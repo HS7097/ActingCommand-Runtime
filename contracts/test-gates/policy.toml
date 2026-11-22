@@ -1487,7 +1487,7 @@ tests = [
 ]
 incident = ["#480", "PG-2b"]
 
-# #486 ASLEEP-1 (0.12.77; register §1.497; brief rd-1121/brief-486-asleep.md; contracts/scheduling/README.md, "An asleep instance"), the policy half, on a neutral V2 catalog (maintenance and judged tasks of one game on an hourly clock due at NOW, a valued pool and a capped pool of instance A read from their keys) with no clock read: with no asleep instance (none named, an available one named, an unknown one named; A available and unavailable) the evaluation equals evaluate_with_owed_reruns's byte for byte and decision for decision (1); A asleep (InstanceHolds::mark_asleep, its snapshot unavailable), its first candidate is deferred instance_asleep_wake_due (instance_id A) with the evaluation's time as its wake, not selected, no intent and no reason chain, and the candidate behind it carries the decision it carries behind the same candidate selected on A available (2); with its budget spent (the closure's deferral and release), its benefit unknown and a pool line holding it (would_cross_hard_line), each decision equals A available's (3); an unavailable instance no one names is blocked instance_unavailable as before, while the named one is woken for its task (4)
+# #486 ASLEEP-1 (0.12.77; register §1.497; brief rd-1121/brief-486-asleep.md; contracts/scheduling/README.md, "An asleep instance"), the policy half, on a neutral V2 catalog (maintenance and judged tasks of one game on an hourly clock due at NOW, a valued pool and a capped pool of instance A read from their keys) with no clock read: with no asleep instance (none named, an unknown one named; A available and unavailable; #486 ASLEEP-2 took out the case of an available one named, now asleep) the evaluation equals evaluate_with_owed_reruns's byte for byte and decision for decision (1); A asleep (InstanceHolds::mark_asleep, its snapshot unavailable), its first candidate is deferred instance_asleep_wake_due (instance_id A) with the evaluation's time as its wake, not selected, no intent and no reason chain, and the candidate behind it carries the decision it carries behind the same candidate selected on A available (2); with its budget spent (the closure's deferral and release), its benefit unknown and a pool line holding it (would_cross_hard_line), each decision equals A available's (3); an unavailable instance no one names is blocked instance_unavailable as before, while the named one is woken for its task (4)
 [[gate]]
 coverage = "Y"
 tests = [
@@ -1497,3 +1497,12 @@ tests = [
     "actingcommand-policy::lib::tests::gate_486_asleep::asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before",
 ]
 incident = ["#486", "ASLEEP-1"]
+
+# #486 ASLEEP-2 (0.12.78; register §1.506; brief rd-1122/brief-486-asleep2.md; contracts/scheduling/README.md, "An asleep instance"), the policy half, on ASLEEP-1's neutral V2 catalog with no clock read: A named asleep while its snapshot holds it available (its application closed by its idle action) selects nothing: its first candidate is deferred instance_asleep_wake_due (instance_id A) with the evaluation's time as its wake, no intent and no reason chain, and the candidate behind it carries the decision it carries behind the same candidate selected on A awake (5); a judged candidate held by a not-positive net benefit (policy_benefit_nonpositive) and one held by a pool line (pool_line_held) each carry A awake's decision, nothing is selected and no candidate names instance_asleep_wake_due (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_486_asleep::asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_for",
+    "actingcommand-policy::lib::tests::gate_486_asleep::asleep2_t6_on_a_closed_instance_an_untimed_gate_decides_as_on_the_instance_awake",
+]
+incident = ["#486", "ASLEEP-2"]

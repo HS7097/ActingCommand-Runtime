@@ -364,7 +364,17 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         let ran = self
             .forget_startup_package(pending.instance_id)
-            .and_then(|()| self.run_package_on_key(pending, &mut key, None).map(|_| ()));
+            .and_then(|()| self.run_package_on_key(pending, &mut key, None))
+            .and_then(|run| {
+                // #486 ASLEEP-2 (register §1.506, ruling 3): a startup package that ran to its end
+                // started the instance's application, so a wake after `close_app` that queued it
+                // binds the next close until a scheduled run admitted on the instance answers it.
+                if run.is_ok() {
+                    lock(&self.idle, HostLocation::RunStartupPackage)?
+                        .wake_started_application(&pending.instance_alias);
+                }
+                Ok(())
+            });
         let released = self.release_host_key(&key);
         ran.and(released)
     }

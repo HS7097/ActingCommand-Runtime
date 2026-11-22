@@ -3025,10 +3025,29 @@ then held back; the idle check stopped it again, with no end.
   does not prepare it (its emulator is stopped, so a preparation could only fail and take it into
   the unavailable instances above), so its withdrawal is the gate's `self_check` and the probes do
   not hold it.
-- **Not asleep.** An instance whose application `close_app` closed (it stays available, and #484's
-  look ahead and its fix round 2 hold for it as before); an instance unavailable for any other cause
-  (its candidates are blocked at placement as before); an instance whose emulator a person stopped.
-  An asleep instance under a person's pause waits for the pause's end as every idle instance does.
+- **An application closed** (#486 ASLEEP-2, since 0.12.78; register §1.506, the coordinator's
+  rulings of 11-22 on board #486). An instance whose idle action closes or holds its application
+  closed (`close_app`, or `auto`'s `close_app` tier: asked for and not ended, its claim holding the
+  key while the close runs, and done, its wake not come; `IdlePlanner::applications_held_closed`),
+  whose startup package can bring it back and whose availability nothing withdrew (the projection
+  holds it available; no fence; no instance the probes take up) is asleep in the same way. Its
+  snapshot is not changed: the evaluation judges it as it is, selects nothing on it, and defers the
+  one candidate it would select there with `instance_asleep_wake_due`, the evaluation's time as its
+  wake; the idle plan wakes it for that candidate alone, by its startup package
+  (`InstanceHolds::judge_asleep_as_available` names such an instance asleep as well). The hold in
+  front of its candidates while the close runs is the idle action's own claim on its key (position
+  2, `dispatch_instance_held`); #484's look ahead behind a hold reads no benefit gate, no pool line
+  and no no-progress guard, so on such an instance a candidate it lets through, or that it cannot
+  answer, counts for the idle plan as held back by a later position that names no time (not due,
+  no wake of its own), behind any hold of positions 1 or 2. Its idle plan takes no wake from a
+  decision a gate without a time holds, as for an instance whose idle action can stop its emulator
+  (fix round 1 above; `close_app`, and `auto` at any tier). After a Runtime start it is asleep once
+  the start's preparation made it available ([runtime-config.md](../runtime-config.md), "What wakes
+  an idle instance").
+- **Not asleep.** An instance unavailable for any other cause, an application closed among them
+  (its candidates are blocked at placement as before, and #484's fix round 2 holds for it); an
+  instance whose emulator a person stopped. An asleep instance under a person's pause waits for the
+  pause's end as every idle instance does.
 
 ## Runtime Boundary
 

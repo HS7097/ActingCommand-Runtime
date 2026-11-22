@@ -1903,9 +1903,12 @@ impl HostShared {
         // emulator it stops or holds stopped.
         let idle_closed = self.idle_closed_for_policy()?;
         let held_stopped = self.idle_emulators_held_stopped()?;
+        // #486 ASLEEP-2: and the instances whose application it closes or holds closed.
+        let held_closed = self.idle_applications_held_closed()?;
         // #486 ASLEEP-1 fix round 1: the instances whose idle action in effect can stop their
-        // emulator, whose idle plans take no wake from a decision a gate without a time holds.
-        let idle_stops_emulator = self.idle_emulator_stops_for_policy()?;
+        // emulator (#486 ASLEEP-2, ruling 2: or close their application), whose idle plans take no
+        // wake from a decision a gate without a time holds.
+        let idle_sleepers = self.idle_sleepers_for_policy()?;
         // ROUT-L RL-1b (frozen model v1.0 §3.3): the scheduler workbench's check, at most once
         // per `standard_packs.check_interval_ms`, before this cycle reads its manifest and
         // catalog. Nothing in configured mode. ISO-PE: it reads the monotonic clock as the cycle
@@ -2071,8 +2074,15 @@ impl HostShared {
         // #486 ASLEEP-1 (register §1.497): the instances asleep as this cycle's inputs were
         // projected (their emulator stopped by their idle action, and nothing but that stop
         // withdrew their availability), which the evaluation judges as if they were available.
-        let asleep =
-            self.asleep_for_policy(&held_stopped, &availability_withdrawals, &fenced_aliases)?;
+        // #486 ASLEEP-2 (register §1.506): with them, the instances whose application their idle
+        // action closed or is closing, which the projection holds available.
+        let asleep = self.asleep_for_policy(
+            &held_stopped,
+            &held_closed,
+            &facts.instances,
+            &availability_withdrawals,
+            &fenced_aliases,
+        )?;
         // Workflow #369 W-1: every instance's one queue as this cycle starts; a held instance's
         // candidates are deferred, and nothing is written for them.
         let occupancy = self.policy_instance_occupancy(time.unix_ms)?;
@@ -2182,7 +2192,7 @@ impl HostShared {
                     standard_pack_variables: standard_pack_variables.as_deref(),
                     availability_withdrawals: &availability_withdrawals,
                     asleep: &asleep,
-                    idle_stops_emulator: &idle_stops_emulator,
+                    idle_sleepers: &idle_sleepers,
                     entry_blocked: &entry_blocked,
                 },
             )?;

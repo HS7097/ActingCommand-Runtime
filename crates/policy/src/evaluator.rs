@@ -417,19 +417,22 @@ impl InstanceHolds {
     /// judges it as if it were available, through every gate an available instance's candidates
     /// go through, and selects nothing on it: the candidate the round would select there carries
     /// `instance_asleep_wake_due` with the evaluation's time as its wake, and no dispatch is made.
-    /// Naming an instance whose snapshot holds it available changes nothing.
+    /// #486 ASLEEP-2 (register §1.506): so is an instance whose application its idle action closed
+    /// or is closing, whose snapshot holds it available: it is judged as it is, and nothing is
+    /// selected on it either.
     pub fn mark_asleep(&mut self, instance_id: impl Into<String>) {
         self.asleep.insert(instance_id.into());
     }
 
-    /// #486 ASLEEP-1: the instances of `instances` named asleep whose snapshot holds them
-    /// unavailable, each held available in `instances` (the evaluation's own projection of its
-    /// input, never the input) so that the evaluation judges it as an available instance; every
-    /// other snapshot is left as it is.
+    /// #486 ASLEEP-1: the instances of `instances` named asleep, each whose snapshot holds it
+    /// unavailable held available in `instances` (the evaluation's own projection of its input,
+    /// never the input) so that the evaluation judges it as an available instance; every other
+    /// snapshot is left as it is. #486 ASLEEP-2: a named instance whose snapshot holds it available
+    /// is asleep as well, its snapshot unchanged.
     fn judge_asleep_as_available(&self, instances: &mut [InstanceSnapshot]) -> BTreeSet<String> {
         let mut judged = BTreeSet::new();
         for instance in instances {
-            if !instance.available && self.asleep.contains(&instance.instance_id) {
+            if self.asleep.contains(&instance.instance_id) {
                 instance.available = true;
                 judged.insert(instance.instance_id.clone());
             }

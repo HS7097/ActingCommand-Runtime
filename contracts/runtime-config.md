@@ -1299,7 +1299,10 @@ scheduling pause holds it (nor a resource fence), its emulator runs, it can be b
 startup package, and for `stop_emulator` its configured emulator start), and the latest policy
 evaluation, one that counts the end of the instance's last run, has no due task for it and no next
 wake closer than `idle.min_gap_ms` (the not-run explanation's due candidates and next wake of the
-instance, the evaluator's own; no other estimate). An evaluation counts the end of the instance's
+instance, the evaluator's own; no other estimate). It does not stop an emulator, or (#486
+ASLEEP-2, since 0.12.78) close an application, that an idle wake started while no scheduled run
+admitted on the instance since answers that wake ("What wakes an idle instance" below). An
+evaluation counts the end of the instance's
 last run (IDLE-3, #447, since 0.12.57, [v012-register.md](v012-register.md) §1.332) when it
 counted the end of every run the policy dispatched on the instance: at the time it read its inputs
 the policy held no dispatch of the instance that was still open (from its intent to the record of
@@ -1427,10 +1430,27 @@ wake. The plan counts that one due and names it, so the wake comes at once for a
 dispatched (the emulator's start, then the startup package), and counts every other decision as on
 an available instance: a spent budget, a backoff or the activity interval wakes the instance at its
 release less the lead, and a candidate whose trigger has not come at its trigger's time less the
-lead. The instances `close_app` closed are not asleep; the case of one whose reconnect or self-check
-failed after `close_app` is AVAIL-1's ([scheduling/README.md](scheduling/README.md), "An unavailable
-instance is probed again"). A pause holds an asleep instance's wake as any `stop_emulator` wake
-(PAUSE-AUTO above).
+lead. The case of an instance whose reconnect or self-check failed after `close_app` is AVAIL-1's
+([scheduling/README.md](scheduling/README.md), "An unavailable instance is probed again"). A pause
+holds an asleep instance's wake as any `stop_emulator` wake (PAUSE-AUTO above).
+
+An instance whose application its idle action closed is asleep too (#486 ASLEEP-2, since 0.12.78,
+[v012-register.md](v012-register.md) §1.506; production v0.12.76 on 11-21: eleven rounds of close
+and wake in sixteen minutes, each wake four seconds after the close, for a judged task the real
+evaluation deferred by a gate without a time). While its idle action closes or holds its
+application closed (`close_app`, or `auto`'s `close_app` tier: asked for and not ended, its claim
+holding the key while the close runs, and done, its wake not come), its startup package configured,
+and nothing withdrew its availability (no fence; no failed self-check or preparation step of its
+own), the evaluation judges it as it is, an available instance, and selects nothing on it: the one
+candidate the round would select there waits with `instance_asleep_wake_due` and the evaluation's
+time as its wake, and the plan wakes the instance for it alone, by its startup package. No
+candidate of such an instance is due through #484's look ahead (above): while a hold of positions 1
+or 2 holds it (the idle action's own claim while the close runs, a person's pause, a Lab run's
+claim), a candidate no later position of the order holds back, or one whose later positions cannot
+answer, counts as held back by a later position that names no time (not due, no wake of its own),
+since the look ahead reads no benefit gate, no pool line and no no-progress guard; once the hold
+ends the evaluation judges it, and only the task it would select wakes the instance. A closed
+instance whose availability is withdrawn, whatever withdrew it, is not asleep, as before.
 
 A decision a gate without a time holds wakes no instance whose emulator the idle action can stop
 (#486 ASLEEP-1 fix round 1, the coordinator's ruling 2 of the round). On an instance whose idle
@@ -1442,9 +1462,11 @@ nothing can be dispatched. This holds for the plan the action itself is decided 
 only ever moves earlier, so the wake fixed at the stop is already without them. Nothing is lost but
 the lead: every evaluation judges an asleep instance as available, so the evaluation in which such
 a task can be dispatched finds it due and wakes the instance. A decision a time-bound gate holds
-keeps contributing that gate's release, and one whose trigger has not come its trigger's time. On an
-instance whose idle action is `close_app`, `none`, or `auto` without its emulator start, the plan is
-as before.
+keeps contributing that gate's release, and one whose trigger has not come its trigger's time.
+#486 ASLEEP-2 (ruling 2): the same holds on an instance whose idle action in effect can close its
+application, `close_app` and `auto` at any tier, with its startup package in effect, whose closed
+application the trigger's time would start for nothing. On an instance whose idle action is `none`,
+or one it cannot take (no startup package), the plan is as before.
 
 A Runtime start keeps an asleep instance asleep (#486 ASLEEP-1 fix round 1, ruling 5). The start
 restores the instance stopped with its wake (IDLE-1P above), withdraws its availability as for every
@@ -1476,6 +1498,26 @@ instance and the same report line). The status has no idle row, so nothing else 
 memory is the idle planner's and in memory only: a scheduled run admitted on the instance after
 the wake, a Runtime start, a catalog's activation and another `idle` configuration of the instance
 end it. No key is added.
+
+A wake that started the application must be answered too (#486 ASLEEP-2, ruling 3). After an idle
+wake after `close_app` whose startup package ran to its end (a package that failed, or never got
+the key, started nothing and binds nothing), the idle check does not close that application again
+until a scheduled run has been admitted on the instance since the wake (the same admission as
+above): under `auto` the tier stops at the rest at home (taken once per idle stretch, as always),
+under `close_app` nothing is taken. The first check that would otherwise have closed it records
+the one `instance_idle_stop_withheld` of that wake, as above, with `idle_action` `close_app`. The
+same four things end it. A wake after `stop_emulator` is bound by its configured start alone, as
+above: the startup package it hands the key to binds nothing more.
+
+A Runtime start keeps an instance its idle action holds closed asleep (#486 ASLEEP-2, ruling 4).
+`host.idle_state` already keeps it (its row `close_app` with its wake), and the start restores it
+closed with that wake (IDLE-1P above). Unlike a stopped emulator it is prepared as every instance
+is, before the start's first evaluation: its emulator runs, so its self-check passes and its
+availability comes back, and from that evaluation on it is asleep with its wake. One whose
+restored pause the start leaves unprepared stays unavailable, and so not asleep, until the resume's
+reconnect proves it again; under that pause its candidates count as held back with no time (#484
+fix round 2 above). Nothing is added for the start, and the memory of ruling 3 is not kept across
+it.
 
 Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484

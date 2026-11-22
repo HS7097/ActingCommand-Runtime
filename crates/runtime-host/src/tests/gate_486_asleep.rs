@@ -1752,3 +1752,840 @@ fn asleep_r2_a_start_keeps_the_instance_asleep_and_an_activation_answers_the_wak
     );
     replay.close();
 }
+
+// ---- #486 ASLEEP-2 (0.12.78; register §1.506): an instance whose application its idle action
+// closed is asleep too (the coordinator's rulings 1 to 5 of 11-22).
+//
+// Production v0.12.76 on 11-21: an instance under `close_app` went round eleven times in sixteen
+// minutes, about 85 seconds each. Its only candidate past its trigger was a judged task the real
+// evaluation deferred by a gate without a time; four seconds after each close a wake for that task
+// came (`task_due`), the startup package ran, the evaluation deferred the task again, and the
+// application was closed again. The hold in front of the candidate is the idle action's own claim
+// on the instance's key while it closes (position 2, `dispatch_instance_held`): #484's look ahead
+// behind it reads positions 3 to 8 and 4b, never the benefit gate, the pool lines or the
+// no-progress guard, so it counted the candidate due.
+//
+// The replays run on the fixture instance of the tests above with its own idle action (`close_app`,
+// its startup package and a standard pack root that declares its application, as
+// `gate_484_idle_w2`'s `close_app` fixture; or `none`), every idle check the host's own on its own
+// plan; the planner's test (12) runs the pure planner as test 9 does. No clock is read.
+// - r3 (the work order's test 1): the loop of 11-21 as a replay, once for a not-positive benefit
+//   and once for a pool line's hold (the capped pool's reading published as a package publishes
+//   it): one close, and no wake under the close's own claim (where the look ahead counted the
+//   task due on main, so the plan read there was due and the wake came at once) or after it.
+// - r4 (test 2): a task that would be selected on the closed instance is the task it is woken
+//   for, with no intent; one wake, `task_due`; its startup package runs and the task is dispatched.
+// - r5 (test 3): a wake whose startup package ran, answered by no admitted run: the night's
+//   checks do not close the application again and one `instance_idle_stop_withheld` names
+//   `close_app`; the day's admitted runs answer it and the application is closed again.
+// - h12 (test 3, the planner): the same in the pure planner, a wake whose startup package did not
+//   run to its end binding nothing, `auto` resting at home at most, a catalog's activation
+//   answering the wake, and a wake after `stop_emulator` bound by no startup package's run.
+// - r6 (test 4): an instance with `idle.action` `none` and an awake `close_app` instance decide and
+//   plan as before.
+
+/// ASLEEP-2: `close_app` with the production gap and leads.
+const CLOSE: IdleConfig = IdleConfig {
+    action: IdleAction::CloseApp,
+    ..STOP
+};
+/// What a wake after `close_app` queues: the startup package.
+const CLOSE_WAKE: IdleStep = IdleStep::Wake {
+    action: IdleAction::CloseApp,
+    work: &[WakeWork::StartupPackage],
+};
+/// The game and the server of the fixture instance (`policy_facts`), and the application the fake
+/// device assigns it, which its game's standard pack root declares for its server.
+const GAME: &str = "fixture-game-a";
+const SERVER: &str = "fixture-server-a";
+const APPLICATION: &str = "neutral.application";
+/// The capped pool of the fixture instance (capacity 180, its stop line 140 and its hard line 104,
+/// regenerating nothing; `gate_sched_c1e`'s lines), read from [`READING_KEY`], and the pool its
+/// consumers produce into, each weighed 1000 milli a unit.
+const POOL: &str = "pool.neutral";
+const OUT: &str = "pool.out";
+const READING_KEY: &str = "resource.neutral";
+/// A judged consumer of the capped pool whose run costs more than it gives (10 units of it for 5
+/// of the other): below the cap its net benefit is not positive.
+const COSTLY: &str = "fixture.asleep2_costly";
+/// A judged consumer of the capped pool whose run gives more than it costs (30 units for 40) and
+/// would leave the pool read at 120 below its hard line.
+const LINED: &str = "fixture.asleep2_lined";
+
+fn effect(pool: &str, direction: &str, amount: u64) -> Value {
+    json!({
+        "pool_id": pool,
+        "direction": direction,
+        "amount": amount,
+        "observation_source": "scan_verified",
+        "confidence_milli": 1000
+    })
+}
+
+/// A pool of the fixture instance read from `resource.<the id without "pool.">` through the
+/// ledger, of constant `capacity`, regenerating nothing, valued 1000 milli a unit.
+fn valued_pool(id: &str, capacity: u64) -> Value {
+    json!({
+        "id": id,
+        "scope": {"kind": "instance", "instance_id": ALIAS},
+        "capacity": capacity,
+        "projection": {"kind": "none"},
+        "observation": {"kind": "fact", "fact_key": format!("resource.{}", &id["pool.".len()..])},
+        "value_source": {"kind": "ledger_fact", "minimum_confidence_milli": 500},
+        "group_delay": {"minimum_delay_ms": 60000, "maximum_delay_ms": 300000},
+        "valuation": {"name": "Fixture", "unit": "unit", "scale": 1, "base_weight_milli": 1000}
+    })
+}
+
+/// [`sources`] of the judged task `task` (its trigger [`judged_task`]'s, a clock `at` 06:05 of day
+/// 1 that names no later time), consuming `consumed` of the capped pool and producing `produced`
+/// of the other, with the two pools beside the fixture's own.
+fn pooled_sources(task: &'static str, consumed: u64, produced: u64) -> CatalogSources {
+    let mut sources = sources(&[SlotTask {
+        id: task,
+        ..judged_task()
+    }]);
+    let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("the tasks");
+    for spec in tasks["tasks"].as_array_mut().expect("the task list") {
+        spec["benefit_judged"] = json!(true);
+        spec["consumes"] = json!([effect(POOL, "consume", consumed)]);
+        spec["produces"] = json!([effect(OUT, "produce", produced)]);
+    }
+    sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the tasks' bytes");
+    let mut pools: Value = serde_json::from_slice(&sources.pools.bytes).expect("the pools");
+    let mut capped = valued_pool(POOL, 180);
+    capped["stop_line"] = json!(140);
+    capped["hard_line"] = json!(104);
+    let entries = pools["pools"].as_array_mut().expect("the pool list");
+    entries.push(valued_pool(OUT, 1_000_000));
+    entries.push(capped);
+    sources.pools.bytes = serde_json::to_vec_pretty(&pools).expect("the pools' bytes");
+    sources
+}
+
+/// The capped pool's reading `value` as a package publishes it (`gate_390_pool1`'s
+/// `package_reading`): observed at `observed_at`, valid for two minutes, no input invalidation.
+fn pool_reading(value: i64, observed_at: u64) -> FactRecord {
+    let mut record = stored_fact(
+        FactScope::Instance {
+            instance_id: ALIAS.to_owned(),
+        },
+        READING_KEY,
+        ContractFactValue::Integer(value),
+        "run:fixture/frame:asleep2/k2",
+        Vec::new(),
+    );
+    record.observed_at_unix_ms = observed_at;
+    record.expires_at_unix_ms = Some(observed_at + 120_000);
+    record.confidence_milli = 990;
+    record.source_detector = format!(
+        "{}task/k2",
+        actingcommand_contract::RESOURCE_READING_DETECTOR_PREFIX
+    );
+    record
+}
+
+/// The replay instance's configuration with its own `idle.action` `action` (`close_app` or
+/// `none`), built as [`stop_emulator_manifest`] builds its own, with no `start_emulator`.
+fn idle_action_manifest(instance: InstanceId, action: IdleAction) -> RuntimeConfigManifest {
+    let (_, defaults) = DefaultsFile::shipped().expect("the defaults file parses");
+    let section = actingcommand_runtime_config::idle::SECTION;
+    let mut parameters =
+        render_parameters(&mechanism_rows(), &[], &defaults, &json!({}), &|_| None)
+            .expect("every key resolves")
+            .into_iter()
+            .filter(|row| row.key.split('.').next() == Some(section))
+            .collect::<Vec<_>>();
+    parameters.push(ConfigParameter {
+        key: actingcommand_runtime_config::instance_key(
+            &crate::failure_identity::identifier_text(&instance),
+            actingcommand_runtime_config::idle::ACTION,
+        ),
+        value: FactScalar::String(action.as_str().to_owned()),
+        source: ConfigParameterSource::Explicit,
+        settable: false,
+    });
+    parameters.extend(no_progress_off_manifest(&instance).parameters);
+    annotate_settable(&mut parameters).expect("every key is in the key table");
+    RuntimeConfigManifest {
+        subsystems: Vec::new(),
+        parameters,
+    }
+}
+
+/// A standard pack root under `root` whose game of the fixture instance declares its application
+/// for its server (`applications.json`), as `close_app` reads it.
+fn declared_application(root: &TempDir) -> PathBuf {
+    let packs = root.path().join("packages");
+    let game = packs.join(GAME);
+    fs::create_dir_all(&game).expect("the game's root");
+    let declared = json!({"servers": {SERVER: {"application_id": APPLICATION}}});
+    fs::write(
+        game.join("applications.json"),
+        serde_json::to_vec_pretty(&declared).expect("the declared application"),
+    )
+    .expect("write the declared application");
+    packs
+}
+
+/// A start of the replay instance's host with the idle action `action`: the fixture instance of
+/// the tests above (emulator-controlled and device self-checked, `device_state`), its startup
+/// package, its stuck recovery off and the standard pack root that declares its application.
+fn open_closing_host(
+    root: &TempDir,
+    registered: InstanceId,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+    action: IdleAction,
+) -> RuntimeHost {
+    // `gate_ord1c`'s fix round 3, as `open_host` above.
+    let moved = Arc::clone(clock);
+    *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || moved.advance(1)));
+    let package = root.path().join("asleep2-startup-package.zip");
+    fs::write(&package, neutral_contained_task_package(true)).expect("write the startup package");
+    let startup = ContainedTaskRequest::new(package.to_string_lossy().into_owned())
+        .and_then(|request| request.with_response_deadline_ms(60_000))
+        .expect("the startup package request");
+    let mut facts = policy_facts();
+    facts.outcomes.clear();
+    RuntimeHost::start(
+        config(root)
+            .with_policy_inputs(PolicyInputSnapshot::new(facts, policy_resources()))
+            .with_runtime_clock(clock.clone())
+            .with_config_manifest(idle_action_manifest(registered, action))
+            .with_stuck_recovery(BTreeMap::from([(
+                ALIAS.to_owned(),
+                InstanceStuckRecovery {
+                    enabled: false,
+                    cooldown_secs: 600,
+                },
+            )]))
+            .with_startup_packages(BTreeMap::from([(ALIAS.to_owned(), startup)]))
+            .with_standard_packs_root(Some(declared_application(root))),
+        Arc::new(FakeProvider::one(ALIAS, registered, Arc::clone(state))),
+    )
+    .expect("start the closing replay's host")
+}
+
+/// How many times the instance's application was stopped (the idle action's close).
+fn closes(state: &FakeState) -> usize {
+    state
+        .application_actions
+        .lock()
+        .expect("application actions")
+        .iter()
+        .filter(|action| **action == ApplicationLifecycleAction::Stop)
+        .count()
+}
+
+/// The record of a wake for a task due (`instance_idle_action`, `queue_idle_wake`, `task_due`).
+fn task_wake_record() -> IdleRecord {
+    (
+        IdleCode::Taken.as_str().to_owned(),
+        IdleLocation::Wake.as_str().to_owned(),
+        Some(IdleWakeCause::TaskDue.as_str().to_owned()),
+    )
+}
+
+impl Replay {
+    /// ASLEEP-2: the replay instance with the idle action `action` on a host of its own, with
+    /// `sources` activated. Every idle check is the host's own, on the plan its own evaluated cycle
+    /// leaves, with its own planner.
+    fn closing(unix_ms: u64, action: IdleAction, sources: &CatalogSources) -> Self {
+        let root = TempDir::new().expect("tempdir");
+        let registered = instance_id();
+        let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
+        let state = device_state();
+        let host = open_closing_host(&root, registered, &clock, &state, action);
+        host.activate_policy_catalog(sources)
+            .expect("activate the catalogue");
+        Self {
+            host,
+            clock,
+            state,
+            registered,
+            approved: BTreeSet::new(),
+            root,
+        }
+    }
+
+    /// The instance's latest plan, as the idle check reads it.
+    fn plan(&self) -> IdlePlan {
+        self.host
+            .idle_plan_and_runs_counted_for_test(ALIAS)
+            .expect("the idle plan")
+            .0
+            .expect("an evaluated plan")
+    }
+
+    /// The task the latest plan counts due.
+    fn due_task(&self) -> Option<String> {
+        self.host
+            .idle_due_task_for_test(ALIAS)
+            .expect("the plan's due task")
+    }
+
+    /// The `idle_action` of each `instance_idle_stop_withheld` of the instance after `after`.
+    fn withheld_actions(&self, after: u64) -> Vec<String> {
+        let events = all_events(&self.host);
+        phases(&events)
+            .into_iter()
+            .filter(|(event, _)| {
+                event.sequence() > after && event.links().instance_id() == Some(&self.registered)
+            })
+            .filter_map(|(_, phase)| {
+                let RuntimeLifecyclePhase::DeviceStateObserved { outcome } = phase else {
+                    return None;
+                };
+                if outcome.code().as_str() != IdleCode::StopWithheld.as_str() {
+                    return None;
+                }
+                outcome
+                    .value("idle_action")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn asleep2_r3_the_loop_of_11_21_closes_once_and_queues_no_wake_for_an_untimed_gate() {
+    for (case, task, consumed, produced, code) in [
+        (
+            "a not-positive benefit",
+            COSTLY,
+            10,
+            5,
+            PolicyCode::PolicyBenefitNonpositive.as_str(),
+        ),
+        (
+            "a pool line",
+            LINED,
+            30,
+            40,
+            PolicyCode::PoolLineHeld.as_str(),
+        ),
+    ] {
+        let replay = Replay::closing(
+            at(1, 6, 0),
+            IdleAction::CloseApp,
+            &pooled_sources(task, consumed, produced),
+        );
+        let before = head(&replay.host);
+        // The capped pool read at 120, a minute before the close.
+        let read_at = at(1, 6, 29);
+        replay.set_time(read_at);
+        replay
+            .host
+            .publish_fact(pool_reading(120, read_at))
+            .expect("the pool's reading is published");
+        // The close's own claim: its worker waits once the planner knows the close's end, before
+        // the claim releases the key (`gate_484_idle_w2`'s hook).
+        let (entered_tx, entered) = mpsc::channel::<()>();
+        let (go, go_rx) = mpsc::channel::<()>();
+        replay
+            .host
+            .run_when_idle_action_finished_for_test(Box::new(move || {
+                entered_tx
+                    .send(())
+                    .expect("the test waits for the close's end");
+                go_rx
+                    .recv_timeout(GATE_WAIT)
+                    .expect("the test lets the close's claim release the key");
+            }))
+            .expect("the hook");
+
+        // 06:30, free: the gate holds the task with no time of its own, and the host's own check
+        // closes the application with no wake.
+        let closed_at = at(1, 6, 30);
+        assert_eq!(
+            deferred_by(&replay.cycle(closed_at), task, code),
+            None,
+            "{case}: the gate names no wake"
+        );
+        entered
+            .recv_timeout(GATE_WAIT)
+            .expect("the close ended and its claim still holds the key");
+        assert_eq!(closes(&replay.state), 1, "{case}: the close");
+
+        // Inside the close's own claim (four seconds after it in production): the claim holds the
+        // task with no wake, and the plan counts it not due. On main the look ahead behind the
+        // claim, which reads no benefit gate and no pool line, counted it due, and the check
+        // queued the wake at once.
+        let in_claim = closed_at + 500;
+        assert_eq!(
+            deferred_by(
+                &replay.cycle(in_claim),
+                task,
+                HostCode::DispatchInstanceHeld.as_str()
+            ),
+            None,
+            "{case}: the close's claim holds the task with no wake"
+        );
+        let held = replay.plan();
+        assert!(!held.due_now, "{case}: not due behind the claim: {held:?}");
+        assert_eq!(held.next_wake_unix_ms, None, "{case}: {held:?}");
+        go.send(()).expect("the close's claim waits");
+        assert_eq!(
+            replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+            Some(1),
+            "{case}: the close ended"
+        );
+
+        // Asleep, free: the gate holds the task as on the instance awake, and nothing wakes it.
+        for moment in [closed_at + 1_000, closed_at + 10_000] {
+            assert_eq!(
+                deferred_by(&replay.cycle(moment), task, code),
+                None,
+                "{case} at {moment}"
+            );
+            let read = replay.plan();
+            assert!(
+                !read.due_now && read.next_wake_unix_ms.is_none(),
+                "{case} at {moment}: {read:?}"
+            );
+        }
+        assert_eq!(
+            replay.records(before),
+            [stop_record()],
+            "{case}: one close and no wake"
+        );
+        assert_eq!(closes(&replay.state), 1, "{case}: closed once");
+        replay.close();
+    }
+}
+
+#[test]
+fn asleep2_r4_a_task_that_would_be_selected_wakes_the_application_once_and_is_dispatched() {
+    let mut replay = Replay::closing(
+        at(1, 6, 0),
+        IdleAction::CloseApp,
+        &sources(&[judged_task()]),
+    );
+    let before = head(&replay.host);
+    // 06:30: the benefit gate holds the judged task with no wake, and the host's own check closes
+    // the application with no wake.
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(at(1, 6, 30)),
+            JUDGED,
+            PolicyCode::BenefitUnknown.as_str()
+        ),
+        None,
+        "an unknown benefit names no wake"
+    );
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the close ended"
+    );
+    assert_eq!(closes(&replay.state), 1, "the host's own check closed it");
+
+    // A catalogue's activation brings a task that can be dispatched now. Asleep, the round's pick
+    // is the task the instance is woken for, at the evaluation's time and with no intent; the
+    // host's own check wakes the application once, for that task.
+    replay
+        .host
+        .activate_policy_catalog(&sources_of(2, &[budget_task(), judged_task()]))
+        .expect("activate the second catalogue");
+    let woken_at = head(&replay.host);
+    let due_at = at(1, 6, 40);
+    let cycle = replay.cycle(due_at);
+    assert_eq!(
+        deferred_by(&cycle, TASK, PolicyCode::InstanceAsleepWakeDue.as_str()),
+        Some(due_at),
+        "the task it is woken for, its wake the evaluation's time"
+    );
+    assert_eq!(
+        intents(&cycle),
+        0,
+        "nothing is dispatched into the closed application"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "one wake, for a task due"
+    );
+
+    // The wake's startup package runs on the instance's key; once it is free, the task is
+    // dispatched.
+    replay.await_free(woken_at);
+    replay.dispatch(at(1, 6, 50));
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "woken once"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep2_r5_a_wake_whose_startup_package_ran_keeps_the_application_open_until_a_run_is_admitted()
+{
+    let mut replay = Replay::closing(
+        at(1, 6, 0),
+        IdleAction::CloseApp,
+        &sources(&[budget_task()]),
+    );
+    let before = head(&replay.host);
+    replay.dispatch(at(1, 6, 10));
+    replay.dispatch(at(1, 6, 20));
+    // 06:30, free: the budget defers the task to its release, and the host's own check closes the
+    // application, its wake at the release less the lead.
+    let release = deferred_by(
+        &replay.cycle(at(1, 6, 30)),
+        TASK,
+        HostCode::PolicyBudgetExhausted.as_str(),
+    )
+    .expect("the budget names its release");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the close ended"
+    );
+    assert_eq!(closes(&replay.state), 1, "the host's own check closed it");
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(at(1, 12, 0)),
+            TASK,
+            HostCode::PolicyBudgetExhausted.as_str()
+        ),
+        Some(release),
+        "asleep, the budget defers the task to its release"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "no wake before its time"
+    );
+
+    // The release less the lead: the check queues the wake, and its startup package runs to its
+    // end on the instance's key.
+    let woken_at = head(&replay.host);
+    replay.cycle(release - LEAD_MS);
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), wake_record()],
+        "the wake at its planned time"
+    );
+    replay.await_free(woken_at);
+
+    // No run admitted: the next night's checks (the task's window closed, its next work at the
+    // window's opening, hours away) do not close the application the wake started, and the ledger
+    // holds one warning for that wake, naming `close_app`.
+    for moment in [at(3, 1, 0), at(3, 1, 10)] {
+        replay.cycle(moment);
+        assert!(
+            replay.claims_free(),
+            "the check at {moment} took no idle action"
+        );
+    }
+    assert_eq!(closes(&replay.state), 1, "not closed again");
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), wake_record(), withheld_record()],
+        "one instance_idle_stop_withheld"
+    );
+    assert_eq!(
+        replay.withheld_actions(before),
+        [IdleAction::CloseApp.as_str()],
+        "the warning names the close not taken"
+    );
+
+    // The day's two runs admitted: the check closes the application again, with no second warning.
+    replay.dispatch(at(3, 6, 10));
+    replay.dispatch(at(3, 6, 20));
+    replay.cycle(at(3, 6, 30));
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(2, GATE_WAIT),
+        Some(2),
+        "the second close ended"
+    );
+    assert_eq!(
+        closes(&replay.state),
+        2,
+        "a run admitted after the wake answers it"
+    );
+    assert_eq!(
+        replay.records(before),
+        [
+            stop_record(),
+            wake_record(),
+            withheld_record(),
+            stop_record()
+        ],
+        "the close again"
+    );
+    replay.close();
+}
+
+/// The planner after `close_app` on the instance, with no wake planned.
+fn closed_planner() -> IdlePlanner {
+    let mut planner = IdlePlanner::default();
+    planner.restore(
+        ALIAS,
+        KeptIdle {
+            action: IdleAction::CloseApp,
+            wake_at_unix_ms: None,
+            woken: false,
+        },
+    );
+    planner
+}
+
+#[test]
+fn asleep2_h12_a_wake_whose_startup_package_ran_holds_the_next_close_back_and_warns_once() {
+    let woken_at = at(1, 6, 0);
+    let far = at(1, 12, 0);
+    let first = woken_at + 10 * MINUTE_MS;
+    let second = woken_at + 20 * MINUTE_MS;
+    // A wake for a due task after `close_app` (`started`: its startup package ran to its end, as
+    // the host's startup claim says), then its claims, then the instance free with nothing due
+    // before `far`: no run was admitted since the wake.
+    let woken_and = |config: &IdleConfig, started: bool| {
+        let mut planner = closed_planner();
+        assert_eq!(
+            planner.check_with_due_task(
+                ALIAS,
+                config,
+                free(),
+                Some(plan_at(woken_at, true, None)),
+                woken_at,
+                Some(TASK),
+            ),
+            Some(CLOSE_WAKE)
+        );
+        if started {
+            planner.wake_started_application(ALIAS);
+        }
+        let held = woken_at + MINUTE_MS;
+        assert_eq!(
+            planner.check(
+                ALIAS,
+                config,
+                leased(),
+                Some(plan_at(held, true, None)),
+                held
+            ),
+            None
+        );
+        planner
+    };
+
+    // A wake whose startup package did not run to its end binds nothing: the close is taken.
+    let mut unstarted = woken_and(&CLOSE, false);
+    assert!(
+        matches!(
+            unstarted.check(
+                ALIAS,
+                &CLOSE,
+                free(),
+                Some(plan_at(first, false, Some(far))),
+                first
+            ),
+            Some(IdleStep::Act {
+                action: IdleAction::CloseApp,
+                ..
+            })
+        ),
+        "no startup package ran, no close is held back"
+    );
+    assert_eq!(unstarted.take_withheld(ALIAS), None);
+
+    // `close_app`: not closed again, one warning naming `close_app`; not again.
+    let mut planner = woken_and(&CLOSE, true);
+    assert_eq!(
+        planner.check(
+            ALIAS,
+            &CLOSE,
+            free(),
+            Some(plan_at(first, false, Some(far))),
+            first
+        ),
+        None,
+        "the application is not closed again"
+    );
+    assert_eq!(
+        planner.take_withheld(ALIAS),
+        Some((
+            IdleAction::CloseApp,
+            WithheldStop {
+                cause: IdleWakeCause::TaskDue,
+                task_id: Some(TASK.to_owned()),
+                woken_at_unix_ms: woken_at,
+            }
+        )),
+        "one warning, with the action not taken and the wake's cause, task and time"
+    );
+    assert_eq!(
+        planner.check(
+            ALIAS,
+            &CLOSE,
+            free(),
+            Some(plan_at(second, false, Some(far))),
+            second
+        ),
+        None
+    );
+    assert_eq!(planner.take_withheld(ALIAS), None, "once per wake");
+
+    // A scheduled run admitted after the wake: the close is taken again.
+    let ran = woken_at + 30 * MINUTE_MS;
+    assert!(
+        matches!(
+            planner.check(
+                ALIAS,
+                &CLOSE,
+                IdleView {
+                    latest_admission: Some(7),
+                    ..free()
+                },
+                Some(plan_at(ran, false, Some(far))),
+                ran
+            ),
+            Some(IdleStep::Act {
+                action: IdleAction::CloseApp,
+                ..
+            })
+        ),
+        "an admitted run answers the wake"
+    );
+
+    // `auto`: a gap the emulator's stop would take rests the instance at home at most.
+    let auto = IdleConfig {
+        action: IdleAction::Auto(AutoGaps {
+            return_home_min_gap_ms: 10 * MINUTE_MS,
+            stop_emulator_min_gap_ms: 2 * HOUR_MS,
+        }),
+        ..CLOSE
+    };
+    let mut rested = woken_and(&auto, true);
+    assert_eq!(
+        rested.check(
+            ALIAS,
+            &auto,
+            free(),
+            Some(plan_at(first, false, Some(far))),
+            first
+        ),
+        Some(IdleStep::Rest {
+            next_due_unix_ms: Some(far),
+            within_ms: 10 * MINUTE_MS,
+        }),
+        "auto rests the instance at home instead"
+    );
+    assert!(
+        matches!(rested.take_withheld(ALIAS), Some((IdleAction::CloseApp, _))),
+        "the close not taken is warned"
+    );
+
+    // A catalog's activation answers the wake.
+    let mut activated = woken_and(&CLOSE, true);
+    activated.forget_unanswered_wakes();
+    assert!(
+        matches!(
+            activated.check(
+                ALIAS,
+                &CLOSE,
+                free(),
+                Some(plan_at(first, false, Some(far))),
+                first
+            ),
+            Some(IdleStep::Act {
+                action: IdleAction::CloseApp,
+                ..
+            })
+        ),
+        "an activation answers the wake"
+    );
+
+    // A wake after `stop_emulator` is bound by its emulator's start alone: a startup package's run
+    // binds no stop of it (ASLEEP-1's rule, unchanged).
+    let mut emulator = stopped_planner(None);
+    assert_eq!(
+        emulator.check_with_due_task(
+            ALIAS,
+            &STOP,
+            stopped(),
+            Some(plan_at(woken_at, true, None)),
+            woken_at,
+            Some(TASK),
+        ),
+        Some(STOP_WAKE)
+    );
+    emulator.wake_started_application(ALIAS);
+    assert!(
+        matches!(
+            emulator.check(
+                ALIAS,
+                &STOP,
+                free(),
+                Some(plan_at(first, false, Some(far))),
+                first
+            ),
+            Some(IdleStep::Act {
+                action: IdleAction::StopEmulator,
+                ..
+            })
+        ),
+        "the stop is taken"
+    );
+    assert_eq!(emulator.take_withheld(ALIAS), None);
+}
+
+#[test]
+fn asleep2_r6_none_and_an_awake_close_app_instance_decide_and_plan_as_before() {
+    // `idle.action` `none`: the judged task on an interval clock names its trigger's next time as
+    // its wake in the plan, as before: `none` closes nothing.
+    let mut none = Replay::closing(
+        at(1, 6, 0),
+        IdleAction::None,
+        &sources(&[budget_task(), judged_interval_task()]),
+    );
+    none.dispatch(at(1, 6, 10));
+    none.dispatch(at(1, 6, 20));
+    let cycle = none.cycle(at(1, 6, 30));
+    let release = deferred_by(&cycle, TASK, HostCode::PolicyBudgetExhausted.as_str())
+        .expect("the budget names its release");
+    let own = deferred_by(&cycle, JUDGED, PolicyCode::BenefitUnknown.as_str())
+        .expect("the judged task names its trigger's next time");
+    assert!(own < release, "{own} before {release}");
+    let plan = none.plan();
+    assert!(!plan.due_now, "{plan:?}");
+    assert_eq!(
+        plan.next_wake_unix_ms,
+        Some(own),
+        "the judged task's own wake, as before"
+    );
+    assert!(none.claims_free(), "no idle action");
+    none.close();
+
+    // An awake `close_app` instance: the task selected (and dispatched) is due and named; with its
+    // budget spent the budget defers it to its release, which is its wake.
+    let mut awake = Replay::closing(
+        at(1, 6, 0),
+        IdleAction::CloseApp,
+        &sources(&[budget_task()]),
+    );
+    awake.dispatch(at(1, 6, 10));
+    let plan = awake.plan();
+    assert!(plan.due_now, "the selected task is due: {plan:?}");
+    assert_eq!(awake.due_task(), Some(TASK.to_owned()), "the plan names it");
+    awake.dispatch(at(1, 6, 20));
+    let release = deferred_by(
+        &awake.evaluate(at(1, 6, 30)),
+        TASK,
+        HostCode::PolicyBudgetExhausted.as_str(),
+    )
+    .expect("the budget names its release");
+    let plan = awake.plan();
+    assert!(!plan.due_now, "{plan:?}");
+    assert_eq!(
+        plan.next_wake_unix_ms,
+        Some(release),
+        "its release, as before"
+    );
+    assert!(awake.claims_free(), "no idle action");
+    awake.close();
+}
