@@ -3326,8 +3326,9 @@ then held back; the idle check stopped it again, with no end.
   capped order, the no-progress guard, the ranking, and its recognition maintenance package's own
   gates. Each candidate carries the decision, reason and wake of the gate that holds it. The one
   candidate the round would select there is not selected: its decision is deferred with
-  `instance_asleep_wake_due` (`instance_id` its alias) and the evaluation's time as its wake (so
-  the evaluation's own wake is now). It takes its instance and its device for the round, so the
+  `instance_asleep_wake_due` (`instance_id` its alias) and no wake of its own (#486 ASLEEP-5,
+  since 0.12.83; until then the evaluation's time, so the evaluation's own wake was now, "When the
+  driver looks again" below). It takes its instance and its device for the round, so the
   candidates behind it wait as behind a selected one (`instance_already_selected`,
   `device_group_waiting` `selected`, `capped_not_head`); a recognition maintenance package picked so
   makes its waiting candidates name `instance_asleep_wake_due` as their gate, with no wake. What
@@ -3356,8 +3357,8 @@ then held back; the idle check stopped it again, with no end.
   whose startup package can bring it back and whose availability nothing withdrew (the projection
   holds it available; no fence; no instance the probes take up) is asleep in the same way. Its
   snapshot is not changed: the evaluation judges it as it is, selects nothing on it, and defers the
-  one candidate it would select there with `instance_asleep_wake_due`, the evaluation's time as its
-  wake; the idle plan wakes it for that candidate alone, by its startup package
+  one candidate it would select there with `instance_asleep_wake_due`, with no wake of its own
+  since 0.12.83 (#486 ASLEEP-5); the idle plan wakes it for that candidate alone, by its startup package
   (`InstanceHolds::judge_asleep_as_available` names such an instance asleep as well). The hold in
   front of its candidates while the close runs is the idle action's own claim on its key (position
   2, `dispatch_instance_held`); #484's look ahead behind a hold reads no benefit gate, no pool line
@@ -3422,6 +3423,34 @@ then held back; the idle check stopped it again, with no end.
   scheduled task's run does not answer withholds the idle action for its hold alone, at least 10
   minutes and at most two hours, which neither a catalog's activation nor a reading's run ends
   (the same file, "The withheld action expires by itself").
+- **When the driver looks again** (#486 ASLEEP-5, since 0.12.83; register §1.524, the
+  coordinator's rulings 1 to 3 of 11-23). The task an asleep instance is woken for names no wake in
+  the evaluation: the evaluator does not know when the instance will be awake. Until 0.12.83 it
+  named the evaluation's time, so the evaluation's wake was now, and a round whose idle plan did not
+  wake the instance (a task within its rounding error, which never wakes a closed game; a wake held
+  by a pause; the action's own claim still running) was followed by the next at once, with nothing
+  changed, without end. Now the host says when the policy driver looks again, from what the cycle's
+  idle check did (`PolicyCycle::idle_wake_unix_ms`, beside the evaluation's own wake; the driver
+  wakes no later than the earlier of the two): for an instance the check left closed or stopped,
+  owing its wake, whose plan counts no task due, the plan's own wake when it has not come (what lets
+  a held task through: a blackout's end, an activity window's opening, a later position's release
+  behind a hold, a task's own time); none for every other instance. A wake under way (queued by
+  this check or an earlier one) names no time: each of its claims ends by handing the instance's key
+  back (`lease.released` or `lease.transferred`, whatever its end: the emulator up and the startup
+  package run, a start that failed, a start a pause or `start_emulator` off ended on its key, a
+  start an emulator control superseded or a stop or a drain interrupted), which raises the host's
+  business notification and so the next cycle; a claim cancelled while queued is ended by the
+  control that cancelled it, whose own claim's end does the same. An action under way names none
+  either, for the same reason. A wake a pause holds (PAUSE-AUTO) names none: the lease sweep's
+  idle check, every second, wakes the instance on the same plan once the pause no longer holds the
+  start. A candidate a position with no time holds is no candidate this rule applies to (the
+  closure defers it, with no wake, before the round could pick it); it was never woken by the
+  evaluation's time, and what lifts such a position reaches the driver as before (register §1.524,
+  its table). An asleep instance with a task due and nothing holding it is woken as fast as before:
+  the evaluation that finds the task due is the one at the task's own time (its wake while it was
+  not due yet), and its idle check starts the wake. What a cycle computes is unchanged: the
+  selection, the order of the deferrals, the idle plan's decision to wake, the cool-down. No
+  periodic evaluation is added.
 - **Not asleep.** An instance unavailable for any other cause, an application closed among them
   (its candidates are blocked at placement as before, and #484's fix round 2 holds for it); an
   instance whose emulator a person stopped. An asleep instance under a person's pause waits for the

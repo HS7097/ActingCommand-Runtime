@@ -625,6 +625,31 @@ impl HostShared {
         self.keep_idle_state(&mut planner)
     }
 
+    /// #486 ASLEEP-5 (register §1.524, ruling 2; `contracts/runtime-config.md`, "What wakes an
+    /// idle instance"): after a cycle's idle check, when the policy driver looks again for the
+    /// instances that check left closed or stopped, owing their wake, beside the evaluation's own
+    /// wake: the earliest time `IdlePlanner::look_again_unix_ms` names for one of them on its
+    /// latest plan; none when none names one. Each lock is taken alone, the planner's, then the
+    /// policy's for the plans, then the planner's again, as the idle check takes them.
+    pub(super) fn idle_look_again(&self) -> RuntimeHostResult<Option<u64>> {
+        let owing = lock(&self.idle, IdleLocation::Check)?.owing_wakes();
+        if owing.is_empty() {
+            return Ok(None);
+        }
+        let plans = {
+            let policy = lock(self.policy()?, IdleLocation::Check)?;
+            owing
+                .iter()
+                .map(|alias| (alias.as_str(), policy.idle_plan(alias)))
+                .collect::<Vec<_>>()
+        };
+        let planner = lock(&self.idle, IdleLocation::Check)?;
+        Ok(plans
+            .into_iter()
+            .filter_map(|(alias, plan)| planner.look_again_unix_ms(alias, plan))
+            .min())
+    }
+
     /// IDLE-1P (#405): records `host.idle_state` when the planner's closed instances changed since
     /// it was last recorded. The caller holds the planner, so the records follow its changes in
     /// order.

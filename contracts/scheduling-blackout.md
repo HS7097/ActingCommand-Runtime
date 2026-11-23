@@ -451,9 +451,14 @@ available instance's do, positions 1 to 9 included (the closure is asked; a paus
 blackout, a budget, a backoff or the activity interval defers them with its own code and wake, and
 the look ahead above reads positions 3 to 8 behind a hold as for any instance). Only the
 candidate the round would then select is not selected: it waits with `instance_asleep_wake_due`
-and the evaluation's time as its wake, and takes the instance (and its device) for the round, so
-a candidate behind it waits as behind a selected one; no intent is made for it, so nothing of
-admission runs. The clock-slot trace writes no record for it either (fix round 1, ruling 8): its
+and no wake of its own (#486 ASLEEP-5, since 0.12.83, register §1.524; before, the evaluation's
+time, so the evaluation's own wake was now), and takes the instance (and its device) for the round,
+so a candidate behind it waits as behind a selected one; no intent is made for it, so nothing of
+admission runs. When the driver looks again for it is the host's to say after the cycle's idle
+check ([scheduling/README.md](scheduling/README.md), "An asleep instance"). Every position of
+this order that defers a candidate with a time keeps its wake as before; one that names no time
+holds no candidate of an asleep instance that this pick could be, since the pick is a candidate
+every position let through. The clock-slot trace writes no record for it either (fix round 1, ruling 8): its
 deferral is the allocation's, after the closure let it through, so no closure deferral is captured
 for it, it is no placement block, and it has no intent to be owed. An instance unavailable for any
 other cause is blocked at placement as before.

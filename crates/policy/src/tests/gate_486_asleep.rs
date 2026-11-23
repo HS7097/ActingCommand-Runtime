@@ -12,7 +12,8 @@
 //   (register §1.506) adapts it: an instance named whose snapshot holds it available is asleep now
 //   (its application closed by its idle action, T5 and T6), so that case left T1.
 // - T2: an asleep instance, one candidate past its trigger with every gate open: it is deferred
-//   with `instance_asleep_wake_due` (its alias) and the evaluation's time as its wake, not
+//   with `instance_asleep_wake_due` (its alias) and no wake of its own (#486 ASLEEP-5, register
+//   §1.524; the evaluation's time until 0.12.83), not
 //   selected, no intent and no reason chain; the eligible candidate behind it carries exactly the
 //   decision it carries behind the same candidate selected on the instance available.
 // - T3: the same instance with the candidate's budget spent (the admission's deferral), with its
@@ -112,11 +113,9 @@ fn asleep_t2_the_candidate_the_round_would_select_waits_as_the_task_it_is_woken_
         "{woken_for:#?}"
     );
     assert_eq!(last.outcome.value("instance_id"), Some(&json!(A)));
-    assert_eq!(
-        woken_for.next_wake_unix_ms,
-        Some(NOW),
-        "its wake is the evaluation's time"
-    );
+    // #486 ASLEEP-5 (register §1.524, ruling 1; adapted): it names no wake of its own, and the
+    // evaluation's wake is not now (it was the evaluation's time until 0.12.83).
+    assert_eq!(woken_for.next_wake_unix_ms, None, "it names no wake");
     assert!(
         !woken_for.reasons.iter().any(|reason| {
             reason.outcome.is(PolicyCode::PlacementSelected)
@@ -125,10 +124,10 @@ fn asleep_t2_the_candidate_the_round_would_select_waits_as_the_task_it_is_woken_
         }),
         "no reason claims a selection: {woken_for:#?}"
     );
-    assert_eq!(
+    assert_ne!(
         asleep.next_wake_unix_ms,
         Some(NOW),
-        "the evaluation wakes now"
+        "the evaluation does not wake now"
     );
 
     // The candidate behind it: what it is behind the same candidate selected.
@@ -263,8 +262,9 @@ fn asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before() {
 // expected value comes from the rulings; nothing reads a clock.
 
 // T5 (the work order's test 2, the policy half): A available and named asleep. The candidate the
-// round would select is deferred `instance_asleep_wake_due` (its alias) with the evaluation's time
-// as its wake, nothing is selected, no intent and no reason chain; the candidate behind it carries
+// round would select is deferred `instance_asleep_wake_due` (its alias) with no wake of its own
+// (#486 ASLEEP-5; the evaluation's time until 0.12.83), nothing is selected, no intent and no
+// reason chain; the candidate behind it carries
 // the decision it carries behind the same candidate selected on A awake.
 #[test]
 fn asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_for() {
@@ -284,11 +284,9 @@ fn asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_f
         "{woken_for:#?}"
     );
     assert_eq!(last.outcome.value("instance_id"), Some(&json!(A)));
-    assert_eq!(
-        woken_for.next_wake_unix_ms,
-        Some(NOW),
-        "its wake is the evaluation's time"
-    );
+    // #486 ASLEEP-5 (register §1.524, ruling 1; adapted): it names no wake of its own, and the
+    // evaluation's wake is not now (it was the evaluation's time until 0.12.83).
+    assert_eq!(woken_for.next_wake_unix_ms, None, "it names no wake");
     assert!(
         !woken_for.reasons.iter().any(|reason| {
             reason.outcome.is(PolicyCode::PlacementSelected)
@@ -297,10 +295,10 @@ fn asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_f
         }),
         "no reason claims a selection: {woken_for:#?}"
     );
-    assert_eq!(
+    assert_ne!(
         closed.next_wake_unix_ms,
         Some(NOW),
-        "the evaluation wakes now"
+        "the evaluation does not wake now"
     );
     let behind = decision(&closed, BEHIND);
     assert!(
@@ -311,6 +309,96 @@ fn asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_f
         "{behind:#?}"
     );
     assert_eq!(behind, decision(&awake, BEHIND), "as behind a selected one");
+}
+
+// #486 ASLEEP-5 (0.12.83; register §1.524, the coordinator's ruling 1; the work order's test 5):
+// the task an asleep instance is woken for keeps its reason and what the round gives it, and names
+// no wake of its own; the candidate behind it decides as on the instance awake; the evaluation
+// does not wake now. On both fixtures: A's emulator stopped (ASLEEP-1's, its snapshot
+// unavailable) and A's application closed (ASLEEP-2's, its snapshot available).
+#[test]
+fn asleep5_t5_the_task_an_asleep_instance_is_woken_for_names_no_wake_and_nothing_else_changes() {
+    let catalog = catalog(vec![maintenance(DUE, 300), maintenance(BEHIND, 100)]);
+    let awake = round_without_holds(&catalog, &[snapshot(A, true)], &eligible);
+    assert_eq!(dispatched(&awake), [DUE], "{awake:#?}");
+    for (case, available) in [
+        ("its emulator stopped", false),
+        ("its application closed", true),
+    ] {
+        let asleep = round(&catalog, &[snapshot(A, available)], &asleep_a(), &eligible);
+        assert!(asleep.dispatch_intents.is_empty(), "{case}: {asleep:#?}");
+        let woken_for = decision(&asleep, DUE);
+        assert_eq!(woken_for.state, SchedulingDecisionState::Deferred, "{case}");
+        assert_eq!(woken_for.eligibility, EligibilityState::True, "{case}");
+        assert!(
+            woken_for
+                .reasons
+                .last()
+                .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAsleepWakeDue)),
+            "{case}: {woken_for:#?}"
+        );
+        assert_eq!(
+            woken_for.next_wake_unix_ms, None,
+            "{case}: no wake of its own"
+        );
+        assert_eq!(
+            decision(&asleep, BEHIND),
+            decision(&awake, BEHIND),
+            "{case}: the candidate behind it as behind the task selected"
+        );
+        assert_ne!(
+            asleep.next_wake_unix_ms,
+            Some(NOW),
+            "{case}: the evaluation does not wake now"
+        );
+    }
+}
+
+// #486 ASLEEP-5 (the work order's test 6, the policy half): two instances, A asleep and B awake,
+// the same tasks on each. B's decisions and its dispatch are those of the round with no instance
+// asleep; A's pick names no wake, so the evaluation's wake is the round's with A awake (B's own
+// pick carries the same trigger's next time as A's would), never now.
+#[test]
+fn asleep5_t6_of_two_instances_the_awake_one_decides_as_before_and_the_asleep_one_adds_no_wake() {
+    let catalog = catalog(vec![maintenance(DUE, 300), maintenance(BEHIND, 100)]);
+    let awake = round_without_holds(&catalog, &[snapshot(A, true), snapshot(B, true)], &eligible);
+    let asleep = round(
+        &catalog,
+        &[snapshot(A, false), snapshot(B, true)],
+        &asleep_a(),
+        &eligible,
+    );
+    let on_b = |evaluation: &PolicyEvaluation| {
+        evaluation
+            .dispatch_intents
+            .iter()
+            .filter(|intent| intent.instance_id == B)
+            .map(|intent| intent.task_id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(on_b(&awake), [DUE], "{awake:#?}");
+    assert_eq!(on_b(&asleep), on_b(&awake), "B is dispatched as before");
+    for task in [DUE, BEHIND] {
+        assert_eq!(
+            decision_on(&asleep, task, B),
+            decision_on(&awake, task, B),
+            "B's {task} as before"
+        );
+    }
+    let woken_for = decision_on(&asleep, DUE, A);
+    assert!(
+        woken_for
+            .reasons
+            .last()
+            .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAsleepWakeDue)),
+        "{woken_for:#?}"
+    );
+    assert_eq!(woken_for.next_wake_unix_ms, None, "A's pick names no wake");
+    assert_eq!(
+        asleep.next_wake_unix_ms, awake.next_wake_unix_ms,
+        "the asleep instance adds no wake"
+    );
+    assert_ne!(asleep.next_wake_unix_ms, Some(NOW), "never now");
 }
 
 // T6 (the work order's test 1, the policy half): on A available and named asleep, a judged

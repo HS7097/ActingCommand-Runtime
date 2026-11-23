@@ -1695,11 +1695,18 @@ impl HostShared {
     ) -> RuntimeHostResult<PolicyCycle> {
         let evaluated = self
             .evaluate_policy_cycle_authoritative(PolicyCycleClock::Sampled, None, trigger)
-            .and_then(|cycle| {
+            .and_then(|mut cycle| {
                 // IDLE-1: the idle check right after the evaluation and before actingd admits
                 // its dispatches, so a wake's claim holds an idle instance before a due dispatch
                 // reaches it.
                 self.check_idle_instances(false)?;
+                // #486 ASLEEP-5 (register §1.524, ruling 2): when the driver looks again for the
+                // instances this check left asleep is the host's to say, from what the check did
+                // with each; the evaluation names no wake for the task an asleep instance is woken
+                // for.
+                if cycle.evaluation.is_some() {
+                    cycle.idle_wake_unix_ms = self.idle_look_again()?;
+                }
                 Ok(cycle)
             });
         match evaluated {
@@ -1807,6 +1814,7 @@ impl HostShared {
             task_held_signals: Vec::new(),
             measurement: None,
             fact_refresh_transitions: Vec::new(),
+            idle_wake_unix_ms: None,
         })
     }
 
@@ -1904,6 +1912,9 @@ impl HostShared {
         seed: Option<u64>,
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
+        // #486 ASLEEP-5 (register §1.524, ruling 4): the cycle's start, from which the time up to
+        // its capped record is counted for the daemon's line of the cycle.
+        let cycle_started = std::time::Instant::now();
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
         }
@@ -1965,6 +1976,7 @@ impl HostShared {
             dispatches_read,
             queue_wait_starts,
             entry_blocked,
+            projection_micros,
         ) = {
             let _outcome_gate = lock(
                 &self.policy_outcome_gate,
@@ -2002,6 +2014,9 @@ impl HostShared {
                 #[cfg(test)]
                 PolicyCycleClock::Fixed { time, monotonic_ms } => (time, monotonic_ms),
             };
+            // #486 ASLEEP-5 (ruling 4): the projection of the cycle's inputs, the finished runs'
+            // outcomes among them, timed for the daemon's line of the cycle.
+            let projection_started = std::time::Instant::now();
             let (
                 facts,
                 resources,
@@ -2018,6 +2033,7 @@ impl HostShared {
                 Some(time.unix_ms),
                 Some(time.unix_ms),
             )?;
+            let projection_micros = crate::policy_host::micros_since(projection_started);
             // IDLE-3 (#447, register §1.332): the policy's own dispatches as these inputs count
             // them, read under the guard they were projected under (a settlement that comes
             // between this read and the evaluation below is not in them).
@@ -2036,6 +2052,7 @@ impl HostShared {
                 dispatches_read,
                 queue_wait_starts,
                 entry_blocked,
+                projection_micros,
             )
         };
         // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
@@ -2236,6 +2253,13 @@ impl HostShared {
         if cycle.evaluation.is_some() {
             self.keep_capped_episodes(RuntimeLifecycleFailureStage::PolicyDriver)?;
         }
+        // #486 ASLEEP-5 (register §1.524, ruling 4): the projection's time, and the time from the
+        // cycle's start to the end of its capped record, for the daemon's line of the cycle;
+        // nothing is stored.
+        if let Some(measurement) = cycle.measurement.as_mut() {
+            measurement.projection_micros = projection_micros;
+            measurement.until_capped_micros = crate::policy_host::micros_since(cycle_started);
+        }
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(
             &mut cycle,
@@ -2313,12 +2337,20 @@ impl HostShared {
                 .is_some()
                     || blackout_holds.contains_key(instance_alias)
             };
-            let transitions = lock(
-                &self.fact_refresh_recorder,
-                HostLocation::RecordFactRefreshTransitions,
-            )?
-            .observe(evaluation, &held, time.unix_ms, overdue_ms);
+            let (transitions, cycle_seq) = {
+                let mut recorder = lock(
+                    &self.fact_refresh_recorder,
+                    HostLocation::RecordFactRefreshTransitions,
+                )?;
+                let transitions = recorder.observe(evaluation, &held, time.unix_ms, overdue_ms);
+                (transitions, recorder.cycle_seq())
+            };
             cycle.fact_refresh_transitions = transitions;
+            // #486 ASLEEP-5 (ruling 4): the cycle's number, as the recorder counts evaluated
+            // cycles (`cycle_seq`).
+            if let Some(measurement) = cycle.measurement.as_mut() {
+                measurement.cycle_seq = cycle_seq;
+            }
         }
         lock(
             &self.trusted_policy_dispatches,
