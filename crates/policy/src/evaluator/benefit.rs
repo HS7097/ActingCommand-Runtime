@@ -52,13 +52,30 @@
 //! - **A fixed value** (SCHED-C1a, register §1.299; Alice's two kinds of scoring of 11-09 15:47
 //!   and 15:50; `contracts/scheduling/README.md`, "Fixed values written in the pack"). A task
 //!   that writes `benefit_fixed_value_milli` `V` is judged by
-//!   `B = V − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a consumption, its `produces`
-//!   unread. A consumed pool still needs its valuation and a regenerating one its reading, as
-//!   above; `ε` holds the consumption's terms only, a fixed value being exact. So below the cap a
-//!   consumer's `B` is `V − W·c`, and in a capped round its value without the pool's cost is `V`
-//!   less the other pools' cost ([`super::capped`] reads it from `S`). Static and dynamic
-//!   candidates rank on the one scale `B ÷ E`. Every decision whose `B` came from a fixed value
-//!   carries `benefit_fixed_value` before its other reasons.
+//!   `B = V + Σ_g produce(k,g)·W(k,g)/Q_g − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a
+//!   consumption and without a goal term. A consumed pool still needs its valuation and a
+//!   regenerating one its reading, as above; a fixed value is exact and adds nothing to `ε`. So
+//!   below the cap a consumer's `B` is `V − W·c` plus its goal terms, and in a capped round its
+//!   value without the pool's cost is `V` plus its goal terms less the other pools' cost
+//!   ([`super::capped`] reads it from `S`). Static and dynamic candidates rank on the one scale
+//!   `B ÷ E`. Every decision whose `B` came from a fixed value carries `benefit_fixed_value` before
+//!   its other reasons.
+//! - **A goal term of a fixed value** (#455 B1, register §1.518; the coordinator's rulings of
+//!   11-23; `contracts/resource-targets.md`, "Resource weights (v2)"). Each pool `g` the task
+//!   produces that the resource layer weighs above 0 for it adds `produce(k,g)·W(k,g)/Q_g`, its
+//!   production term as for a task without a fixed value, with its share of `ε` and its item: such
+//!   a pool declares no valuation (the compiler refuses a fixed value beside a priced product), so
+//!   it is weighed only by a goal in force that covers the task with an open gap, `W = Γ` and `Q`
+//!   the goal's `scale`. Any other pool it produces is not read: no goal, a pending goal (an
+//!   unknown reading, `Γ = 0`) and a met goal add nothing, so without such a goal `B`, `ε` and every
+//!   record are those of before, and a goal never lowers a `B`. Ruling 9 (a goal chooses which task
+//!   spends a pool, the pool's lines choose when), as corrected: below the trigger line of a
+//!   regenerating pool it consumes (the capacity without a written one; a pool whose lines give no
+//!   value counts as below), with no capped episode under way ([`super::capped`]), whether the task
+//!   may spend is judged by `S` and `ε` without its goal terms, as before them; the order it takes
+//!   once it passes reads them with the terms. At or above the line, and for a pool that does not
+//!   regenerate, the terms count everywhere. Ruling 11: a reason judged without them lists no goal
+//!   term, says so once in its detail, and `benefit_fixed_value` gives the `B` judged.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -75,6 +92,7 @@ use super::{
     project_pool_value, reason_with, resource_suggestion, scope_matches_instance, unknown_token,
 };
 use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
+use crate::resource_targets::PoolWeight;
 use crate::{
     ObservationRef, PoolProjection, PoolSpec, PredicateSpec, TaskSpec, TaskTerminalState,
     ValuationDeclaration,
@@ -162,6 +180,10 @@ enum Judgement {
         downstream: bool,
         /// SS-2h: the term of each pool it consumes, in declaration order (each pool once).
         consumed: Vec<ConsumedTerm>,
+        /// #455 B1 ruling 9 (register §1.518): for a task with a fixed value and at least one
+        /// goal term, its judgement without them, which the gate reads below the trigger line of
+        /// a regenerating pool it consumes; `None` otherwise.
+        without_goals: Option<WithoutGoals>,
     },
     Unknown {
         gap: Gap,
@@ -169,6 +191,20 @@ enum Judgement {
         suggestions: Vec<DetectionSuggestion>,
     },
 }
+
+/// #455 B1 ruling 9 (register §1.518): a fixed value's judgement without its goal terms.
+struct WithoutGoals {
+    /// `S` without the goal terms.
+    sum: ExactSum,
+    /// `ε` without their bounds.
+    tolerance: ExactSum,
+    /// Ruling 11: how many of the judgement's items, at their head, are goal terms.
+    goal_items: usize,
+}
+
+/// #455 B1 ruling 11 (register §1.518): what the detail of a judged candidate's reason says once
+/// when the goal terms were not counted, below the trigger line of a pool it consumes.
+const GOAL_TERMS_UNCOUNTED: &str = " goal_terms=not_counted_below_trigger_line";
 
 /// SS-2h (register §1.289): one consumed pool's part of a judged candidate's `S` and `ε`, which
 /// the capped spending order takes out again: its value without the pool's cost is `S` plus
@@ -201,6 +237,17 @@ impl ExactSum {
             numerator: 0,
             denominator: 1,
         }
+    }
+
+    /// #455 B1 (register §1.518): this sum with `other` added; `None` on overflow.
+    fn joined(&self, other: &Self) -> Option<Self> {
+        let mut sum = self.clone();
+        sum.add(
+            other.numerator.unsigned_abs(),
+            other.denominator.unsigned_abs(),
+            other.numerator < 0,
+        )?;
+        Some(sum)
     }
 
     /// SS-2h: this sum with one more term; `None` on overflow.
@@ -373,25 +420,29 @@ fn valued_pool<'a>(
 }
 
 /// The candidate's net benefit (module doc). `weight` is the resource layer's effective weight
-/// `W(k,p)` of a pool the task produces, when its term holds one; otherwise the pool's base
-/// weight is `W`.
+/// `W(k,p)` of a pool the task produces, with its step, when its term holds one; otherwise the
+/// pool's base weight is `W`.
 ///
-/// SCHED-C1a (register §1.299): with the task's fixed value `V` the sum starts at `V`, its
-/// `produces` are not read (neither their pools' valuations nor `ε`'s production terms), and the
-/// consumption is judged as before: `B = V` without one, `V` less its cost otherwise.
+/// SCHED-C1a (register §1.299): with the task's fixed value `V` the sum starts at `V` and the
+/// consumption is judged as before: `B = V` without one, `V` less its cost otherwise. #455 B1
+/// (register §1.518): of its `produces` only the pools its term weighs above 0 are read, each a
+/// production term at its term's step `Q` (a goal's `scale`), with its share of `ε` and its item;
+/// no other produced pool is looked up, so neither its valuation nor an entry's pending amount
+/// makes `B` unknown.
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
     context: &PlacementContext<'_>,
     facts: &EvaluationFacts,
-    weight: impl Fn(&str) -> Option<u64>,
+    weight: impl Fn(&str) -> Option<PoolWeight>,
 ) -> PolicyEvaluationResult<Judgement> {
     let unknown = |gap| Judgement::Unknown {
         gap,
         suggestions: Vec::new(),
     };
     let fixed_value = task.benefit_fixed_value_milli;
-    let produces: &[crate::ResourceEffectSpec] = match fixed_value {
+    // The entries checked below: a fixed value's `produces` are not (module doc).
+    let checked: &[crate::ResourceEffectSpec] = match fixed_value {
         Some(_) => &[],
         None => &task.produces,
     };
@@ -399,7 +450,7 @@ fn judge(
         return Ok(unknown(Gap::NoEffects));
     }
     // Every entry and every pool it touches, in declaration order, produces first.
-    for effect in produces.iter().chain(&task.consumes) {
+    for effect in checked.iter().chain(&task.consumes) {
         if effect.is_pending() {
             return Ok(unknown(Gap::EntryPending(effect.pool_id.clone())));
         }
@@ -426,26 +477,56 @@ fn judge(
     }
     // SS-2d: the rounding bound `ε` of `sum`, accumulated as exactly (module doc).
     let mut tolerance = ExactSum::new();
+    // #455 B1 ruling 9 (register §1.518): a fixed value's goal terms and their bounds, summed apart
+    // and joined to `S` and `ε` at the end, so the pools' lines can read the two without them.
+    let mut goal_sum = ExactSum::new();
+    let mut goal_bound = ExactSum::new();
+    let mut goal_items = 0_usize;
     let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
-    for effect in produces {
+    for effect in &task.produces {
         if seen.contains(&effect.pool_id.as_str()) {
             continue;
         }
         seen.push(effect.pool_id.as_str());
-        let (_, valuation) = valued_pool(&effect.pool_id, instance, context)
-            .map_err(|_| PolicyEvaluationError::invalid("a judged pool lost its valuation"))?;
+        // `W` and `Q`: the pool's valuation's, its term's weight where it holds one; #455 B1, with
+        // a fixed value, only a pool its term weighs above 0, at that term's step.
+        let (weight_milli, scale) = match fixed_value {
+            None => {
+                let (_, valuation) =
+                    valued_pool(&effect.pool_id, instance, context).map_err(|_| {
+                        PolicyEvaluationError::invalid("a judged pool lost its valuation")
+                    })?;
+                (
+                    weight(&effect.pool_id).map_or_else(
+                        || u64::from(valuation.base_weight_milli),
+                        |term| term.weight_milli,
+                    ),
+                    valuation.scale,
+                )
+            }
+            Some(_) => match weight(&effect.pool_id) {
+                Some(term) if term.weight_milli > 0 => (term.weight_milli, term.step),
+                _ => continue,
+            },
+        };
         let produced = crate::resource_targets::per_run_yield(&task.produces, &effect.pool_id);
-        let weight_milli =
-            weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
         downstream |= weight_milli > 0;
+        let (terms, bounds) = match fixed_value {
+            None => (&mut sum, &mut tolerance),
+            Some(_) => {
+                goal_items += 1;
+                (&mut goal_sum, &mut goal_bound)
+            }
+        };
         let (numerator, denominator) = ratio(
             &[produced, u128::from(weight_milli)],
-            &[u128::from(valuation.scale), 1_000],
+            &[u128::from(scale), 1_000],
         )
         .ok_or_else(overflow)?;
-        sum.add(numerator, denominator, false)
+        terms
+            .add(numerator, denominator, false)
             .ok_or_else(overflow)?;
         // SS-2d: `R/(2000·Q) + n·(2W+1)/(4000·Q)`.
         let rounding = rounding_numerator(
@@ -455,8 +536,8 @@ fn judge(
         )
         .ok_or_else(overflow)?;
         let (bound_numerator, bound_denominator) =
-            ratio(&[rounding], &[u128::from(valuation.scale), 4_000]).ok_or_else(overflow)?;
-        tolerance
+            ratio(&[rounding], &[u128::from(scale), 4_000]).ok_or_else(overflow)?;
+        bounds
             .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
         items.push(format!(
@@ -485,8 +566,10 @@ fn judge(
             &effect.pool_id,
             context.amounts.on(&instance.instance_id),
         )?;
-        let weight_milli =
-            weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
+        let weight_milli = weight(&effect.pool_id).map_or_else(
+            || u64::from(valuation.base_weight_milli),
+            |term| term.weight_milli,
+        );
         // SS-2h (register §1.289): a unit consumed costs its full weight `W` whatever the pool's
         // fill; SS-2b's linear discount is retired. A regenerating pool still needs its reading,
         // as before (unknown or expired, `B` is unknown), and wakes the evaluation at its next
@@ -568,13 +651,31 @@ fn judge(
                 .collect(),
         });
     }
+    // #455 B1: `S` and `ε` with the goal terms; ruling 9: without them beside, for the lines. The
+    // goal terms' items lead `items`: a fixed value's every production item is one.
+    if goal_items == 0 {
+        return Ok(Judgement::Known {
+            sum,
+            tolerance,
+            items,
+            wake_unix_ms,
+            downstream,
+            consumed,
+            without_goals: None,
+        });
+    }
     Ok(Judgement::Known {
-        sum,
-        tolerance,
+        sum: sum.joined(&goal_sum).ok_or_else(overflow)?,
+        tolerance: tolerance.joined(&goal_bound).ok_or_else(overflow)?,
         items,
         wake_unix_ms,
         downstream,
         consumed,
+        without_goals: Some(WithoutGoals {
+            sum,
+            tolerance,
+            goal_items,
+        }),
     })
 }
 
@@ -596,8 +697,8 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// gate: an unjudged candidate passes untouched; a judged one passes with its known positive `B`
 /// and `E`, or is deferred with `policy_benefit_nonpositive` or `benefit_unknown` and takes no
 /// part in the allocation. `weights` holds, by work index, the effective weight of each pool
-/// the candidate's resource term weighs. With `refreshing`, a candidate whose only gap is an
-/// unknown reading asks the fact refresh for it through `affected`.
+/// the candidate's resource term weighs, with its step. With `refreshing`, a candidate whose only
+/// gap is an unknown reading asks the fact refresh for it through `affected`.
 ///
 /// SS-2d (register §1.235): three ways for a known `B`. Within its rounding error (`|S| ≤ ε`)
 /// it is `benefit_within_tolerance`: released (`zero_tier`, the allocation's last place in its
@@ -614,7 +715,7 @@ pub(super) fn gate(
     facts: &EvaluationFacts,
     ranked: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
-    weights: &BTreeMap<usize, BTreeMap<String, u64>>,
+    weights: &BTreeMap<usize, BTreeMap<String, PoolWeight>>,
     refreshing: bool,
     affected: &mut Vec<AffectedCandidate>,
     memory: &mut CappedMemory,
@@ -696,6 +797,7 @@ pub(super) fn gate(
                 wake_unix_ms,
                 downstream,
                 consumed: _,
+                without_goals,
             } => {
                 let defer = |task_work: &mut TaskWork, reason: DecisionReason| {
                     task_work.state = SchedulingDecisionState::Deferred;
@@ -707,7 +809,7 @@ pub(super) fn gate(
                 };
                 // SS-2h: a capped pool's order decides before the sign of `B`. SCHED-C1a: a `B`
                 // computed from a fixed value says so first, whatever the gate then decides.
-                let hold = match disposition {
+                let (hold, below_trigger) = match disposition {
                     Disposition::Held(reason) => {
                         note_fixed_value(task_work, task, saturating_milli(sum.floor()), expected);
                         defer(task_work, reason);
@@ -727,17 +829,42 @@ pub(super) fn gate(
                         kept.push(candidate);
                         continue;
                     }
-                    Disposition::Normal { hold } => hold,
+                    Disposition::Normal {
+                        hold,
+                        below_trigger,
+                    } => (hold, below_trigger),
                 };
                 let benefit_milli = saturating_milli(sum.floor());
-                note_fixed_value(task_work, task, benefit_milli, expected);
+                // #455 B1 ruling 9 (register §1.518): below the trigger line of a regenerating pool
+                // it consumes, whether a task with a fixed value may spend is judged without its
+                // goal terms, as before them; once it passes, its order reads `B` with them. Ruling
+                // 11: a reason judged without them lists no goal term and says so once.
+                let (gated_sum, gated_tolerance, gated_items, uncounted) = match &without_goals {
+                    Some(plain) if below_trigger => (
+                        &plain.sum,
+                        &plain.tolerance,
+                        &items[plain.goal_items..],
+                        GOAL_TERMS_UNCOUNTED,
+                    ),
+                    _ => (&sum, &tolerance, items.as_slice(), ""),
+                };
+                let gated_milli = saturating_milli(gated_sum.floor());
                 // SS-2d: within its rounding error the sign is not trusted (module doc).
-                let within = sum.within(&tolerance).ok_or_else(|| {
+                let within = gated_sum.within(gated_tolerance).ok_or_else(|| {
                     PolicyEvaluationError::invalid(format!(
                         "task '{}' net benefit tolerance is negative on instance '{}'",
                         task.id, instance.instance_id
                     ))
                 })?;
+                // SCHED-C1a: the `B` the decision reads, with the goal terms once it passes, else the
+                // one judged (ruling 11).
+                let passes = !within && gated_milli > 0;
+                note_fixed_value(
+                    task_work,
+                    task,
+                    if passes { benefit_milli } else { gated_milli },
+                    expected,
+                );
                 if within {
                     let tier = if !task.is_benefit_realization() {
                         ZeroTier::Unmarked
@@ -750,12 +877,14 @@ pub(super) fn gate(
                     } else {
                         ZeroTier::Released
                     };
-                    task_work.reasons.push(tolerance_reason(
-                        (benefit_milli, &sum),
-                        (saturating_milli(tolerance.ceil()), &tolerance),
+                    let mut said = tolerance_reason(
+                        (gated_milli, gated_sum),
+                        (saturating_milli(gated_tolerance.ceil()), gated_tolerance),
                         tier,
-                        &items,
-                    ));
+                        gated_items,
+                    );
+                    said.detail.push_str(uncounted);
+                    task_work.reasons.push(said);
                     if matches!(tier, ZeroTier::Released) {
                         // SS-2h: a released one is held by a pool's lines as a positive one is.
                         if let Some(hold) = hold {
@@ -774,7 +903,7 @@ pub(super) fn gate(
                     }
                     continue;
                 }
-                if benefit_milli > 0 {
+                if passes {
                     // SS-2h: positive, but a pool's lines hold it (its hard line, or a capped
                     // pool's order).
                     if let Some(hold) = hold {
@@ -794,9 +923,9 @@ pub(super) fn gate(
                     continue;
                 }
                 task_work.state = SchedulingDecisionState::Deferred;
-                task_work
-                    .reasons
-                    .push(nonpositive_reason(benefit_milli, expected, &items));
+                let mut said = nonpositive_reason(gated_milli, expected, gated_items);
+                said.detail.push_str(uncounted);
+                task_work.reasons.push(said);
                 if let Some(wake) = wake_unix_ms.filter(|wake| *wake > context.time.unix_ms) {
                     task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
                 }

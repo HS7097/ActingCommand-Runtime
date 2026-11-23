@@ -47652,6 +47652,210 @@ a row is tried again after 20, 40 and 80 minutes and then every two hours, withi
 and, after another task's successful run on its instance, as soon as its ordinary backoff and its
 minimum interval have passed.
 
+### 1.518 Slice #455 B1 (0.12.82): a rule with a fixed value counts a goal's gap on the pools it produces that declare no valuation (board #455, the main line's third step; the rulings 1 to 11 are the coordinator's of 11-23 (9 after the implementer's first report, 9 corrected, 10 and 11 after the independent review of #1884), no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b1.md` after the read-only study `rd-1123/study-step3-pools.md`, its questions 2 to 4 and the coordinator's disposition of it; on main `2c0f949d`)
+
+This section takes 1.518. It ships in 0.12.82.
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", its bullets "The net
+benefit" and "Unknown is never 0"; "Fixed values written in the pack", its bullets "Without a
+consumption", "With a consumption", "Its `produces`", "One scale" and the new "A goal on what it
+produces" and "A goal chooses which task spends a pool, the pool's lines choose when"; "Pool
+lines", the bullet "Below the cap"; "Capped spending order", the bullet "A round"; "Expected
+quantities (v2)", the bullet "SS-6"), [resource-targets.md](resource-targets.md) ("Resource weights
+(v2)", the new paragraphs "A goal on what a task with a fixed value produces" and "A goal never
+takes `run_cap` away") and [remedies.md](remedies.md) (section 4, the row `run_cap`) are the
+contract;
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value", its last bullet, and the
+new paragraph "Pools a goal asks for") and [pack-catalog.md](pack-catalog.md) (the bullet "The value
+and the marks") follow it. No `package` revision moves, no declared interface range, no
+configuration key, no code or word, no catalog member, no `requires` name: nothing is declared
+anew, and no catalog's bytes or hash move.
+
+**Why.** The aim of the third step: the person says what the account lacks and the scheduler picks
+the stages that yield it. A resource repository is about to declare, per game, what each business
+rule yields into pools that have no valuation (materials and currencies); every such rule carries a
+fixed value, and a fixed value beside a pool without a valuation is accepted (beside a priced or
+pending one it is refused). Until this slice the judgement took a fixed-value task's `produces` as
+empty (SCHED-C1a, §1.299), so a goal on such a pool changed neither the rule's benefit nor its
+order: it reached only the score stage's term `R`, which does not order the judged candidates of
+the business tier (they go by `B ÷ E`; the Runtime's catalog runs no selection document whose
+thresholds could promote one).
+
+**The rule** (rulings 1, 2, 3 and 5).
+- *The goal term.* For a task with a fixed value `V`, each pool it produces that declares no
+  valuation and that a goal in force covers with an open gap adds `r·W/(1000·Q)`: `r` its per-run
+  yield in thousandths (the resource layer's `per_run_yield`, an integer `amount` at its confidence
+  or an `expected_amount_milli`), `W = B_p + Γ` the weight the resource layer gives the pool for the
+  goal (`B_p` 0 without a valuation, `Γ = min(⌊I·g/S⌋, 1 000 000)`), `Q` the goal's own `scale`
+  `S` (the step the resource layer divided by; `I` the goal's `importance_milli`, both required on a
+  goal over a pool without a valuation). `B = V + Σ goal terms − cost`, summed exactly and floored
+  once, as before.
+- *Where the weight comes from.* The resource layer's own term of the candidate
+  (`ResourceTerm::pool_weights`, `weigh_production`), which already weighed such a pool by the
+  covering goal (`Q_p = valuation.scale, else t.scale`): it now hands the judgement the step `Q`
+  beside `W` (`PoolWeight`). No new input, no change of the goal document, nothing outside the
+  policy crate's evaluation; a pool observed by a fact needs only that fact (the goal's gap reads it
+  as before), so the host supplies nothing new.
+- *Nothing else is read* (ruling 2). A produced pool the term does not weigh above 0 is skipped
+  before it is looked up: no goal covers it, its reading is unknown (a pending goal, `Γ = 0`), the
+  goal is met, or its target is unresolved. An entry whose amount is the pending marker yields
+  nothing (`per_run_yield`) and never makes `B` unknown. A goal never lowers a `B`.
+- *Without such a goal* (ruling 3) the term is empty: `S`, `ε`, every item, record, decision and
+  identity are those of before.
+- *The rounding bound and the items* (ruling 5). A goal term adds
+  `[2r + n·(2W + 1)]/(4000·Q)` to `ε`, `n` its pool's `expected_amount_milli` entries, as a
+  production term of a task without a fixed value does; the judgement's items name it
+  `<pool>:+<⌊term⌋>`, before the consumption's.
+- *Decided here.* Since the compiler refuses a fixed value beside a priced or pending product, every
+  pool a fixed-value task produces declares no valuation, so the judgement reads the weight and the
+  step the term gives without looking the pool up. A pending amount on a goal-covered pool counts as
+  a yield of 0 rather than making `B` unknown, so a goal cannot stop a stage that ran before (the
+  implementer's choice, which the coordinator accepted on 11-23; written in the contract).
+
+**Ruling 9: a goal chooses which task spends a pool, the pool's lines choose when** (the
+coordinator's, after the first report showed that a goal term making a benefit positive lets the
+task spend below the consumed pool's trigger line as soon as one run fits above the hard line, and
+come back each time the pool has regenerated one run: an instance woken for a single run, with no
+more spent in total).
+- *Below the line* (as corrected after the independent review of #1884, which found that the first
+  build marked only a pool that writes a `trigger_line`, though a pool without one has its trigger
+  at its capacity). Where a task consumes a pool that regenerates (its `projection` is not `none`)
+  and the pool is below its trigger line (the `trigger_line`, or the capacity without one) with no
+  capped episode under way (the lines' gate's "Below the cap", `capped.rs`, `plan`), or its lines
+  give no value with no episode under way (the branch of `plan` that holds with `capped_cap_unknown`
+  or `lines_invalid`), whether the task may spend is judged by its benefit without the goal terms,
+  exactly as before them: one positive without them spends as before (the hard line still holds
+  it) and its order then reads `B` with them; one positive only by a goal term waits for the line.
+  A consumed pool that does not regenerate (a ticket, a shop currency) has no "when": the goal
+  terms count there everywhere, as rulings 1 to 8 built it, and the rule's own cooldown paces it.
+  Whether a pool regenerates is read where the mark is made: `plan` holds the pool's `PoolSpec`,
+  whose `projection` it matches (`PoolProjection::Regenerating`).
+- *How the two are told apart.* The judgement keeps, beside `S` and `ε`, the two without the goal
+  terms and how many of its items are goal terms (`Judgement::Known`'s `without_goals`, a
+  `WithoutGoals`, summed apart in `judge` and joined at its end), and the lines' plan marks a
+  candidate below the line (`Disposition::Normal`'s `below_trigger`). No second judgement call;
+  nothing outside the policy crate's evaluation.
+- *What a person sees* (ruling 11, the smallest of the two choices: leave the uncounted terms out
+  and say so once). A task that waits below the line only because its benefit without the goal
+  terms is not positive carries the reason it carries without the goal: `policy_benefit_nonpositive`
+  with that `benefit_milli` (or `benefit_within_tolerance` with that `S` and `ε`), the same code and
+  values; its items are those without the goal terms and its detail ends once with
+  ` goal_terms=not_counted_below_trigger_line`; its `benefit_fixed_value` gives the `B` judged and
+  `V`. The goal shows in the candidate's `resource_targets` and `resource_weights`. A candidate that
+  passes carries the `B` with the goal terms its order reads. No code or word is new.
+- *At and above the line* (the capped episode) and in every order of the table below, `B` with the
+  goal terms is read: when the pool reaches its line the task that produces the lacking pool heads
+  the round and sweeps to the stop line by the capped rule.
+- *A chain's follower* is not judged and, by its edge (COV-1), is due only after its head's run, so
+  a head that waits below the line holds its chain; the lines never hold a rider.
+- *A worked timeline.* A pool of capacity 180, `trigger_line` 160, `stop_line` 140, `hard_line`
+  104, regenerating one unit in six minutes, valued 1000 milli a unit; a stage of `V` 9 500 consumes
+  10 a run (−500 without the goal) and produces 2 a run of a pool a goal lacks 30 of (term 600:
+  100 with it). From 110 the pool regenerates; from 114 one run fits above the hard line, but below
+  160 the stage waits `policy_benefit_nonpositive` −500. At 160, five hours later, the episode
+  begins, the stage heads it and is handed `run_cap` min(⌈20 ÷ 10⌉, ⌊56 ÷ 10⌋, ⌈30 ÷ 2⌉) = 2: one
+  dispatch, two runs, to 140; the next sweep comes two hours later, at 160 again. Under rulings 1 to
+  8 alone it ran once an hour from 114 on. The same pool writing no `trigger_line` waits for 180.
+
+**Ruling 10: a goal never takes `run_cap` away** (`resource_targets.rs`, `goal_runs`, `run_cap`).
+The review found that a produced pool with an open gap declared by `expected_amount_milli` made
+`goal_runs` answer nothing and its `?` drop the whole `run_cap`, the lines' and reserves' part
+included; a sweep without `run_cap` runs to its floor, or a package that presses `run_cap` times
+ends unresolved. Now such a pool bounds the runs by ⌈gap·1000 ÷ its expected yield per run in
+thousandths⌉, at least 1, and one that yields nothing per run (its amount pending) bounds nothing;
+`run_cap` is the least of the bounds that exist (the lines' or reserves' runs, the goal's, 1 000)
+and is absent only where it was before for another reason (no consumed pool takes part, an
+unknown reading or line of one that does, a consumed amount per run that is no integer). An
+integer yield is bounded as before; a task with no goal on what it produces is handed the
+`run_cap` of before. For example: 2 a run consumed below the lines' hard line 104 read at 150
+(⌊46 ÷ 2⌋ = 23 runs), 2.5 a run expected of a pool a goal lacks 30 of: `run_cap` min(23,
+⌈30 000 ÷ 2 500⌉ = 12) = 12, where before it had none. [remedies.md](remedies.md) (section 4, the
+row `run_cap`) and [resource-targets.md](resource-targets.md) ("A goal never takes `run_cap`
+away") state it; [scheduling/README.md](scheduling/README.md) ("Expected quantities (v2)", SS-6)
+no longer says that such a production gives none.
+
+**The readers of a fixed value that rank or gate** (ruling 4). Each reads the judgement's `S` (or
+`⌊S⌋`), so each now takes the goal terms; none was changed besides the judgement.
+
+| Reader | Where | Now |
+|---|---|---|
+| The gate's sign and band (positive, `policy_benefit_nonpositive`, `benefit_within_tolerance`) | `evaluator/benefit.rs`, `gate` | `⌊S⌋` and `ε` with the terms; ruling 9: without them below the trigger line of a regenerating pool it consumes |
+| The order within a tier, `B ÷ E` | `evaluator.rs`, `allocation_order`, `KnownBenefit::order` | the candidate's `KnownBenefit` is `⌊S⌋` |
+| The reserve gate's order | `evaluator.rs`, `apply_reserves` (the allocation order with tiers) | as the order within a tier |
+| A capped round's listing and frozen order, `V ÷ C` | `evaluator/capped.rs`, `start_round` (`S` plus the pool's cost, over its bound and over `C`) | with the terms and their bounds |
+| The capped block's head `B = V − W·(c − a)` and the block's place | `evaluator/capped.rs`, `RoundView::decide`; `evaluator.rs`, `OrderView` | `S` plus the refund |
+| The hard line's hold below the trigger line | `evaluator/capped.rs`, `plan` | reads no value; it holds a candidate that would pass; ruling 9: for a regenerating pool below its trigger line (the capacity without a written one), or whose lines give no value, with no episode under way, it also marks the candidate `below_trigger`, so the gate decides that "would pass" without the goal terms |
+| Records: `benefit_fixed_value` (`benefit_milli` `B`, `fixed_value_milli` `V`), `rank_breakdown` | `evaluator/benefit.rs`, `note_fixed_value`; `evaluator.rs`, `rank_breakdown_detail` | `B` with the terms, `V` itself |
+| Not readers of the value: the score stage's `R` (it weighed the goal before), the zero tier (refused beside `V`), the coverage and provenance of the composer, `goals.json`'s `goal_tier_without_fixed_value` (whether a rule writes one) | — | unchanged |
+
+With no goal on such a pool no term exists, so no order changes (stop condition 3 not met).
+
+**A worked example.** Two stages of one instance, `V` 40 000 each, each consuming 30 a run of a pool
+valued 1000 milli a unit (`Q` 1): cost 30 000, `B` 10 000 each, and the tie-break decides (the one
+declared first). Stage X yields 2 a run of a pool without a valuation, stage Y none. A goal asks for
+at least 40 of that pool, `scale` 10, `importance_milli` 1000; it is read at 10, so it lacks 30:
+`Γ = ⌊1000·30/10⌋ = 3000`, X's term `2000·3000/(10·1000) = 600`, `B(X) = 10 600`, `B(Y) = 10 000`, and
+X goes first. Read at 40 (met) or unknown: 10 000 each, as before. In a capped round (the pool read
+above its trigger line) of `V` 36 000 each, X is listed with 36 600 against 36 000 over 30 and is
+spent first. With an expected yield of 2.5 a run the term is 750 and its bound
+`[5000 + 6001]/40 000 = 11001/40000`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The weight and step handed on | `crates/policy/src/resource_targets.rs` (`PoolWeight`, `ResourceTerm::pool_weights`) |
+| The goal terms | `crates/policy/src/evaluator/benefit.rs` (`judge`: the production loop reads, for a fixed value, only the pools its term weighs above 0, at the term's step, summed apart; `ExactSum::joined`; `Judgement::Known`'s `without_goals`) |
+| Ruling 9 | `crates/policy/src/evaluator/capped.rs` (`Disposition::Normal`'s and `Decided`'s `below_trigger`, set in `plan` for a regenerating pool below its trigger line and in its branch of lines that give no value); `crates/policy/src/evaluator/benefit.rs` (`gate`, phase 3: the sign and band read without the goal terms when it is set) |
+| Ruling 10 | `crates/policy/src/resource_targets.rs` (`goal_runs` answers the goal's bound or none, an expected yield bounding by ⌈gap·1000 ÷ yield⌉; `run_cap` no longer loses its other bounds to it) |
+| Ruling 11 | `crates/policy/src/evaluator/benefit.rs` (`WithoutGoals::goal_items`, `GOAL_TERMS_UNCOUNTED`; `gate`, phase 3: the items without the goal terms, the detail's note, `benefit_fixed_value` the `B` judged) |
+| The map of weights | `crates/policy/src/evaluator.rs` (the score stage's `weights`, now of `PoolWeight`) |
+
+**Tests** (incident `#455 B1`: `crates/policy/src/tests/gate_455_b1.rs`, policy gate map; no clock
+read).
+
+| Test | What it shows |
+|---|---|
+| `b1_t1_a_goal_on_a_lacking_pool_adds_its_term_and_its_stage_goes_first` (1) | Read at 150, `V` 40 000, cost 30 000: the producer 10 600 and selected (its `rank_breakdown` B and V), the other 10 000 `instance_already_selected`; without the goal both 10 000 and the one declared first selected |
+| `b1_t2_a_met_goal_or_an_unknown_reading_leaves_both_stages_as_before` (2) | The goal met (read at 40) or pending (no reading): both 10 000, the first selected, the resource layer saying `satisfied` or `pending` |
+| `b1_t3_without_a_goal_every_decision_is_byte_for_byte_the_one_of_before` (3) | catalog-a's V1 and V2 golden identities; without a goal the decisions serialize to the bytes of the same stages declaring no production, the lacking pool read or not; same dispatch and wake |
+| `b1_t4_in_a_capped_round_the_stage_that_produces_the_lacking_pool_is_frozen_first` (4) | Read at 200, `V` 36 000: the producer frozen first, `capped_spend` rank 1, B 36 600; the other `capped_not_head` with 36 000; without the goal the other way round (task ids) |
+| `b1_t5_an_expected_yield_brings_its_rounding_bound_and_its_item_names_the_pool` (5) | 2.5 a run expected: `V` 29 250 gives S 0 within `ε = 611001/40000` (⌈ε⌉ 16), items `pool.lacking:+750,pool.neutral:-30000`; `V` 40 000 gives 10 750; without the goal −750, the consumption's item alone |
+| `b1_t7_the_goals_spend_values_are_those_of_before` (7) | `gap_remaining` and `run_cap` as SS-6 and LF-1 build them: 30 and 1 below the cap (the hard line binds), 2 and 1 on a capped round's head (the goal binds) |
+| `b1_t8_below_a_trigger_line_a_stage_positive_only_by_its_goal_waits_as_before` (rulings 9, 11) | A regenerating pool, trigger line 160, read at 150, `V` 9 500, 10 a run: not dispatched; `policy_benefit_nonpositive` with the outcome it has without the goal (−500), items `pool.neutral:-10000` and the detail's ` goal_terms=not_counted_below_trigger_line`; `benefit_fixed_value` −500; the goal in `resource_weights` |
+| `b1_t9_at_the_trigger_line_that_stage_heads_the_capped_episode` (ruling 9) | Read at 160: the producer heads the round (`capped_spend` rank 1, `trigger_line` 160), B 10 100, `run_cap` 2, gap 30; the other `capped_not_head` with 9 500; without the goal the other way round |
+| `b1_t10_below_a_trigger_line_a_stage_positive_without_its_goal_spends_as_before` (ruling 9) | `V` 12 000 at 150: both positive without the terms; the producer dispatched with 2 600, the other 2 000 `instance_already_selected`; without the goal the first declared |
+| `b1_t11_without_a_written_line_a_regenerating_pool_waits_and_a_spent_currency_does_not` (ruling 9) | A capped pool without lines, read at 150: regenerating, the producer waits −500 below its capacity with the ruling 11 detail; not regenerating, the producer dispatched with 100, the other −500 `policy_benefit_nonpositive`; without the goal neither |
+| `b1_t12_an_unknown_reading_or_line_with_no_round_in_progress_counts_as_below_the_line` (ruling 9) | The regenerating pool unread, the stages on an hourly clock: `benefit_unknown` `reading_unknown` with and without the goal; its stop line read from a missing fact: the producer waits −500 with the ruling 11 detail, the outcome without the goal, not `capped_cap_unknown` |
+| `b1_t13_an_expected_yield_bounds_run_cap_by_the_gap_instead_of_removing_it` (ruling 10) | 2 a run consumed at 150 (lines: 23 runs), 2.5 a run expected, gap 30: B 38 750, gap 30, `run_cap` 12; without the goal `run_cap` 23 and no gap |
+| `b1_t14_one_regenerating_pool_below_its_line_holds_a_task_that_consumes_two` (ruling 9) | 10 a run of the pool that does not regenerate and 1 of a regenerating one below its capacity, `V` 10 500: waits −500, items `pool.neutral:-10000,pool.regen:-1000` and the ruling 11 detail, the outcome without the goal |
+
+Test 6 is the existing refusals, unchanged: `sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer`
+(`fixed_value_conflict` beside a valued and a pending product) and
+`cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word` (`catalog_value_conflict`).
+Test 8: one existing test is changed, for ruling 10:
+`ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_nor_wraps` (SS-6), whose
+first case, a goal-driven production declared by `expected_amount_milli` with an open gap of 60
+beside a reserve that pays for 30 runs, now expects `run_cap` 12 (⌈60·1000 ÷ 5000⌉) where it
+expected none; its other cases are unchanged. `sched_c1a_t1_a_fixed_value_without_effects_is_its_known_benefit`
+(a production of a pool without a valuation, no goal: `B = V`) passes as it is. No test leaves the
+gate map; no golden is re-recorded.
+
+**What is not changed.** A task without a fixed value, but for ruling 10's `run_cap`; a fixed-value
+task with no goal over a pool it produces; the conflict rule between a fixed value and a valued or
+pending pool, and so what a catalogue accepts or refuses, its hash and the `requires` names (ruling
+7); what a goal does to a pool with a valuation; the consumption's cost and its gates; the score
+stage's `R` and every resource-target reason; `gap_remaining`, and the goal's part in `run_cap` for
+an integer yield (ruling 6); admission; every declared interface range. No game, package or alias
+is named in code (ruling 8).
+
+**At deploy.** Nothing to configure. No installed root has a goal on a pool without a valuation, so
+nothing changes until a resource repository declares such pools on its rules ("Pools a goal asks
+for") and a goal is set on one; from then on the stages that yield it are judged `V` plus their goal
+terms, and one that consumes a regenerating pool and is worth running only by its goal term waits
+for that pool's trigger line, its capacity without one (ruling 9). A task with a goal on a pool it
+produces by `expected_amount_milli` is handed a `run_cap` where it had none (ruling 10). An older
+build reads the same root and ignores these productions as before.
+
 ### 1.519 Slice #455 B3 (0.12.82): a `resource` entry of `goals.json` can set a goal on a pool that declares no valuation (board #455, the main line's third step; the rulings 1 to 6 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b3.md` after the read-only study `rd-1123/study-step3-pools.md`, its question 3 and slice B3, and the coordinator's disposition of it; on main `8923a701`, the v0.12.81 release)
 
 This section takes 1.519 (1.518 belongs to another slice of this version). It ships in 0.12.82.
@@ -47659,9 +47863,8 @@ This section takes 1.519 (1.518 belongs to another slice of this version). It sh
 table and the bullet below it, the neutral example, "Texts and limits", "The checks", "Who reads
 it" and "Interface") is the contract; [resource-targets.md](resource-targets.md) ("One value by
 name": who gives a goal set by name its step and importance) and
-[standard-pack-schedule.md](standard-pack-schedule.md) (one sentence after the table "What a
-resource repository writes", where the pools' declaration is described: the paragraph of 1.518 on
-the pools a goal asks for is not on main yet) follow it.
+[standard-pack-schedule.md](standard-pack-schedule.md) (one sentence at the end of 1.518's
+paragraph "Pools a goal asks for", pointing to the entry's two numbers) follow it.
 
 **Why.** A resource repository declares, per game, the pools its rules produce (materials,
 currencies) without a valuation: every producing rule keeps its fixed value, and a fixed value

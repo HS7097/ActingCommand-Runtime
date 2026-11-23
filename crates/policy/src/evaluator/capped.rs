@@ -103,7 +103,8 @@ use super::{
 use crate::codes::{LinesSource, PolicyCode, PoolLineHold};
 use crate::resource_targets::{LineView, PoolLines};
 use crate::{
-    CompiledCatalog, FactValue, ObservationRef, PoolCapacity, PoolLine, PoolSpec, TaskSpec,
+    CompiledCatalog, FactValue, ObservationRef, PoolCapacity, PoolLine, PoolProjection, PoolSpec,
+    TaskSpec,
 };
 
 // SCHED-C1d (register §1.299 SC1-11): what the Runtime keeps of the memory across a start.
@@ -425,8 +426,14 @@ pub(super) struct Known<'a> {
 /// What a pool's lines decide for one ranked candidate.
 pub(super) enum Disposition {
     /// No capped order holds it: the gate decides as before; `hold`, when present, holds it if it
-    /// would pass (its hard line, or another consumer's capped order).
-    Normal { hold: Option<DecisionReason> },
+    /// would pass (its hard line, or another consumer's capped order). #455 B1 ruling 9 (register
+    /// §1.518): `below_trigger` when a regenerating pool it consumes is below its trigger line (the
+    /// capacity without a written one), or its lines give no value, with no episode under way, so
+    /// the gate judges whether it may spend without its goal terms.
+    Normal {
+        hold: Option<DecisionReason>,
+        below_trigger: bool,
+    },
     /// A capped order holds it back this round.
     Held(DecisionReason),
     /// A capped round tries it: it passes with its own `B`, whatever its sign.
@@ -635,6 +642,9 @@ pub(super) fn plan(
                 continue;
             }
             considered.insert(key.clone());
+            // #455 B1 ruling 9 (register §1.518): only a regenerating pool has a "when" its lines
+            // choose; one that does not regenerate lets a goal term count below its trigger line.
+            let regenerates = matches!(pool.projection, PoolProjection::Regenerating(_));
             // SCHED-C1f1 (register §1.303 SC1F-4): a hold of a candidate whose consumption of the
             // pool is read from a fact names that consumption and where it comes from.
             let for_task = |task_id: &str, reason: DecisionReason| {
@@ -694,8 +704,11 @@ pub(super) fn plan(
                             source,
                         )),
                     };
-                    if let Some(hold) = hold {
-                        for (&task_id, (index, _, _)) in &candidates {
+                    for (&task_id, (index, _, _)) in &candidates {
+                        // #455 B1 ruling 9: with no episode under way, a regenerating pool whose
+                        // lines give no value counts as below its trigger line.
+                        decided[*index].below_trigger |= regenerates;
+                        if let Some(hold) = &hold {
                             decided[*index].normal_hold(&for_task(task_id, hold.clone()));
                         }
                     }
@@ -729,8 +742,12 @@ pub(super) fn plan(
             let Some(view) = in_round else {
                 // Below the cap (SCHED-C1c: the trigger line), or the episode ended: the hard line
                 // holds a run that would cross it (SCHED-C1f1: by its consumption in effect, which
-                // its judgement read).
+                // its judgement read). #455 B1 ruling 9 (register §1.518): below the trigger line of
+                // a regenerating pool (its capacity without a written one), the gate judges whether
+                // a candidate may spend without its goal terms.
+                let below_trigger = regenerates && !lines.at_trigger();
                 for (&task_id, (index, _, term)) in &candidates {
+                    decided[*index].below_trigger |= below_trigger;
                     let after = lines.reading - i128::from(units(term.consumed_milli)?);
                     if after < i128::from(lines.hard) {
                         decided[*index].normal_hold(&for_task(
@@ -813,12 +830,14 @@ pub(super) fn settle(
 }
 
 /// What the pools decided for one candidate so far: the first capped hold, the first hard-line
-/// hold and the first capped slot, each in pool order.
+/// hold and the first capped slot, each in pool order; #455 B1 ruling 9: whether a regenerating
+/// pool it consumes is below its trigger line, with no episode under way.
 #[derive(Default)]
 struct Decided {
     held: Option<DecisionReason>,
     hold: Option<DecisionReason>,
     member: Option<(KnownBenefit, CappedSlot)>,
+    below_trigger: bool,
 }
 
 impl Decided {
@@ -835,6 +854,7 @@ impl Decided {
     }
 
     fn disposition(self) -> Disposition {
+        let below_trigger = self.below_trigger;
         match (self.held, self.hold, self.member) {
             (Some(held), _, _) => Disposition::Held(held),
             (None, Some(hold), Some(_)) => Disposition::Held(hold),
@@ -842,7 +862,10 @@ impl Decided {
                 benefit,
                 slot: Box::new(slot),
             },
-            (None, hold, None) => Disposition::Normal { hold },
+            (None, hold, None) => Disposition::Normal {
+                hold,
+                below_trigger,
+            },
         }
     }
 }
@@ -1331,7 +1354,8 @@ fn start_round(
     // Listed: its value without the pool's cost is above that value's rounding bound; from the
     // second round, not limited. Never by its cost. SCHED-C1a (register §1.299): for a task with
     // a fixed value `V` the benefit gate's `S` starts at `V`, so this value is `V` less the cost
-    // of the other pools it consumes, and its bound their terms alone.
+    // of the other pools it consumes, and its bound their terms alone; #455 B1 (register §1.518):
+    // plus its goal terms, with their share of the bound.
     let mut listed = Vec::new();
     for (task_id, (_, known, term)) in candidates {
         if number > 1 && known.task.is_benefit_limited() {

@@ -2242,6 +2242,18 @@ pub(crate) struct ResourceTerm {
     lapsed_until_unix_ms: Option<u64>,
 }
 
+/// SS-2b: one pool of a candidate's resource term as its net benefit reads it
+/// ([`ResourceTerm::pool_weights`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PoolWeight {
+    /// `W = B + Γ`, the pool's effective weight for the candidate.
+    pub(crate) weight_milli: u64,
+    /// `Q`, the step its term divides by: the pool's `valuation.scale`, else the `scale` of the
+    /// goal that covers the candidate (#455 B1, register §1.518: the step of a fixed-value task's
+    /// goal term).
+    pub(crate) step: u64,
+}
+
 /// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WeightItem {
@@ -2260,12 +2272,21 @@ impl ResourceTerm {
         self.term_milli > 0 || self.override_target.is_some()
     }
 
-    /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, by pool id; the
-    /// net benefit reads the resource layer's own weights and writes none.
-    pub(crate) fn pool_weights(&self) -> BTreeMap<String, u64> {
+    /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, with the step `Q` its
+    /// term divides by, by pool id; the net benefit reads the resource layer's own weights and
+    /// writes none.
+    pub(crate) fn pool_weights(&self) -> BTreeMap<String, PoolWeight> {
         self.items
             .iter()
-            .map(|item| (item.pool.clone(), item.effective_milli))
+            .map(|item| {
+                (
+                    item.pool.clone(),
+                    PoolWeight {
+                        weight_milli: item.effective_milli,
+                        step: item.step,
+                    },
+                )
+            })
             .collect()
     }
 
@@ -4267,13 +4288,14 @@ fn run_amount(task: &TaskSpec, pool_id: &str, consumes: u64) -> Option<u64> {
 /// episode, at most ⌈what the pool holds above the reading the episode is spent at / that
 /// consumption⌉: enough runs to end the episode ("Capped spending order", its plan taken run by
 /// run), never below the floor. `None` when no pool it consumes takes part, when one such pool's
-/// projected amount or one of its lines is unknown, or when a declaration it needs is incomplete:
-/// a consumed pool, or a goal-driven produced pool with an open gap, without an integer per-run
-/// `amount` on every entry. SS-2g (register §1.232): so a task that reserves a pool it consumes by
-/// `expected_amount_milli` gets no `run_cap`, as a goal-driven production declared by expectation
-/// gives none; its `spend_allowance` is unchanged and stops the spend. SCHED-C1f1: one run's
-/// amount is the one in effect on the candidate's instance, which its reserve view and its lines
-/// hold ([`run_amount`]), an integer, so an amount read from a fact gives a `run_cap`.
+/// projected amount or one of its lines is unknown, or when a consumed pool that takes part has no
+/// integer per-run `amount` on every entry. SS-2g (register §1.232): so a task that reserves a
+/// pool it consumes by `expected_amount_milli` gets no `run_cap`; its `spend_allowance` is
+/// unchanged and stops the spend. #455 B1 ruling 10 (register §1.518): a goal never takes it
+/// away: a goal-driven production declared by expectation bounds it ([`goal_runs`]) instead of
+/// removing it, as it did before. SCHED-C1f1: one run's amount is the one in effect on the
+/// candidate's instance, which its reserve view and its lines hold ([`run_amount`]), an integer,
+/// so an amount read from a fact gives a `run_cap`.
 fn run_cap(
     task: &TaskSpec,
     spend: &impl Fn(&str) -> PoolSpend,
@@ -4303,7 +4325,7 @@ fn run_cap(
         least = Some(least.map_or(runs, |least| least.min(runs)));
     }
     let runs = least?;
-    let cap = match goal_runs(task, pools, gap)? {
+    let cap = match goal_runs(task, pools, gap) {
         Some(needed) => runs.min(needed),
         None => runs,
     };
@@ -4316,13 +4338,16 @@ fn run_cap(
 /// ⌈gap / the task's declared production of the pool per run⌉: the task stays useful until its
 /// largest remaining need is met. A pool whose gap is 0 (a met goal) or unknown adds nothing,
 /// and with nothing left there is no goal term (ruling 102: a met goal only stops adding
-/// score). `Some(None)` without a goal term; `None` when a pool with an open gap declares no
-/// integer per-run `amount` on every entry (an `expected_amount_milli` production).
+/// score). `None` without a goal term. #455 B1 ruling 10 (register §1.518): a pool with an open
+/// gap that declares no integer per-run `amount` on every entry (an `expected_amount_milli`
+/// production) needs ⌈gap·1000 / its expected yield per run in thousandths⌉ runs, at least 1; one
+/// that yields nothing per run (its amount pending) adds nothing. Before, such a pool removed
+/// `run_cap` whole.
 fn goal_runs(
     task: &TaskSpec,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
-) -> Option<Option<u64>> {
+) -> Option<u64> {
     let base_weighted = task.produces.iter().any(|effect| {
         pools
             .iter()
@@ -4331,7 +4356,7 @@ fn goal_runs(
             .is_some_and(|valuation| valuation.base_weight_milli > 0)
     });
     if base_weighted {
-        return Some(None);
+        return None;
     }
     let mut seen = BTreeSet::new();
     let mut needed = 0_u64;
@@ -4342,9 +4367,20 @@ fn goal_runs(
         let Some(gap) = gap(effect.pool_id.as_str()).filter(|gap| *gap > 0) else {
             continue;
         };
-        let per_run = declared_amount(&task.produces, &effect.pool_id)?;
-        needed = needed.max(gap.div_ceil(per_run));
+        let runs = match declared_amount(&task.produces, &effect.pool_id) {
+            Some(per_run) => gap.div_ceil(per_run),
+            None => {
+                let expected_milli = per_run_yield(&task.produces, &effect.pool_id);
+                if expected_milli == 0 {
+                    continue;
+                }
+                u64::try_from((u128::from(gap) * 1_000).div_ceil(expected_milli))
+                    .unwrap_or(u64::MAX)
+                    .max(1)
+            }
+        };
+        needed = needed.max(runs);
     }
-    Some((needed > 0).then_some(needed))
+    (needed > 0).then_some(needed)
 }
 // ---- SS-6: end ----

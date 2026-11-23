@@ -535,6 +535,41 @@ its pools' valuations weigh in):
   no writer of `model` exists), and the provenance listing of `standard-pack check` shows which
   values are the pack's and which the model's.
 - The rule requires `benefit_fixed_value` ("`requires`" above).
+- A goal on what it produces (#455 B1, since 0.12.82; register §1.518): a pool the rule produces
+  that declares no valuation counts in its benefit once a goal in force covers it with an open gap,
+  `V` plus the goal term less the cost of what it consumes
+  ([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack", "A goal on
+  what it produces"); without such a goal the rule is judged as before. The coverage ("Judged
+  rules" above) still reads no `produces` of such a rule.
+
+**Pools a goal asks for** (#455 B1, since 0.12.82). So that a person can say what an account lacks
+and the scheduler picks the stages that yield it, a resource repository declares each material or
+currency a business rule yields as a pool of `schedule.json` **without a `valuation`** (neither a
+block nor the pending marker: either beside a fixed value is refused, `fixed_value_conflict`, and
+in `pack-catalog.json` `catalog_value_conflict`), with an `observation` of the kind `fact` whose key
+is under `inventory.` or `resource.` (a goal attaches to no other pool; a pool read from rows of a
+list also takes one), a `capacity` no less than the largest amount one effect writes, and
+`projection` `{"kind": "none"}` where it does not regenerate. The yield goes into the rule's
+`produces` on its business part (its entry, or its per-rule part, in a version 2
+`pack-catalog.json` of a switched root; the rule itself otherwise): an integer `amount`, or
+`expected_amount_milli` for an average. The rule keeps its `fixed_value_milli`. A judged rule never
+writes a `consumes` of such a pool: it would wait `benefit_unknown` (`valuation_missing`) and never
+run. Nothing changes until a goal is set on the pool (`session.resource_targets`, with its own
+`scale` and `importance_milli`, which a goal on a pool without a valuation must carry); from then on
+the rules that yield it are judged `V` plus their goal terms, and of two of one value and one cost
+the one that yields it goes first. A goal chooses which rule spends a pool, the pool's lines choose
+when (ruling 9): a rule that consumes a regenerating pool (stamina, energy: its `projection` is not
+`none`) and is worth running only by its goal term waits for that pool's trigger line (its
+`trigger_line`, or its capacity without one) and then sweeps to the stop line, so write the pool's
+lines where it should be spent earlier than at its cap; a rule that spends a pool that does not
+regenerate (a ticket, a shop currency) runs as soon as the goal makes it worth it, paced by its own
+cooldown. While its gap is open such a rule is handed the gap as `gap_remaining`, and its `run_cap`
+is at most the runs the gap still needs: ⌈gap ÷ the integer `amount`⌉, or for a production by
+`expected_amount_milli` ⌈gap·1000 ÷ that expectation⌉, at least 1 (ruling 10: a goal never takes
+`run_cap` away; [remedies.md](remedies.md), section 4, "Spend values"). The goal page offers such a
+goal by a `resource` entry of `goals.json` version 3 that carries those two numbers, `scale` and
+`importance_milli`, which the resource side writes from its research tables (#455 B3, since
+0.12.82; register §1.519; [standard-pack-goals.md](standard-pack-goals.md), "An entry").
 
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
 can replace them one by one, the composer reports, per game, which judged rules run on a fixed
@@ -577,11 +612,6 @@ game's business rules:
 | Consumer of a regenerating pool | its `consumes` (one run's amount), `fixed_value_milli` (`V`, its value without the pool's cost), `"limited": true` where a limit counts its runs; no "reading ≥ capacity − margin" threshold once the pool is valued ("Tools", the redundant trigger) | a constant `valuation` (`scale` Q, `base_weight_milli` W) beside its `stop_line` and `hard_line` (and `trigger_line`), `H = S − (the costliest run)` | below the trigger line `V − W·c`; from the trigger line the capped order by `V ÷ c`. A pack that wants a consumer to run only in capped rounds writes its pool's `W` so that `W·c ≥ V` for that consumer; a consumer meant to spend the reserve below the stop line (a time-limited, high-value run) has `V > W·c` and is still held by the hard line: the reserve Alice's planned red line keeps (11-07, #428 6706630435: 「不让资源达到上限，但是保留一些资源用于某些限时的，收益高的任务」) |
 | Reading and navigation step inside a chain | a readings, return-home or recovery step: `"maintenance": true`; a step after the chain's first business rule: nothing (it rides with that rule, SS-2e); the chain's value once, on its first business rule | — | the maintenance tier, or its chain |
 | Still needs the model (its value depends on live data or on a choice made at run time) | nothing, or `"amount": "pending"` | `"valuation": "pending"` | `benefit_unknown` until the model's export |
-
-A pool a goal asks for that the file declares without a `valuation` (Workflow #455 B3, since
-0.12.82; register §1.519) is offered on the goal page by a `resource` entry of `goals.json` version
-3 that carries the goal's own `scale` and `importance_milli`, which the resource side writes from
-its research tables ([standard-pack-goals.md](standard-pack-goals.md), "An entry").
 
 **Who writes the fixed value and the marks, since Workflow #477 CV-1** (0.12.79; register §1.507;
 [pack-catalog.md](pack-catalog.md), "Version 2"). A rule's `consumes` and `produces`, its
