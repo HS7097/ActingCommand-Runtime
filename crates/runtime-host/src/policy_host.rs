@@ -1631,25 +1631,56 @@ pub(crate) fn latest_task_admission<'a>(
 /// is due" stays for a hold of the instance itself (positions 1 and 2). The decision, the not-run
 /// explanation and every dispatch are unchanged; a candidate the closure lets through, one a
 /// time-bound position defers, the fact refresh and an instance whose idle action is `none` (or one
-/// it cannot take) are left as they were.
+/// it cannot take) are left as they were. #486 ASLEEP-4 (register §1.520, ruling 1): the judgement
+/// is [`names_no_time`] and [`hold_back_with_no_time`], which the look ahead before a candidate's
+/// time asks too (`PolicyHost::evaluate`).
 fn hold_back_untimed(
     held_ahead: &mut crate::schedule_explanation::IdleHeldAhead,
     sleepers: (&BTreeSet<String>, &BTreeSet<String>),
     intent: &DispatchIntent,
     eligibility: &CandidateEligibility,
 ) {
+    if names_no_time(eligibility) {
+        hold_back_with_no_time(held_ahead, sleepers, &intent.task_id, &intent.instance_id);
+    }
+}
+
+/// #486 ASLEEP-3 (ruling 3) and ASLEEP-4 (register §1.520, ruling 1): whether a position's answer
+/// defers the candidate with no time of its own (a fact refresh's deferral, which names its gate,
+/// is not such an answer).
+fn names_no_time(eligibility: &CandidateEligibility) -> bool {
+    matches!(
+        eligibility,
+        CandidateEligibility::Deferred {
+            next_wake_unix_ms: None,
+            ..
+        }
+    )
+}
+
+/// #486 ASLEEP-3 fix round 1 (ruling 3) and ASLEEP-4: whether the idle plan of `instance_id` counts a
+/// candidate that a later position holds back with no time: an instance asleep (`sleepers.0`) or
+/// one whose idle action can put it to sleep (`sleepers.1`).
+fn sleeps_for_idle(sleepers: (&BTreeSet<String>, &BTreeSet<String>), instance_id: &str) -> bool {
     let (asleep, idle_sleepers) = sleepers;
-    if let CandidateEligibility::Deferred {
-        next_wake_unix_ms: None,
-        ..
-    } = eligibility
-        && intent.task_id != FACT_REFRESH_TASK_ID
-        && (asleep.contains(&intent.instance_id) || idle_sleepers.contains(&intent.instance_id))
-    {
+    asleep.contains(instance_id) || idle_sleepers.contains(instance_id)
+}
+
+/// #486 ASLEEP-3 (ruling 3) and ASLEEP-4 (register §1.520, ruling 1): counts the candidate
+/// `task_id` on `instance_id` held back by a later position that names no time
+/// (`held_ahead`, `None`) when the instance's idle plan counts one ([`sleeps_for_idle`]); the fact
+/// refresh's reading is never counted so.
+fn hold_back_with_no_time(
+    held_ahead: &mut crate::schedule_explanation::IdleHeldAhead,
+    sleepers: (&BTreeSet<String>, &BTreeSet<String>),
+    task_id: &str,
+    instance_id: &str,
+) {
+    if task_id != FACT_REFRESH_TASK_ID && sleeps_for_idle(sleepers, instance_id) {
         held_ahead
-            .entry(intent.instance_id.clone())
+            .entry(instance_id.to_owned())
             .or_default()
-            .insert(intent.task_id.clone(), None);
+            .insert(task_id.to_owned(), None);
     }
 }
 
@@ -1664,15 +1695,17 @@ fn hold_back_untimed(
 /// `excluded_by`, the first such variable in declaration order): the info
 /// `goal_value_excludes_rule` naming the application, the task and the variable; clearing or
 /// changing the set value is a change of facts, which wakes the evaluation. `None` for every other
-/// candidate, the fact refresh's included.
+/// candidate, the fact refresh's included. #486 ASLEEP-4: read for the pair (`task_id` on
+/// `instance_id`), so the look ahead before a candidate's time asks it as the closure does.
 pub(crate) fn rule_value_deferral(
     plan: &actingcommand_policy::VariablePlan,
-    intent: &DispatchIntent,
+    task_id: &str,
+    instance_id: &str,
 ) -> Option<CandidateEligibility> {
-    if let Some(refused) = plan.rule_value_refused(&intent.task_id, &intent.instance_id) {
+    if let Some(refused) = plan.rule_value_refused(task_id, instance_id) {
         let mut outcome = Outcome::new(crate::codes::GoalValueCode::RuleRefused)
-            .instance_id(intent.instance_id.as_str())
-            .task_id(intent.task_id.as_str())
+            .instance_id(instance_id)
+            .task_id(task_id)
             .package_id(refused.package_id.as_str())
             .variable_name(refused.variable_name.as_str());
         if let Some(problem) = refused.problem {
@@ -1690,10 +1723,10 @@ pub(crate) fn rule_value_deferral(
             next_wake_unix_ms: None,
         });
     }
-    let variable_name = plan.excluded_by(&intent.task_id, &intent.instance_id)?;
+    let variable_name = plan.excluded_by(task_id, instance_id)?;
     let outcome = Outcome::new(crate::codes::GoalValueCode::ExcludesRule)
-        .instance_id(intent.instance_id.as_str())
-        .task_id(intent.task_id.as_str())
+        .instance_id(instance_id)
+        .task_id(task_id)
         .variable_name(variable_name);
     Some(CandidateEligibility::Deferred {
         reason: DecisionReason {
@@ -4358,7 +4391,7 @@ impl PolicyHost {
                 ));
             }
             // Position 3, without its lift check (which may lift, copy or record).
-            if pack_admission.suspends(suspension_lift, intent)? {
+            if pack_admission.suspends(suspension_lift, &intent.procedure_ref)? {
                 return Ok(Some(None));
             }
             // Position 4.
@@ -4392,13 +4425,15 @@ impl PolicyHost {
             // Positions 5 and 6, and between them (Workflow #500 SV-2) position 5a: the package's
             // declaration in force refuses a value the task's rule carries (fix round 1), or a
             // value set on the application excludes the rule, with no time of its own.
-            if let Some(deferral) = pack_schedule.deferral(intent, false) {
+            if let Some(deferral) =
+                pack_schedule.deferral(&intent.task_id, &intent.instance_id, false)
+            {
                 return Ok(Some(deferred_wake(&deferral)));
             }
-            if rule_value_deferral(&variable_plan, intent).is_some() {
+            if rule_value_deferral(&variable_plan, &intent.task_id, &intent.instance_id).is_some() {
                 return Ok(Some(None));
             }
-            if let Some(deferral) = rerun_plan.deferral(intent) {
+            if let Some(deferral) = rerun_plan.deferral(&intent.task_id, &intent.instance_id) {
                 return Ok(Some(deferred_wake(&deferral)));
             }
             // Position 7.
@@ -4591,7 +4626,9 @@ impl PolicyHost {
                 // Workflow #429 R-8 (position 5, after `pack_registry_not_loaded`, which #389 U-3
                 // adds): the instance's pack schedule closes the package the candidate's task
                 // runs; it wakes when the covering row ends.
-                if let Some(closed) = pack_schedule.deferral(intent, refresh) {
+                if let Some(closed) =
+                    pack_schedule.deferral(&intent.task_id, &intent.instance_id, refresh)
+                {
                     // #486 ASLEEP-3 (ruling 3): a row with no end names no time.
                     hold_back_untimed(&mut held_ahead, sleepers, intent, &closed);
                     return Ok(closed);
@@ -4602,13 +4639,15 @@ impl PolicyHost {
                 // application holds another value set for, which decides which rules run; the
                 // candidate waits with no wake of its own and, for the idle plan, is held back with
                 // no time as any untimed later position (#486 ASLEEP-3, `hold_back_untimed`).
-                if let Some(excluded) = rule_value_deferral(&variable_plan, intent) {
+                if let Some(excluded) =
+                    rule_value_deferral(&variable_plan, &intent.task_id, &intent.instance_id)
+                {
                     hold_back_untimed(&mut held_ahead, sleepers, intent, &excluded);
                     return Ok(excluded);
                 }
                 // Workflow #386 SR-2b-2 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 6): an owed rerun waits for the instance's pacing stage.
-                if let Some(waiting) = rerun_plan.deferral(intent) {
+                if let Some(waiting) = rerun_plan.deferral(&intent.task_id, &intent.instance_id) {
                     hold_back_untimed(&mut held_ahead, sleepers, intent, &waiting);
                     return Ok(waiting);
                 }
@@ -4948,6 +4987,85 @@ impl PolicyHost {
                     .entry(alias.to_owned())
                     .or_default()
                     .insert(decision.task_id.clone(), None);
+            }
+        }
+        // #486 ASLEEP-4 (register §1.520, rulings 1 and 2; `scheduling/README.md`, "A later
+        // position that names no time"; `runtime-config.md`, "What wakes an idle instance"): for
+        // the idle plan alone, a decision whose own wake is a time that has not come (its trigger's
+        // next time, a cooldown's end, a time-bound position's release), on an instance asleep or
+        // one whose idle action can put it to sleep, counts as held back by a later position that
+        // names no time (`held_ahead`, `None`: not due, no wake of its own) when such a position
+        // would hold it once that time has come. Production 0.12.81 on 11-23: an instance asleep
+        // since 00:07 was woken at 03:34:40 for a reading task due at 03:39:40, which its closed
+        // pack schedule then held back; fifteen minutes awake for nothing. The look ahead asks
+        // ASLEEP-3's positions for the candidate as if its earlier position had let it through,
+        // each through the reader the closure above asks and judged as `hold_back_untimed` judges
+        // an eligible candidate (`names_no_time`, `hold_back_with_no_time`): position 3 without its
+        // lift check (as #484's look ahead), 5, 5a, 6 and 8a, all of them, since such a position
+        // holds the candidate whatever a time-bound one does before it. It reads nothing the time
+        // that has not come decides: not position 8 (the admission preview judges budgets, the
+        // activity window and interval, a backoff and a pause on the dispatch the evaluation
+        // builds for a candidate, none here), no benefit gate, pool line or no-progress guard. A
+        // candidate it cannot tell (no task of the catalog, a reader that fails) keeps its wake,
+        // the failure said as the look ahead behind a hold says its own; one that stops the
+        // Runtime ends this cycle. A decision already counted (behind a hold, or held back at an
+        // untimed position) is left as it is. Its trigger's time stays the evaluation's own wake,
+        // so the evaluation at that time judges the candidate again; the decisions and the not-run
+        // explanation do not read this.
+        let untimed_ahead = |task_id: &str, alias: &str| -> RuntimeHostResult<bool> {
+            // Tests: the look ahead fails as a position that cannot answer fails.
+            #[cfg(test)]
+            if LOOK_AHEAD_FAILS_FOR_TEST.with(std::cell::Cell::get) {
+                return Err(request(
+                    HostCode::PolicyEvaluationRejected,
+                    HostLocation::EvaluatePolicyCycle,
+                ));
+            }
+            let Some(task) = active.compiled.dispatch_task(task_id) else {
+                return Ok(false);
+            };
+            if pack_admission.suspends(suspension_lift, &task.procedure_ref)? {
+                return Ok(true);
+            }
+            let remedy_round = remedy_plan.deferral(task_id, alias).map(|deferral| {
+                CandidateEligibility::Deferred {
+                    reason: deferral.reason.clone(),
+                    next_wake_unix_ms: deferral.next_wake_unix_ms,
+                }
+            });
+            Ok([
+                pack_schedule.deferral(task_id, alias, false),
+                rule_value_deferral(&variable_plan, task_id, alias),
+                rerun_plan.deferral(task_id, alias),
+                remedy_round,
+            ]
+            .iter()
+            .flatten()
+            .any(names_no_time))
+        };
+        for decision in &evaluation.decisions {
+            let Some(alias) = decision.instance_id.as_deref() else {
+                continue;
+            };
+            if decision.task_id == FACT_REFRESH_TASK_ID
+                || decision.state == SchedulingDecisionState::Selected
+                || decision
+                    .next_wake_unix_ms
+                    .is_none_or(|wake| wake <= time.unix_ms)
+                || !sleeps_for_idle(sleepers, alias)
+                || held_ahead
+                    .get(alias)
+                    .is_some_and(|tasks| tasks.contains_key(&decision.task_id))
+            {
+                continue;
+            }
+            match untimed_ahead(&decision.task_id, alias) {
+                Ok(true) => {
+                    hold_back_with_no_time(&mut held_ahead, sleepers, &decision.task_id, alias);
+                }
+                Ok(false) => {}
+                Err(error) if error.halts_runtime() => return Err(error),
+                Err(error) => self.idle_look_ahead_failures.push(error.outcome()),
             }
         }
         // #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating

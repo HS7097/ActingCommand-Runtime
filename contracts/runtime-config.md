@@ -1596,6 +1596,34 @@ decision, its reason and wake, and the not-run explanation are the evaluation's 
 instance's entry block (position 4b) still counts its candidates due, as ASLEEP-1 settled; an
 instance whose idle action is `none`, or one it cannot take, plans as before.
 
+So does the candidate before its time (#486 ASLEEP-4, since 0.12.82, the coordinator's rulings 1 to 3
+of 11-23; [v012-register.md](v012-register.md) §1.520). Production 0.12.81 on 11-23: an instance
+under `stop_emulator`, asleep since 00:07, was woken at 03:34:40 (`planned_time_reached`) for a
+reading task whose trigger turned true at 03:39:40; at that time its pack schedule, closed with no
+end, held the task back, nothing was admitted, and the emulator was stopped again at 03:49:50. While
+the task waited for its trigger, the plan took the trigger's time. Now, on the same instances, a
+decision whose own wake is a time that has not come (its trigger's next time, a cooldown's end, a
+time-bound position's release) gives the idle plan no wake when a position of the list above would
+hold the candidate back once that time has come: the plan asks each of them (the package's
+suspension without its lift check, the pack schedule's row, the value set on the application or the
+rule's value the package refuses, an owed rerun's pacing, a remedy round) for the candidate as if
+its earlier position had let it through, through the reader the evaluation asks for an eligible
+candidate, and judges the answers as above (`PolicyHost::evaluate`, `names_no_time`,
+`hold_back_with_no_time`). It reads only what the time that has not come does not decide: not the
+availability (budgets, the activity window and interval, a backoff, a task's pause: the admission
+preview judges them on the dispatch the evaluation builds for an eligible candidate), no benefit
+gate, no pool line, no no-progress guard. Where it cannot tell, the candidate keeps its wake, a
+failure said in the daemon's log as #484's look ahead says its own. The decision keeps its own wake,
+so the evaluation still runs at that time and judges the candidate again: a position that opened
+meanwhile without a fact (a repaired package, whose suspension the lift check lifts when the
+candidate reaches it) costs the instance its lead, never the task. A position opened by a fact (a
+pack schedule's edit, a value set or cleared) wakes the policy driver (`FactsChanged`), whose plan
+takes the candidate's time again, or names it the task the instance is woken for once it is
+eligible; nothing of that path changed. An awake instance with such a candidate is not kept from
+its action by that time. What wakes an instance for a task that is due, the hold of a withheld
+action and its lengths, a regenerating pool's `task_due` and an instance whose idle action is
+`none` are as before.
+
 At a start (#486 ASLEEP-3, ruling 3), the wake of a restored instance obeys the same judgement as
 a wake from sleep. A wake the start owes (an instance restored woken whose startup package had not
 run, or one restored closed because the start could not use a record) no longer comes at the
@@ -1616,7 +1644,11 @@ does not (a task near, a pause), it stays closed, owing its wake. Its readings a
 that judgement and of the check on the action's key (fix round 2, ruling 4): an instance for which
 only readings wait is stopped, not left running until a task with a real time comes due; an
 action not carried out on its key leaves it closed, owing its wake. A wake whose start then finds
-the emulator running still queues the startup package (review M-1 below).
+the emulator running still queues the startup package (review M-1 below). #486 ASLEEP-4 (since
+0.12.82, ruling 4): a start prepares no instance whose emulator its restored idle action holds
+stopped (ASLEEP-1), so it records no `instance_not_running` for it; neither does a self-check of
+such an instance, a person's, a placement's or a resume's reconnect, which answers the code as
+before ([emulator-control.md](emulator-control.md), "An instance asleep by its idle action").
 
 Each action and each wake is one `instance_idle_action` record (`operation` `run_idle_action`
 or `queue_idle_wake`, `idle_action` naming the action). A wake's record says why it came (#484

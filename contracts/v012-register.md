@@ -47856,6 +47856,173 @@ for that pool's trigger line, its capacity without one (ruling 9). A task with a
 produces by `expected_amount_milli` is handed a `run_cap` where it had none (ruling 10). An older
 build reads the same root and ignores these productions as before.
 
+### 1.520 Slice #486 ASLEEP-4 (0.12.82): the idle plan takes no wake from a candidate that a position with no time will hold when its time comes; a sleeping instance is no error (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-486-asleep4.md`; on main `bcd660bd`, v0.12.81 with slice B1 of #455)
+
+This section takes 1.520 (1.519 belongs to another slice of 0.12.82, the goal declaration's reader
+and checks). It ships in 0.12.82. [scheduling/README.md](scheduling/README.md) ("An asleep
+instance", the bullet "A later position that names no time" and its new sub-bullet "The candidate
+before its time"), [runtime-config.md](runtime-config.md) ("What wakes an idle instance": the new
+paragraph after "A later position that names no time"; "At a start": its last sentences) and
+[emulator-control.md](emulator-control.md) ("Cold start": the new paragraph "An instance asleep by
+its idle action"; [runtime-fact-store.md](runtime-fact-store.md), "Emulator status first", points to
+it) are the contract.
+
+**What happened** (production 0.12.81, 11-23, read from the ledger by the coordinator; the instance
+of the trial of board #486, whose idle action is `stop_emulator`). It slept from 00:07 with a
+planned wake at 03:34:40 for a next occurrence at 03:39:40. It woke on time (`queue_idle_wake`,
+`idle_wake_cause` `planned_time_reached`), its emulator was up in 18 seconds and the reading run
+after the start succeeded. At 03:39:40 nothing was dispatched: the candidate whose time that was, a
+reading task, had become eligible and was deferred `pack_schedule_closed` by its pack schedule's
+row with no end. At 03:39:44 the check recorded `instance_idle_stop_withheld` (ASLEEP-3's hold of
+ten minutes), nothing was admitted in it, and at 03:49:50 the emulator was stopped again: fifteen
+minutes awake for nothing. Two more reading tasks of that instance have closed pack schedules and
+would have woken it the same way. And at the Runtime's start after a deployment (01:36:20) and at a
+placement's self-check (14:21:44) the sleeping instance got an error-severity
+`runtime.lifecycle_observed` record `instance_not_running`.
+
+**The reading, checked in the code.**
+- *Why the time was taken.* ASLEEP-3's `hold_back_untimed` runs inside the evaluation's closure,
+  which the evaluator asks only for a candidate past its trigger (and its cooldown). Before 03:39:40
+  the decision was blocked `trigger_false` with its trigger's next time as its wake, the closure was
+  never asked, nothing was put in `IdleHeldAhead`, and `IdleDraft::add` took that wake.
+- *Asking the closure's judgement before the time* needs no second evaluation and no change of what
+  the evaluator returns (the work order's first stop condition is not met): the readers of
+  ASLEEP-3's positions need only the pair, and position 3 the task's procedure, which the catalog's
+  task gives (`CompiledCatalog::dispatch_task`, as the evaluator builds the intent from it). Their
+  readers took a `DispatchIntent` while reading only those, so they now take the pair
+  (`CycleSchedule::deferral`, `rule_value_deferral`, `RerunPlan::deferral`) or the procedure
+  (`PackAdmission::suspends`); the closure and #484's look ahead pass the intent's. Position 8, the
+  availability, is judged by the admission preview on the dispatch the evaluator builds (its
+  decision id seeds the activity interval; its profile, duration and limits are the candidate's),
+  which a candidate before its time has none of, and its budgets, activity window and interval and
+  backoff depend on the time that has not come: the look ahead does not read it (ruling 2).
+- *No sleep through a task* (the second stop condition is not met): the decision keeps its own wake,
+  so the evaluation's next wake, which the daemon's policy driver sleeps until, is unchanged; the
+  evaluation at that time judges the candidate eligible and, if nothing holds it any more, counts it
+  due on the asleep instance (`instance_asleep_wake_due`), which wakes it then. A position read now
+  that opens before the time without a fact (a repaired package) costs the instance its lead, never
+  the task.
+- *The error record.* Both records come from the self-check's emulator status read (#411 A48):
+  `read_emulator_status_first` writes the step's connection-preparation `runtime.failed` and the
+  preparation `instance_preparation_finished`, each with outcome `instance_not_running`, whose
+  severity is the outcome's category, `error` (ledger revision 3). The start's own preparation
+  prepares no instance whose emulator its restored idle action holds stopped (ASLEEP-1 fix round 1)
+  and reads no status, so the code shows no other path at a start that writes the code: the record of
+  01:36:20 reads as a self-check run after the start (the deploy's), which the coordinator did not
+  name; this was not checked against the ledger.
+
+**The rule.**
+- *The candidate before its time* (rulings 1 and 2; `crates/runtime-host/src/policy_host.rs`,
+  `evaluate`, after the evaluation and #484's fix round 2 loop). For each decision of a task, not
+  the fact refresh's, not selected, whose own wake is later than the evaluation, on an instance
+  asleep or one whose idle action can put it to sleep (`sleeps_for_idle`), not yet in
+  `IdleHeldAhead`: the look ahead (`untimed_ahead`) asks position 3 read only
+  (`PackAdmission::suspends`, no lift check, as #484's look ahead), position 5's row, position 5a's
+  two (`rule_value_deferral`), position 6's pacing and position 8a's remedy round, each through the
+  reader the closure asks, and judges each answer with `names_no_time`, the predicate
+  `hold_back_untimed` now uses too; any one that names no time puts the candidate in `IdleHeldAhead`
+  with no time through `hold_back_with_no_time`, the insertion `hold_back_untimed` now uses too. No
+  second list: the judgement is ASLEEP-3's, split into those two functions; the positions are
+  read through their own readers. All of them are asked, not the first alone, since one that names
+  no time holds the candidate whatever a time-bound one does before it. `IdleDraft::add` then takes
+  no wake from the decision (its existing branch for a candidate not due whose later position names
+  no time).
+- *What it reads* (ruling 2): the package's suspension as it stands, the pack schedule's rows as
+  this evaluation's facts hold them (a row with no end covers every later time; rows of one package
+  never overlap), the instance's pacing stage and remedy round, a set value; no benefit gate, no
+  pool line, no no-progress guard, no availability. Where it cannot tell (no task of the catalog, a
+  reader that fails, including the test switch `LOOK_AHEAD_FAILS_FOR_TEST`) the candidate keeps its
+  wake; a failure that stops the Runtime ends the cycle, any other is kept in
+  `idle_look_ahead_failures`, which the cycle writes to the daemon's log (#484 fix round 1).
+- *When the holding position opens* (ruling 3, confirmed with no change). A pack schedule's edit
+  and a value set or cleared are fact records, which raise `FactsChanged` for the daemon's policy
+  driver (`policy_wake.rs`); that evaluation's look ahead no longer holds the candidate, so before
+  its time the plan's wake is its time again (the check wakes the sleeping instance at that time
+  less the lead, `planned_time_reached`), and from its time on the evaluation defers it
+  `instance_asleep_wake_due` and the check wakes the instance for it (`task_due`), as ASLEEP-3
+  says. A repaired package raises nothing; its suspension is lifted by position 3's lift check when
+  the candidate reaches it, in the evaluation at the candidate's own time (the decision's wake),
+  which wakes the instance then.
+- *An awake instance* (test 5): a candidate before its time that such a position holds gives the
+  plan no wake, so its time, even within `idle.min_gap_ms`, no longer keeps the idle action from
+  the instance.
+- *A sleeping instance is no error* (ruling 4; `crates/runtime-host/src/host/selfcheck_emulator.rs`,
+  `StatusEnd`; `resource_close.rs`, `prepare_connection_attempt`). Of the two choices the smaller is
+  taken: the records are not written. When the status read finds no emulator process on an
+  instance whose idle action holds its emulator stopped (`idle_holds_emulator_stopped`), the read
+  ends the check with `StatusEnd { code: instance_not_running, asleep: true }` and writes no
+  `runtime.failed`; the preparation then writes no `instance_preparation_finished` (no ladder is
+  admitted, as for any status read failure; no fence is lifted; `PreparationAttempt::event` is none,
+  as for a preparation whose lease was refused). The idle action's own `instance_idle_action` record
+  of the stop already says the emulator is stopped. Info severity was not open: a record's severity
+  is its outcome's category, so it would need a new code or another category for
+  `instance_not_running`, which every other emitter shares. The self-check's answer, the instance's
+  unavailability and every other step are as before; what a client reads as a failure
+  (`failure_code` `instance_not_running`) is unchanged. An instance not running for any other
+  reason (a person's stop, a stop outside the Runtime, a failed status read on a pending binding, an
+  instance whose idle action closed only its application, whose emulator runs) keeps both records.
+  The decision reads a typed member the read sets, not a code.
+- *Neutral* (ruling 6): no game, package or alias is named in code.
+
+**A worked timeline** (the incident's times; lead 5 minutes, minimum gap 30 minutes).
+
+| Time | Before (0.12.81) | After (0.12.82) |
+|---|---|---|
+| 00:07 | asleep; the reading task waits `trigger_false`, its wake 03:39:40; the plan's wake 03:39:40, the planner's 03:34:40 | the same decision; the look ahead finds its pack schedule's row closed with no end: no wake in the plan; asleep with no wake planned |
+| 03:34:40 | `queue_idle_wake` `planned_time_reached`; the emulator started, the startup package and the reading run | nothing |
+| 03:39:40 | the task eligible, deferred `pack_schedule_closed`, no wake (ASLEEP-3): not due | the evaluation runs (the decision's wake): the same deferral; not due, no wake |
+| 03:39:44 | `instance_idle_stop_withheld` (hold 10 minutes) | nothing |
+| 03:49:50 | `instance_idle_action` `run_idle_action`: the emulator stopped again | still asleep |
+| later | the instance's two other readers behind closed schedules wake it the same way | none wakes it; the schedule opened (a fact) brings their wakes back |
+
+**What does not change** (ruling 5). ASLEEP-3's hold and its lengths; what wakes an instance for a
+candidate that is due; the `task_due` wake for a regenerating pool's projection (ASLEEP-2's ruling
+7); every decision, its reason, its own wake (so the evaluation's next wake and the driver's timer)
+and the not-run explanation; an instance whose idle action is `none` (in no sleeper set); a
+candidate behind a hold of positions 1 or 2 (#484's look ahead, first) and one held back at an
+untimed position while eligible (ASLEEP-3, already counted); the fact refresh. No new member, no
+configuration key, no declared interface range, no code; no severity of an existing record moved
+(ruling 4 took "not written").
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The look ahead before a candidate's time | `crates/runtime-host/src/policy_host.rs` (`evaluate`: `untimed_ahead` and its loop; `names_no_time`, `sleeps_for_idle`, `hold_back_with_no_time`, `hold_back_untimed`; `rule_value_deferral` by the pair) |
+| The readers by the pair | `crates/runtime-host/src/pack_schedule.rs` (`CycleSchedule::deferral`), `crates/runtime-host/src/policy_host/rerun.rs` (`RerunPlan::deferral`), `crates/runtime-host/src/pack_admission.rs` (`PackAdmission::suspends`) |
+| The idle plan | `crates/runtime-host/src/schedule_explanation.rs` (`IdleHeldAhead`'s text; `IdleDraft::add` unchanged) |
+| No error record for a sleeping instance | `crates/runtime-host/src/host/selfcheck_emulator.rs` (`StatusEnd`, `read_emulator_status_first`, `end_selfcheck`, `recognize_running_emulator`), `crates/runtime-host/src/host/resource_close.rs` (`prepare_connection_attempt`) |
+
+**Tests** (incident `#486 ASLEEP-4`: `crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate
+map; on the incident's replay instance of ASLEEP-3, `stop_emulator`, its configured emulator start
+and a startup package, a reading task whose UTC clock `at` turns true at 06:30, twenty minutes after
+the first cycle; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `asleep4_r11_a_closed_pack_schedule_ahead_of_the_trigger_wakes_nothing_and_holds_no_action_back` (1, 5) | Its pack schedule closed with no end, the instance awake: the decision blocked `trigger_false` with its wake 06:30 as before, the plan not due and no wake, no task named; the host's own check stops the emulator (before, the wake twenty minutes ahead kept it awake), kept stopped with no wake; at 06:25 still waiting and no wake, at 06:30 and 06:40 deferred `pack_schedule_closed` with no wake; one stop, no wake record, no emulator start |
+| `asleep4_r12_a_schedule_reopened_while_asleep_brings_the_wake_back_and_the_task_runs` (1, 3) | The same stop; the schedule reopened at 06:15 while asleep: at 06:20 the plan's wake is 06:30, as with an open schedule, no wake yet; at 06:25 one wake `planned_time_reached`, the configured start starts the emulator and the startup package runs; at 06:30 the task is dispatched |
+| `asleep4_r13_a_suspended_package_ahead_of_the_trigger_wakes_nothing` (2) | The task's package suspended by the admission after start (`gate_386_sr3`'s refused package): no wake, the stop with no wake planned; at 06:30 deferred `pack_admission_suspended` with no wake; one stop, no wake, no emulator start |
+| `asleep4_r14_a_look_ahead_that_fails_keeps_the_candidates_wake` (4) | The look ahead failing (`LOOK_AHEAD_FAILS_FOR_TEST`): the plan keeps the wake 06:30, no idle action is asked for, the cycle goes on; the next cycle names no wake and the stop is taken |
+| `asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error` (6) | Asleep after the stop, a self-check answers `instance_not_running` and no `runtime.failed` or `instance_preparation_finished` of that code is recorded; the same after a seeding and a loading start in the sleep; on an instance whose idle action took nothing and whose emulator reads stopped, the self-check records both, as before |
+
+Test 2's other position, a value set on the application that excludes the rule: not built. Its
+reader is the same `rule_value_deferral` the closure asks; SV-2's fixture is a composer-mode host
+whose instance no idle action puts to sleep, and building one with both was judged beyond the
+fixtures at hand. Test 7: the existing gate tests of ASLEEP-1 to ASLEEP-3 are unchanged; the helper
+`open_incident_host` (ASLEEP-3) now calls `open_incident_host_held` with no hold, which builds the
+same host, so r8 and r10 build theirs as before. No test leaves the gate map; no golden is
+re-recorded.
+
+**At deploy.** Nothing to configure. An instance that sleeps is no longer woken for a task its
+closed pack schedule holds (nor a suspended package, a value set on the application that excludes
+the rule, an owed rerun's pacing, a remedy round): it sleeps through that task's time, and an awake
+one is no longer kept from its idle action by such a time. When the resource side opens the
+schedule, the next evaluation brings the wake back. A self-check of a sleeping instance (a
+placement's, a person's) no longer leaves an error record; its answer is as before. A rollback to
+0.12.81 meets nothing kept on disk. In the release notes' language:
+能闲置的实例上（醒着或睡着），还没到触发时刻、但到时会被没有时刻的门（任务包排程关闭且没有结束时间、包被暂停、应用上设的值排除这条规则、补跑节奏、补救轮次）挡住的任务，不再给闲置计划提供唤醒时刻：睡着的实例不会为它被叫醒，醒着的也不会因为它而不进入闲置；门一打开（排程重新开放、设定值清掉），下一次评估就把唤醒时刻带回来。由闲置动作停掉模拟器而睡着的实例，自检时不再写 `instance_not_running` 的错误记录，自检的回答照旧。
+
 ### 1.521 Slice #392 DA-L0 (0.12.83): the layout probe, a Lab operation that says where each template mark of a page went on a saved frame wider than the base (board #392, the first slice toward handsets at their native size; the rulings 1 to 9 are the coordinator's of 11-23, no words of the owner's behind them; the owner's words behind the slice are her ruling of 11-13, one set of packages made at 1280x720 and a converter in the backend, and of 11-23, handsets scheduled at their native size with nothing changed on the handset; coordinator work order `rd-1123/brief-392-dal0.md` after the read-only study of 11-13, its section "DA-L0", its sections 5 and 8 and its decision K13; on main `bcd660bd`)
 
 This section takes 1.521. It ships in 0.12.83.
