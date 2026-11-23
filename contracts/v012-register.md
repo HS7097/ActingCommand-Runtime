@@ -47981,6 +47981,15 @@ A root that writes one names `clock_monthly` and needs this build: an older Runt
 a rollback below 0.12.83 while that root, or a fragment of the active generation composed from it,
 is installed.
 
+**Fix round 1** (pull request #1887; coordinator work order `rd-1123/brief-477-ck1-fix1.md`). The
+first build of the tests did not compile: t7 serialized the compiled catalog's bundle, which is no
+serializable type. It now serializes the bundle's four documents, which are, and asserts the same;
+no production type changed. The composer's module comment lists `clock_monthly` among the names
+step 2 checks. `adopt`'s branch gains its test, `ck1_an_adopted_rule_on_a_monthly_clock_adds_clock_monthly_to_requires`
+(`crates/resource-tooling/src/gate_464_p1.rs`, the apps gate map's row "#477 CK-1"): #464 P1's first
+adoption with the decision's trigger a monthly clock writes the rule with that trigger and answers
+`requires_added` `benefit_fixed_value` then `clock_monthly`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

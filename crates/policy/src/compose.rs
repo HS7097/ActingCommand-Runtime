@@ -35,7 +35,9 @@
 //!    read it (`IrreversiblePackages::package_variables`): an object of one or more values, each
 //!    of a variable the package declares and taken by that declaration as a value set on the
 //!    application is ([`crate::judge_rule_variable_value`]); `schedule_invalid` at the member
-//!    otherwise.
+//!    otherwise. #477 CK-1 (register §1.510): a rule's clock or a timeline event's schedule of the
+//!    kind `monthly` needs `requires` to name `clock_monthly`, `schedule_invalid` at the first
+//!    such `schedule` otherwise.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
 //!    belongs to `s` and is not held, and every pool, profile and event for every server or for
 //!    `s`, each scope filled with `{kind: instance, instance_id: i}` (the item's own and those of

@@ -576,7 +576,15 @@ fn ck1_t7_a_catalogue_without_the_kind_keeps_its_golden_hashes() {
         let example = compile_catalog(&example_sources(version))
             .unwrap_or_else(|failure| panic!("{version}: {:?}", failure.diagnostics()));
         assert_eq!(example.catalog_hash(), golden, "{version}");
-        let text = serde_json::to_string(example.catalog()).expect("the catalog serializes");
+        // The bundle is no serializable type; its four documents are, one by one.
+        let bundle = example.catalog();
+        let text = serde_json::to_string(&(
+            &bundle.tasks,
+            &bundle.pools,
+            &bundle.activity,
+            &bundle.timeline,
+        ))
+        .expect("the documents serialize");
         assert!(!text.contains("monthly"), "{version}: {text}");
     }
 }
