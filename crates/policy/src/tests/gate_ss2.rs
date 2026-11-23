@@ -489,6 +489,7 @@ fn state(task_id: &str, at: u64, terminal: TaskTerminalState) -> TaskRuntimeSnap
         failure_streak: None,
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 

@@ -46,9 +46,10 @@ use actingcommand_contract::{
     IssuedCorrelationId, IssuedRunId, IssuedTaskId, LeaseId, LeaseToken, OwnerEpoch,
     PerformanceContext, PolicyAdmissionRecord, PolicyConditionSettlement,
     PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyJournalDispatchRecord, PolicyPayload,
-    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyRandomDelay, PolicyReasonRecord,
-    ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
+    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
+    PolicyJournalDispatchRecord, PolicyPayload, PolicyPlanningSignalEventData,
+    PolicyPlanningSignalKind, PolicyRandomDelay, PolicyReasonRecord, ProjectDecisionPageRequest,
+    RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
 };
 use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use actingcommand_policy::{
@@ -3384,6 +3385,9 @@ impl PolicyHost {
                         HostLocation::ProjectPolicyTaskState,
                     )
                 })?;
+                // #477 CK-2 (register §1.516): whether the latest dispatch left the clock
+                // occurrence it answered owed; every other snapshot is as before.
+                let clock_owed = clock_owed_through(dispatch, ledger_position);
                 let (terminal_state, completed_window) = if dispatch
                     .completed_sequence
                     .is_some_and(|sequence| sequence <= ledger_position)
@@ -3428,6 +3432,7 @@ impl PolicyHost {
                         // SCH-M ED-1: filled from the instance's samples by ED-2.
                         expected_runtime_ms: None,
                         expected_runtime_runs: None,
+                        clock_owed,
                     },
                 ))
             })
@@ -3450,6 +3455,7 @@ impl PolicyHost {
                         failure_streak: None,
                         expected_runtime_ms: None,
                         expected_runtime_runs: None,
+                        clock_owed: false,
                     })
                     .eligible_since_unix_ms = Some(*since);
             }
@@ -8214,6 +8220,37 @@ fn snapshot_terminal(
         PolicyExecutionOutcome::Failed { .. } => TaskTerminalState::Failed,
         PolicyExecutionOutcome::Stopped { .. } => TaskTerminalState::Cancelled,
     })
+}
+
+/// #477 CK-2 (register §1.516; `contracts/scheduling/README.md`, "Clock Sources"): whether a
+/// settled dispatch's `outcome` left the clock occurrence it answered owed: the dispatch never ran
+/// (it settled as interrupted, [`settled_as_interrupted`]), or its failure paused the pair for
+/// neither a severe class nor a sensitive task (its streak reached `escalation_threshold`, or its
+/// retries are used up under `on_failure` `pause`). Every other settlement served it, as before:
+/// a success, a stop, a run a condition ended, a failure scheduled for a retry or continued, a
+/// sensitive task's failure and a failure of a severe class.
+fn leaves_clock_owed(outcome: &PolicyExecutionOutcome) -> bool {
+    settled_as_interrupted(outcome)
+        || matches!(
+            outcome,
+            PolicyExecutionOutcome::Failed { failure }
+                if failure.disposition == PolicyFailureDisposition::PausedTask
+                    && failure.original_class != PolicyFailureClass::Severe
+                    && !failure.sensitive
+        )
+}
+
+/// #477 CK-2: whether `dispatch` settled through `ledger_position` and its settlement left the
+/// clock occurrence it answered owed ([`leaves_clock_owed`]); a dispatch not settled yet serves it,
+/// as before.
+fn clock_owed_through(dispatch: &SeenDispatch, ledger_position: u64) -> bool {
+    dispatch
+        .completed_sequence
+        .is_some_and(|sequence| sequence <= ledger_position)
+        && dispatch
+            .execution
+            .as_ref()
+            .is_some_and(|execution| leaves_clock_owed(&execution.outcome))
 }
 
 /// Folds the executed runs among `runs`, in admission order per (task, instance) pair, into

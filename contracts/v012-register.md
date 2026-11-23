@@ -47106,6 +47106,172 @@ this build does (its `adopt` writes the members into the rule, which every compo
 refuses, `catalog_business_member`), so a repository adopts only with tools of this build once it
 has cut over.
 
+### 1.516 Slice #477 CK-2 (0.12.81): a clock occurrence stays owed when its dispatch never ran or its failure paused the pair (board #477; the rulings are the coordinator's of 11-23 and their Addendum 1, written after the implementer stopped on the work order's second stop condition, no words of the owner's behind them; coordinator work order `rd-1123/brief-477-ck2.md`; on main `5243fd8f`, the v0.12.80 release)
+
+This section takes 1.516 (1.510 and 1.511 belong to two other slices). It ships in 0.12.81.
+[scheduling/README.md](scheduling/README.md) ("Clock Sources"; "Clock-slot records": came due,
+served, the fate, lost occurrences; "Settlement Feedback And Eligibility Age": the snapshot member)
+is the contract; [scheduling/v2/README.md](scheduling/v2/README.md) (`missed`),
+[policy-suspension.md](policy-suspension.md) ("Lifting (R19)": what such a failure leaves behind for
+a clock) and [standard-pack-schedule.md](standard-pack-schedule.md) (the advice paragraph on a
+rule's clock) follow it. No `package` revision, no declared interface range, no configuration key,
+no code, no catalog member, no `requires` name: a catalogue's serialization and hash do not move.
+
+**Why.** "A clock occurrence … is owed … until the task is next dispatched": every admitted
+dispatch served its occurrence, also one that never ran and one whose failure paused the pair. A
+daily task whose package was repaired after such a pause waited for the next day; a dispatch a
+restart interrupted did not come back. The resource side writes a second occurrence the same day
+as a retry (89 business rules on 11-22, with a `daily_limit` of 2 or more).
+
+**The stop and the narrowing.** As first written (the occurrence owed until a run settles and did
+not fail) the work order assumed that something always holds a pair after a failure. It does not:
+once `retry_limit` is reached under `on_failure` `continue` the disposition is `continue` with no
+retry time, and the cooldown and the activity's minimum interval may be 0; a clock that stays true
+would then be dispatched again at the next evaluation, and three quick failures of one identity
+would pause the pair until a package update, worse than today for a cause that passes by itself.
+Addendum 1 replaces the work order's rulings 1, 2, 3, 5 and 6 by the rule below.
+
+**The rule** (A1, A2, A6).
+- The latest dispatch admitted at or after an occurrence O serves it, as before, except in two
+  cases, in which O stays owed: **(a)** the dispatch never ran: it settled as interrupted
+  (`policy_settlement_interrupted`, read by the existing `settled_as_interrupted`; also a run the
+  Runtime's end cut short); **(b)** its failure paused the pair for neither its severe original
+  class nor a sensitive task: the disposition `paused_task` with the original class `recoverable`
+  and the record's `sensitive` false (`pause_cause` `retries_exhausted` or `repeated_failure`). The
+  decision reads the record's class, disposition and member, and names no code but through
+  `settled_as_interrupted`.
+- Every other settlement serves O exactly as before: a success, a stop, a run a condition ended
+  (its owed rerun keeps its rules), a failure scheduled for a retry (the retry mechanism makes its
+  own retries as before), a failure continued (`continue` after the retries: today's behaviour,
+  pinned by a test), a sensitive task's failure and a failure of a severe original class (the set
+  the settlement pauses at once as never restarted: `effective_class` severe for `class` severe or
+  a sensitive task). A run still in flight serves O, so the rule that keeps a pair with a dispatch
+  in flight from a second one is unchanged (ruling 4).
+- The latest dispatch decides, as A1 says: when a later dispatch admitted at or after O is (a) or
+  (b), O is owed again although an earlier one served it (with a clock alone as the trigger a
+  later dispatch after O is the Runtime's own rerun, which answered O).
+- A clock under a `not` reads the same (A6); `missed` bounds an owed O by its grace as any unserved
+  one (ruling 7); several occurrences: the latest decides (ruling 8).
+- A pair paused by (b) is held by its pause; when a package update lifts it and O is still owed,
+  the task runs then, on O, and does not wait for the next occurrence. This is intended.
+
+**Not in this slice** (A4). Trying a failed task again later the same day when its failure passes
+by itself (a maintenance, a popup): that needs a pacing of its own (a hold that grows and ends by
+itself) and will be designed with the slice on consequences that end by themselves. A second
+occurrence the same day written as a retry is still needed for that case and stays. What this
+version adds is that a task whose package was repaired runs the same day, and that a dispatch a
+restart interrupted comes back.
+
+**No loop** (A3; the proofs from the code).
+- (a) An interrupted settlement's record is `severe`, so its settlement pauses the pair
+  (`policy_control.rs`, `preview_paced_settlement`: `effective_class` severe → `paused_task`). The
+  pause holds nothing only for the first interrupted settlement of the pair in a row
+  (`interruption_lifted_by_restart`: its code and a count of 1; `suspension_lifted`): the pair is
+  dispatched once more on O. The next interrupted settlement in a row is the same failure (code,
+  no identity, class) and counts 2 (`consecutive_same_error`), which no restart lifts: the pause
+  holds the pair (`preview_failure_disposition`, `policy_task_paused`) until a lift check finds its
+  main package changed since the pair's first check ("Lifting (R19)", a pause without a failure
+  identity). So at most one dispatch follows a run of interruptions before a package update, and
+  an interruption needs a Runtime's end or an abandoned worker.
+- (b) The pause holds the pair at every evaluation (`policy_task_paused`, a deferral with no time:
+  nothing wakes the evaluation for it) until `SuspensionLiftView::lifted` finds a recorded content
+  hash changed, measured at most once per `scheduling.suspension.lift_check_min_interval_ms`. After
+  the lift the pair is dispatched once on O; a failure of that run records the content measured at
+  its own settlement, so its identity differs and starts a new streak (count 1), and a pause it
+  reaches is lifted only by the next change of that content. A run that serves (a success, a retry,
+  `continue`) ends it. One case reaches a second dispatch without a content change: a settlement
+  that could not measure its main package records `x`, which any measured hash lifts ("Lifting
+  (R19)", as before); its next failure then records the measured content.
+
+**The snapshot** (A5). `TaskRuntimeSnapshot` gains one optional member, `clock_owed`, `true` when
+the pair's latest dispatch (of its accounting group, K5) settled through the input position as (a)
+or (b), and absent otherwise (`false`): then the clock reads `last_dispatched_unix_ms` as before and
+the snapshot's bytes, `fact_snapshot_id` and every decision identity are as on main. Present, a
+clock reads the pair as never dispatched (`TaskRuntimeSnapshot::clock_served_unix_ms`): every
+occurrence unserved, its latest due. The host computes it from the dispatch journal's execution
+record of the pair's latest dispatch (`policy_host.rs`, `task_runtime_snapshots_of`,
+`leaves_clock_owed`, `clock_owed_through`): no ledger revision, no record, no wire member. The
+forward projection's simulated success clears it.
+
+**The clock-slot records and the not-run explanation** (ruling 9, the smallest change). The slot
+view reads the new meaning (`clock_slot_view`), so an O left owed is due again and its records
+follow it as any due O: the pause that holds the pair is `clock_slot_refused` with
+`policy_task_paused` at first sight, and still at most one record of each kind per occurrence,
+before the dispatch or after it. The lapse pass reads as before, from the pair's latest dispatch:
+an O that dispatch left owed has its refused record from the pause, or its pair runs on it at once
+(the first interruption in a row), so nothing is lost without a trace. A refused or deferred
+record's fate is still settled by the pair's first admitted dispatch after it, whatever that run's
+end (not changed). The not-run explanation shows the pair's own deferral (`policy_task_paused`)
+where it showed `trigger_false`.
+
+**A worked timeline** (UTC; a daily rule at 05:00, the recommended `on_failure` `{pause, 1, 0, 2}`,
+`daily_limit` 3).
+- 05:00 the occurrence O; 05:00 the pair is dispatched; its run fails on a screen its package does
+  not match (`page_confirmation_failed`, identity I, count 1): a retry, 1 ms backoff. It serves O
+  (A2).
+- 05:01 the immediate rerun (R22, its own rule) fails with I again: count 2, the escalation
+  threshold, `paused_task` (`repeated_failure`): case (b), the latest dispatch, so O is owed. The
+  snapshot carries `clock_owed: true`.
+- 05:01 to 09:30 the hold: every evaluation defers the pair with `policy_task_paused`, a lift check
+  measuring the package at most once a minute; `clock_slot_refused` {O, `policy_task_paused`} is
+  written once; nothing is dispatched.
+- 09:30 the package is repaired; at the first evaluation after the check's interval the pause is
+  lifted and the pair runs on O (before this version: tomorrow at 05:00). The run succeeds: O is
+  served, nothing more today (a failure would start a new streak, I measured anew).
+- The next day 05:00: a new occurrence, as always.
+- Beside it: had the 05:00 run met a popup that passed by 05:01, the immediate rerun succeeds as
+  before; had a restart cut the 05:00 run short, the start settles it as interrupted, the first in
+  a row, and the pair runs on O at the start's first evaluation (before: tomorrow).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The member and the clock | `crates/policy/src/evaluator.rs` (`TaskRuntimeSnapshot::clock_owed`, `clock_served_unix_ms`; the `clock` predicate, `clock_slot_view`) |
+| A simulated success | `crates/policy/src/forward.rs` (`update_task_states`) |
+| The projection | `crates/runtime-host/src/policy_host.rs` (`task_runtime_snapshots_of`, `leaves_clock_owed`, `clock_owed_through`) |
+
+**Tests** (incident `#477 CK-2`: `crates/policy/src/tests/gate_477_ck2.rs`, policy gate map, and
+`crates/runtime-host/src/tests/gate_477_ck2.rs`, host gate map; no clock read). Addendum 1's
+tests (1) to (10).
+
+| Test | What it shows |
+|---|---|
+| `ck2_t1_an_occurrence_left_owed_is_due_until_a_dispatch_after_it_serves_it` (2) | 07:00 answered at 07:01: without the member `trigger_false`; with it dispatched at 07:10; after a run at 07:30 nothing is due until the next day's 07:00 |
+| `ck2_t2_a_later_occurrence_replaces_an_owed_earlier_one` (7) | Clocks at 07:00 and 19:00, 07:00 owed: at 18:59 07:00 is due (none without the member); at 20:00 19:00 is due, tomorrow's 07:00 next, one dispatch, the lapse pass as before; a run at 20:00 serves it |
+| `ck2_t3_missed_bounds_an_owed_occurrence_by_its_grace_as_before` (6) | `missed` of two hours: owed 07:00 due at 08:59, expired at 09:00 with `clock_occurrence_expired`; without the member nothing is due |
+| `ck2_t4_a_clock_under_a_not_reads_an_owed_occurrence_as_due` (10) | `not(clock)`: true when the occurrence is served, `trigger_false` when it is owed |
+| `ck2_t5_a_snapshot_without_the_member_serializes_as_before` (8) | A snapshot without the member serializes byte for byte as main's literal and main's bytes read back to it; present, the member is `true` and reads back |
+| `ck2_h1_a_settlement_that_serves_its_occurrence_projects_no_member_as_before` (1, 4, 5, 8) | Through the host: a success, a failure continued at once, a retried failure with its identity, a sensitive task's failure, a severe failure, a stopped run and a condition: no `clock_owed`, the snapshot's JSON without it; at 07:02 `trigger_false`, or the immediate rerun or the owed rerun as before; after `continue` due again only at the next day's 07:00 |
+| `ck2_h2_a_failure_that_paused_the_pair_leaves_its_occurrence_owed_until_a_run_after_the_lift` (2, 9, 10's host side) | A step failure paused at once: `clock_owed`; held at two evaluations, one refused record (`policy_task_paused`); the changed package lifts it and the pair runs on the same occurrence, fails with a new streak (count 1) and is held again; after the next change it runs and succeeds; nothing due at 09:00; still one record |
+| `ck2_h3_a_dispatch_that_never_ran_leaves_its_occurrence_owed_as_its_interruption_allows` (3, 9) | Interrupted: `clock_owed`; the first in a row lets it run again at once with no record; the second in a row holds it (`policy_task_paused`, one refused record) until its package changes; then it runs and succeeds |
+
+Adapted: no existing test changes what it pins. Every struct literal of `TaskRuntimeSnapshot` names
+the new member as absent (`clock_owed: false`), which the compiler requires: 34 literals in 31 gate
+files of the policy crate, one in its `h1_completion` test, eight unit-test literals of
+`evaluator.rs`, and the literals of `forward.rs`, `fact_store.rs`, `host/run_duration.rs` and
+`policy_host.rs`.
+
+**What is not changed.** What is admitted and what a budget counts; the failure handling itself
+(the immediate rerun, the backoff and its clamp, the accumulation, the pause, the entry failure,
+the stopped run, the condition's owed rerun); `missed`; the catalogue's bytes and hash; every
+declared interface range; the idle plan's files (a pair (b) holds is deferred with no time, which
+`hold_back_untimed` already counts held back on an instance that can sleep; a backoff's deferral
+carries its wake, as for a trigger that is not a clock); the clock-slot records' fate; no game,
+package or alias is named in code.
+
+**At deploy.** No installation's catalogue changes. On a ledger with no interrupted settlement and
+no such pause every snapshot, decision and record is as before. The 89 rules that carry a second
+occurrence the same day behave as before, but in the two cases: after an interruption or a pausing
+failure at their first occurrence, the first comes back as soon as the interruption lets it or a
+repaired package lifts the pause (a later occurrence replaces it, as always). From this version a
+task whose run a restart interrupted runs again the same day, and a task paused by its failures
+runs the same day once its package is repaired; a task whose failure passes by itself is not tried
+again on its occurrence (A4). A rule with a `daily_limit` of 1 does not come back the same day: the
+dispatch that never ran or failed took the day's count (`policy_budget_exhausted`, as today), so a
+repository that wants it writes 2 or leaves the bound out. A rollback to 0.12.80 keeps nothing of
+it: the member is never stored.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -541,6 +541,7 @@ pub(super) fn task_state(last_dispatched_unix_ms: Option<u64>) -> TaskRuntimeSna
         failure_streak: None,
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 

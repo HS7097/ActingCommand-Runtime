@@ -971,6 +971,19 @@ interrupted settlement in a row is lifted at the next start of this Runtime. The
 no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
 suspension.
 
+What such a failure leaves behind for a clock (#477 CK-2, since 0.12.81;
+[v012-register.md](v012-register.md) §1.516; [scheduling/README.md](scheduling/README.md),
+"Clock Sources"): when the pair's latest dispatch settled as interrupted, or failed and paused
+its pair neither for its severe class nor for a sensitive task (`retries_exhausted`,
+`repeated_failure`), the clock occurrence it answered stays owed. So the pair is due on it while
+it is held: its `policy_task_paused` is its deferral at every evaluation (a lift check each time,
+measuring a package at most once per interval, as above), and its occurrence is recorded refused
+once. A lift, or the first interrupted settlement in a row, which holds nothing, lets it run on
+that same occurrence at the next evaluation instead of at the next occurrence. A failure of a
+severe class and a sensitive task's failure, which pause too, and a failure scheduled for a retry
+or continued serve their occurrence as before: after such a lift the pair waits for its next
+occurrence.
+
 ## `actingd suspended`
 
 ```text

@@ -726,6 +726,7 @@ fn refresh_state(
         failure_streak: Some(failure_streak),
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 

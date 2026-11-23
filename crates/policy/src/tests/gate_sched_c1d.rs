@@ -591,6 +591,7 @@ impl World {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         });
         self.reading -= spent;
         self.read_at = self.now + 30_000;
