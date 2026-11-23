@@ -47135,18 +47135,23 @@ Addendum 1 replaces the work order's rulings 1, 2, 3, 5 and 6 by the rule below.
 - The latest dispatch admitted at or after an occurrence O serves it, as before, except in two
   cases, in which O stays owed: **(a)** the dispatch never ran: it settled as interrupted
   (`policy_settlement_interrupted`, read by the existing `settled_as_interrupted`; also a run the
-  Runtime's end cut short); **(b)** its failure paused the pair for neither its severe original
-  class nor a sensitive task: the disposition `paused_task` with the original class `recoverable`
-  and the record's `sensitive` false (`pause_cause` `retries_exhausted` or `repeated_failure`). The
-  decision reads the record's class, disposition and member, and names no code but through
+  Runtime's end cut short); **(b)** its failure paused the pair, whatever the failure's class,
+  unless the task is `sensitive`: the disposition `paused_task` with the record's `sensitive` false
+  (every `pause_cause` but `sensitive_task`: `unrecorded_screen`, `runtime_budget_exceeded`,
+  `severe_failure`, `repeated_failure`, `retries_exhausted`; `interrupted_again` is (a)). The
+  decision reads the record's disposition and member, and names no code but through
   `settled_as_interrupted`.
+- Fix round 1 (the coordinator's, after the first report): (b) was first built for a recoverable
+  original class only, from A2's "the never-restarted kind". "Severe failures are never
+  automatically restarted" forbids the Runtime's own retry; a pause that a package update lifts is
+  the author's repair, and after it the task should run the same day. The common case in
+  production is a pause at the first occurrence for a screen the package never recorded, which the
+  resource side lifts by recording the screen and placing the package again.
 - Every other settlement serves O exactly as before: a success, a stop, a run a condition ended
   (its owed rerun keeps its rules), a failure scheduled for a retry (the retry mechanism makes its
   own retries as before), a failure continued (`continue` after the retries: today's behaviour,
-  pinned by a test), a sensitive task's failure and a failure of a severe original class (the set
-  the settlement pauses at once as never restarted: `effective_class` severe for `class` severe or
-  a sensitive task). A run still in flight serves O, so the rule that keeps a pair with a dispatch
-  in flight from a second one is unchanged (ruling 4).
+  pinned by a test) and a sensitive task's failure. A run still in flight serves O, so the rule
+  that keeps a pair with a dispatch in flight from a second one is unchanged (ruling 4).
 - The latest dispatch decides, as A1 says: when a later dispatch admitted at or after O is (a) or
   (b), O is owed again although an earlier one served it (with a clock alone as the trigger a
   later dispatch after O is the Runtime's own rerun, which answered O).
@@ -47182,6 +47187,16 @@ restart interrupted comes back.
   `continue`) ends it. One case reaches a second dispatch without a content change: a settlement
   that could not measure its main package records `x`, which any measured hash lifts ("Lifting
   (R19)", as before); its next failure then records the measured content.
+- (b) of a severe class (fix round 1). A severe failure's settlement pauses at once
+  (`preview_paced_settlement`: `effective_class` severe → `paused_task`, no retry, no immediate
+  rerun), and `suspension_lifted` lifts it only through `SuspensionLiftView::lifted`: a content
+  hash its identity records that a measurement finds changed (a measured `x` included), or, for a
+  pause without an identity (a run over its runtime budget), the main package changed since the
+  first lift check of that pause (`baseline_changed`, keyed by the paused dispatch); the restart's
+  lift is the interruption's alone. After the lift the pair runs once on O; a new severe failure
+  pauses again, its identity recording the content measured at its own settlement (or a new
+  baseline at its first check), so the next dispatch waits for the next change: it cannot be
+  dispatched at every evaluation.
 
 **The snapshot** (A5). `TaskRuntimeSnapshot` gains one optional member, `clock_owed`, `true` when
 the pair's latest dispatch (of its accounting group, K5) settled through the input position as (a)
@@ -47242,9 +47257,10 @@ tests (1) to (10).
 | `ck2_t3_missed_bounds_an_owed_occurrence_by_its_grace_as_before` (6) | `missed` of two hours: owed 07:00 due at 08:59, expired at 09:00 with `clock_occurrence_expired`; without the member nothing is due |
 | `ck2_t4_a_clock_under_a_not_reads_an_owed_occurrence_as_due` (10) | `not(clock)`: true when the occurrence is served, `trigger_false` when it is owed |
 | `ck2_t5_a_snapshot_without_the_member_serializes_as_before` (8) | A snapshot without the member serializes byte for byte as main's literal and main's bytes read back to it; present, the member is `true` and reads back |
-| `ck2_h1_a_settlement_that_serves_its_occurrence_projects_no_member_as_before` (1, 4, 5, 8) | Through the host: a success, a failure continued at once, a retried failure with its identity, a sensitive task's failure, a severe failure, a stopped run and a condition: no `clock_owed`, the snapshot's JSON without it; at 07:02 `trigger_false`, or the immediate rerun or the owed rerun as before; after `continue` due again only at the next day's 07:00 |
+| `ck2_h1_a_settlement_that_serves_its_occurrence_projects_no_member_as_before` (1, 4, 5, 8) | Through the host: a success, a failure continued at once, a retried failure with its identity, a sensitive task's failure, a stopped run and a condition (fix round 1: the severe failure it first held moved to h4's side): no `clock_owed`, the snapshot's JSON without it; at 07:02 `trigger_false`, or the immediate rerun or the owed rerun as before; after `continue` due again only at the next day's 07:00 |
 | `ck2_h2_a_failure_that_paused_the_pair_leaves_its_occurrence_owed_until_a_run_after_the_lift` (2, 9, 10's host side) | A step failure paused at once: `clock_owed`; held at two evaluations, one refused record (`policy_task_paused`); the changed package lifts it and the pair runs on the same occurrence, fails with a new streak (count 1) and is held again; after the next change it runs and succeeds; nothing due at 09:00; still one record |
 | `ck2_h3_a_dispatch_that_never_ran_leaves_its_occurrence_owed_as_its_interruption_allows` (3, 9) | Interrupted: `clock_owed`; the first in a row lets it run again at once with no record; the second in a row holds it (`policy_task_paused`, one refused record) until its package changes; then it runs and succeeds |
+| `ck2_h4_a_first_occurrence_pause_lifted_by_a_repaired_package_runs_on_the_same_occurrence_once` (fix round 1) | A screen the package never recorded (severe, paused at once, not sensitive): `clock_owed`; held at two evaluations, one refused record; the repaired package lifts it and the pair runs on the same occurrence, once: nothing due a minute later nor at 09:00; the next day's 07:00 due as always |
 
 Adapted: no existing test changes what it pins. Every struct literal of `TaskRuntimeSnapshot` names
 the new member as absent (`clock_owed: false`), which the compiler requires: 34 literals in 31 gate
@@ -47265,9 +47281,11 @@ no such pause every snapshot, decision and record is as before. The 89 rules tha
 occurrence the same day behave as before, but in the two cases: after an interruption or a pausing
 failure at their first occurrence, the first comes back as soon as the interruption lets it or a
 repaired package lifts the pause (a later occurrence replaces it, as always). From this version a
-task whose run a restart interrupted runs again the same day, and a task paused by its failures
-runs the same day once its package is repaired; a task whose failure passes by itself is not tried
-again on its occurrence (A4). A rule with a `daily_limit` of 1 does not come back the same day: the
+task whose run a restart interrupted runs again the same day, and a task paused by a failure runs
+the same day once its package is repaired, unless it is `sensitive`. The common case: a package
+that met a screen it never recorded (`unrecorded_screen`, a pause at the first occurrence), once
+the screen is recorded and the package placed again, runs the same day instead of the next. A task
+whose failure passes by itself is not tried again on its occurrence (A4). A rule with a `daily_limit` of 1 does not come back the same day: the
 dispatch that never ran or failed took the day's count (`policy_budget_exhausted`, as today), so a
 repository that wants it writes 2 or leaves the bound out. A rollback to 0.12.80 keeps nothing of
 it: the member is never stored.

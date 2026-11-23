@@ -180,8 +180,8 @@ pub struct TaskRuntimeSnapshot {
     pub expected_runtime_runs: Option<u8>,
     /// #477 CK-2 (register §1.516; `contracts/scheduling/README.md`, "Clock Sources"): `true`
     /// when the pair's latest dispatch did not serve the clock occurrence it answered: it never
-    /// ran (it settled as interrupted) or its failure paused the pair, for neither a severe class
-    /// nor a sensitive task. Absent (`false`), a clock reads `last_dispatched_unix_ms` as before.
+    /// ran (it settled as interrupted) or its failure paused the pair of a task that is not
+    /// sensitive. Absent (`false`), a clock reads `last_dispatched_unix_ms` as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub clock_owed: bool,
 }

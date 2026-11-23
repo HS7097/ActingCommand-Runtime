@@ -72,8 +72,8 @@ before `O + grace_ms`; after it the occurrence is skipped and the clock waits
 for its next occurrence (`../README.md`, "Clock Sources"). #477 CK-2 (since
 0.12.81): an occurrence of any clock is served by the latest dispatch of the
 task admitted at or after it, unless that dispatch never ran (settled as
-interrupted) or its failure paused the pair for neither a severe class nor a
-sensitive task; then it stays owed (with `missed` inside its grace only) until
+interrupted) or its failure paused the pair of a task that is not sensitive,
+whatever the failure's class; then it stays owed (with `missed` inside its grace only) until
 a dispatch serves it or a later occurrence replaces it (`../README.md`, "Clock
 Sources"). `missed` under a
 `not` is refused (`predicate_uncomputable`), an unknown `kind` is a

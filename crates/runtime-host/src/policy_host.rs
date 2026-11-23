@@ -46,10 +46,9 @@ use actingcommand_contract::{
     IssuedCorrelationId, IssuedRunId, IssuedTaskId, LeaseId, LeaseToken, OwnerEpoch,
     PerformanceContext, PolicyAdmissionRecord, PolicyConditionSettlement,
     PolicyDetectionBudgetRecord, PolicyDispatchEventData, PolicyExecutionEventData,
-    PolicyExecutionOutcome, PolicyFailureClass, PolicyFailureDisposition,
-    PolicyJournalDispatchRecord, PolicyPayload, PolicyPlanningSignalEventData,
-    PolicyPlanningSignalKind, PolicyRandomDelay, PolicyReasonRecord, ProjectDecisionPageRequest,
-    RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
+    PolicyExecutionOutcome, PolicyFailureDisposition, PolicyJournalDispatchRecord, PolicyPayload,
+    PolicyPlanningSignalEventData, PolicyPlanningSignalKind, PolicyRandomDelay, PolicyReasonRecord,
+    ProjectDecisionPageRequest, RequestId, RunId, RuntimeErrorCode, RuntimeRequest, TaskId,
 };
 use actingcommand_ledger::{GlobalLedger, LedgerIndexRole, PersistedEvent};
 use actingcommand_policy::{
@@ -8224,18 +8223,18 @@ fn snapshot_terminal(
 
 /// #477 CK-2 (register §1.516; `contracts/scheduling/README.md`, "Clock Sources"): whether a
 /// settled dispatch's `outcome` left the clock occurrence it answered owed: the dispatch never ran
-/// (it settled as interrupted, [`settled_as_interrupted`]), or its failure paused the pair for
-/// neither a severe class nor a sensitive task (its streak reached `escalation_threshold`, or its
-/// retries are used up under `on_failure` `pause`). Every other settlement served it, as before:
-/// a success, a stop, a run a condition ended, a failure scheduled for a retry or continued, a
-/// sensitive task's failure and a failure of a severe class.
+/// (it settled as interrupted, [`settled_as_interrupted`]), or its failure paused the pair of a
+/// task that is not sensitive, whatever the failure's class (a severe failure such as a screen the
+/// package never recorded, a streak at `escalation_threshold`, retries used up under `on_failure`
+/// `pause`): a package update lifts such a pause, and the task then runs on that occurrence. Every
+/// other settlement served it, as before: a success, a stop, a run a condition ended, a failure
+/// scheduled for a retry or continued, and a sensitive task's failure.
 fn leaves_clock_owed(outcome: &PolicyExecutionOutcome) -> bool {
     settled_as_interrupted(outcome)
         || matches!(
             outcome,
             PolicyExecutionOutcome::Failed { failure }
                 if failure.disposition == PolicyFailureDisposition::PausedTask
-                    && failure.original_class != PolicyFailureClass::Severe
                     && !failure.sensitive
         )
 }

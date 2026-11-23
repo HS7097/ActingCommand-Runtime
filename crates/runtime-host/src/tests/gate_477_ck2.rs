@@ -4,21 +4,24 @@
 // words of the owner's behind them; contracts/scheduling/README.md, "Clock Sources", "Clock-slot
 // records"; contracts/policy-suspension.md, "Lifting (R19)"): the host's half. A pair's task
 // snapshot carries `clock_owed` when the pair's latest dispatch never ran (it settled as
-// interrupted) or its failure paused the pair (neither for a severe class nor for a sensitive
-// task); every other settlement projects the snapshot of before. Through the host, on the
+// interrupted) or its failure paused the pair of a task that is not sensitive, whatever the
+// failure's class; every other settlement projects the snapshot of before. Through the host, on the
 // clock-slot fixture of `gate_372k2` (one task, a daily UTC clock at 07:00, the activity window
 // 06:00 to 23:30, four runs a day, no cooldown, an activity interval of 1 ms) and a manual Runtime
 // clock:
 // - a success, a continued failure, a retried failure (the immediate rerun runs as before), a
-//   sensitive task's failure, a severe failure, a stopped run and a run a condition ended project
-//   no member, as before, and the pair waits for its next occurrence or its own rerun (h1);
+//   sensitive task's failure, a stopped run and a run a condition ended project no member, as
+//   before, and the pair waits for its next occurrence or its own rerun (h1);
 // - a failure that paused the pair leaves its occurrence owed: the pause holds the pair, its
 //   refused record is written once, the lift of a changed package dispatches it on the same
 //   occurrence, a new failure starts a new streak and is held again, and a run that succeeds after
 //   the next lift serves it (h2);
 // - a dispatch that never ran leaves its occurrence owed: the first interruption in a row lets the
 //   pair run again on the same occurrence at once, the second holds it until its package changes,
-//   with its refused record written once (h3).
+//   with its refused record written once (h3);
+// - a severe failure that pauses at its first occurrence (a screen the package never recorded)
+//   leaves its occurrence owed: held, written refused once, and after the repaired package lifts
+//   the pause the pair runs on the same occurrence, once (h4).
 // Every alias, id and package is neutral.
 
 use super::gate_372k2::{SLOT_TASK, at, slot_rows, slot_sources, slot_task};
@@ -74,11 +77,11 @@ fn recoverable() -> PolicyExecutionInput {
     }
 }
 
-/// The failure identity of a main-scope failure whose run went through the main package with the
-/// content hash prefix `main_hash` (`x`: not measured).
-fn identity(main_hash: &str) -> String {
+/// The failure identity of a main-scope failure with the code `base` whose run went through the
+/// main package with the content hash prefix `main_hash` (`x`: not measured).
+fn identity(base: &str, main_hash: &str) -> String {
     FailureIdentity {
-        base: "page_confirmation_failed".to_owned(),
+        base: base.to_owned(),
         key: "0".repeat(12),
         main: IdentityPackage {
             id_hash: format!("{:x}", Sha256::digest(MAIN_ID.as_bytes()))
@@ -93,14 +96,34 @@ fn identity(main_hash: &str) -> String {
     .encode()
 }
 
-/// A recoverable step failure with the failure identity `identity(main_hash)`.
+/// A recoverable step failure (`page_confirmation_failed`) with its failure identity naming the
+/// main package's content `main_hash`.
 fn step_failure(main_hash: &str) -> PolicyExecutionInput {
     PolicyExecutionInput::Failed {
         outcome: Outcome::new(
             actingcommand_execution_kernel::ExecutionKernelCode::PageConfirmationFailed,
         ),
-        failure_identity: Some(identity(main_hash)),
+        failure_identity: Some(identity("page_confirmation_failed", main_hash)),
         class: PolicyFailureClass::Recoverable,
+    }
+}
+
+/// A linear step met a screen its package never recorded, severe (it pauses its pair at its first
+/// occurrence), with the failure identity of the main package's content `main_hash`. The failure
+/// carries the values its catalog entry requires, as `gate_469_h2` gives them.
+fn unrecorded_screen(main_hash: &str) -> PolicyExecutionInput {
+    PolicyExecutionInput::Failed {
+        outcome: Outcome::new(
+            actingcommand_execution_kernel::ExecutionKernelCode::ContainedTaskLinearUnrecordedScreen,
+        )
+        .pack_operation_id("open")
+        .page_ids(["neutral/list", "neutral/home"])
+        .attempts(1_u32),
+        failure_identity: Some(identity(
+            "contained_task_linear_unrecorded_screen",
+            main_hash,
+        )),
+        class: PolicyFailureClass::Severe,
     }
 }
 
@@ -311,20 +334,15 @@ fn refused_by_the_pause() -> Vec<(String, Option<String>)> {
 // Tests 1, 4, 5 and 8 of Addendum 1 (A2). Day 0's 07:00 run succeeds; day 1's 07:00 run settles as
 // each case says. None projects `clock_owed`, and the snapshot serializes without it, as before:
 // - a success (the golden of a ledger with no failed run), a failure continued at once, a sensitive
-//   task's failure (paused as sensitive), a severe failure and a stopped run: the occurrence is
-//   served, at 07:02 the trigger is false; after the continued failure the pair is due again at
-//   day 2's 07:00, not before;
+//   task's failure (paused as sensitive) and a stopped run: the occurrence is served, at 07:02 the
+//   trigger is false; after the continued failure the pair is due again at day 2's 07:00, not
+//   before;
 // - a failure scheduled for a retry, with its failure identity: the immediate rerun runs at 07:02
 //   as before (`failure_retry_immediate`);
 // - a sampling timeout ended by a condition: its owed rerun runs at 07:02 as before
 //   (`policy_rerun_owed`).
 #[test]
 fn ck2_h1_a_settlement_that_serves_its_occurrence_projects_no_member_as_before() {
-    let severe = PolicyExecutionInput::Failed {
-        outcome: Outcome::new(RuntimeErrorCode::CaptureFailed),
-        failure_identity: None,
-        class: PolicyFailureClass::Severe,
-    };
     let stopped = PolicyExecutionInput::Stopped {
         outcome: Outcome::new(RuntimeErrorCode::ContainedTaskCancelled),
     };
@@ -358,14 +376,6 @@ fn ck2_h1_a_settlement_that_serves_its_occurrence_projects_no_member_as_before()
             paused_at_once(),
             true,
             recoverable(),
-            Some(PolicyFailureDisposition::PausedTask),
-            None,
-        ),
-        (
-            "severe",
-            paused_at_once(),
-            false,
-            severe,
             Some(PolicyFailureDisposition::PausedTask),
             None,
         ),
@@ -524,6 +534,60 @@ fn ck2_h3_a_dispatch_that_never_ran_leaves_its_occurrence_owed_as_its_interrupti
     assert!(
         !selected(&later) && has_reason(&later, "trigger_false"),
         "the occurrence is served: {later:#?}"
+    );
+    pair.close();
+}
+
+// The coordinator's fix round of A1 (b) (any pause but a sensitive task's) and its test: a pause at
+// the first occurrence, the common case. Day 0's 07:00 run succeeds; day 1's 07:00 run meets a
+// screen its package never recorded (`contained_task_linear_unrecorded_screen`, severe, its
+// identity naming the main package's content): the pair is paused at once and the snapshot carries
+// `clock_owed`. At 07:01 and 07:01:30 the pause holds the pair and the occurrence's one record is
+// refused by it. The package is repaired (its content changes): after the lift check's interval
+// the pair runs on the same occurrence, succeeds, and is due once only: nothing at 07:03:10 nor at
+// 09:00, and the next occurrence, day 2's 07:00, is due as always.
+#[test]
+fn ck2_h4_a_first_occurrence_pause_lifted_by_a_repaired_package_runs_on_the_same_occurrence_once() {
+    let root = TempDir::new().expect("tempdir");
+    let main = root.path().join("main.zip");
+    let first = write_main(&main, &neutral_contained_task_package(false));
+    let mut pair = Pair::start(
+        root,
+        &slot_catalog(catalog_on_failure(), false),
+        Some(&main),
+    );
+    let occurrence = at(1, 7, 0);
+    pair.dispatch(at(0, 7, 0), &PolicyExecutionInput::Succeeded);
+
+    let paused_for = failure_of(&pair.dispatch(occurrence, &unrecorded_screen(&first)));
+    assert_eq!(paused_for.disposition, PolicyFailureDisposition::PausedTask);
+    assert_eq!(paused_for.original_class, PolicyFailureClass::Severe);
+    assert!(!paused_for.sensitive);
+    assert!(pair.snapshot(occurrence + MINUTE_MS).clock_owed);
+    for now in [occurrence + MINUTE_MS, occurrence + 90 * SECOND_MS] {
+        let evaluation = pair.evaluate(now);
+        assert!(
+            !selected(&evaluation) && has_reason(&evaluation, "policy_task_paused"),
+            "at {now}: the pause holds the pair: {evaluation:#?}"
+        );
+    }
+    assert_eq!(records_of(&pair.host, occurrence), refused_by_the_pause());
+
+    write_main(&main, &neutral_non_home_start_contained_task_package(false));
+    let lifted_at = occurrence + 130 * SECOND_MS;
+    pair.dispatch(lifted_at, &PolicyExecutionInput::Succeeded);
+    assert!(!pair.snapshot(lifted_at + MINUTE_MS).clock_owed);
+    for now in [lifted_at + MINUTE_MS, at(1, 9, 0)] {
+        let evaluation = pair.evaluate(now);
+        assert!(
+            !selected(&evaluation) && has_reason(&evaluation, "trigger_false"),
+            "at {now}: the occurrence is served, once: {evaluation:#?}"
+        );
+    }
+    assert_eq!(records_of(&pair.host, occurrence), refused_by_the_pause());
+    assert!(
+        selected(&pair.evaluate(at(2, 7, 0))),
+        "the next occurrence is due as always"
     );
     pair.close();
 }
