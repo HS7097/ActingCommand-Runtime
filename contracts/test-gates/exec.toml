@@ -4462,3 +4462,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_477_lr1::lr1_a_press_count_of_a_linear_steps_pack_needs_revision_25_and_nothing_else_does",
 ]
 incident = ["#477 LR-1"]
+
+# Workflow #455 B3 (0.12.82; register §1.519; brief rd-1123/brief-455-b3.md; contracts/standard-pack-goals.md, "The checks", "Who reads it"), the Lab's root check, on G-R1's fixtures with two more pools in the composed schedule, one without a valuation and one whose valuation is pending (no rule touches either): standard-pack check takes the valid file as version 3 with a resource entry carrying its own scale 10 and importance_milli 1000 on the pool without a valuation, with no warning and the answer of the root without the file but for root_files; a file adding entries that carry neither, the step alone or the importance alone on that pool, the step, the importance or both on the valued pool, both or neither on the pending pool and both on the pool valued without gap gives one standard_pack_root_invalid warning per entry in file order, goal_pool_unvalued at governs/pool, goal_valuation_conflict at scale, else importance_milli, goal_pool_unvalued for the pending and the partial valuation, the answer otherwise the one without the file; every other refusal of the check on that root is G-R1's; package bundle --goals lays the version 3 file byte for byte (test 2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_455_gr1::b3_the_root_check_holds_an_entry_s_own_step_and_importance_to_its_pool",
+]
+incident = ["#455 B3"]

@@ -1401,11 +1401,15 @@ pub enum GoalRecordEdit {
     /// The target `id` on the pool `resource`, at least `at_least`, mode `adjust`, its step,
     /// importance and rule the pool's valuation, no tasks and no lifetime: it replaces the target
     /// on that pool whatever its id (and a target of that id on another pool), else is added
-    /// after the others.
+    /// after the others. Workflow #455 B3 (register §1.519): `scale` and `importance_milli`, when
+    /// given (a `resource` entry of `goals.json` version 3 that carries them), are the target's
+    /// own step and importance, written as a v3 target's members.
     SetTarget {
         id: String,
         resource: String,
         at_least: u64,
+        scale: Option<u64>,
+        importance_milli: Option<u64>,
     },
     /// The target `id` and its task rows are removed.
     ClearTarget { id: String },
@@ -1538,13 +1542,15 @@ pub fn edit_goal_record(
             id,
             resource,
             at_least,
+            scale,
+            importance_milli,
         } => {
             let target = ResourceTargetSpecV3 {
                 id: id.clone(),
                 resource: resource.clone(),
                 condition: TargetCondition::AtLeast { amount: *at_least },
-                scale: None,
-                importance_milli: None,
+                scale: *scale,
+                importance_milli: *importance_milli,
                 rule: None,
                 apply: TargetApplicationV2 {
                     mode: TargetMode::Adjust,

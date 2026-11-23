@@ -284,7 +284,9 @@ crate::outcome_vocabulary! {
         GoalBlockMismatch => "goal_block_mismatch",
         /// G-R1: a `resource` entry's pool is not a pool of the composed schedule.
         GoalPoolUnknown => "goal_pool_unknown",
-        /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap`.
+        /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap`; Workflow #455
+        /// B3 (since 0.12.82): but a pool that declares no valuation takes a version 3 entry that
+        /// carries both `scale` and `importance_milli`.
         GoalPoolUnvalued => "goal_pool_unvalued",
         /// G-R1: a governed package is not a package of `bundle.json`; Workflow #463 V1: the
         /// package a governed rule runs, or one that declares a placed variable, is not.
@@ -301,7 +303,9 @@ crate::outcome_vocabulary! {
         /// G-R1: a `tier` entry's rule writes no `fixed_value_milli`.
         GoalTierWithoutFixedValue => "goal_tier_without_fixed_value",
         /// G-R1: what an entry declares as its values cannot hold one (a range, a step, a count,
-        /// an option written twice, a tier's scale, a table of more than 1024 keys).
+        /// an option written twice, a tier's scale, a table of more than 1024 keys); Workflow
+        /// #455 B3 (since 0.12.82): a `resource` entry's own `scale` below 1 or `importance_milli`
+        /// outside 1 to 1,000,000.
         GoalRangeInvalid => "goal_range_invalid",
         /// G-R1: an entry's `default` is not a value of its declaration.
         GoalDefaultInvalid => "goal_default_invalid",
@@ -326,6 +330,10 @@ crate::outcome_vocabulary! {
         /// build reads no more (it reads version 2), at its `schema_version`; the file is read no
         /// further. A version this build does not know yet is `malformed` there.
         GoalVersionRetired => "goal_version_retired",
+        /// Workflow #455 B3 (since 0.12.82): a `resource` entry of `goals.json` carries its own
+        /// `scale` or `importance_milli` while its pool's valuation gives both: one source for a
+        /// goal's step and importance. At the entry's `scale`, else its `importance_milli`.
+        GoalValuationConflict => "goal_valuation_conflict",
         /// Workflow #463 V1: a variable two packages of the root declare with declarations that
         /// are not byte-identical (at each declaration), or whose name an entry of `goals.json`
         /// uses for anything but its placement (at each declaration's `name`); no variable of

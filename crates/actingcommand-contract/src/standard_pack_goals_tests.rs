@@ -103,6 +103,8 @@ fn goals_neutral_example_reads_to_typed_entries() {
                         floor_milli_per_day: 120_000,
                         ceiling_milli_per_day: 900_000,
                     }),
+                    scale: None,
+                    importance_milli: None,
                 },
             },
             DeclaredGoal {
@@ -140,7 +142,7 @@ fn goals_neutral_example_reads_to_typed_entries() {
     let mut references = GoalReferences::new(packages(&["neutral.collect"]));
     references
         .pools
-        .insert("pool.neutral.points".to_owned(), true);
+        .insert("pool.neutral.points".to_owned(), GoalPoolValuation::Usable);
     references.variables.insert(
         "route".to_owned(),
         variable(GoalBlock::Choice, &["neutral.collect"]),
@@ -202,6 +204,8 @@ fn goals_each_type_reads_its_members() {
                         floor_milli_per_day: -5000,
                         ceiling_milli_per_day: 0,
                     }),
+                    scale: None,
+                    importance_milli: None,
                 }
             ),
             (
@@ -264,7 +268,7 @@ fn goals_each_type_reads_its_members() {
     let mut references = GoalReferences::new(packages(&["neutral.collect", "neutral.spend"]));
     references
         .pools
-        .insert("pool.neutral.points".to_owned(), true);
+        .insert("pool.neutral.points".to_owned(), GoalPoolValuation::Usable);
     references.rules.insert(
         "neutral.spend".to_owned(),
         GoalRule {
@@ -356,10 +360,11 @@ fn goals_reader_is_strict() {
             issue(Problem::Malformed, "/entries/1/type"),
         ),
         // V1 fix round 3: version 2 is the file's; a version this build does not know yet keeps
-        // `malformed`, a word other than version 1's `goal_version_retired`.
+        // `malformed`, a word other than version 1's `goal_version_retired`. Workflow #455 B3:
+        // this build reads version 3 too, so the later version is version 4.
         (
             "a later version",
-            with(|value| value["schema_version"] = json!("actingcommand.goals.v3")),
+            with(|value| value["schema_version"] = json!("actingcommand.goals.v4")),
             issue(Problem::Malformed, "/schema_version"),
         ),
         (
@@ -547,5 +552,344 @@ fn gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root()
     assert_eq!(
         check_standard_pack_goal_references(&goals, &GoalReferences::new(BTreeSet::new())),
         unknown
+    );
+}
+
+// ---- Workflow #455 B3 (register §1.519): a `resource` entry of version 3 carries the goal's own
+// step and importance, for a pool of `schedule.json` that declares no valuation.
+
+/// A version 3 document of `entries`.
+fn version_3(entries: Value) -> Value {
+    json!({"schema_version": "actingcommand.goals.v3", "game": GAME, "entries": entries})
+}
+
+/// A `resource` entry `name` on `pool`, titled `Fixture`, with the members of `weights` (its own
+/// `scale` and `importance_milli`, as the fixture gives them) after its own.
+fn weighted_entry(name: &str, pool: &str, weights: &Value) -> Value {
+    let mut entry = json!({"name": name, "type": "resource", "governs": {"pool": pool},
+                           "title": {"en": "Fixture"}});
+    if let (Some(members), Some(added)) = (entry.as_object_mut(), weights.as_object()) {
+        members.extend(added.clone());
+    }
+    entry
+}
+
+/// The brief's test 1, the reader: a version 3 `resource` entry reads its own `scale` and
+/// `importance_milli`, both, one or neither (the references, not the reader, hold the pair to the
+/// pool), the goal document's bounds included (1 and 2^53 - 1, 1 and 1,000,000); each below or
+/// above its bound is `goal_range_invalid` at it, one that is no safe integer or no integer
+/// `malformed` there, as every integer member of the file; the two members are no member of
+/// another type's entry, nor of a version 2 document, where they are `malformed` as on main. The
+/// reader has no writer: what it read is not written back (the goal page's view of an entry, which
+/// writes it, is the host's test).
+#[test]
+fn b3_a_version_3_resource_entry_reads_its_own_step_and_importance() {
+    use StandardPackProblem as Problem;
+    let lacking = "pool.neutral.lacking";
+    let document = version_3(json!([
+        weighted_entry(
+            "both",
+            lacking,
+            &json!({"scale": 10, "importance_milli": 1000})
+        ),
+        weighted_entry("step_only", lacking, &json!({"scale": 5})),
+        weighted_entry("importance_only", lacking, &json!({"importance_milli": 7})),
+        weighted_entry("neither", "pool.neutral.points", &json!({})),
+        weighted_entry(
+            "largest",
+            lacking,
+            &json!({"scale": MAX_GOAL_SAFE_INTEGER, "importance_milli": MAX_GOAL_IMPORTANCE_MILLI})
+        ),
+        weighted_entry(
+            "least",
+            lacking,
+            &json!({"scale": 1, "importance_milli": 1})
+        ),
+    ]));
+    let goals = read(&document).unwrap_or_else(|issues| panic!("version 3 reads: {issues:?}"));
+    let weights = goals
+        .entries
+        .iter()
+        .map(|entry| match &entry.kind {
+            DeclaredGoalKind::Resource {
+                scale,
+                importance_milli,
+                ..
+            } => (entry.name.as_str(), *scale, *importance_milli),
+            other => panic!("a resource entry: {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        weights,
+        [
+            ("both", Some(10), Some(1000)),
+            ("step_only", Some(5), None),
+            ("importance_only", None, Some(7)),
+            ("neither", None, None),
+            ("largest", Some(9_007_199_254_740_991), Some(1_000_000)),
+            ("least", Some(1), Some(1)),
+        ]
+    );
+    // Otherwise the entry reads as a version 2 entry does: its pool, no rate, its base block and
+    // its title.
+    assert_eq!(
+        goals.entries[0],
+        DeclaredGoal {
+            name: "both".to_owned(),
+            block: Some(GoalBlock::GoalRow),
+            title: Some(text(&[("en", "Fixture")])),
+            help: None,
+            kind: DeclaredGoalKind::Resource {
+                pool: lacking.to_owned(),
+                rate: None,
+                scale: Some(10),
+                importance_milli: Some(1000),
+            },
+        }
+    );
+
+    let one = |weights: Value| version_3(json!([weighted_entry("lacking", lacking, &weights)]));
+    let cases = [
+        (
+            "a step of 0",
+            one(json!({"scale": 0, "importance_milli": 1000})),
+            issue(Problem::GoalRangeInvalid, "/entries/0/scale"),
+        ),
+        (
+            "a negative step",
+            one(json!({"scale": -1, "importance_milli": 1000})),
+            issue(Problem::GoalRangeInvalid, "/entries/0/scale"),
+        ),
+        (
+            "a step above the safe integers",
+            one(json!({"scale": 9_007_199_254_740_992_u64, "importance_milli": 1000})),
+            issue(Problem::Malformed, "/entries/0/scale"),
+        ),
+        (
+            "a step that is no integer",
+            one(json!({"scale": 1.5, "importance_milli": 1000})),
+            issue(Problem::Malformed, "/entries/0/scale"),
+        ),
+        (
+            "a step written as a text",
+            one(json!({"scale": "10", "importance_milli": 1000})),
+            issue(Problem::Malformed, "/entries/0/scale"),
+        ),
+        (
+            "an importance of 0",
+            one(json!({"scale": 10, "importance_milli": 0})),
+            issue(Problem::GoalRangeInvalid, "/entries/0/importance_milli"),
+        ),
+        (
+            "an importance above 1,000,000",
+            one(json!({"scale": 10, "importance_milli": 1_000_001})),
+            issue(Problem::GoalRangeInvalid, "/entries/0/importance_milli"),
+        ),
+        (
+            "a step on a heading",
+            version_3(
+                json!([{"name": "stock", "type": "heading", "title": {"en": "Stock"},
+                              "scale": 10}]),
+            ),
+            issue(Problem::Malformed, "/entries/0/scale"),
+        ),
+        (
+            "a step in version 2",
+            with(|value| value["entries"][1]["scale"] = json!(10)),
+            issue(Problem::Malformed, "/entries/1/scale"),
+        ),
+        (
+            "an importance in version 2",
+            with(|value| value["entries"][1]["importance_milli"] = json!(1000)),
+            issue(Problem::Malformed, "/entries/1/importance_milli"),
+        ),
+    ];
+    for (case, value, expected) in cases {
+        assert_eq!(read(&value).map(|_| ()), Err(vec![expected]), "{case}");
+    }
+}
+
+/// The brief's test 2, the contract crate's half (the Lab's root check over a composed schedule
+/// is `gate_455_gr1`'s): the references hold a `resource` entry's own step and importance to what
+/// its pool declares of its valuation. A pool that declares none takes an entry that carries both
+/// and refuses one that carries one or neither `goal_pool_unvalued` at its pool; a pool whose
+/// valuation gives both takes an entry that carries neither and refuses one that carries either
+/// `goal_valuation_conflict`, at its `scale`, else at its `importance_milli`; a pending
+/// valuation, or one without `gap`, refuses the entry `goal_pool_unvalued` whatever it carries, as
+/// before.
+#[test]
+fn b3_references_hold_an_entry_s_own_step_and_importance_to_its_pool_s_valuation() {
+    use GoalPoolValuation as Pool;
+    use StandardPackProblem as Problem;
+    let both = json!({"scale": 10, "importance_milli": 1000});
+    let step = json!({"scale": 10});
+    let importance = json!({"importance_milli": 1000});
+    let none = json!({});
+    let cases = [
+        ("both on no valuation", Pool::Absent, &both, None),
+        (
+            "neither on no valuation",
+            Pool::Absent,
+            &none,
+            Some((Problem::GoalPoolUnvalued, "governs/pool")),
+        ),
+        (
+            "the step alone on no valuation",
+            Pool::Absent,
+            &step,
+            Some((Problem::GoalPoolUnvalued, "governs/pool")),
+        ),
+        (
+            "the importance alone on no valuation",
+            Pool::Absent,
+            &importance,
+            Some((Problem::GoalPoolUnvalued, "governs/pool")),
+        ),
+        ("neither on a usable valuation", Pool::Usable, &none, None),
+        (
+            "the step on a usable valuation",
+            Pool::Usable,
+            &step,
+            Some((Problem::GoalValuationConflict, "scale")),
+        ),
+        (
+            "the importance on a usable valuation",
+            Pool::Usable,
+            &importance,
+            Some((Problem::GoalValuationConflict, "importance_milli")),
+        ),
+        (
+            "both on a usable valuation",
+            Pool::Usable,
+            &both,
+            Some((Problem::GoalValuationConflict, "scale")),
+        ),
+        (
+            "both on a pending valuation or one without gap",
+            Pool::Unusable,
+            &both,
+            Some((Problem::GoalPoolUnvalued, "governs/pool")),
+        ),
+        (
+            "neither on a pending valuation or one without gap",
+            Pool::Unusable,
+            &none,
+            Some((Problem::GoalPoolUnvalued, "governs/pool")),
+        ),
+    ];
+    for (case, valuation, weights, refusal) in cases {
+        let goals = read(&version_3(json!([weighted_entry(
+            "material",
+            "pool.neutral.material",
+            weights
+        )])))
+        .unwrap_or_else(|issues| panic!("{case}: the entry reads: {issues:?}"));
+        let mut references = GoalReferences::new(packages(&[]));
+        references
+            .pools
+            .insert("pool.neutral.material".to_owned(), valuation);
+        let expected = refusal
+            .map(|(problem, member)| issue(problem, &format!("/entries/0/{member}")))
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            check_standard_pack_goal_references(&goals, &references),
+            expected,
+            "{case}"
+        );
+    }
+}
+
+/// The brief's test 5, the reader's half. A file without the new members reads as on main: the
+/// neutral example and the file of every type, version 2, read to the typed entries
+/// `goals_neutral_example_reads_to_typed_entries` and `goals_each_type_reads_its_members` pin
+/// (their resource entries carry no own step and importance), and labelled version 3 they read to
+/// the same entries; the neutral example's resource entry is held to its pool as before (nothing on
+/// a usable valuation, `goal_pool_unvalued` on any other). The later shape, as the contract
+/// provides (ruling 4): a version this build does not know is `malformed` at `/schema_version`
+/// and its entries are read by the grammar of version 2, so a document labelled version 4 that
+/// carries the new members gives exactly what a build before B3 gives a version 3 document that
+/// carries them: `malformed` at `/schema_version`, then at each member.
+#[test]
+fn b3_a_file_without_the_members_reads_as_before_and_a_later_version_is_refused() {
+    let relabelled = |value: &Value| {
+        let mut value = value.clone();
+        value["schema_version"] = json!("actingcommand.goals.v3");
+        value
+    };
+    let neutral: Value =
+        serde_json::from_str(NEUTRAL_EXAMPLE).expect("the neutral example is JSON");
+    for (case, version_2) in [
+        ("the neutral example", neutral),
+        ("every type", every_type()),
+    ] {
+        let before = read(&version_2).unwrap_or_else(|issues| panic!("{case}: {issues:?}"));
+        assert_eq!(
+            read(&relabelled(&version_2)),
+            Ok(before.clone()),
+            "{case}: version 3 without the members reads as version 2"
+        );
+        assert!(
+            before.entries.iter().all(|entry| match &entry.kind {
+                DeclaredGoalKind::Resource {
+                    scale,
+                    importance_milli,
+                    ..
+                } => scale.is_none() && importance_milli.is_none(),
+                _ => true,
+            }),
+            "{case}"
+        );
+    }
+    let goals = parse_standard_pack_goals(NEUTRAL_EXAMPLE.as_bytes(), GAME)
+        .unwrap_or_else(|issues| panic!("the neutral example reads: {issues:?}"));
+    for (valuation, expected) in [
+        (GoalPoolValuation::Usable, Vec::new()),
+        (
+            GoalPoolValuation::Absent,
+            vec![issue(
+                StandardPackProblem::GoalPoolUnvalued,
+                "/entries/1/governs/pool",
+            )],
+        ),
+        (
+            GoalPoolValuation::Unusable,
+            vec![issue(
+                StandardPackProblem::GoalPoolUnvalued,
+                "/entries/1/governs/pool",
+            )],
+        ),
+    ] {
+        let mut references = GoalReferences::new(packages(&["neutral.collect"]));
+        references
+            .pools
+            .insert("pool.neutral.points".to_owned(), valuation);
+        references.variables.insert(
+            "route".to_owned(),
+            variable(GoalBlock::Choice, &["neutral.collect"]),
+        );
+        assert_eq!(
+            check_standard_pack_goal_references(&goals, &references),
+            expected,
+            "{valuation:?}"
+        );
+    }
+
+    let mut later = version_3(json!([weighted_entry(
+        "material",
+        "pool.neutral.material",
+        &json!({"scale": 10, "importance_milli": 1000})
+    )]));
+    later["schema_version"] = json!("actingcommand.goals.v4");
+    assert_eq!(
+        read(&later).map(|_| ()),
+        Err(vec![
+            issue(StandardPackProblem::Malformed, "/schema_version"),
+            issue(StandardPackProblem::Malformed, "/entries/0/scale"),
+            issue(
+                StandardPackProblem::Malformed,
+                "/entries/0/importance_milli"
+            ),
+        ])
     );
 }

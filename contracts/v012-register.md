@@ -47652,6 +47652,163 @@ a row is tried again after 20, 40 and 80 minutes and then every two hours, withi
 and, after another task's successful run on its instance, as soon as its ordinary backoff and its
 minimum interval have passed.
 
+### 1.519 Slice #455 B3 (0.12.82): a `resource` entry of `goals.json` can set a goal on a pool that declares no valuation (board #455, the main line's third step; the rulings 1 to 6 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b3.md` after the read-only study `rd-1123/study-step3-pools.md`, its question 3 and slice B3, and the coordinator's disposition of it; on main `8923a701`, the v0.12.81 release)
+
+This section takes 1.519 (1.518 belongs to another slice of this version). It ships in 0.12.82.
+[standard-pack-goals.md](standard-pack-goals.md) (its head, "The file", "An entry", the types'
+table and the bullet below it, the neutral example, "Texts and limits", "The checks", "Who reads
+it" and "Interface") is the contract; [resource-targets.md](resource-targets.md) ("One value by
+name": who gives a goal set by name its step and importance) and
+[standard-pack-schedule.md](standard-pack-schedule.md) (one sentence after the table "What a
+resource repository writes", where the pools' declaration is described: the paragraph of 1.518 on
+the pools a goal asks for is not on main yet) follow it.
+
+**Why.** A resource repository declares, per game, the pools its rules produce (materials,
+currencies) without a valuation: every producing rule keeps its fixed value, and a fixed value
+beside a valued or pending pool is refused ([pack-catalog.md](pack-catalog.md),
+`catalog_value_conflict`). The goal document already takes a goal on such a pool when the goal
+carries its own `scale` and `importance_milli` (version 3 of `session.resource_targets`, whose
+targets are v2 targets), and 1.518 makes such a goal raise the benefit of the rules that produce
+the pool. What was missing is the declaration: `goals.json`'s check refused a `resource` entry on
+such a pool (`goal_pool_unvalued`), so the goal page could not offer the person the goal.
+
+**The rule** (rulings 1 to 4 and 6).
+- *The two numbers* (ruling 1). A `resource` entry may carry `scale` and `importance_milli`, the
+  goal document's names and bounds (`scale` 1 to 2^53 − 1, `importance_milli` 1 to 1 000 000),
+  written by the resource side from its research tables. The reader reads each alone
+  (`DeclaredGoalKind::Resource`'s `scale` and `importance_milli`, `Check::own_weight`); a number
+  outside its bounds is `goal_range_invalid` at it, one that is no safe integer or no integer
+  `malformed`, as every integer member of the file.
+- *The check* (ruling 2; the contract crate's `check_standard_pack_goal_references`, its references
+  `GoalReferences::pools` now holding what each pool declares, `GoalPoolValuation`; the Lab's root
+  check, `crates/resource-tooling/src/standard_pack_goals.rs`, `goal_issues`, reading it from the
+  composed schedule's pool): a pool that declares no valuation (no `valuation` member, or `null`)
+  takes an entry that carries both numbers and refuses one that carries one or neither with the
+  existing `goal_pool_unvalued`; a pool whose valuation holds `scale` and `gap` refuses an entry
+  that carries either with **`goal_valuation_conflict`** (one source for a goal's step and
+  importance: the pool's valuation), at the entry's `scale`, else its `importance_milli`; a pending
+  valuation is refused as before, whatever the entry carries.
+- *The write* (ruling 3; `crates/runtime-host/src/goals.rs`, `check_set` and `check_target`;
+  `crates/policy/src/resource_targets/v3.rs`, `GoalRecordEdit::SetTarget` and `edit_goal_record`).
+  A `set` of such an entry's value `{at_least}` is the one row `SetTarget` with the entry's numbers,
+  written by the same request (`EditGoal`) into the same record (`session.resource_targets`, v3)
+  as a goal on a valued pool, the two as the target's own `scale` and `importance_milli` (members of
+  its row, as a v3 document's target writes them); `clear` removes it. The Runtime's `pool_unvalued`
+  now refuses only a step or an importance that the pool's valuation does not give and the target
+  does not carry, so an entry with both passes on a pool without a valuation, and every request
+  that carried nothing before is judged and written as before. The page shows such an entry as any
+  `resource` entry: its entry as read (the two members in it, `declared_entry`), the value, who set
+  it, the reading or its pending reason, and the gap where the reading is known.
+- *An older build* (ruling 4). The contract's way for a later shape of this file is its
+  `schema_version` ("a released format does not change its shape in place"; every reader since
+  0.12.60 refuses a version it does not know `malformed` at `/schema_version`). So a file that
+  carries the two members is **version 3**, `actingcommand.goals.v3`: version 2 with these two
+  members on a `resource` entry and nothing else. This build reads versions 2 and 3; in a version
+  2 file the two members are unknown (`malformed`), so a version 2 file reads exactly as before,
+  bytes and answers. A Lab of 0.12.61 to 0.12.81 refuses a version 3 file `malformed` at
+  `/schema_version` (and at each member), warns and checks the root as without it (`package bundle
+  --goals`, `resource verify` and `standard-pack build` refuse it); a Runtime of those releases
+  refuses it at its workbench (`standard_pack_goals_not_applied`, `refused`), applies no entry of
+  it and runs the game root as without it.
+- *Ruling 6*: no game, package or alias is named in code, contract or test; the fixtures are
+  `neutral`.
+
+**Decided here** (each the smallest choice the rulings leave).
+- The word for "one source": none of the file's words says it (`goal_pool_unvalued` says the
+  opposite, `goal_range_invalid` speaks of an entry's own values, `catalog_value_conflict` belongs
+  to `pack-catalog.json`), so `goal_valuation_conflict` is added to the existing vocabulary
+  `standard_pack_problem` under the existing code `standard_pack_root_invalid`: a warning of
+  `standard-pack check` (exit 0, the root checked as without the file), a refusal of `package
+  bundle --goals` (its exit as any refused root file's) and of the `bundle` step of `resource
+  verify` and `standard-pack build`. No outcome code is added.
+- A valuation block without `gap` stays refused (`goal_pool_unvalued`) whatever the entry carries,
+  as a pending one: ruling 2 opens only a pool that declares no valuation, and such a block gives a
+  step, so an entry's `scale` beside it would be a second source.
+- A version 3 file without the two members is accepted and read as version 2; no `package`
+  revision moves: the installer judges the file by its name (`goal_undeclared` below 14), and the
+  older readers' refusal at `/schema_version` is the clean refusal the contract gives.
+- The Runtime holds no references (as since G-R1): it writes what an entry carries. A version 3
+  entry that carries the numbers on a valued pool, which the Tools refuse before a bundle is made,
+  would be written with them; one that carries one alone is refused `pool_unvalued` where the pool
+  requires the other.
+
+**A worked example.** `schedule.json` declares `pool.neutral.material` without a valuation (its
+observation a fact under `inventory.`); the rule that yields it keeps its `fixed_value_milli` and
+`produces` 2 a run. `goals.json` version 3 holds
+
+```json
+{"name": "material", "type": "resource", "governs": {"pool": "pool.neutral.material"},
+ "title": {"en": "Material to hold"}, "scale": 10, "importance_milli": 1000}
+```
+
+`standard-pack check` passes it. A person asks for at least 40: `EditGoal` with `{"kind": "set",
+"name": "material", "value_json": "{\"at_least\":40}"}`. The Runtime writes the target row
+`{row: target, id: material, resource: pool.neutral.material, at_least: 40, mode: adjust, weight:
+score_stage, scale: 10, importance_milli: 1000, set_unix_ms, channel, initiator}`, that is the v3
+target
+
+```json
+{"id": "material", "resource": "pool.neutral.material",
+ "condition": {"kind": "at_least", "amount": 40}, "scale": 10, "importance_milli": 1000,
+ "apply": {"mode": "adjust", "weight": "score_stage"}}
+```
+
+and the page lists the entry with `{"at_least":40}` set. Read at 10, the goal lacks 30 and weighs
+`Γ = ⌊1000·30 / 10⌋ = 3000` (what it then does to benefit and order is 1.518's). On a pool whose
+valuation gives both, the same entry is `goal_valuation_conflict` at `/entries/<i>/scale`; without
+the two numbers, on this pool, `goal_pool_unvalued` as before.
+
+**Tests** (incident `#455 B3`: the contract crate's `standard_pack_goals_tests.rs`, contract gate
+map; `crates/resource-tooling/src/gate_455_gr1.rs`, exec gate map;
+`crates/runtime-host/src/tests/gate_455_b3.rs`, host gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `b3_a_version_3_resource_entry_reads_its_own_step_and_importance` (1) | Both, the step alone, the importance alone, neither, the largest (2^53 − 1, 1 000 000) and the least (1, 1) read to the typed members; a step of 0 or −1 and an importance of 0 or 1 000 001 `goal_range_invalid` at the member; a step above the safe integers, a fraction and a text `malformed`; the members on a heading and in a version 2 file `malformed`. The reader has no writer of the file |
+| `b3_references_hold_an_entry_s_own_step_and_importance_to_its_pool_s_valuation` (2) | No valuation: both pass, neither or one `goal_pool_unvalued` at the pool; a usable valuation: neither passes, the step, the importance or both `goal_valuation_conflict` at `scale`, else `importance_milli`; pending or without `gap`: both and neither `goal_pool_unvalued` |
+| `b3_the_root_check_holds_an_entry_s_own_step_and_importance_to_its_pool` (2) | `standard-pack check` over a composed schedule with a pool without a valuation and a pending one: the valid file as version 3 with the carrying entry passes, the answer the one without the file but for `root_files`; nine more entries give one warning each in file order (the rows above, the pending and the gap-less valuation `goal_pool_unvalued`); G-R1's refusals as before; `package bundle --goals` lays the version 3 file byte for byte |
+| `b3_host_a_value_on_an_entry_with_its_own_step_and_importance_writes_them_and_clear_removes_it` (3) | `{at_least: 40}` on the carrying entry is `SetTarget` with scale 10 and importance 1000; the row holds them with the setter; the page's reader reads them back; the goal document's reader (`parse_resource_targets`) takes the target in document form, the largest numbers too; a valued pool's entry by the same request and record writes none; neither or the step alone on a pool without a valuation `pool_unvalued` with its pool; `clear` removes the target, the last leaving no record |
+| `b3_host_the_page_shows_such_an_entry_with_and_without_a_reading` (4) | With a value: the entry as read with the two members, the value, who set it, the target, the reading 30 and the gap 10, or the pending reading and no gap; without a value: the default, the reading or the pending one; a valued pool's entry in the same members |
+| `b3_a_file_without_the_members_reads_as_before_and_a_later_version_is_refused` (5) | The neutral example and the file of every type read alike as version 2 and as version 3, no own numbers; the neutral example's resource entry passes a usable valuation and is `goal_pool_unvalued` otherwise; a document labelled version 4 carrying the members is `malformed` at `/schema_version` and at each member, what a build before B3 answers a version 3 file |
+| `b3_host_an_entry_without_the_members_is_written_as_before` (5) | The neutral example's resource entry as the view writes it is main's bytes (a golden); labelled version 3 the same declaration; the carrying entry written with the two members after its own |
+
+Test 6: existing tests touched, each for a requirement this slice moves, their names and other
+assertions kept. `goals_reader_is_strict`: "a later version" is now `actingcommand.goals.v4`
+(version 3 is read). `goals_neutral_example_reads_to_typed_entries` and
+`goals_each_type_reads_its_members`: the expected resource entry names `scale` and
+`importance_milli` `None`, and the references hold `GoalPoolValuation::Usable` where they held
+`true`. The policy crate's `gate_463_v3` (the five `SetTarget` edits of
+`v3_policy_one_row_changes_and_every_other_row_is_kept_as_stored` and
+`v3_policy_the_bounds_refuse_an_edit`) and the host's `gate_463_v3` (the two targets of its
+fixture `stored()` and the two expected edits of
+`v3_host_each_situation_of_the_checks_is_its_own_word`) name the new members `None`. Every other
+test, G-R1's and G-SLx's checks of `goals.json` among them, passes unchanged. No test leaves the
+gate map; no golden is re-recorded.
+
+**What is not changed.** Every `goals.json` without the two members (version 2, and version 3
+without them), its bytes and every answer; the other four entry types; the goal document's
+grammar and readers (`session.resource_targets` versions 1 to 3); the shapes of `GoalView` and
+`EditGoal` (the view's `entry` is the entry as read, a JSON value, which carries the two members
+of an entry that writes them); admission and evaluation (what a goal does to benefit and order is
+1.518's); the installer's `place` and the `package` revision a bundle that carries `goals.json`
+declares (14); every declared interface range; the outcome codes.
+
+**Interface and versions.** One document version is added: `goals.json` version 3,
+`actingcommand.goals.v3`, read beside version 2. No interface revision moves: `package` (a bundle
+with `goals.json` declares [14, 14] as before; no `GOALS_PACKAGE_REVISION` change), `runtime-client`
+(no request or answer changes), `runtime-outcomes` (one word in an existing vocabulary under an
+existing code, as G-R1's words were), `ledger`, `actingd-config`.
+
+**At deploy.** Nothing to configure. No installed root's `goals.json` carries the two members, so
+every installed root reads and answers as before. A resource repository that writes a version 3
+file needs Tools of 0.12.82 for its `resource verify` and `standard-pack build`; a build before
+0.12.82 refuses a root that carries one at the file's `schema_version` (its Lab warns and checks the
+root as without the file and refuses to bundle it; its Runtime applies no entry of it and runs the
+game as without it; its installer places it), so placing such a root before the Runtime is
+0.12.82 leaves that game without its goal page's entries until then. A goal an `EditGoal` of
+0.12.82 wrote with its own step and importance stays readable by an earlier Runtime (version 3 of
+the goal document has had both members since 0.12.60).
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

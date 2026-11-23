@@ -1460,6 +1460,7 @@ tests = [
 incident = ["#463 V2"]
 
 # Workflow #463 V3 (0.12.61; register §1.383; brief rd-1115/brief-463-v3-goals-view-edit.md; contracts/resource-targets.md, "One value by name"), policy half, with a made-up instance and pools and no clock: an entry set on no record is a v3 record of its header and one entry row (name, the value's canonical text, set_unix_ms, channel, initiator) that the goal page reads back with who set it; a second set replaces that row, a console set names no initiator, and clearing the last entry leaves the withdrawal the page reads as no record (1); a second entry and a target join after the stored rows, which stay as stored; a target row is mode adjust, weight score_stage with the setter's fields; a target on the same pool under another id replaces it and names it, one of the same id on another pool goes, clearing a target removes its row only (2); an entry over a v2 policy turns its targets into v3 targets with the policy's lifetime and no setter, a v1 policy is unreadable to the edit and to the page (3); a value above 1024 canonical bytes, a fraction, a 97th entry and a 17th target are refused with their word (4)
+#   Workflow #455 B3 (0.12.82; register §1.519): GoalRecordEdit::SetTarget gained the target's own scale and importance_milli, so the five SetTarget edits of tests 2 and 4 name them, None (a target that carries none, written as before); their assertions are unchanged.
 [[gate]]
 coverage = "Y"
 tests = [

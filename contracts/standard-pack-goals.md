@@ -13,12 +13,24 @@ who reads it, its interface revision, and what is not this file's.
 reads in its own `control.json`, and an entry of this file only places it on the page. Release
 0.12.60 shipped version 1 with its eight types, and a released format does not change its shape
 in place, so the file of the five types is **version 2** (`actingcommand.goals.v2`; V1 fix round
-3, the coordinator's ruling 2 on the design's questions). This build reads version 2 only: a
-version 1 file is `goal_version_retired` at `/schema_version` and is read no further. No pack
-carries a version 1 file ("Before any pack carries the file"), so nothing is converted and no
-reader of version 1 stays. A version 2 file that writes one of the four types is
+3, the coordinator's ruling 2 on the design's questions). This build reads version 2 and (below)
+version 3: a version 1 file is `goal_version_retired` at `/schema_version` and is read no further.
+No pack carries a version 1 file ("Before any pack carries the file"), so nothing is converted and
+no reader of version 1 stays. A version 2 file that writes one of the four types is
 `goal_type_unknown` at it. What a Runtime, an installer and a Lab of 0.12.60 do with a version 2
 file is in "Interface".
+
+**Workflow #455 B3** (Runtime 0.12.82; [v012-register.md](v012-register.md) §1.519; the
+coordinator's rulings, not the owner's words). A resource repository declares the pools its rules
+produce (materials, currencies) **without a valuation**, since each producing rule keeps its fixed
+value ([pack-catalog.md](pack-catalog.md), `catalog_value_conflict`); a goal on such a pool carries
+its own step and importance ([resource-targets.md](resource-targets.md), version 3 of the goal
+document). So a `resource` entry may carry the two numbers, `scale` and `importance_milli`, with the
+goal document's names and bounds ("An entry"); a released format does not change its shape in
+place, so a file that carries them is **version 3** (`actingcommand.goals.v3`), version 2 with
+these two members on a `resource` entry and nothing else. A version 2 file is read exactly as
+before, bytes and answers, the two members included (`malformed` in it); a build before 0.12.82
+refuses a version 3 file at its `schema_version` ("Interface").
 
 **No value is read here.** The values a person or an agent sets, the requests that set and read
 them, the run fact a governed package reads and the scheduler's reading of a resource goal are
@@ -33,8 +45,8 @@ unit text and no option title. They are data for the console.
 `goals.json` is an optional root file of the game root, `<standard_packs.root>/<game>/goals.json`,
 beside `bundle.json`, by the root-file rule ([package-reference.md](package-reference.md),
 "Standard package root", "Naming"): `schema_version` `actingcommand.goals.v2` (Workflow #463 V1
-fix round 3; version 1, `actingcommand.goals.v1`, is what release 0.12.60 read) and `game` equal
-to the directory's name.
+fix round 3; version 1, `actingcommand.goals.v1`, is what release 0.12.60 read) or, since Workflow
+#455 B3, `actingcommand.goals.v3`, and `game` equal to the directory's name.
 
 - It is not `ui.json` (since Workflow #477 PC-1, the display part of `pack-catalog.json`,
   [pack-catalog.md](pack-catalog.md)): the Runtime must enforce types and ranges, and that file is
@@ -43,13 +55,15 @@ to the directory's name.
   would refuse the whole schedule.
 
 ```text
-{schema_version: "actingcommand.goals.v2", game,
+{schema_version: "actingcommand.goals.v2" | "actingcommand.goals.v3", game,
  entries: [{name, type, block?, title: {<locale>: text}, help?: {<locale>: text}, governs?,
             <the type's members>}
          | {name, type: "variable", block?}]}
 
 governs:  {pool: <pool id of schedule.json>}            type resource
         | {rules: [<rule id of schedule.json>, ...]}     type tier
+
+version 3 only, type resource:  scale?, importance_milli?
 ```
 
 The document has exactly the members `schema_version`, `game` and `entries`.
@@ -71,6 +85,14 @@ The document has exactly the members `schema_version`, `game` and `entries`.
   once in its list. The `governs` object holds exactly the member its type takes.
 - **Default**: written in the file, never a pointer into the schedule. A `resource` entry's default
   is "no goal": it writes no `default`.
+- **The goal's own step and importance** (Workflow #455 B3; version 3, a `resource` entry only):
+  `scale`, an integer from 1 to 2^53 - 1, and `importance_milli`, an integer from 1 to 1,000,000:
+  the names and the bounds of a goal's `scale` and `importance_milli` in the goal document
+  ([resource-targets.md](resource-targets.md), the v2 target's rows, which version 3 takes). Written
+  by the resource side from its research tables, never from an application's readings. An entry
+  writes both for a pool of `schedule.json` that declares no valuation, and neither for a pool whose
+  valuation gives them: one source for a goal's step and importance ("The checks"). A value set on
+  the entry writes the application's goal with the two as its own ("Who reads it", the goal page).
 
 Every other member is refused.
 
@@ -83,7 +105,7 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
 |---|---|---|
 | `heading` | none: a group title between entries | none |
 | `note` | none: the author's text | none |
-| `resource` | `governs: {pool}`; `rate?: {floor_milli_per_day, ceiling_milli_per_day}` | `{at_least, by_unix_ms?}` |
+| `resource` | `governs: {pool}`; `rate?: {floor_milli_per_day, ceiling_milli_per_day}`; in version 3 (Workflow #455 B3) `scale?`, `importance_milli?` | `{at_least, by_unix_ms?}` |
 | `tier` | `governs: {rules}`; `options: [{value, title, scale_milli}]` (2 to 32), `default` | one option value |
 | `variable` | none; it writes neither `title` nor `help`, only `name`, `type` and an optional `block` | the placed variable's ([package-variables.md](package-variables.md)) |
 
@@ -91,6 +113,10 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
   (`floor_milli_per_day`) and at its high end (`ceiling_milli_per_day`), written by the resource
   side from its research tables and never from an application's readings. A deadline reads it
   (G-R4); the shape is accepted now so that packs need no second revision.
+- **`scale` and `importance_milli`** (a `resource` entry of version 3, Workflow #455 B3): the step
+  `S` and the importance `I` a goal on the entry's pool carries as its own, for a pool that declares
+  no valuation ("An entry"); each read alone by the reader, held as a pair to the pool by the
+  references ("The checks").
 - **Option values** (`tier`): 1 to 64 bytes of `[a-z0-9][a-z0-9_.:-]*`, each once in its list. A
   tier's `scale_milli` is an integer from 1 to 1,000,000 (times 1000): a later slice (G-R5) scales
   the fixed value of the governed rules by it.
@@ -107,17 +133,24 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
 ### Neutral example
 
 ```json
-{"schema_version": "actingcommand.goals.v2", "game": "neutral",
+{"schema_version": "actingcommand.goals.v3", "game": "neutral",
  "entries": [
   {"name": "stock", "type": "heading", "title": {"en": "Stock", "zh-Hans": "储备"}},
   {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
    "title": {"en": "Points to hold", "zh-Hans": "要攒的点数"},
    "rate": {"floor_milli_per_day": 120000, "ceiling_milli_per_day": 900000}},
-  {"name": "route", "type": "variable"}]}
+  {"name": "route", "type": "variable"},
+  {"name": "material", "type": "resource", "governs": {"pool": "pool.neutral.material"},
+   "title": {"en": "Material to hold", "zh-Hans": "要攒的材料"},
+   "scale": 10, "importance_milli": 1000}]}
 ```
 
 The third entry places the variable `route` a package of the root declares (Workflow #463 V1; in
-version 1 it was a `choice` entry that governed `neutral.collect`).
+version 1 it was a `choice` entry that governed `neutral.collect`). The fourth (Workflow #455 B3)
+governs `pool.neutral.material`, a pool `schedule.json` declares without a valuation, and carries
+the step 10 and the importance 1000 a goal on it takes; the second governs a pool whose valuation
+gives both, so it carries neither. Without the fourth entry and labelled
+`actingcommand.goals.v2`, the document is version 2's example, read as before B3.
 
 ## Blocks
 
@@ -153,7 +186,8 @@ what exceeds, as `pack-catalog.json` has `catalog_out_of_limits` for its own (`u
 `ui_out_of_limits`) (G-R1 fix round 1; before it this
 file said `malformed`). An integer outside the safe integers is not of its type (`malformed`), and
 a `scale_milli` outside its range is what the entry declares as its values (`goal_range_invalid`;
-"The checks"). The value types' limits Workflow #463 V1 moved to a package's `variables`
+"The checks"), and so (Workflow #455 B3) is a `resource` entry's `scale` below 1 and its
+`importance_milli` outside 1 to 1,000,000. The value types' limits Workflow #463 V1 moved to a package's `variables`
 ([package-variables.md](package-variables.md)). Bounds of the shape, not tunables:
 
 | What | Limit |
@@ -167,6 +201,8 @@ a `scale_milli` outside its range is what the entry declares as its values (`goa
 | `options` | 2 to 32 (`tier`) |
 | an option value | 1 to 64 bytes |
 | `scale_milli` | 1 to 1,000,000 |
+| a `resource` entry's `scale` (version 3) | 1 to 2^53 - 1, a goal's `scale` |
+| a `resource` entry's `importance_milli` (version 3) | 1 to 1,000,000, a goal's `importance_milli` |
 | an integer | a safe integer, at most 2^53 - 1 in magnitude |
 
 ## The checks
@@ -183,18 +219,19 @@ against the root.
 
 | `standard_pack_problem` | When | `json_pointer` |
 |---|---|---|
-| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too; a `title` or `help` a `variable` entry writes); a `schema_version` that is neither version 2's nor version 1's (a version this build does not know yet, a later one included); a name, an option value or an id outside its form; a `governs` id named twice | the member (empty for the whole document) |
+| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too; a `title` or `help` a `variable` entry writes; Workflow #455 B3: a `scale` or an `importance_milli` in a version 2 file or on an entry of another type than `resource`); a `schema_version` that is neither version 2's, version 3's nor version 1's (a version this build does not know yet, a later one included; its entries are then read by version 2's members); a name, an option value or an id outside its form; a `governs` id named twice | the member (empty for the whole document) |
 | `goal_version_retired` | Workflow #463 V1 fix round 3: `schema_version` is `actingcommand.goals.v1`, version 1, which release 0.12.60 read and this build reads no more. The file is read no further: after the members repeated in one object and the document's own members unknown or missing, it is the file's only problem | `/schema_version` |
 | `goal_out_of_limits` | the file is larger than 1 MiB; a list, a map or a text's locales of a count outside its limit; a name, an option value, an id, a locale or a text of a length outside its limit (the "Limits" table; an empty one too). G-R1 fix round 1 | what exceeds: the list, the map, the text or the member (empty for the whole file) |
 | `game_mismatch` | `game` is not the directory's | `/game` |
 | `goal_name_duplicate` | a name an earlier entry has | `/entries/<i>/name`, the later |
 | `goal_type_unknown` | `type` is none of the five of version 2, a later version's type included, and (Workflow #463 V1) the four types `variable` replaced, `integer`, `choice`, `switch` and `ordered`; the entry is read no further | `/entries/<i>/type` |
 | `goal_block_mismatch` | `block` is not the type's base block; Workflow #463 V1: a `variable` entry's `block` that is none of the four a variable is shown with (by the reader), or not the placed variable's base block (by the references) | `/entries/<i>/block` |
-| `goal_range_invalid` | what the entry declares as its values cannot hold one: an option value written twice (at the later `value`); a tier's `scale_milli` outside 1 to 1,000,000 (at it; one that is no safe integer is `malformed`, as every integer member of the file) | the member named |
+| `goal_range_invalid` | what the entry declares as its values cannot hold one: an option value written twice (at the later `value`); a tier's `scale_milli` outside 1 to 1,000,000 (at it; one that is no safe integer is `malformed`, as every integer member of the file); Workflow #455 B3: a `resource` entry's `scale` below 1 or its `importance_milli` outside 1 to 1,000,000, the goal document's bounds (at it) | the member named |
 | `goal_default_invalid` | a `tier`'s `default` is not one of its option values, judged once its options hold | `/entries/<i>/default` |
 | `goal_rate_invalid` | a `rate` whose `ceiling_milli_per_day` is below its `floor_milli_per_day` | `/entries/<i>/rate/ceiling_milli_per_day` |
 | `goal_pool_unknown` | a `resource` entry's pool is not a pool of the composed schedule (no pool without `schedule.json`) | `/entries/<i>/governs/pool` |
-| `goal_pool_unvalued` | that pool's `valuation` lacks `scale` or `gap` (a pending or absent valuation too) | `/entries/<i>/governs/pool` |
+| `goal_pool_unvalued` | that pool's `valuation` lacks `scale` or `gap` (a pending or absent valuation too). Workflow #455 B3: a pool that declares no valuation (no `valuation` member, or `null`) takes an entry that carries both `scale` and `importance_milli`, and refuses so one that carries one or neither; a pending valuation, and a block without `gap`, refuse the entry whatever it carries, as before | `/entries/<i>/governs/pool` |
+| `goal_valuation_conflict` | Workflow #455 B3: the entry carries `scale` or `importance_milli` and its pool's valuation holds both `scale` and `gap`: one source for a goal's step and importance, the pool's valuation | `/entries/<i>/scale`, else `/entries/<i>/importance_milli` |
 | `goal_package_unknown` | (G-R1 fix round 1) the package a `tier` entry's rule runs is not a package of `bundle.json`, which the composition has refused before (`rule_package_unregistered`), so that the check never passes a rule whose package it was not told of; Workflow #463 V1: or a package that declares a placed variable is not | `.../governs/rules/<j>`, or `/entries/<i>/name` |
 | `goal_rule_unknown` | a `tier` entry's rule is not a rule of `schedule.json` | `/entries/<i>/governs/rules/<j>` |
 | `goal_tier_without_fixed_value` | that rule, its package passed, writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
@@ -225,8 +262,10 @@ for that game, and a reader of the declaration says why.
 - **`actinglab standard-pack check --root <game root>`** reads the file beside the other root files
   and lists it in `root_files` (after `display-layout.json`, before `loading.json`). After the
   composition of `schedule.json` it already runs, it reads the file and holds an accepted file to
-  the root: the pools of `schedule.json` and its rules with the packages they run, and every package
-  of `bundle.json` with (Workflow #463 V1) the variables it declares (read by the Runtime's metadata
+  the root: the pools of `schedule.json` (Workflow #455 B3: each with what it declares of its
+  `valuation`, a block with `scale` and `gap`, none, or the pending marker or a block without
+  `gap`; the contract crate's `GoalPoolValuation`) and its rules with the packages they run, and
+  every package of `bundle.json` with (Workflow #463 V1) the variables it declares (read by the Runtime's metadata
   reader, as the remedy report reads them; until Workflow #455 G-SLx, 0.12.77, also the
   capabilities its `control.json` provides and their `irreversible` marks); since V1 it reads no
   table. A version 1 file is the warning
@@ -321,6 +360,20 @@ for that game, and a reader of the declaration says why.
   workbench has checked the root after a start the page answers `not_checked_yet` and an edit is
   refused with that word (fix round 2 of #1731: `root_failing` for a root no check since the start
   could read, `no_schedule` for a game without `schedule.json`).
+- **A `resource` entry that carries its own step and importance** (Workflow #455 B3, Runtime
+  0.12.82, register §1.519; version 3). A `set` of its value `{at_least}` writes the application's
+  goal by the same request (`EditGoal`) and in the same record (`session.resource_targets`, version
+  3 of the goal document, [resource-targets.md](resource-targets.md), "One value by name") as on a
+  valued pool, with the entry's `scale` and `importance_milli` as the target's own (its row carries
+  them); a `clear` removes it. The Runtime's `pool_unvalued` refuses only a step or an importance
+  the pool's valuation does not give and the goal does not carry, so an entry that carries both
+  passes on a pool without a valuation and one that carries neither or one is refused as before.
+  The Runtime holds no references: it writes what the entry carries; keeping the two off a valued
+  pool is the check's (`goal_valuation_conflict`), which the Tools run before a bundle is made. The
+  page shows such an entry as any `resource` entry (its entry as its reader read it, the two
+  members in it; the value set, who set it, the target, the pool's reading or its pending reason,
+  and the gap where the reading is known). The goal page's requests and their answers keep their
+  shape.
 
 ## Interface
 
@@ -396,6 +449,35 @@ for a version 2 file one of whose entries governs such a package:
   keeps every variable of its root from applying (`package_unreadable`). Its installer does not let
   such a package in through a bundle that declares its revision ([package-variables.md](package-variables.md),
   "Interface").
+
+**Version 3, Workflow #455 B3 (Runtime 0.12.82; register §1.519) moves no `package` revision.** A
+later shape of this file is a later `schema_version`, which every reader since 0.12.60 refuses at
+`/schema_version` (`malformed`, "The checks": "a version this build does not know yet"), and that
+is how a build before 0.12.82 refuses a version 3 file; the file's name is what the installer
+judges (`goal_undeclared` below 14), and no version is judged at the edge, so a bundle that carries
+a version 3 file declares `package` [14, 14] (`GOALS_PACKAGE_REVISION` stays 14) and the
+Runtime's declared `package` range does not move. What the programs of 0.12.61 to 0.12.81 (which read
+version 2) do with a version 3 file:
+
+- **The Lab** (`standard-pack check`) refuses the file `malformed` at `/schema_version` and at each
+  `scale` and `importance_milli` (its reader reads the entries by version 2's members), one
+  `standard_pack_root_invalid` warning each, and checks the root as without the file; `package
+  bundle --goals` refuses the bundle with the first, `--out` not written; `resource verify` and
+  `standard-pack build` fail their `bundle` step, no zip.
+- **The Runtime's workbench** (and check-config and `actingd suspended`, which read a root as it
+  does) refuses the file as its reader does: `standard_pack_goals_not_applied` (`goals_failure`
+  `refused`, its first problem `malformed` at `/schema_version`), no entry of the file applies for
+  that game, and the goal page names the file `refused` with its sha256 and lists no entry of it;
+  the game root runs as without the file. A goal record an `EditGoal` of 0.12.82 wrote with a
+  target's own `scale` and `importance_milli` is read by those Runtimes as any version 3 record
+  (the members are version 3's of the goal document since 0.12.60).
+- **The installer's `place`** reads the file's name only and places it; its post check's
+  `standard-pack check` warns as above and passes.
+
+A version 2 file, and a version 3 file without the two members, are read as version 2 is: the
+same entries, the same references and the same answers, so a root that carries none is byte for
+byte what it was. **A rollback is not refused** for the file: no installed root carries version 3
+at this release; a root that does runs on an earlier Runtime as without it, as above.
 
 ## What is not this file's
 

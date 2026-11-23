@@ -578,6 +578,11 @@ game's business rules:
 | Reading and navigation step inside a chain | a readings, return-home or recovery step: `"maintenance": true`; a step after the chain's first business rule: nothing (it rides with that rule, SS-2e); the chain's value once, on its first business rule | — | the maintenance tier, or its chain |
 | Still needs the model (its value depends on live data or on a choice made at run time) | nothing, or `"amount": "pending"` | `"valuation": "pending"` | `benefit_unknown` until the model's export |
 
+A pool a goal asks for that the file declares without a `valuation` (Workflow #455 B3, since
+0.12.82; register §1.519) is offered on the goal page by a `resource` entry of `goals.json` version
+3 that carries the goal's own `scale` and `importance_milli`, which the resource side writes from
+its research tables ([standard-pack-goals.md](standard-pack-goals.md), "An entry").
+
 **Who writes the fixed value and the marks, since Workflow #477 CV-1** (0.12.79; register §1.507;
 [pack-catalog.md](pack-catalog.md), "Version 2"). A rule's `consumes` and `produces`, its
 `fixed_value_milli` with its `fixed_value_origin`, and its `limited` and `realization` marks may

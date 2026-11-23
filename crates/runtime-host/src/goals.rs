@@ -277,8 +277,9 @@ pub(crate) fn check_edit(
 ///
 /// 1. an entry of the accepted `goals.json`: a `heading` or a `note` holds no value
 ///    (`holds_no_value`); a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
-///    its pool, as an other target does (below); a `variable` placement is the variable of its
-///    name (2);
+///    its pool, as an other target does (below), and (Workflow #455 B3) its goal carries the
+///    `scale` and `importance_milli` the entry carries; a `variable` placement is the variable of
+///    its name (2);
 /// 2. a variable of a bound package: one that does not apply is `variable_not_applying` with its
 ///    `variable_problem`; else its value is judged by the dispatch's own function
 ///    ([`judge_value`]) and held to the store's bound;
@@ -302,12 +303,24 @@ fn check_set(
         Some(DeclaredGoalKind::Tier { .. }) => {
             return Err(GoalRefusal::new(GoalProblem::TierNotBuilt));
         }
-        Some(DeclaredGoalKind::Resource { pool, .. }) => {
-            let at_least = check_target(page, value, Some(pool))?;
+        Some(DeclaredGoalKind::Resource {
+            pool,
+            scale,
+            importance_milli,
+            ..
+        }) => {
+            // Workflow #455 B3: the goal carries the step and the importance the entry carries.
+            let own = OwnWeights {
+                scale: *scale,
+                importance_milli: *importance_milli,
+            };
+            let at_least = check_target(page, value, Some(pool), own)?;
             return Ok(GoalRecordEdit::SetTarget {
                 id: name.to_owned(),
                 resource: pool.clone(),
                 at_least,
+                scale: own.scale,
+                importance_milli: own.importance_milli,
             });
         }
         Some(DeclaredGoalKind::Variable) | None => {}
@@ -335,11 +348,13 @@ fn check_set(
         return Err(GoalRefusal::new(GoalProblem::NameUnknown));
     };
     let resource = resource.as_str().unwrap_or_default().to_owned();
-    let at_least = check_target(page, value, None)?;
+    let at_least = check_target(page, value, None, OwnWeights::default())?;
     Ok(GoalRecordEdit::SetTarget {
         id: name.to_owned(),
         resource,
         at_least,
+        scale: None,
+        importance_milli: None,
     })
 }
 
@@ -494,17 +509,29 @@ fn item_at(variable: &PackageVariable, value: &Value, word: GoalProblem) -> Opti
     }
 }
 
+/// Workflow #455 B3 (register §1.519): the step and the importance a `resource` entry of a version
+/// 3 `goals.json` carries, which the goal it sets carries as its own `scale` and
+/// `importance_milli`; none for an entry that carries none and for an other target.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OwnWeights {
+    pub(crate) scale: Option<u64>,
+    pub(crate) importance_milli: Option<u64>,
+}
+
 /// Workflow #463 V3: a resource value, the `at_least` it holds, or why it is refused. For a
 /// resource entry (`pool` its `governs.pool`) the value is `{at_least}`; for an other target it is
 /// `{resource, at_least}`. Every other member is `wrong_type` at it, but `by_unix_ms`, which is
 /// `deadline_unsupported`; `at_least` is a whole number (else `wrong_type`) from 1 to the safe
 /// integers and not above the pool's capacity when its capacity reads one (else `out_of_range`);
 /// the pool is one the application can target (else `pool_not_targetable`) whose valuation gives
-/// the step and the importance a goal by name does not carry (else `pool_unvalued`).
+/// the step and the importance a goal by name does not carry (else `pool_unvalued`). Workflow #455
+/// B3: what the goal carries itself (`own`, a resource entry's) the pool's valuation need not
+/// give: `pool_unvalued` only for a step or an importance the pool requires and `own` lacks.
 pub(crate) fn check_target(
     page: &GoalPage,
     value: &Value,
     pool: Option<&String>,
+    own: OwnWeights,
 ) -> Result<u64, GoalRefusal> {
     let Value::Object(members) = value else {
         return Err(GoalRefusal::new(GoalProblem::WrongType));
@@ -544,7 +571,9 @@ pub(crate) fn check_target(
     else {
         return Err(GoalRefusal::new(GoalProblem::PoolNotTargetable).pool(&pool));
     };
-    if targetable.scale_required || targetable.importance_required {
+    if (targetable.scale_required && own.scale.is_none())
+        || (targetable.importance_required && own.importance_milli.is_none())
+    {
         return Err(GoalRefusal::new(GoalProblem::PoolUnvalued).pool(&pool));
     }
     let ceiling = page
@@ -955,8 +984,8 @@ fn goal_cause(cause: &VariableCause) -> Option<GoalVariableCause> {
 }
 
 /// An entry of an accepted `goals.json` as its reader read it: its name, type, block, texts, and
-/// the members of its type (a resource entry's pool and rate, a tier's rules, options and
-/// default).
+/// the members of its type (a resource entry's pool and rate, and, Workflow #455 B3, its own
+/// `scale` and `importance_milli` when it carries them; a tier's rules, options and default).
 pub(crate) fn declared_entry(goal: &DeclaredGoal) -> Value {
     let text = |text: &GoalText| {
         Value::Object(
@@ -981,7 +1010,12 @@ pub(crate) fn declared_entry(goal: &DeclaredGoal) -> Value {
         entry.insert("help".to_owned(), text(help));
     }
     match &goal.kind {
-        DeclaredGoalKind::Resource { pool, rate } => {
+        DeclaredGoalKind::Resource {
+            pool,
+            rate,
+            scale,
+            importance_milli,
+        } => {
             entry.insert("governs".to_owned(), serde_json::json!({ "pool": pool }));
             if let Some(rate) = rate {
                 entry.insert(
@@ -990,6 +1024,16 @@ pub(crate) fn declared_entry(goal: &DeclaredGoal) -> Value {
                         "floor_milli_per_day": rate.floor_milli_per_day,
                         "ceiling_milli_per_day": rate.ceiling_milli_per_day,
                     }),
+                );
+            }
+            // Workflow #455 B3: the goal's own step and importance, as the entry carries them.
+            if let Some(scale) = scale {
+                entry.insert("scale".to_owned(), Value::from(*scale));
+            }
+            if let Some(importance_milli) = importance_milli {
+                entry.insert(
+                    "importance_milli".to_owned(),
+                    Value::from(*importance_milli),
                 );
             }
         }

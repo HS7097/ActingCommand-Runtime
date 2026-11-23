@@ -162,6 +162,8 @@ fn v3_policy_one_row_changes_and_every_other_row_is_kept_as_stored() {
             id: "points".to_owned(),
             resource: POOL.to_owned(),
             at_least: 500,
+            scale: None,
+            importance_milli: None,
         },
         lab(3_000),
     );
@@ -192,6 +194,8 @@ fn v3_policy_one_row_changes_and_every_other_row_is_kept_as_stored() {
             id: "stock".to_owned(),
             resource: POOL.to_owned(),
             at_least: 700,
+            scale: None,
+            importance_milli: None,
         },
         console(4_000),
     )
@@ -217,6 +221,8 @@ fn v3_policy_one_row_changes_and_every_other_row_is_kept_as_stored() {
             id: "stock".to_owned(),
             resource: OTHER_POOL.to_owned(),
             at_least: 9,
+            scale: None,
+            importance_milli: None,
         },
         lab(5_000),
     );
@@ -346,6 +352,8 @@ fn v3_policy_the_bounds_refuse_an_edit() {
                 id: format!("target_{index}"),
                 resource: format!("pool.neutral.{index}"),
                 at_least: 1,
+                scale: None,
+                importance_milli: None,
             },
             lab(1),
         ));
@@ -359,6 +367,8 @@ fn v3_policy_the_bounds_refuse_an_edit() {
                 id: "target_16".to_owned(),
                 resource: "pool.neutral.16".to_owned(),
                 at_least: 1,
+                scale: None,
+                importance_milli: None,
             },
             lab(1)
         ),

@@ -643,7 +643,16 @@ another request wrote with who set them:
   `score_stage`, its step and importance the pool's valuation's (a pool whose valuation lacks
   either is refused `pool_unvalued`), no tasks and no lifetime; it replaces the target on that pool
   whatever its id (the answer's `replaced_target_id`) and a target of the same id on another pool.
-  `clear` removes the target and its task rows.
+  `clear` removes the target and its task rows. **Who gives a goal set by name its step and
+  importance** (Workflow #455 B3, 0.12.82; register §1.519): the pool's valuation, or the entry. A
+  resource entry of `goals.json` version 3 may carry `scale` and `importance_milli`, the resource
+  side's numbers for a pool that declares no valuation, with the bounds of this document's
+  `scale` and `importance_milli` ([standard-pack-goals.md](standard-pack-goals.md), "An entry");
+  its `set` writes them as the target's own `scale` and `importance_milli` (members of the row),
+  and `pool_unvalued` refuses only a step or an importance the pool does not give and the target
+  does not carry. An other target, and an entry that carries neither, carry none, as before. The
+  goal so written is an ordinary v3 target, which this document's readers take and every
+  evaluation resolves as `S = scale`, `I = importance_milli`.
 - **Over a v2 policy** its targets become v3 targets with the policy's lifetime and no setter, as
   under a v2 document applied over a v3 record; a v1 policy or rows no reader reads are refused
   `record_unreadable`; a record left with no target and no entry is the withdrawal.

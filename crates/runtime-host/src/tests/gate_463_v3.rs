@@ -253,6 +253,8 @@ fn stored() -> StoredGoalRecord {
                 id: "points".to_owned(),
                 resource: POINTS.to_owned(),
                 at_least: 50,
+                scale: None,
+                importance_milli: None,
             },
             lab(3_000),
         ),
@@ -261,6 +263,8 @@ fn stored() -> StoredGoalRecord {
                 id: "other".to_owned(),
                 resource: OTHER_POOL.to_owned(),
                 at_least: 7,
+                scale: None,
+                importance_milli: None,
             },
             lab(4_000),
         ),
@@ -464,7 +468,9 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
         GoalRecordEdit::SetTarget {
             id: "points".to_owned(),
             resource: POINTS.to_owned(),
-            at_least: 120
+            at_least: 120,
+            scale: None,
+            importance_milli: None,
         }
     );
     assert_eq!(
@@ -472,7 +478,9 @@ fn v3_host_each_situation_of_the_checks_is_its_own_word() {
         GoalRecordEdit::SetTarget {
             id: "spare".to_owned(),
             resource: OTHER_POOL.to_owned(),
-            at_least: 9
+            at_least: 9,
+            scale: None,
+            importance_milli: None,
         }
     );
     assert_eq!(

@@ -30,11 +30,11 @@ use crate::standard_pack_schedule::issue_path;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    DeclaredCapabilities, GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
-    MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootGoalDocument, RootPackageVariables,
-    StandardPackRoot, StandardPackRootIssue, VariableOrigins, check_standard_pack_goal_references,
-    goal_variables, judge_root_variables, parse_standard_pack_goals, parse_standard_pack_schedule,
-    take_catalog_business,
+    DeclaredCapabilities, GoalPoolValuation, GoalReferences, GoalRule, IrreversiblePackages,
+    LabError, LabResult, MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootGoalDocument,
+    RootPackageVariables, StandardPackRoot, StandardPackRootIssue, VariableOrigins,
+    check_standard_pack_goal_references, goal_variables, judge_root_variables,
+    parse_standard_pack_goals, parse_standard_pack_schedule, take_catalog_business,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
 use actingcommand_policy::standard_pack_schedule_takes_catalog;
@@ -132,13 +132,18 @@ pub(crate) fn goal_issues(
                 .map_err(|issue| root_invalid(game, &issue_path(path, &issue), &issue))?;
         }
         for pool in &schedule.pools {
-            // A pool a goal may name has a valuation block with its step and its gap weight.
-            let valued = matches!(
-                pool.body.get("valuation"),
+            // A pool a goal may name has a valuation block with its step and its gap weight, or
+            // (Workflow #455 B3) no valuation, a goal on it carrying its own step and importance.
+            let valuation = match pool.body.get("valuation") {
+                None | Some(Value::Null) => GoalPoolValuation::Absent,
                 Some(Value::Object(valuation))
-                    if valuation.contains_key("scale") && valuation.contains_key("gap")
-            );
-            references.pools.insert(pool.id.clone(), valued);
+                    if valuation.contains_key("scale") && valuation.contains_key("gap") =>
+                {
+                    GoalPoolValuation::Usable
+                }
+                Some(_) => GoalPoolValuation::Unusable,
+            };
+            references.pools.insert(pool.id.clone(), valuation);
         }
         for rule in &schedule.rules {
             // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to.

@@ -39,6 +39,8 @@
 // - on each such root every other refusal of the check is the one before, and a root none of
 //   whose packages marks a capability irreversible answers as before.
 // The first test lost its last fixture, `goal_governs_irreversible`, which nothing gives now.
+// Workflow #455 B3 (0.12.82; register §1.519) adds, at the end, the root check of a version 3
+// `resource` entry's own step and importance against its pool's valuation.
 // A made-up game `neutral`, server `test`, 16x9; every package, pool, rule, variable and text is a
 // placeholder.
 
@@ -998,4 +1000,191 @@ fn gslx_a_root_without_an_irreversible_capability_answers_as_before() {
     assert_eq!(listing, every_variable_applies());
     assert_each_refusal(&game_root);
     assert_bundle_lays(reversible(), &schedule(), &goals());
+}
+
+// ---- Workflow #455 B3 (0.12.82; register §1.519): the root check holds a version 3 `resource`
+// entry's own step and importance to the valuation its pool has in the composed schedule.
+
+/// Workflow #455 B3: a pool that declares no valuation, as a resource repository declares a pool
+/// its rules produce.
+const LACKING: &str = "pool.neutral.lacking";
+/// Workflow #455 B3: a pool whose valuation is the pending marker.
+const LATER: &str = "pool.neutral.later";
+
+/// Workflow #455 B3: the pool of [`pool`] of `id` whose `valuation` is `valuation`, or none.
+fn pool_valued_as(id: &str, valuation: Option<Value>) -> Value {
+    let mut value = pool(id, false);
+    match valuation {
+        Some(written) => value["valuation"] = written,
+        None => {
+            value
+                .as_object_mut()
+                .expect("a pool")
+                .shift_remove("valuation")
+                .expect("the fixture's valuation");
+        }
+    }
+    value
+}
+
+/// Workflow #455 B3: [`schedule`] with two more pools, [`LACKING`] without a valuation and
+/// [`LATER`] with the pending marker; no rule touches either.
+fn schedule_with_unvalued_pools() -> Value {
+    let mut value = schedule();
+    let pools = value["pools"].as_array_mut().expect("the pools");
+    pools.push(pool_valued_as(LACKING, None));
+    pools.push(pool_valued_as(LATER, Some(json!("pending"))));
+    value
+}
+
+/// Workflow #455 B3: a `resource` entry `name` on the pool `pool_id`, titled `Fixture`, with the
+/// members of `weights` (its own `scale` and `importance_milli`) after its own.
+fn resource_on(name: &str, pool_id: &str, weights: &Value) -> Value {
+    let mut entry = json!({"name": name, "type": "resource", "governs": {"pool": pool_id},
+                           "title": {"en": "Fixture"}});
+    if let (Some(members), Some(added)) = (entry.as_object_mut(), weights.as_object()) {
+        members.extend(added.clone());
+    }
+    entry
+}
+
+/// Workflow #455 B3: [`goals`] as version 3, with one more `resource` entry, `lacking`, on
+/// [`LACKING`] with its own step 10 and importance 1000.
+fn goals_v3() -> Value {
+    goals_with(|value| {
+        value["schema_version"] = json!("actingcommand.goals.v3");
+        value["entries"]
+            .as_array_mut()
+            .expect("the entries")
+            .push(resource_on(
+                "lacking",
+                LACKING,
+                &json!({"scale": 10, "importance_milli": 1000}),
+            ));
+    })
+}
+
+// Workflow #455 B3 (the brief's test 2, the Lab's root check): on a root whose composed schedule
+// has a pool valued with `scale` and `gap` ([`VALUED`]), one valued without `gap` ([`UNVALUED`]),
+// one without a valuation ([`LACKING`]) and one whose valuation is pending ([`LATER`]),
+// `standard-pack check` takes the valid file as version 3 with an entry on [`LACKING`] that
+// carries both numbers: no warning, the answer the one without the file but for `root_files`, and
+// `package bundle --goals` lays the file byte for byte. A file that adds entries carrying one or
+// neither number on [`LACKING`], either or both on [`VALUED`], both or neither on [`LATER`] and
+// both on [`UNVALUED`] is refused with one warning per entry in file order: `goal_pool_unvalued` at
+// the pool, `goal_valuation_conflict` at the `scale`, else at the `importance_milli`, and
+// `goal_pool_unvalued` for the pending and the partial valuation whatever the entry carries, as
+// before; the answer is otherwise the one without the file. Every other refusal of the check on
+// that root is the one before.
+#[test]
+fn b3_the_root_check_holds_an_entry_s_own_step_and_importance_to_its_pool() {
+    let (_temp, game_root) = installed_with(packs(), &schedule_with_unvalued_pools());
+    let without = check(&game_root);
+    write_json(&game_root.join("goals.json"), &goals_v3());
+    let accepted = check(&game_root);
+    assert_eq!(accepted.status, "checked");
+    assert_eq!(
+        accepted.root_files,
+        ["bundle.json", "schedule.json", "goals.json"]
+    );
+    assert!(
+        root_invalid_warnings(&accepted.warnings).is_empty(),
+        "{:?}",
+        accepted.warnings
+    );
+    assert_eq!(without_root_files(&accepted), without_root_files(&without));
+
+    let both = json!({"scale": 10, "importance_milli": 1000});
+    let added = [
+        (
+            "lacking_bare",
+            LACKING,
+            json!({}),
+            "goal_pool_unvalued",
+            "governs/pool",
+        ),
+        (
+            "lacking_step",
+            LACKING,
+            json!({"scale": 10}),
+            "goal_pool_unvalued",
+            "governs/pool",
+        ),
+        (
+            "lacking_importance",
+            LACKING,
+            json!({"importance_milli": 1000}),
+            "goal_pool_unvalued",
+            "governs/pool",
+        ),
+        (
+            "points_step",
+            VALUED,
+            json!({"scale": 10}),
+            "goal_valuation_conflict",
+            "scale",
+        ),
+        (
+            "points_importance",
+            VALUED,
+            json!({"importance_milli": 1000}),
+            "goal_valuation_conflict",
+            "importance_milli",
+        ),
+        (
+            "points_both",
+            VALUED,
+            both.clone(),
+            "goal_valuation_conflict",
+            "scale",
+        ),
+        (
+            "later_both",
+            LATER,
+            both.clone(),
+            "goal_pool_unvalued",
+            "governs/pool",
+        ),
+        (
+            "later_bare",
+            LATER,
+            json!({}),
+            "goal_pool_unvalued",
+            "governs/pool",
+        ),
+        (
+            "stock_both",
+            UNVALUED,
+            both,
+            "goal_pool_unvalued",
+            "governs/pool",
+        ),
+    ];
+    let mut refused_file = goals_v3();
+    let entries = refused_file["entries"].as_array_mut().expect("the entries");
+    let first = entries.len();
+    let mut expected = Vec::new();
+    for (offset, (name, pool_id, weights, problem, member)) in added.iter().enumerate() {
+        entries.push(resource_on(name, pool_id, weights));
+        expected.push(goal_warning(
+            &game_root,
+            problem,
+            &format!("/entries/{}/{member}", first + offset),
+        ));
+    }
+    write_json(&game_root.join("goals.json"), &refused_file);
+    let refused = check(&game_root);
+    assert_eq!(refused.status, "checked");
+    assert_eq!(root_invalid_warnings(&refused.warnings), expected);
+    // The goal warnings come last; without them the answer is the one without the file.
+    let mut answer = without_root_files(&refused);
+    let warnings = answer["warnings"]
+        .as_array_mut()
+        .expect("the warnings")
+        .split_off(without.warnings.len());
+    assert_eq!(warnings.len(), expected.len());
+    assert_eq!(answer, without_root_files(&without));
+
+    assert_each_refusal(&game_root);
+    assert_bundle_lays(packs(), &schedule_with_unvalued_pools(), &goals_v3());
 }

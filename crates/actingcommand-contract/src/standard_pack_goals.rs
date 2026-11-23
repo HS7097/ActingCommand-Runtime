@@ -38,6 +38,14 @@
 //! `goal_version_retired` at `/schema_version` and read no further, and a version this build does
 //! not know yet stays `malformed` there.
 //!
+//! Workflow #455 B3 (register §1.519): version 3, [`STANDARD_PACK_GOALS_V3_SCHEMA_VERSION`], is
+//! version 2 whose `resource` entry may carry the goal's own `scale` and `importance_milli`, with
+//! the bounds the goal document gives them, for a pool of `schedule.json` that declares no
+//! valuation ([`GoalPoolValuation::Absent`]); the references refuse such an entry that carries
+//! one or neither (`goal_pool_unvalued`), and one that carries either beside a pool whose
+//! valuation gives both (`goal_valuation_conflict`). A version 2 document is read as before, and a
+//! build that knows no version 3 refuses its document `malformed` at `/schema_version`.
+//!
 //! The file stores no value: a value is the installation's, set by a person or an agent (Workflow
 //! #463 V3, `EditGoal`). The Runtime interprets no text here: titles, help texts, unit texts,
 //! option titles and locales are opaque, measured in bytes only, and ids and option values are
@@ -60,9 +68,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The game root's goal declaration (G-R1).
 pub const STANDARD_PACK_GOALS_FILE: &str = "goals.json";
-/// The one version of `goals.json` this build reads: version 2 (Workflow #463 V1 fix round 3),
-/// whose five types place a package's variable where version 1 governed packages.
+/// Version 2 of `goals.json` (Workflow #463 V1 fix round 3), whose five types place a package's
+/// variable where version 1 governed packages. Workflow #455 B3 (register §1.519): one of the two
+/// versions this build reads, read as before.
 pub const STANDARD_PACK_GOALS_SCHEMA_VERSION: &str = "actingcommand.goals.v2";
+/// Workflow #455 B3 (register §1.519): version 3, version 2 whose `resource` entry may also carry
+/// `scale` and `importance_milli`, the goal's own step and importance for a pool that declares no
+/// valuation. A build before it refuses such a document `malformed` at `/schema_version`, as every
+/// version it does not know yet.
+pub const STANDARD_PACK_GOALS_V3_SCHEMA_VERSION: &str = "actingcommand.goals.v3";
 /// Workflow #463 V1 fix round 3: version 1, the version release 0.12.60 read with its eight
 /// types, which this build reads no more: a document of it is `goal_version_retired` at
 /// `/schema_version` and is read no further.
@@ -97,8 +111,14 @@ pub const MAX_GOAL_ORDERED_COUNT: u64 = 32;
 pub const MAX_GOAL_VALUE_BYTES: usize = 64;
 /// The largest `scale_milli` of a `tier` option (the smallest is 1).
 pub const MAX_GOAL_SCALE_MILLI: i64 = 1_000_000;
-/// The largest integer of the file, in magnitude: the safe integers of JSON, 2^53 - 1.
+/// The largest integer of the file, in magnitude: the safe integers of JSON, 2^53 - 1. Workflow
+/// #455 B3: also the largest `scale` of a `resource` entry, the bound the goal document gives a
+/// target's `scale` (`contracts/resource-targets.md`; the smallest is 1).
 pub const MAX_GOAL_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+/// Workflow #455 B3 (register §1.519): the largest `importance_milli` of a `resource` entry, the
+/// bound the goal document gives a target's `importance_milli` (`contracts/resource-targets.md`;
+/// the smallest is 1).
+pub const MAX_GOAL_IMPORTANCE_MILLI: i64 = 1_000_000;
 
 /// The type of an entry (`type`), one of the five of version 2 (Workflow #463 V1, which replaced
 /// version 1's four types that governed packages by `variable`; version 2 since its fix round 3).
@@ -168,10 +188,13 @@ impl GoalType {
         }
     }
 
-    /// The members an entry of the type may hold besides the required ones.
-    const fn optional(self) -> &'static [&'static str] {
+    /// The members an entry of the type may hold besides the required ones. Workflow #455 B3:
+    /// `own_weights` when the document is version 3, whose `resource` entry may also hold `scale`
+    /// and `importance_milli`.
+    const fn optional(self, own_weights: bool) -> &'static [&'static str] {
         match self {
             Self::Heading | Self::Note | Self::Tier => COMMON_OPTIONAL,
+            Self::Resource if own_weights => RESOURCE_V3_OPTIONAL,
             Self::Resource => RESOURCE_OPTIONAL,
             Self::Variable => VARIABLE_OPTIONAL,
         }
@@ -185,6 +208,8 @@ const TIER_REQUIRED: &[&str] = &["name", "type", "title", "governs", "options", 
 const VARIABLE_REQUIRED: &[&str] = &["name", "type"];
 const COMMON_OPTIONAL: &[&str] = &["block", "help"];
 const RESOURCE_OPTIONAL: &[&str] = &["block", "help", "rate"];
+/// Workflow #455 B3: a version 3 `resource` entry's, with the goal's own step and importance.
+const RESOURCE_V3_OPTIONAL: &[&str] = &["block", "help", "rate", "scale", "importance_milli"];
 const VARIABLE_OPTIONAL: &[&str] = &["block"];
 
 /// A block (`block`): how a reader shows an entry or (Workflow #463 V1) a variable. Version 2, as
@@ -308,10 +333,14 @@ pub enum DeclaredGoalKind {
     Heading,
     Note,
     /// `governs.pool`, and the optional `rate` a deadline reads (a later slice). Its default is
-    /// "no goal": the entry writes none.
+    /// "no goal": the entry writes none. Workflow #455 B3 (register §1.519): a version 3 entry's
+    /// own `scale` (1 to 2^53 - 1) and `importance_milli` (1 to 1,000,000), which a goal set on it
+    /// carries as its own; `None` when the entry writes none (always in version 2).
     Resource {
         pool: String,
         rate: Option<GoalRate>,
+        scale: Option<u64>,
+        importance_milli: Option<u64>,
     },
     /// `governs.rules` and its tiers (a later slice compiles them).
     Tier {
@@ -415,15 +444,31 @@ pub struct GoalVariable {
     pub packages: Vec<String>,
 }
 
+/// Workflow #455 B3 (register §1.519): what a pool of the composed schedule declares of its
+/// `valuation`, which a `resource` entry is held to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalPoolValuation {
+    /// A `valuation` block with `scale` and `gap`: a goal on the pool takes its step and its
+    /// importance from it, so an entry carries neither (`goal_valuation_conflict`).
+    Usable,
+    /// No valuation: no `valuation` member, or `null`. An entry carries the goal's own step and
+    /// importance, both (`goal_pool_unvalued` otherwise).
+    Absent,
+    /// A valuation a goal cannot take both from: the pending marker, or a block without `gap`
+    /// (`goal_pool_unvalued`, whatever the entry carries, as before B3).
+    Unusable,
+}
+
 /// What the references of a declaration are held to (`check_standard_pack_goal_references`): what
 /// the game root offers. G-R1 fix round 1: made only by [`GoalReferences::new`], from every
 /// package of the root; there is no default, so a reader cannot leave the packages out by
 /// omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalReferences {
-    /// The pools of the composed schedule by id, each `true` when its `valuation` holds both
-    /// `scale` and `gap`; none without `schedule.json`.
-    pub pools: BTreeMap<String, bool>,
+    /// The pools of the composed schedule by id, each with what it declares of its valuation
+    /// (Workflow #455 B3; until 0.12.81 `true` when its `valuation` held both `scale` and `gap`);
+    /// none without `schedule.json`.
+    pub pools: BTreeMap<String, GoalPoolValuation>,
     /// The rules of `schedule.json` by id; none without `schedule.json`.
     pub rules: BTreeMap<String, GoalRule>,
     /// Workflow #463 V1: the variables the packages of the root declare, by name; none until a
@@ -603,9 +648,10 @@ impl GoalReferences {
 ///   value, an id, a locale or a text outside its limit (at what exceeds);
 /// - `malformed`: no JSON or no object (the whole document; a byte-order mark too); a member
 ///   repeated in one object, unknown, missing or not of its type (an integer outside the safe
-///   integers too), a `schema_version` other than [`STANDARD_PACK_GOALS_SCHEMA_VERSION`] and
-///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`] (a version this build does not know yet), a
-///   name, an option value or an id outside its form;
+///   integers too; Workflow #455 B3: a `resource` entry's `scale` or `importance_milli` in a
+///   version 2 document), a `schema_version` other than [`STANDARD_PACK_GOALS_SCHEMA_VERSION`],
+///   [`STANDARD_PACK_GOALS_V3_SCHEMA_VERSION`] and [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`]
+///   (a version this build does not know yet), a name, an option value or an id outside its form;
 /// - `goal_version_retired` (Workflow #463 V1 fix round 3): `schema_version` is
 ///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`], version 1, at `/schema_version`; the document
 ///   is read no further;
@@ -616,7 +662,8 @@ impl GoalReferences {
 /// - `goal_block_mismatch`: a `block` other than the type's base block, or (Workflow #463 V1) a
 ///   placement's `block` that is no block a variable is shown with;
 /// - `goal_range_invalid`: an option value written twice, a tier's `scale_milli` outside 1 to
-///   [`MAX_GOAL_SCALE_MILLI`];
+///   [`MAX_GOAL_SCALE_MILLI`]; Workflow #455 B3: a `resource` entry's `scale` below 1, or its
+///   `importance_milli` outside 1 to [`MAX_GOAL_IMPORTANCE_MILLI`];
 /// - `goal_default_invalid`: a tier's `default` that is none of its option values;
 /// - `goal_rate_invalid`: a `rate` whose ceiling is below its floor.
 pub fn parse_standard_pack_goals(
@@ -654,7 +701,12 @@ pub fn parse_standard_pack_goals(
 /// checks", the references' rows), entry by entry in file order:
 ///
 /// - `goal_pool_unknown`: a `resource` entry's pool is not a pool of the composed schedule;
-/// - `goal_pool_unvalued`: its pool's `valuation` lacks `scale` or `gap`;
+/// - `goal_pool_unvalued`: its pool's `valuation` lacks `scale` or `gap`; Workflow #455 B3: but
+///   a pool that declares no valuation ([`GoalPoolValuation::Absent`]) passes an entry that carries
+///   both `scale` and `importance_milli`;
+/// - `goal_valuation_conflict` (Workflow #455 B3): a `resource` entry carries `scale` (at it) or
+///   else `importance_milli` (at it) beside a pool whose valuation gives both: one source for a
+///   goal's step and importance;
 /// - `goal_package_unknown`: (fix round 1) the package a governed rule runs, or (Workflow #463 V1)
 ///   a package that declares a placed variable, is not a package of `bundle.json`;
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;
@@ -681,12 +733,36 @@ pub fn check_standard_pack_goal_references(
         // nothing, as a heading and a note name nothing.
         match &goal.kind {
             DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {}
-            DeclaredGoalKind::Resource { pool, .. } => {
+            DeclaredGoalKind::Resource {
+                pool,
+                scale,
+                importance_milli,
+                ..
+            } => {
                 let at_pool = at(&governs, "pool");
+                let carries_both = scale.is_some() && importance_milli.is_some();
                 match references.pools.get(pool) {
                     None => check.issue(StandardPackProblem::GoalPoolUnknown, at_pool),
-                    Some(false) => check.issue(StandardPackProblem::GoalPoolUnvalued, at_pool),
-                    Some(true) => {}
+                    // Workflow #455 B3: a pool that declares no valuation takes a goal whose entry
+                    // carries its step and its importance, both.
+                    Some(GoalPoolValuation::Absent) if carries_both => {}
+                    Some(GoalPoolValuation::Absent | GoalPoolValuation::Unusable) => {
+                        check.issue(StandardPackProblem::GoalPoolUnvalued, at_pool);
+                    }
+                    // B3: one source for a goal's step and importance, the pool's valuation.
+                    Some(GoalPoolValuation::Usable) => {
+                        if scale.is_some() {
+                            check.issue(
+                                StandardPackProblem::GoalValuationConflict,
+                                at(&pointer, "scale"),
+                            );
+                        } else if importance_milli.is_some() {
+                            check.issue(
+                                StandardPackProblem::GoalValuationConflict,
+                                at(&pointer, "importance_milli"),
+                            );
+                        }
+                    }
                 }
             }
             DeclaredGoalKind::Tier { rules, .. } => {
@@ -976,8 +1052,11 @@ impl Check {
 
     fn document(&mut self, value: &Value, game: &str) -> Option<StandardPackGoals> {
         let document = self.object(value, "", &["schema_version", "game", "entries"], &[])?;
-        match document.get("schema_version").map(Value::as_str) {
-            None | Some(Some(STANDARD_PACK_GOALS_SCHEMA_VERSION)) => {}
+        // Workflow #455 B3: whether a `resource` entry may carry its own step and importance,
+        // which only version 3 takes; version 2 is read as before.
+        let own_weights = match document.get("schema_version").map(Value::as_str) {
+            None | Some(Some(STANDARD_PACK_GOALS_SCHEMA_VERSION)) => false,
+            Some(Some(STANDARD_PACK_GOALS_V3_SCHEMA_VERSION)) => true,
             // Workflow #463 V1 fix round 3: version 1, which release 0.12.60 read, is read no
             // more and says so with a word of its own; the document is read no further, as an
             // entry of an unknown type is not.
@@ -986,8 +1065,11 @@ impl Check {
                 return None;
             }
             // Any other version, a later one included, is `malformed` there, as before.
-            Some(_) => self.malformed("/schema_version"),
-        }
+            Some(_) => {
+                self.malformed("/schema_version");
+                false
+            }
+        };
         match document.get("game").map(Value::as_str) {
             Some(None) => self.malformed("/game"),
             Some(Some(declared)) if declared != game => {
@@ -1000,7 +1082,7 @@ impl Check {
         let mut typed = Vec::new();
         let mut complete = true;
         for (index, entry) in entries.iter().enumerate() {
-            match self.entry(entry, index, &mut names) {
+            match self.entry(entry, index, &mut names, own_weights) {
                 Some(goal) => typed.push(goal),
                 None => complete = false,
             }
@@ -1012,12 +1094,14 @@ impl Check {
     }
 
     /// One entry: its name, its type, its members, its block, its texts and its type's members.
-    /// An entry whose type is unknown is not read further.
+    /// An entry whose type is unknown is not read further. Workflow #455 B3: `own_weights` for a
+    /// version 3 document, whose `resource` entry may carry its own step and importance.
     fn entry(
         &mut self,
         value: &Value,
         index: usize,
         names: &mut BTreeSet<String>,
+        own_weights: bool,
     ) -> Option<DeclaredGoal> {
         let pointer = format!("/entries/{index}");
         let Some(object) = value.as_object() else {
@@ -1043,7 +1127,12 @@ impl Check {
                 return None;
             }
         };
-        self.members(object, &pointer, goal_type.required(), goal_type.optional());
+        self.members(
+            object,
+            &pointer,
+            goal_type.required(),
+            goal_type.optional(own_weights),
+        );
         let block = self.block(object.get("block"), &pointer, goal_type.base_block());
         // Workflow #463 V1: a placement writes no texts; the placed variable carries its own.
         let texts = match goal_type {
@@ -1052,7 +1141,7 @@ impl Check {
                 .texts(object, &pointer)
                 .map(|(title, help)| (Some(title), help)),
         };
-        let kind = self.kind(goal_type, object, &pointer);
+        let kind = self.kind(goal_type, object, &pointer, own_weights);
         let (title, help) = texts?;
         Some(DeclaredGoal {
             name: name?,
@@ -1126,6 +1215,7 @@ impl Check {
         goal_type: GoalType,
         object: &Map<String, Value>,
         pointer: &str,
+        own_weights: bool,
     ) -> Option<DeclaredGoalKind> {
         match goal_type {
             GoalType::Heading => Some(DeclaredGoalKind::Heading),
@@ -1136,9 +1226,25 @@ impl Check {
                     None => Some(None),
                     Some(rate) => self.rate(rate, &at(pointer, "rate")).map(Some),
                 };
+                // Workflow #455 B3: version 3's own step and importance, each read alone; the
+                // references hold the pair to the pool's valuation.
+                let scale = self.own_weight(
+                    object,
+                    pointer,
+                    ("scale", MAX_GOAL_SAFE_INTEGER),
+                    own_weights,
+                );
+                let importance_milli = self.own_weight(
+                    object,
+                    pointer,
+                    ("importance_milli", MAX_GOAL_IMPORTANCE_MILLI),
+                    own_weights,
+                );
                 Some(DeclaredGoalKind::Resource {
                     pool: pool?,
                     rate: rate?,
+                    scale: scale?,
+                    importance_milli: importance_milli?,
                 })
             }
             GoalType::Tier => {
@@ -1225,6 +1331,32 @@ impl Check {
             floor_milli_per_day: floor,
             ceiling_milli_per_day: ceiling,
         })
+    }
+
+    /// Workflow #455 B3 (register §1.519): a `resource` entry's own `member`, `scale` or
+    /// `importance_milli`, from 1 to `max`, the bound the goal document gives it: `Some(None)` when
+    /// the entry writes none, or when `own_weights` is not set (a version 2 document, whose reader
+    /// reports the member unknown with the entry's members); a safe integer ([`Check::integer`]:
+    /// `malformed` otherwise, as every integer member of the file) outside 1 to `max` is
+    /// `goal_range_invalid` at it.
+    fn own_weight(
+        &mut self,
+        object: &Map<String, Value>,
+        pointer: &str,
+        (member, max): (&str, i64),
+        own_weights: bool,
+    ) -> Option<Option<u64>> {
+        let Some(value) = object.get(member).filter(|_| own_weights) else {
+            return Some(None);
+        };
+        let at_member = at(pointer, member);
+        let weight = self.integer(value, &at_member)?;
+        if (1..=max).contains(&weight) {
+            Some(Some(weight.unsigned_abs()))
+        } else {
+            self.issue(StandardPackProblem::GoalRangeInvalid, at_member);
+            None
+        }
     }
 
     /// A `tier` entry's `options`: 2 to 32 tiers `{value, title, scale_milli}`, each value written
