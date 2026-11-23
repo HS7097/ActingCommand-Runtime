@@ -92,7 +92,8 @@ The document has exactly the members `schema_version`, `game` and `entries`.
   by the resource side from its research tables, never from an application's readings. An entry
   writes both for a pool of `schedule.json` that declares no valuation, and neither for a pool whose
   valuation gives them: one source for a goal's step and importance ("The checks"). A value set on
-  the entry writes the application's goal with the two as its own ("Who reads it", the goal page).
+  the entry writes the application's goal with each of the two the pool's valuation does not give
+  as its own, copied when the value is set ("Who reads it", the goal page).
 
 Every other member is refused.
 
@@ -364,16 +365,23 @@ for that game, and a reader of the declaration says why.
   0.12.82, register §1.519; version 3). A `set` of its value `{at_least}` writes the application's
   goal by the same request (`EditGoal`) and in the same record (`session.resource_targets`, version
   3 of the goal document, [resource-targets.md](resource-targets.md), "One value by name") as on a
-  valued pool, with the entry's `scale` and `importance_milli` as the target's own (its row carries
-  them); a `clear` removes it. The Runtime's `pool_unvalued` refuses only a step or an importance
-  the pool's valuation does not give and the goal does not carry, so an entry that carries both
-  passes on a pool without a valuation and one that carries neither or one is refused as before.
-  The Runtime holds no references: it writes what the entry carries; keeping the two off a valued
-  pool is the check's (`goal_valuation_conflict`), which the Tools run before a bundle is made. The
-  page shows such an entry as any `resource` entry (its entry as its reader read it, the two
-  members in it; the value set, who set it, the target, the pool's reading or its pending reason,
-  and the gap where the reading is known). The goal page's requests and their answers keep their
-  shape.
+  valued pool; a `clear` removes it. Fix round 1 (the coordinator's ruling 1): **the goal carries
+  an entry's number only where the pool gives none**, its `scale` only when the pool requires a
+  step of the goal (its valuation gives no `scale`), its `importance_milli` only when the pool
+  requires an importance (its valuation gives no `gap`), each as the target's own (a member of its
+  row); one place decides this and the refusal `pool_unvalued`, which refuses a step or an
+  importance the pool requires and the entry does not carry. So an entry that carries both passes
+  on a pool without a valuation and one that carries neither or one is refused as before; beside a
+  pool whose valuation gives both (a file the check refuses, `goal_valuation_conflict`, but which a
+  placement can still bring, since only bundling refuses it) the goal is written without numbers
+  of its own whatever the entry carries, the row an entry without them writes. **The numbers are
+  copied into the goal when its value is set.** A later change of the entry's numbers, or a
+  valuation its pool gains later, reaches a goal already set only when its value is set again; a
+  set goal that follows its entry is not in this slice. The page shows such an entry as any
+  `resource` entry: its entry as its reader reads the declaration now (the two members in it, not
+  the numbers the stored goal carries), the value set, who set it, the target, the pool's reading
+  or its pending reason, and the gap where the reading is known. The goal page's requests and their
+  answers keep their shape.
 
 ## Interface
 

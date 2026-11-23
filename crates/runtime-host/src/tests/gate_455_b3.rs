@@ -7,15 +7,17 @@
 // application's goal with them. Tested on what `EditGoal` and `GoalView` run: the page's pure
 // functions (`crate::goals`: the checks of an edit, the view's list and the entry as the view
 // writes it), the policy crate's one-row edit of the record, the goal page's reader of the record
-// and the goal document's reader, on a made-up page: five pools the application can target, one
-// valued, no package bound. Every name, pool and value is made up; no clock is read.
+// and the goal document's reader, on a made-up page: seven pools the application can target, two
+// valued, no package bound. Every name, pool and value is made up; no clock is read. Fix round 1
+// (brief rd-1123/brief-455-b3-fix1.md, ruling 1): the goal carries an entry's number only where
+// the pool's valuation does not give it.
 
 use std::collections::BTreeMap;
 
 use crate::goals::{EditRequest, GoalPage, GoalRefusal, check_edit, declared_entry, view_entries};
 use actingcommand_contract::{
-    FactScalar, GoalEntryState, GoalEntryType, GoalProblem, GoalResourceState, GoalSetBy,
-    GoalValueSource, GoalViewEntry, Initiator, ResourceTargetCondition,
+    DeclaredGoalKind, FactScalar, GoalEntryState, GoalEntryType, GoalProblem, GoalResourceState,
+    GoalSetBy, GoalValueSource, GoalViewEntry, Initiator, ResourceTargetCondition,
     ResourceTargetConditionState, ResourceTargetObservation, ResourceTargetPendingReason,
     RuntimeChannel, StandardPackGoals, TargetableResource, parse_standard_pack_goals,
 };
@@ -40,6 +42,13 @@ const BARE: &str = "pool.neutral.bare";
 const STEPPED: &str = "pool.neutral.stepped";
 /// A pool whose valuation gives the step and the importance, which the entry `points` governs.
 const POINTS: &str = "pool.neutral.points";
+/// Fix round 1: a pool without a valuation, which the entry `weighted` governs with its own
+/// importance alone (a file the Lab's check refuses).
+const WEIGHTED: &str = "pool.neutral.weighted";
+/// Fix round 1: a pool whose valuation gives the step and the importance, which the entry `priced`
+/// governs with its own step and importance too (a file the Lab's check refuses,
+/// `goal_valuation_conflict`, and that can still be placed).
+const PRICED: &str = "pool.neutral.priced";
 /// The largest step the goal document takes, 2^53 - 1.
 const LARGEST_STEP: u64 = 9_007_199_254_740_991;
 
@@ -66,7 +75,11 @@ fn declaration() -> StandardPackGoals {
         {"name": "stepped", "type": "resource", "governs": {"pool": STEPPED},
          "title": {"en": "Stepped"}, "scale": 10},
         {"name": "points", "type": "resource", "governs": {"pool": POINTS},
-         "title": {"en": "Points"}}
+         "title": {"en": "Points"}},
+        {"name": "weighted", "type": "resource", "governs": {"pool": WEIGHTED},
+         "title": {"en": "Weighted"}, "importance_milli": 1000},
+        {"name": "priced", "type": "resource", "governs": {"pool": PRICED},
+         "title": {"en": "Priced"}, "scale": 10, "importance_milli": 1000}
     ]});
     parse_standard_pack_goals(&serde_json::to_vec(&document).expect("goals bytes"), GAME)
         .unwrap_or_else(|issues| panic!("the fixture goals.json reads: {issues:?}"))
@@ -109,7 +122,7 @@ fn pool_offered(
     }
 }
 
-/// The page: [`declaration`], no package bound, the five pools targetable, [`LACKING`] read as
+/// The page: [`declaration`], no package bound, the seven pools targetable, [`LACKING`] read as
 /// `observation` and the others at 30.
 fn page_with(observation: ResourceTargetObservation) -> GoalPage {
     GoalPage {
@@ -123,6 +136,8 @@ fn page_with(observation: ResourceTargetObservation) -> GoalPage {
             pool_offered(BARE, false, reading()),
             pool_offered(STEPPED, false, reading()),
             pool_offered(POINTS, true, reading()),
+            pool_offered(WEIGHTED, false, reading()),
+            pool_offered(PRICED, true, reading()),
         ],
         capacities: BTreeMap::new(),
         not_applying: BTreeMap::new(),
@@ -561,4 +576,101 @@ fn b3_host_an_entry_without_the_members_is_written_as_before() {
             r#""scale":10,"importance_milli":1000}"#
         )
     );
+}
+
+// Fix round 1, test (a) (the coordinator's ruling 1): an entry that carries both numbers beside a
+// pool whose valuation gives both (`priced`: a file the Lab's check refuses
+// `goal_valuation_conflict` and that can still be placed) gets the goal without numbers of its
+// own. `SetTarget` names neither, its target row is the row main writes for a valued pool's entry,
+// and the edit the policy crate composes (its rows and its identity) is the one the same entry
+// without the numbers gives.
+#[test]
+fn b3_fix1_an_entry_with_both_numbers_on_a_valued_pool_writes_the_row_of_an_entry_without_them() {
+    let page = page_with(reading());
+    let with_numbers = set_on(&page, "priced", "{\"at_least\":40}").expect("the value is taken");
+    assert_eq!(
+        with_numbers,
+        GoalRecordEdit::SetTarget {
+            id: "priced".to_owned(),
+            resource: PRICED.to_owned(),
+            at_least: 40,
+            scale: None,
+            importance_milli: None,
+        }
+    );
+    let mut bare_page = page_with(reading());
+    let bare_entry = bare_page
+        .declaration
+        .as_mut()
+        .and_then(|goals| {
+            goals
+                .entries
+                .iter_mut()
+                .find(|declared| declared.name == "priced")
+        })
+        .expect("the entry priced");
+    bare_entry.kind = DeclaredGoalKind::Resource {
+        pool: PRICED.to_owned(),
+        rate: None,
+        scale: None,
+        importance_milli: None,
+    };
+    let without_numbers =
+        set_on(&bare_page, "priced", "{\"at_least\":40}").expect("the value is taken");
+    assert_eq!(with_numbers, without_numbers);
+    let composed = |edit: &GoalRecordEdit| {
+        edit_goal_record(None, None, INSTANCE, edit, lab_setter())
+            .unwrap_or_else(|refusal| panic!("{edit:?} is taken: {refusal:?}"))
+    };
+    assert_eq!(
+        composed(&with_numbers),
+        composed(&without_numbers),
+        "the same rows and identity"
+    );
+    let rows = written(None, &with_numbers);
+    assert_eq!(
+        target_row(&rows, "priced"),
+        &BTreeMap::from([
+            ("row".to_owned(), text("target")),
+            ("id".to_owned(), text("priced")),
+            ("resource".to_owned(), text(PRICED)),
+            ("at_least".to_owned(), FactScalar::Integer(40)),
+            ("mode".to_owned(), text("adjust")),
+            ("weight".to_owned(), text("score_stage")),
+            ("set_unix_ms".to_owned(), FactScalar::Integer(5_000)),
+            ("channel".to_owned(), text("lab")),
+            ("initiator".to_owned(), text("Lab-CLI")),
+        ])
+    );
+}
+
+// Fix round 1, test (b): an entry that carries one of the two numbers beside a pool without a
+// valuation (`weighted` its importance alone, `stepped` its step alone) is refused `pool_unvalued`
+// with its pool, on no record and on a record that holds a goal: the check gives no edit, and the
+// host composes and publishes only an edit the check gives, so nothing is written.
+#[test]
+fn b3_fix1_an_entry_with_one_number_on_a_pool_without_a_valuation_is_refused_pool_unvalued() {
+    let page = page_with(reading());
+    let lacking = set_on(&page, "lacking", "{\"at_least\":40}").expect("the value is taken");
+    let rows = written(None, &lacking);
+    let recorded = stored_goal_record(Some(rows.as_slice()), None, INSTANCE);
+    for (name, pool_id) in [("weighted", WEIGHTED), ("stepped", STEPPED)] {
+        for record in [&StoredGoalRecord::Empty, &recorded] {
+            let refusal = check_edit(
+                &page,
+                record,
+                EditRequest::Set {
+                    name,
+                    value_json: "{\"at_least\":40}",
+                },
+                judged_by_lab(),
+            )
+            .expect_err("the value is refused");
+            assert_eq!(
+                (refusal.problem, refusal.pool_id.as_deref()),
+                (GoalProblem::PoolUnvalued, Some(pool_id)),
+                "{name}"
+            );
+        }
+    }
 }

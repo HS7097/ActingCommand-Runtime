@@ -309,12 +309,13 @@ fn check_set(
             importance_milli,
             ..
         }) => {
-            // Workflow #455 B3: the goal carries the step and the importance the entry carries.
-            let own = OwnWeights {
+            // Workflow #455 B3: the step and the importance the entry carries; the goal carries
+            // each the pool's valuation does not give (fix round 1, decided by `check_target`).
+            let entry_weights = OwnWeights {
                 scale: *scale,
                 importance_milli: *importance_milli,
             };
-            let at_least = check_target(page, value, Some(pool), own)?;
+            let (at_least, own) = check_target(page, value, Some(pool), entry_weights)?;
             return Ok(GoalRecordEdit::SetTarget {
                 id: name.to_owned(),
                 resource: pool.clone(),
@@ -348,13 +349,13 @@ fn check_set(
         return Err(GoalRefusal::new(GoalProblem::NameUnknown));
     };
     let resource = resource.as_str().unwrap_or_default().to_owned();
-    let at_least = check_target(page, value, None, OwnWeights::default())?;
+    let (at_least, own) = check_target(page, value, None, OwnWeights::default())?;
     Ok(GoalRecordEdit::SetTarget {
         id: name.to_owned(),
         resource,
         at_least,
-        scale: None,
-        importance_milli: None,
+        scale: own.scale,
+        importance_milli: own.importance_milli,
     })
 }
 
@@ -509,9 +510,10 @@ fn item_at(variable: &PackageVariable, value: &Value, word: GoalProblem) -> Opti
     }
 }
 
-/// Workflow #455 B3 (register §1.519): the step and the importance a `resource` entry of a version
-/// 3 `goals.json` carries, which the goal it sets carries as its own `scale` and
-/// `importance_milli`; none for an entry that carries none and for an other target.
+/// Workflow #455 B3 (register §1.519): a step and an importance of a goal's own: those a `resource`
+/// entry of a version 3 `goals.json` carries (none for an entry that carries none and for an other
+/// target), and of them those the goal it sets carries as its own `scale` and `importance_milli`
+/// (fix round 1: each only where the pool's valuation does not give it, [`check_target`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct OwnWeights {
     pub(crate) scale: Option<u64>,
@@ -525,14 +527,18 @@ pub(crate) struct OwnWeights {
 /// integers and not above the pool's capacity when its capacity reads one (else `out_of_range`);
 /// the pool is one the application can target (else `pool_not_targetable`) whose valuation gives
 /// the step and the importance a goal by name does not carry (else `pool_unvalued`). Workflow #455
-/// B3: what the goal carries itself (`own`, a resource entry's) the pool's valuation need not
-/// give: `pool_unvalued` only for a step or an importance the pool requires and `own` lacks.
+/// B3: what a resource entry carries (`own`) the pool's valuation need not give: `pool_unvalued`
+/// only for a step or an importance the pool requires and `own` lacks. Fix round 1 (the
+/// coordinator's ruling 1): decided at the same place, per number, the goal carries of `own` only
+/// the step and the importance the pool requires, so a pool whose valuation gives both gets the
+/// goal without numbers of its own, whatever the entry carries. Answers the `at_least` and the
+/// numbers the goal carries.
 pub(crate) fn check_target(
     page: &GoalPage,
     value: &Value,
     pool: Option<&String>,
     own: OwnWeights,
-) -> Result<u64, GoalRefusal> {
+) -> Result<(u64, OwnWeights), GoalRefusal> {
     let Value::Object(members) = value else {
         return Err(GoalRefusal::new(GoalProblem::WrongType));
     };
@@ -571,11 +577,20 @@ pub(crate) fn check_target(
     else {
         return Err(GoalRefusal::new(GoalProblem::PoolNotTargetable).pool(&pool));
     };
-    if (targetable.scale_required && own.scale.is_none())
-        || (targetable.importance_required && own.importance_milli.is_none())
-    {
+    // One decision per number (fix round 1): `None` where the pool's valuation gives it, which the
+    // goal then does not carry; `Some` where the pool requires it of the goal, holding what the
+    // entry carries, which must be a number.
+    let scale = targetable.scale_required.then_some(own.scale);
+    let importance_milli = targetable
+        .importance_required
+        .then_some(own.importance_milli);
+    if scale == Some(None) || importance_milli == Some(None) {
         return Err(GoalRefusal::new(GoalProblem::PoolUnvalued).pool(&pool));
     }
+    let written = OwnWeights {
+        scale: scale.flatten(),
+        importance_milli: importance_milli.flatten(),
+    };
     let ceiling = page
         .capacities
         .get(&pool)
@@ -588,7 +603,7 @@ pub(crate) fn check_target(
             .within(1, i64::try_from(ceiling).unwrap_or(i64::MAX))
             .pool(&pool));
     }
-    Ok(at_least)
+    Ok((at_least, written))
 }
 
 /// Who set a stored row, as the page shows it.

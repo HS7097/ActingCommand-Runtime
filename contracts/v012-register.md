@@ -47902,6 +47902,23 @@ such a pool (`goal_pool_unvalued`), so the goal page could not offer the person 
   that carried nothing before is judged and written as before. The page shows such an entry as any
   `resource` entry: its entry as read (the two members in it, `declared_entry`), the value, who set
   it, the reading or its pending reason, and the gap where the reading is known.
+- *One source per number at the Runtime* (fix round 1, the coordinator's ruling 1, after the
+  independent review of #1885: an entry with both numbers beside a valued pool, which the Lab warns
+  of at `standard-pack check` and at a placement's recheck and refuses only at bundling, can be
+  placed; written with its numbers, the goal's gap weight took the goal's step and importance and
+  the production term's step the pool's valuation, two sources in one judgement). The goal carries
+  the entry's `scale` only when the pool requires a step of the goal (`scale_required`) and its
+  `importance_milli` only when the pool requires an importance (`importance_required`); on a pool
+  whose valuation gives both it is written without numbers of its own whatever the entry carries,
+  the row main writes for a valued pool. `check_target` decides it per number in the one place that
+  decides `pool_unvalued` (a required number the entry lacks) and answers the numbers the goal
+  carries beside `at_least`.
+- *The numbers are copied* (fix round 1, ruling 3). An entry's numbers are copied into the goal
+  when its value is set. A later change of the entry's numbers, or a valuation its pool gains
+  later, reaches a goal already set only when its value is set again (a pool gaining a valuation
+  beside a goal that carries its own numbers mixes the two sources the same way until then); a set
+  goal that follows its entry is not in this slice. The goal page shows the entry's numbers as the
+  declaration reads them now, not the numbers the stored goal carries.
 - *An older build* (ruling 4). The contract's way for a later shape of this file is its
   `schema_version` ("a released format does not change its shape in place"; every reader since
   0.12.60 refuses a version it does not know `malformed` at `/schema_version`). So a file that
@@ -47930,10 +47947,12 @@ such a pool (`goal_pool_unvalued`), so the goal page could not offer the person 
 - A version 3 file without the two members is accepted and read as version 2; no `package`
   revision moves: the installer judges the file by its name (`goal_undeclared` below 14), and the
   older readers' refusal at `/schema_version` is the clean refusal the contract gives.
-- The Runtime holds no references (as since G-R1): it writes what an entry carries. A version 3
-  entry that carries the numbers on a valued pool, which the Tools refuse before a bundle is made,
-  would be written with them; one that carries one alone is refused `pool_unvalued` where the pool
-  requires the other.
+- The Runtime holds no references (as since G-R1), so it judges an entry by the active catalog's
+  pool, not by the check's word: fix round 1 (ruling 1) corrected this sentence, which said that
+  it writes what an entry carries. It writes of an entry's numbers only those the pool requires, so
+  a version 3 entry that carries the numbers beside a valued pool (which the Tools refuse at
+  bundling) gets the goal without them; one that carries one alone is refused `pool_unvalued`
+  where the pool requires the other.
 
 **A worked example.** `schedule.json` declares `pool.neutral.material` without a valuation (its
 observation a fact under `inventory.`); the rule that yields it keeps its `fixed_value_milli` and
@@ -47974,6 +47993,8 @@ map; `crates/resource-tooling/src/gate_455_gr1.rs`, exec gate map;
 | `b3_host_the_page_shows_such_an_entry_with_and_without_a_reading` (4) | With a value: the entry as read with the two members, the value, who set it, the target, the reading 30 and the gap 10, or the pending reading and no gap; without a value: the default, the reading or the pending one; a valued pool's entry in the same members |
 | `b3_a_file_without_the_members_reads_as_before_and_a_later_version_is_refused` (5) | The neutral example and the file of every type read alike as version 2 and as version 3, no own numbers; the neutral example's resource entry passes a usable valuation and is `goal_pool_unvalued` otherwise; a document labelled version 4 carrying the members is `malformed` at `/schema_version` and at each member, what a build before B3 answers a version 3 file |
 | `b3_host_an_entry_without_the_members_is_written_as_before` (5) | The neutral example's resource entry as the view writes it is main's bytes (a golden); labelled version 3 the same declaration; the carrying entry written with the two members after its own |
+| `b3_fix1_an_entry_with_both_numbers_on_a_valued_pool_writes_the_row_of_an_entry_without_them` (fix round 1, (a)) | Both numbers beside a pool whose valuation gives both: `SetTarget` without numbers; the edit the policy crate composes (rows and identity) equals the one of the same entry without them; the target row is main's row for a valued pool |
+| `b3_fix1_an_entry_with_one_number_on_a_pool_without_a_valuation_is_refused_pool_unvalued` (fix round 1, (b)) | The importance alone, or the step alone, beside a pool without a valuation: `pool_unvalued` with its pool, on no record and on a record holding a goal; no edit, so nothing written |
 
 Test 6: existing tests touched, each for a requirement this slice moves, their names and other
 assertions kept. `goals_reader_is_strict`: "a later version" is now `actingcommand.goals.v4`

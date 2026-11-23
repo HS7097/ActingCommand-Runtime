@@ -4821,3 +4821,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_b3::b3_host_an_entry_without_the_members_is_written_as_before",
 ]
 incident = ["#455 B3"]
+
+# #455 B3 fix round 1 (0.12.82; register §1.519; brief rd-1123/brief-455-b3-fix1.md, rulings 1 and 2), on the same page with two more pools, no clock read: the goal carries an entry's number only where the pool's valuation does not give it, decided where pool_unvalued is. An entry carrying both numbers beside a pool whose valuation gives both is SetTarget without numbers of its own, the edit the policy crate composes (rows and identity) is the one the same entry without the numbers gives, and its target row is the row main writes for a valued pool's entry (a); an entry carrying the importance alone, or the step alone, beside a pool without a valuation is refused pool_unvalued with its pool, on no record and on a record holding a goal, so no edit is composed (b)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_b3::b3_fix1_an_entry_with_both_numbers_on_a_valued_pool_writes_the_row_of_an_entry_without_them",
+    "actingcommand-runtime-host::lib::tests::gate_455_b3::b3_fix1_an_entry_with_one_number_on_a_pool_without_a_valuation_is_refused_pool_unvalued",
+]
+incident = ["#455 B3"]

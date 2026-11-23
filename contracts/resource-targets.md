@@ -648,11 +648,15 @@ another request wrote with who set them:
   resource entry of `goals.json` version 3 may carry `scale` and `importance_milli`, the resource
   side's numbers for a pool that declares no valuation, with the bounds of this document's
   `scale` and `importance_milli` ([standard-pack-goals.md](standard-pack-goals.md), "An entry");
-  its `set` writes them as the target's own `scale` and `importance_milli` (members of the row),
-  and `pool_unvalued` refuses only a step or an importance the pool does not give and the target
-  does not carry. An other target, and an entry that carries neither, carry none, as before. The
-  goal so written is an ordinary v3 target, which this document's readers take and every
-  evaluation resolves as `S = scale`, `I = importance_milli`.
+  its `set` writes each the pool requires of the goal (its valuation gives no `scale`, no `gap`) as
+  the target's own `scale` or `importance_milli` (members of the row) and none the pool's
+  valuation gives (fix round 1: one source per number), and `pool_unvalued` refuses only a step or
+  an importance the pool requires and the entry does not carry. An other target, and an entry that
+  carries neither, carry none, as before. The goal so written is an ordinary v3 target, which this
+  document's readers take and every evaluation resolves as `S = scale`, `I = importance_milli`.
+  The numbers are copied when the value is set: a later change of the entry's numbers, or a
+  valuation its pool gains later, reaches a goal already set only when its value is set again (a
+  set goal that follows its entry is not in this slice).
 - **Over a v2 policy** its targets become v3 targets with the policy's lifetime and no setter, as
   under a v2 document applied over a v3 record; a v1 policy or rows no reader reads are refused
   `record_unreadable`; a record left with no target and no entry is the withdrawal.

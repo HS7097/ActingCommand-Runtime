@@ -1402,8 +1402,9 @@ pub enum GoalRecordEdit {
     /// importance and rule the pool's valuation, no tasks and no lifetime: it replaces the target
     /// on that pool whatever its id (and a target of that id on another pool), else is added
     /// after the others. Workflow #455 B3 (register §1.519): `scale` and `importance_milli`, when
-    /// given (a `resource` entry of `goals.json` version 3 that carries them), are the target's
-    /// own step and importance, written as a v3 target's members.
+    /// given (those a `resource` entry of `goals.json` version 3 carries where the pool's valuation
+    /// does not give them), are the target's own step and importance, written as a v3 target's
+    /// members.
     SetTarget {
         id: String,
         resource: String,
