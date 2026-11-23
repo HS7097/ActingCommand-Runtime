@@ -898,6 +898,51 @@ fn p1_a_first_adoption_writes_the_pack_directory_the_rule_and_the_requires_words
     );
 }
 
+// #477 CK-1 (register §1.510): the first adoption's decision with a monthly clock as its trigger
+// writes the rule with that trigger, and `requires` gains `clock_monthly` after the fixed value's
+// word.
+#[test]
+fn ck1_an_adopted_rule_on_a_monthly_clock_adds_clock_monthly_to_requires() {
+    let fixture = Fixture::new();
+    let files = package_files(ADOPTED, SERVER, "Adopted fixture", &provenance("passed"));
+    let source = recording(&fixture, &stopped(), &files);
+    let monthly = json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "monthly",
+            "clock_source": {
+                "kind": "server",
+                "timezone_id": "fixed/plus-nine",
+                "utc_offset_minutes": 540,
+                "dst_offset_minutes": 0,
+                "maintenance_drift_ms": 0
+            },
+            "day_of_month": 1,
+            "minute_of_day": 240
+        }
+    });
+    let mut decided = business(&fixed(9_000));
+    decided["trigger"] = monthly.clone();
+    let decision = decide(&fixture, "decision", &decided);
+
+    let answer = standard_pack_adopt(
+        request(&fixture, source, Some(decision), false, FIRST),
+        &Committed,
+    )
+    .unwrap_or_else(|error| panic!("the recording is adopted: {error}"));
+    assert_eq!(
+        answer.requires_added,
+        [
+            BENEFIT_FIXED_VALUE_SUBSYSTEM,
+            actingcommand_policy::CLOCK_MONTHLY_SUBSYSTEM
+        ]
+    );
+    assert_eq!(
+        answer.rule.as_ref().map(|rule| &rule["trigger"]),
+        Some(&monthly)
+    );
+}
+
 #[test]
 fn p1_a_second_identical_adoption_is_refused_pack_exists() {
     let fixture = Fixture::new();
