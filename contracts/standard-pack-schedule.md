@@ -224,6 +224,21 @@ reads its last result across the reset, from before it; a retry branch that must
 the current period needs, as its period gate, a `dependency_completed` on an earlier rule of the
 same period, which the reset clears.
 
+#477 CK-2 (since 0.12.81; [scheduling/README.md](scheduling/README.md), "Clock Sources";
+[v012-register.md](v012-register.md) §1.516), advice to a resource repository on a rule's clock. A
+rule meant to run once after the game's daily refresh writes one clock occurrence at the refresh
+instant. From 0.12.81, for a rule that is not `sensitive`, that occurrence stays owed for the rest
+of its activity day after a dispatch a restart interrupted (its run started or not) and after a
+failure that paused the rule's pair (a screen the package never recorded included), so the rule
+runs on it the same day once the interruption lets it through or its repaired package lifts the
+pause: for these a
+second occurrence is not needed. **For a failure that passes by itself (a maintenance, a popup) a
+second occurrence the same day, written as a retry, is still needed and stays**: a failed run that
+is retried, continued or of a sensitive task serves its occurrence as before, and nothing tries it
+again later the same day (a pacing of its own for that is a later slice). Such a second occurrence
+needs a `daily_limit` of 2 or none, as today, and while it is written a rule that succeeded at the
+first occurrence runs again at the second, as before.
+
 ### Self-read fact probes
 
 A rule's `fact` predicate that writes `on_unknown` (SS-5, since 0.12.32;

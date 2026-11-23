@@ -134,6 +134,7 @@ fn snapshot(members: (Option<u64>, Option<u8>)) -> TaskRuntimeSnapshot {
         failure_streak: None,
         expected_runtime_ms: members.0,
         expected_runtime_runs: members.1,
+        clock_owed: false,
     }
 }
 

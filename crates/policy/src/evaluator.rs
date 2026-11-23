@@ -178,6 +178,22 @@ pub struct TaskRuntimeSnapshot {
     /// SCH-M ED-1: how many samples E is the mean of; absent with `expected_runtime_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_runtime_runs: Option<u8>,
+    /// #477 CK-2 (register §1.516; `contracts/scheduling/README.md`, "Clock Sources"): `true`
+    /// when the pair's latest dispatch did not serve the clock occurrence it answered: it never
+    /// ran (it settled as interrupted) or its failure paused the pair of a task that is not
+    /// sensitive. Absent (`false`), a clock reads `last_dispatched_unix_ms` as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clock_owed: bool,
+}
+
+impl TaskRuntimeSnapshot {
+    /// #477 CK-2: when the pair's latest dispatch was admitted, as a clock reads it: a clock's
+    /// occurrence at or before it is served. `None` when the pair has no dispatch, or when its
+    /// latest one left its occurrence owed (`clock_owed`): every occurrence is then unserved, as
+    /// for a pair never dispatched.
+    pub fn clock_served_unix_ms(&self) -> Option<u64> {
+        self.last_dispatched_unix_ms.filter(|_| !self.clock_owed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -6984,9 +7000,10 @@ fn evaluate_predicate(
         }
         PredicateSpec::Clock { schedule, missed } => {
             let (latest, next) = schedule_occurrences(schedule, time)?;
-            let last_dispatched = task_state.and_then(|state| state.last_dispatched_unix_ms);
-            let unserved =
-                latest.filter(|occurrence| last_dispatched.is_none_or(|last| last < *occurrence));
+            // #477 CK-2 (register §1.516): the pair's latest dispatch serves, unless it never ran
+            // or its failure paused the pair; then none did. Under a `not` too.
+            let served = task_state.and_then(TaskRuntimeSnapshot::clock_served_unix_ms);
+            let unserved = latest.filter(|occurrence| served.is_none_or(|last| last < *occurrence));
             // Workflow #361 R7: with `missed`, an unserved occurrence is due only before its
             // expiry. `latest` and `time.unix_ms` are the schedule's own coordinate shifted by
             // one and the same offset, so comparing them in Unix time is comparing them there.
@@ -8177,8 +8194,9 @@ pub struct ClockSlotView {
 }
 
 /// Reads the clock predicates of `task.trigger` with the trigger's own due rule: an occurrence
-/// is due when the pair has no dispatch, or its last dispatch precedes the occurrence, and,
-/// for a clock with `missed` (Workflow #361 R7), the evaluation is before the occurrence's
+/// is due when the pair has no dispatch, or its last dispatch precedes the occurrence (#477 CK-2:
+/// or left it owed, [`TaskRuntimeSnapshot::clock_served_unix_ms`]), and, for a clock with
+/// `missed` (Workflow #361 R7), the evaluation is before the occurrence's
 /// grace ran out. Every `clock` reached through `all` and `any` counts. A `not` subtree and
 /// every other predicate kind are ignored. `state` is the pair's runtime snapshot.
 ///
@@ -8192,15 +8210,14 @@ pub fn clock_slot_view(
     let Some(clocks) = counted_clocks(&task.trigger) else {
         return Ok(None);
     };
-    let last_dispatched = state.and_then(|state| state.last_dispatched_unix_ms);
+    let served = state.and_then(TaskRuntimeSnapshot::clock_served_unix_ms);
     let mut view = ClockSlotView {
         due_occurrence: None,
         next_occurrence: None,
     };
     for clock in clocks {
         let (latest, next) = schedule_occurrences(clock.schedule, time)?;
-        let mut due =
-            latest.filter(|occurrence| last_dispatched.is_none_or(|last| last < *occurrence));
+        let mut due = latest.filter(|occurrence| served.is_none_or(|last| last < *occurrence));
         if let (Some(occurrence), Some(MissedSlotRule::SkipAfter { grace_ms })) =
             (due, clock.missed)
             && occurrence_expiry(occurrence, *grace_ms)? <= time.unix_ms
@@ -8234,8 +8251,9 @@ pub struct ClockSlotLapse {
 
 /// Workflow #372 K4: the occurrences of the pair's counted clocks (as `clock_slot_view` counts
 /// them) that the pair has not served and that are lost at `time`, newest first. Only a pair
-/// with a dispatch history has any. The occurrences read are those after its last dispatch, at
-/// or before `time` and within 48 h before it, at most 32, newest first. With O′ the next
+/// with a dispatch history has any. The occurrences read are those after its last dispatch (#477
+/// CK-2: from the occurrence it answered, when it left that one owed), at or before `time` and
+/// within 48 h before it, at most 32, newest first. With O′ the next
 /// occurrence after O over every counted clock, O expired when its clock has `missed`, its
 /// grace ran out at or before `time`, and O′ is absent or not before that; O was superseded
 /// when O′ is at or before `time` and O did not expire. Occurrences of several clocks at one
@@ -8253,8 +8271,27 @@ pub fn clock_slot_lapses(
     let Some(last_dispatched) = state.and_then(|state| state.last_dispatched_unix_ms) else {
         return Ok(Vec::new());
     };
+    // #477 CK-2 (register §1.516): a last dispatch that left its occurrence owed (`clock_owed`)
+    // served none, so the occurrence it answered, the latest of the counted clocks at or before
+    // it, is read too: its grace's end is recorded `clock_slot_expired` as any unserved one's.
+    let mut read_after = last_dispatched;
+    if state.is_some_and(|state| state.clock_owed) {
+        let answered_at = EvaluationTime {
+            unix_ms: last_dispatched,
+            monotonic_ms: time
+                .monotonic_ms
+                .saturating_sub(time.unix_ms.saturating_sub(last_dispatched)),
+        };
+        let mut answered = None;
+        for clock in &clocks {
+            answered = answered.max(schedule_occurrences(clock.schedule, answered_at)?.0);
+        }
+        if let Some(occurrence) = answered {
+            read_after = occurrence.saturating_sub(1);
+        }
+    }
     let earliest = time.unix_ms.saturating_sub(CLOCK_SLOT_LAPSE_LOOKBACK_MS);
-    let read = |occurrence: u64| occurrence > last_dispatched && occurrence >= earliest;
+    let read = |occurrence: u64| occurrence > read_after && occurrence >= earliest;
     let mut occurrences = BTreeMap::<u64, Option<u64>>::new();
     let mut next = None;
     for clock in clocks {
@@ -10275,6 +10312,7 @@ pub(crate) mod tests {
                 failure_streak: None,
                 expected_runtime_ms: None,
                 expected_runtime_runs: None,
+                clock_owed: false,
             },
             TaskRuntimeSnapshot {
                 task_id: "fixture.observe-secondary".to_owned(),
@@ -10287,6 +10325,7 @@ pub(crate) mod tests {
                 failure_streak: None,
                 expected_runtime_ms: None,
                 expected_runtime_runs: None,
+                clock_owed: false,
             },
         ];
         let result =
@@ -10908,6 +10947,7 @@ pub(crate) mod tests {
                 failure_streak: None,
                 expected_runtime_ms: None,
                 expected_runtime_runs: None,
+                clock_owed: false,
             });
             let result = evaluate(
                 &catalog,
@@ -11000,6 +11040,7 @@ pub(crate) mod tests {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         });
         assert_eq!(
             evaluate(&unmapped, &unmapped_facts, &base_resources(), time, 9)
@@ -11378,6 +11419,7 @@ pub(crate) mod tests {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         });
 
         let result = evaluate(
@@ -11449,6 +11491,7 @@ pub(crate) mod tests {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         });
 
         let result = evaluate(
@@ -11632,6 +11675,7 @@ pub(crate) mod tests {
                 failure_streak: None,
                 expected_runtime_ms: None,
                 expected_runtime_runs: None,
+                clock_owed: false,
             };
             let time = EvaluationTime {
                 unix_ms: now,
@@ -11688,6 +11732,7 @@ pub(crate) mod tests {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         }
     }
 
