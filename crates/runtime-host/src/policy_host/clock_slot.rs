@@ -18,7 +18,7 @@
 //! group (the task and the ids it continues), and a task's dispatch history is its group's (its
 //! folded snapshot); a new record is written under the task.
 
-use super::{CatalogStore, matching_activity_profile};
+use super::{CatalogStore, ClockSlotPreviewCost, matching_activity_profile};
 use crate::RuntimeHostResult;
 use crate::codes::{HostCode, SchedulingRuleHostCode};
 use actingcommand_contract::outcome::{Code, Outcome, VocabularyToken};
@@ -360,12 +360,19 @@ struct Preview<'a> {
     time: EvaluationTime,
     emitted: BTreeSet<String>,
     signals: Vec<PolicyPlanningSignalEventData>,
+    /// #486 ASLEEP-5 (register §1.524, ruling 4): the pairs with a dispatch history read for their
+    /// lapsed occurrences, the calls of `clock_slot_live` and the reads of the planning-signal
+    /// store, counted for the daemon's line of the cycle.
+    pairs: u64,
+    live_calls: u64,
+    store_reads: Cell<u64>,
 }
 
 /// The clock-slot records of one evaluation, in the order they are to be appended: the
 /// closure's deferrals, then the placement blocks, then the owed selections; these three read
 /// only pairs whose trigger was true at this evaluation. Then (Workflow #372 K4) the expired
-/// and superseded occurrences of every pair in `facts.tasks` with a dispatch history.
+/// and superseded occurrences of every pair in `facts.tasks` with a dispatch history. #486
+/// ASLEEP-5: with what the preview read (its time is the caller's to set).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preview(
     store: &CatalogStore,
@@ -378,7 +385,7 @@ pub(super) fn preview(
     in_flight: &BTreeSet<(&str, &str)>,
     deferrals: Deferrals,
     time: EvaluationTime,
-) -> RuntimeHostResult<Vec<PolicyPlanningSignalEventData>> {
+) -> RuntimeHostResult<(Vec<PolicyPlanningSignalEventData>, ClockSlotPreviewCost)> {
     let mut preview = Preview {
         store,
         catalog,
@@ -391,6 +398,9 @@ pub(super) fn preview(
         time,
         emitted: BTreeSet::new(),
         signals: Vec::new(),
+        pairs: 0,
+        live_calls: 0,
+        store_reads: Cell::new(0),
     };
     for ((task_id, alias), deferral) in deferrals.captured.into_inner() {
         // Workflow #411 B15 R4: a remedy hold that the evaluation turned into its round's stop
@@ -448,9 +458,16 @@ pub(super) fn preview(
         .iter()
         .filter(|state| state.last_dispatched_unix_ms.is_some())
     {
+        preview.pairs = preview.pairs.saturating_add(1);
         preview.lapsed(state)?;
     }
-    Ok(preview.signals)
+    let cost = ClockSlotPreviewCost {
+        micros: 0,
+        pairs: preview.pairs,
+        live_calls: preview.live_calls,
+        store_reads: preview.store_reads.get(),
+    };
+    Ok((preview.signals, cost))
 }
 
 impl<'a> Preview<'a> {
@@ -503,8 +520,13 @@ impl<'a> Preview<'a> {
 
     /// Whether a record with this id exists: written by this cycle, or in the projection.
     fn known(&self, signal_id: &str) -> RuntimeHostResult<bool> {
-        Ok(self.emitted.contains(signal_id)
-            || self.store.load_planning_signal(signal_id)?.is_some())
+        if self.emitted.contains(signal_id) {
+            return Ok(true);
+        }
+        // #486 ASLEEP-5: each read of the store counted for the daemon's line of the cycle.
+        self.store_reads
+            .set(self.store_reads.get().saturating_add(1));
+        Ok(self.store.load_planning_signal(signal_id)?.is_some())
     }
 
     /// Workflow #372 K5: whether a `kind` record of the occurrence exists for the pair under any
@@ -645,6 +667,7 @@ impl<'a> Preview<'a> {
             let is_live = match live {
                 Some(is_live) => is_live,
                 None => {
+                    self.live_calls = self.live_calls.saturating_add(1);
                     let is_live = clock_slot_live(
                         self.catalog,
                         task,

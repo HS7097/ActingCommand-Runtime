@@ -681,7 +681,8 @@ impl InstanceHolds {
     /// that stop withdrew its availability. While its snapshot holds it unavailable, an evaluation
     /// judges it as if it were available, through every gate an available instance's candidates
     /// go through, and selects nothing on it: the candidate the round would select there carries
-    /// `instance_asleep_wake_due` with the evaluation's time as its wake, and no dispatch is made.
+    /// `instance_asleep_wake_due`, and no dispatch is made. #486 ASLEEP-5 (register §1.524): with
+    /// no wake of its own (until 0.12.83 the evaluation's time).
     /// #486 ASLEEP-2 (register §1.506): so is an instance whose application its idle action closed
     /// or is closing, whose snapshot holds it available: it is judged as it is, and nothing is
     /// selected on it either.
@@ -3320,19 +3321,23 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         }
         // #486 ASLEEP-1 (register §1.497; `contracts/scheduling/README.md`, "An asleep
         // instance"): the candidate the round would select on an asleep instance is the task the
-        // instance is woken for. It is not selected: it waits with `instance_asleep_wake_due` and
-        // the evaluation's time as its wake, and nothing a dispatch alone causes happens (no
-        // intent, no reason chain and no decision record, no shared run slot, no chain step, no
-        // capped spend and no pass of its capped block). It takes its instance and its device for
-        // the round as a selected candidate does, so every candidate behind it waits as behind one;
-        // a fact refresh's names it as its gate, with no wake.
+        // instance is woken for. It is not selected: it waits with `instance_asleep_wake_due`, and
+        // nothing a dispatch alone causes happens (no intent, no reason chain and no decision
+        // record, no shared run slot, no chain step, no capped spend and no pass of its capped
+        // block). It takes its instance and its device for the round as a selected candidate does,
+        // so every candidate behind it waits as behind one; a fact refresh's names it as its gate,
+        // with no wake. #486 ASLEEP-5 (register §1.524, ruling 1): it names no wake of its own
+        // either. Until 0.12.83 its wake was the evaluation's time, so the evaluation's own wake was
+        // now, and a round whose idle plan did not wake the instance was followed by the next at
+        // once, with nothing changed. When the driver looks again for it is the host's to say, from
+        // what its idle plan did with it (`PolicyCycle::idle_wake_unix_ms`).
         if asleep.contains(candidate.instance_id.as_str()) {
             let task_work = &mut work[candidate.work_index];
             task_work.state = SchedulingDecisionState::Deferred;
             task_work
                 .reasons
                 .push(asleep_reason(&candidate.instance_id));
-            task_work.next_wake_unix_ms = Some(time.unix_ms);
+            task_work.next_wake_unix_ms = None;
             if refresh {
                 refresh_gates.insert(
                     candidate.work_index,
