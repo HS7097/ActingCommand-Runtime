@@ -156,9 +156,9 @@ impl HostShared {
                 let mut variables = page_variables(&read.page, &|task_id: &str| {
                     plan.resolutions(task_id, instance_alias)
                 });
-                let carried = plan.carried(instance_alias);
+                let carried_names = plan.carried(instance_alias);
                 for row in &mut variables {
-                    row.carried = carried.contains(row.variable.name.as_str());
+                    row.carried = carried_names.contains(row.variable.name.as_str());
                 }
                 let conditions = read
                     .target_view

@@ -1965,7 +1965,7 @@ fn refused_rule_variables(
             };
             if let Err(problem) = crate::judge_rule_variable_value(variable, value) {
                 let why = match problem {
-                    Some(judged) => format!("the declaration's judgement is {judged}"),
+                    Some(word) => format!("the declaration's judgement is {word}"),
                     None => "its text is longer than the goal store keeps".to_owned(),
                 };
                 return Some((

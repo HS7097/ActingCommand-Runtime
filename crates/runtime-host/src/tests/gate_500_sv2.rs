@@ -69,17 +69,17 @@ fn variables() -> Value {
 // The rule `id` of the package, due at every evaluation, producing `amount` units of pool A and
 // carrying `pick` = `pick`.
 fn carrying(id: &str, amount: u64, pick: &str) -> Value {
-    let mut carrying = rule(id, PACKAGE, 100, Some(POOL_A));
-    carrying["trigger"] = json!({
+    let mut written = rule(id, PACKAGE, 100, Some(POOL_A));
+    written["trigger"] = json!({
         "kind": "clock",
         "schedule": {"kind": "interval", "clock_source": {"kind": "local"}, "every_ms": 1,
                      "anchor_ms": 0}
     });
-    carrying["loop_budget"]["window_iteration_limit"] = json!(8);
-    carrying["loop_budget"]["max_runtime_ms"] = json!(3_600_000);
-    carrying["produces"][0]["amount"] = json!(amount);
-    carrying["variables"] = json!({"pick": pick});
-    carrying
+    written["loop_budget"]["window_iteration_limit"] = json!(8);
+    written["loop_budget"]["max_runtime_ms"] = json!(3_600_000);
+    written["produces"][0]["amount"] = json!(amount);
+    written["variables"] = json!({"pick": pick});
+    written
 }
 
 // Places the game root below `packs`: its bundle, its `schedule.json` with the two rules, and the
@@ -119,9 +119,9 @@ fn place_game_root(packs: &Path) {
 // The fixture's facts: the one instance bound to game A on server A, able to run the Runtime's
 // package operation, and no recorded outcome.
 fn facts() -> EvaluationFacts {
-    let mut facts = policy_facts();
-    facts.outcomes.clear();
-    facts.instances = vec![InstanceSnapshot {
+    let mut bound = policy_facts();
+    bound.outcomes.clear();
+    bound.instances = vec![InstanceSnapshot {
         instance_id: INSTANCE.to_owned(),
         server_id: SERVER_A.to_owned(),
         game_id: GAME_A.to_owned(),
@@ -130,7 +130,7 @@ fn facts() -> EvaluationFacts {
         capability_operation_ids: vec![actingcommand_policy::STANDARD_PACK_OPERATION_ID.to_owned()],
         preferred_task_ids: Vec::new(),
     }];
-    facts
+    bound
 }
 
 // ---- The fixture.
@@ -381,9 +381,9 @@ fn overlaid_pick(host: &RuntimeHost) -> Option<FactValue> {
         })
 }
 
-// The string fact `text`.
-fn text(text: &str) -> Option<FactValue> {
-    Some(FactValue::String(text.to_owned()))
+// The string fact `word`.
+fn text(word: &str) -> Option<FactValue> {
+    Some(FactValue::String(word.to_owned()))
 }
 
 // The decision `evaluation` made of `task_id` on the instance.
@@ -391,9 +391,7 @@ fn decision<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a TaskDeci
     evaluation
         .decisions
         .iter()
-        .find(|decision| {
-            decision.task_id == task_id && decision.instance_id.as_deref() == Some(INSTANCE)
-        })
+        .find(|made| made.task_id == task_id && made.instance_id.as_deref() == Some(INSTANCE))
         .unwrap_or_else(|| panic!("the decision of {task_id}: {evaluation:#?}"))
 }
 
@@ -662,12 +660,12 @@ impl DirectScene {
         .expect("the values' names are variables' names");
         let mut client = TestClient::connect(&self.host);
         client.set_receipt_read_timeout();
-        let run = client.request(RuntimeOperation::run_contained_task(
+        let started = client.request(RuntimeOperation::run_contained_task(
             INSTANCE,
             client.ids.mint_holder_id().expect("holder"),
             request,
         ));
-        let receipt = client.send(&run);
+        let receipt = client.send(&started);
         drop(client);
         receipt
     }

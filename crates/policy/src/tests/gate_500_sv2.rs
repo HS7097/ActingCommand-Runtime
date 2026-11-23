@@ -75,7 +75,7 @@ fn variables() -> Vec<PackageVariable> {
 
 /// A `schedule.json` rule `id` of [`PACKAGE`] on an hourly clock, carrying `carried` when given.
 fn rule(id: &str, carried: Option<Value>) -> Value {
-    let mut rule = json!({
+    let mut written = json!({
         "id": id,
         "package_id": PACKAGE,
         "priority": 100,
@@ -112,9 +112,9 @@ fn rule(id: &str, carried: Option<Value>) -> Value {
         "strategic_weight_milli": 1000
     });
     if let Some(carried) = carried {
-        rule["variables"] = carried;
+        written["variables"] = carried;
     }
-    rule
+    written
 }
 
 /// A `schedule.json` of `rules`, naming `requires`.
@@ -137,11 +137,12 @@ fn two_rules() -> Value {
     )
 }
 
-/// Composes `schedule` for one instance of the game, whose registry holds `packages`, each read
-/// declaring [`declaration`]'s variables, with the subsystems `subsystems` when given.
+/// Composes the `schedule.json` `document` for one instance of the game, whose registry holds
+/// `packages`, each read declaring [`declaration`]'s variables, with the subsystems `subsystems`
+/// when given.
 fn compose_with(
     packages: &[&str],
-    schedule: &Value,
+    document: &Value,
     subsystems: Option<&BTreeSet<String>>,
 ) -> Result<StandardPackComposition, StandardPackComposeFailure> {
     let bundle = json!({
@@ -184,11 +185,11 @@ fn compose_with(
             })
             .collect(),
     );
-    let schedule = serde_json::to_vec(schedule).expect("schedule bytes");
+    let bytes = serde_json::to_vec(document).expect("schedule bytes");
     let games = BTreeMap::from([(
         GAME.to_owned(),
         StandardPackGameFiles {
-            schedule: &schedule,
+            schedule: &bytes,
             root: &root,
             maintenance: &[],
             irreversible: &irreversible,
@@ -211,13 +212,13 @@ fn compose_with(
 }
 
 /// [`compose_with`] of the fixture's one package and no Runtime manifest.
-fn compose(schedule: &Value) -> Result<StandardPackComposition, StandardPackComposeFailure> {
-    compose_with(&[PACKAGE], schedule, None)
+fn compose(document: &Value) -> Result<StandardPackComposition, StandardPackComposeFailure> {
+    compose_with(&[PACKAGE], document, None)
 }
 
-/// The first refusal of composing `schedule` with `subsystems`, as the composer names it.
-fn first_issue(schedule: &Value, subsystems: Option<&BTreeSet<String>>) -> StandardPackRootIssue {
-    let failure = compose_with(&[PACKAGE], schedule, subsystems).expect_err("the root is refused");
+/// The first refusal of composing `document` with `subsystems`, as the composer names it.
+fn first_issue(document: &Value, subsystems: Option<&BTreeSet<String>>) -> StandardPackRootIssue {
+    let failure = compose_with(&[PACKAGE], document, subsystems).expect_err("the root is refused");
     let first = failure.issues().first().expect("an issue");
     assert_eq!(first.game_id.as_deref(), Some(GAME), "{failure}");
     first.issue.clone()
