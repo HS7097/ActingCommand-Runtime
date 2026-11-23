@@ -47954,9 +47954,34 @@ consumes it, or produces it without a fixed value, is `benefit_unknown` (`valuat
 before, its lines take no part, and B1's rules apply to it as to any pool without a valuation. A
 catalogue without the member: its bytes, hash, decisions, records and the goal page's answers.
 `goals.json` stays at version 2; the host's goal code and the goal page's types are unchanged; no
-record, request or ledger member is new. No game, package or alias is named in code. The outcome
-catalogue's texts of `goal_pool_unvalued` and `pool_unvalued` still name the valuation alone (their
-index is not regenerated here); the contracts above give the third source.
+record, request or ledger member is new. No game, package or alias is named in code.
+
+**Fix round 1** (the independent review of #1888, "may merge"; the coordinator took four of its
+optional items, work order `rd-1123/brief-455-b3p-fix1.md`).
+- *One reading of "the pool writes no valuation"* (item 1). The Lab's goal check
+  (`standard_pack_goals.rs`, `goal_issues`) read it as the member being absent, so a pool writing
+  `"valuation": null` beside `target_defaults` was valued for the check and unvalued for the
+  compiler. It now reads the member as the compiler does and as `CatalogScheduleFacts` does: absent
+  or `null` is no valuation. The five forms, the check and the compiler alike: absent and `null`
+  (with `target_defaults`) give a goal its terms, or the check's `goal_pool_unvalued` and the
+  goal page's `pool_unvalued` without it; the pending marker, a block without `gap` and a block with
+  `scale` and `gap` are valuations, beside which `target_defaults` is refused `type_mismatch`, the
+  last alone giving a goal its terms.
+- *The two words' texts* (item 2). The outcome catalogue's `goal_pool_unvalued` and `pool_unvalued`
+  name the cause as the code gives it (neither a valuation with `scale` and `gap` nor, on a pool
+  without a valuation, `target_defaults`) and the remedy for a pool whose producing rules keep fixed
+  values (`target_defaults`, a valuation there being refused); the index is regenerated; the two
+  words' doc comments say the same.
+- *The offered list* (item 3) and two comments (item 4): a test that this build's manifest names
+  `pool_target_defaults`; the comments of `check_target_v2` and the host's `check_target` (comment
+  only).
+
+| Test | What it shows |
+|---|---|
+| `b3p_fix1_a_null_valuation_beside_target_defaults_is_no_valuation_for_the_goal_check` (item 1; exec gate map) | On G-R1's root a pool writing `"valuation": null` and `target_defaults`: the valid version 2 file whose `resource` entry governs it gives no warning |
+| `b3p_this_runtime_names_pool_target_defaults_and_composes_a_file_that_requires_it` (item 3; apps gate map, `apps/actingd/src/config/gate_455_b3p.rs`) | The assembled manifest names `pool_target_defaults`, enabled; given those subsystems the composer composes a file whose pool writes the member and lists it in `requires`, the compiled pool holding 10 and 1000 |
+
+No existing test is changed.
 
 **At deploy.** Nothing to configure. No installed root writes the member, so nothing changes until
 a resource repository declares a pool with `target_defaults` (and `pool_target_defaults` in its

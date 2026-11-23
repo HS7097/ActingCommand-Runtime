@@ -284,7 +284,8 @@ crate::outcome_vocabulary! {
         GoalBlockMismatch => "goal_block_mismatch",
         /// G-R1: a `resource` entry's pool is not a pool of the composed schedule.
         GoalPoolUnknown => "goal_pool_unknown",
-        /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap`.
+        /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap` and (#455
+        /// B3-P), as a pool without a valuation, no `target_defaults` with both numbers.
         GoalPoolUnvalued => "goal_pool_unvalued",
         /// G-R1: a governed package is not a package of `bundle.json`; Workflow #463 V1: the
         /// package a governed rule runs, or one that declares a placed variable, is not.

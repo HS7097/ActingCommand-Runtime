@@ -1049,3 +1049,29 @@ fn b3p_a_resource_entry_on_a_pool_with_target_defaults_is_accepted() {
         );
     }
 }
+
+// #455 B3-P fix round 1 (the coordinator's item 1; register §1.522): a pool that writes
+// `"valuation": null` beside `target_defaults` writes no valuation for the goal check, as for the
+// compiler, which takes its defaults: the valid version 2 file whose `resource` entry governs it
+// gives no warning.
+#[test]
+fn b3p_fix1_a_null_valuation_beside_target_defaults_is_no_valuation_for_the_goal_check() {
+    let mut material = pool(MATERIAL, false);
+    material["valuation"] = Value::Null;
+    material["target_defaults"] = json!({"scale": 10, "importance_milli": 1000});
+    let mut with_defaults = schedule();
+    with_defaults["pools"]
+        .as_array_mut()
+        .expect("the pools")
+        .push(material);
+    with_defaults["requires"]
+        .as_array_mut()
+        .expect("the requires")
+        .push(json!(POOL_TARGET_DEFAULTS_SUBSYSTEM));
+    let (_temp, game_root) = installed_with(packs(), &with_defaults);
+    let (warnings, _) = checked_with(
+        &game_root,
+        &goals_with(|value| value["entries"][2]["governs"]["pool"] = json!(MATERIAL)),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+}

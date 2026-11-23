@@ -741,8 +741,9 @@ fn check_resource_targets_v2(
 }
 
 /// The entry's check of one v2 target: its pool, then its step and importance (the target's
-/// own or the pool valuation's), then its named tasks, or, without `tasks`, whether any task of
-/// the instance produces the pool. A refusal names its reason and its path below the target.
+/// own, else the pool valuation's, else, #455 B3-P, the pool's `target_defaults`:
+/// [`target_terms`]), then its named tasks, or, without `tasks`, whether any task of the instance
+/// produces the pool. A refusal names its reason and its path below the target.
 fn check_target_v2<'a>(
     catalog: &'a CompiledCatalog,
     target: &ResourceTargetSpecV2,

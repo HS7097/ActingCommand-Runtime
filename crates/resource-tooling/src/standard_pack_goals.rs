@@ -134,16 +134,23 @@ pub(crate) fn goal_issues(
         for pool in &schedule.pools {
             // A pool a goal may name has a valuation block with its step and its gap weight, or
             // (#455 B3-P, register §1.522) writes no valuation and `target_defaults` with both.
-            let valued = matches!(
-                pool.body.get("valuation"),
-                Some(Value::Object(valuation))
-                    if valuation.contains_key("scale") && valuation.contains_key("gap")
-            ) || (!pool.body.contains_key("valuation")
-                && matches!(
+            // B3-P fix round 1: "no valuation" as the compiler reads the member, absent or `null`
+            // (as `CatalogScheduleFacts` reads it); the pending marker is a valuation.
+            let written = pool
+                .body
+                .get("valuation")
+                .filter(|valuation| !valuation.is_null());
+            let valued = match written {
+                Some(Value::Object(block)) => {
+                    block.contains_key("scale") && block.contains_key("gap")
+                }
+                Some(_) => false,
+                None => matches!(
                     pool.body.get(POOL_TARGET_DEFAULTS_MEMBER),
                     Some(Value::Object(defaults))
                         if defaults.contains_key("scale") && defaults.contains_key("importance_milli")
-                ));
+                ),
+            };
             references.pools.insert(pool.id.clone(), valued);
         }
         for rule in &schedule.rules {
