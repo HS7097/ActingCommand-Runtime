@@ -1588,3 +1588,15 @@ tests = [
     "actingcommand-policy::lib::tests::gate_477_ck2::ck2_t5_a_snapshot_without_the_member_serializes_as_before",
 ]
 incident = ["#477 CK-2"]
+
+# Workflow #490 FR-1 (0.12.81; register §1.517; the coordinator's rulings 1 and 2 on board #490, tests 1, 2 and 6; contracts/scheduling/README.md, "Fact refresh", "Its own gates"), the scheduler's half, on the D2-S4 fixture with the shipped settings (the whole UTC day the activity window), no clock read: the rest after failed runs in a row lasts failure_backoff_ms × 2^(k+1), k the failures past max_consecutive_failures, at most two hours, from the latest failed dispatch; a millisecond before 20, 40, 80 minutes and two hours after the third, fourth, fifth, sixth and seventh failure in a row nothing runs, R_I's decision wakes at the rest's end and the candidate is fact_refresh_exhausted failure_pause with that end as next_eligible_unix_ms, and at the end R_I is dispatched (t1); a third failure dispatched fifteen minutes before the window's end rests until the window's end, and R_I is dispatched at it, in the next activity day (t1); a failure_backoff_ms of 0 gives no rest, R_I dispatched past its minimum interval, its daily limit still binding (t1); task Y's scheduled run on the instance dispatched after the failure and succeeded ends the rest at once: R_I waits task_cooldown_active with the failure's code until its failure backoff's end and is dispatched then; Y's success dispatched before the failure, or on the other instance, ends nothing (t2); without a failed reading (R_I never ran, or read successfully inside its minimum interval) the reason chains, decisions and intents serialize byte for byte the same under the shipped settings, 0, 1 and the largest (t6). T24 adapted: the wake of its rest (rule 1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_d2_s4::fr1_t1_the_rest_after_failures_in_a_row_grows_and_ends_by_itself",
+    "actingcommand-policy::lib::tests::gate_d2_s4::fr1_t1_the_rest_never_passes_the_activity_windows_end",
+    "actingcommand-policy::lib::tests::gate_d2_s4::fr1_t1_a_failure_backoff_of_zero_gives_no_rest",
+    "actingcommand-policy::lib::tests::gate_d2_s4::fr1_t2_a_later_success_of_another_task_on_the_instance_ends_the_rest",
+    "actingcommand-policy::lib::tests::gate_d2_s4::fr1_t6_without_a_failed_reader_the_round_is_byte_for_byte_the_one_of_before",
+]
+incident = ["#490", "FR-1"]

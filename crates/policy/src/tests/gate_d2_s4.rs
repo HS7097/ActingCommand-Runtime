@@ -357,7 +357,9 @@ fn gate_d2_t23_a_successful_reader_that_left_the_key_unknown_is_unresolved() {
 // T24 (D2M:604; §3.9 item 1): R_I's navigation failed: it backs off for `failure_backoff_ms` and
 // A's candidate waits, `fact_refresh_pending` with the failure's code; failures in a row up to
 // `max_consecutive_failures` today exhaust it, `refresh_limit=failure_pause`. The evaluation
-// never fails.
+// never fails. Workflow #490 FR-1 (0.12.81, register §1.517, rule 1) changed the wake it pins:
+// the rest after the third failure in a row ends twice `failure_backoff_ms` after the latest
+// failed dispatch, no longer at the activity day's end.
 #[test]
 fn gate_d2_t24_a_failed_reader_backs_off_then_rests_after_its_failures_in_a_row() {
     let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
@@ -392,7 +394,7 @@ fn gate_d2_t24_a_failed_reader_backs_off_then_rests_after_its_failures_in_a_row(
     assert_eq!(refresh_codes(waiting), [EXHAUSTED]);
     assert_values(
         coded(waiting, EXHAUSTED)[0],
-        &exhausted("failure_pause", Some(NEXT_DAY)),
+        &exhausted("failure_pause", Some(dispatched + 2 * BACKOFF_MS)),
     );
 }
 
@@ -1585,4 +1587,249 @@ fn w2a_an_unavailable_instance_names_its_gate_through_fact_refresh_pending() {
         &w2a_pending(Some(UNAVAILABLE_INSTANCE)),
     );
     assert_eq!(waiting.next_wake_unix_ms, None);
+}
+
+// ---- Workflow #490 FR-1 (0.12.81; register §1.517; contracts/scheduling/README.md, "Fact
+// refresh", "Its own gates"): R_I's rest after failed runs in a row lasts a time that grows with
+// the row and ends by itself, never past the activity window's end, and a later success of another
+// task's scheduled run on the instance ends it at once.
+
+// Another task's snapshot on `instance_id`: its latest dispatch at `dispatched_at`, settled as a
+// success ten seconds later.
+fn succeeded(task_id: &str, instance_id: &str, dispatched_at: u64) -> TaskRuntimeSnapshot {
+    TaskRuntimeSnapshot {
+        task_id: task_id.to_owned(),
+        instance_id: instance_id.to_owned(),
+        last_dispatched_unix_ms: Some(dispatched_at),
+        eligible_since_unix_ms: None,
+        terminal_state: Some(TaskTerminalState::Succeeded),
+        completed_window: Some(CompletedActivityWindow {
+            window_id: "fixture-activity:window".to_owned(),
+            completed_at_unix_ms: dispatched_at + 10_000,
+        }),
+        last_duration_ms: None,
+        failure_streak: Some(0),
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
+        clock_owed: false,
+    }
+}
+
+// Rule 1 (test 1): with the default settings R_I rests 20 minutes after its third failure in a
+// row, 40 after its fourth, 80 after its fifth and two hours from its sixth on, counted from its
+// latest failed dispatch. A millisecond before the rest's end nothing runs on A, R_I's decision
+// wakes at that end and A's candidate is exhausted (`failure_pause`) with that end as its
+// `next_eligible_unix_ms`; at the end the rest is over by itself and R_I is dispatched again (its
+// minimum interval and failure backoff ended long before).
+#[test]
+fn fr1_t1_the_rest_after_failures_in_a_row_grows_and_ends_by_itself() {
+    let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
+    let dispatched = NOW - 60_000;
+    for (streak, rest_ms) in [
+        (3_u16, 20 * 60_000),
+        (4, 40 * 60_000),
+        (5, 80 * 60_000),
+        (6, 2 * HOUR_MS),
+        (7, 2 * HOUR_MS),
+    ] {
+        let rest_end = dispatched + rest_ms;
+        let round = |at: u64| {
+            evaluate_stock(
+                &inputs(vec![reader(u32::from(streak), Some(failure))]),
+                vec![refresh_state(
+                    dispatched,
+                    TaskTerminalState::Failed,
+                    Some(dispatched + 20_000),
+                    streak,
+                )],
+                at,
+            )
+        };
+
+        let resting = round(rest_end - 1);
+        assert!(intents_on(&resting, A).is_empty(), "{streak}");
+        let refresh = refresh_decision(&resting, A).expect("R_I's decision");
+        assert_eq!(refresh.state, SchedulingDecisionState::Deferred, "{streak}");
+        assert_eq!(refresh.next_wake_unix_ms, Some(rest_end), "{streak}");
+        let waiting = decision(&resting, ALPHA, A);
+        assert_eq!(refresh_codes(waiting), [EXHAUSTED], "{streak}");
+        assert_values(
+            coded(waiting, EXHAUSTED)[0],
+            &exhausted("failure_pause", Some(rest_end)),
+        );
+
+        let rested = round(rest_end);
+        assert_eq!(refresh_intents_on(&rested, A), 1, "{streak}");
+        assert_eq!(
+            refresh_codes(decision(&rested, ALPHA, A)),
+            [PENDING],
+            "{streak}"
+        );
+    }
+}
+
+// Rule 1 (test 1): the rest never passes the activity window's end. The fixture's window is the
+// whole UTC day, and R_I's third failure in a row was dispatched fifteen minutes before it ends,
+// so its twenty minutes would end five minutes into the next day: a minute before the day's end
+// A's candidate is exhausted until the window's end, and at it, in a new activity day where a
+// failure of the day before rests nothing, R_I is dispatched again.
+#[test]
+fn fr1_t1_the_rest_never_passes_the_activity_windows_end() {
+    let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
+    let dispatched = NEXT_DAY - 15 * 60_000;
+    let round = |at: u64| {
+        evaluate_stock(
+            &inputs(vec![reader(3, Some(failure))]),
+            vec![refresh_state(
+                dispatched,
+                TaskTerminalState::Failed,
+                Some(dispatched + 20_000),
+                3,
+            )],
+            at,
+        )
+    };
+
+    let resting = round(NEXT_DAY - 60_000);
+    assert!(intents_on(&resting, A).is_empty());
+    let waiting = decision(&resting, ALPHA, A);
+    assert_eq!(refresh_codes(waiting), [EXHAUSTED]);
+    assert_values(
+        coded(waiting, EXHAUSTED)[0],
+        &exhausted("failure_pause", Some(NEXT_DAY)),
+    );
+
+    let next_activity_day = round(NEXT_DAY);
+    assert_eq!(refresh_intents_on(&next_activity_day, A), 1);
+}
+
+// Rule 1 (test 1): a `failure_backoff_ms` of 0 gives no rest. Past its minimum interval R_I is
+// dispatched again after its third failure in a row; its daily limit bounds it as it bounds every
+// reading (`daily_limit`, waking at the window's end).
+#[test]
+fn fr1_t1_a_failure_backoff_of_zero_gives_no_rest() {
+    let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
+    let dispatched = NOW - MIN_INTERVAL_MS - 60_000;
+    let third_failure = || {
+        vec![refresh_state(
+            dispatched,
+            TaskTerminalState::Failed,
+            Some(dispatched + 20_000),
+            3,
+        )]
+    };
+    let without_backoff = |dispatched_today: u32| {
+        let mut refresh = inputs(vec![reader(dispatched_today, Some(failure))]);
+        refresh.settings.failure_backoff_ms = 0;
+        refresh
+    };
+
+    let evaluation = evaluate_stock(&without_backoff(3), third_failure(), NOW);
+    assert_eq!(refresh_intents_on(&evaluation, A), 1);
+    assert_eq!(refresh_codes(decision(&evaluation, ALPHA, A)), [PENDING]);
+
+    let evaluation = evaluate_stock(&without_backoff(DAILY_LIMIT), third_failure(), NOW);
+    assert!(intents_on(&evaluation, A).is_empty());
+    assert_values(
+        coded(decision(&evaluation, ALPHA, A), EXHAUSTED)[0],
+        &exhausted("daily_limit", Some(NEXT_DAY)),
+    );
+}
+
+// Rule 2 (test 2): task Y's scheduled run on A, dispatched after R_I's third failed dispatch in a
+// row and settled as a success, ends R_I's rest at once. What holds R_I then is its failure
+// backoff (`task_cooldown_active`, A's candidate pending with the failure's code until the
+// backoff's end), at whose end, ten minutes before the rest would have ended, it is dispatched. Y's
+// success dispatched before R_I's failed dispatch, or on B, ends nothing: A's candidate is
+// exhausted until the rest's end.
+#[test]
+fn fr1_t2_a_later_success_of_another_task_on_the_instance_ends_the_rest() {
+    let failure = Code::relayed(NAVIGATION_FAILED).expect("a registered code");
+    let dispatched = NOW - 50_000;
+    let completed = dispatched + 20_000;
+    let rest_end = dispatched + 2 * BACKOFF_MS;
+    let backoff_end = completed + BACKOFF_MS;
+    let two_tasks = catalog(&[(ALPHA, 100), (Y, 50)], Some(&stock_document()));
+    let round = |other: TaskRuntimeSnapshot, at: u64| {
+        evaluate(
+            &two_tasks,
+            &[instance(A, &[]), instance(B, &[])],
+            vec![expired_stock(A), fresh_stock(B, NOW - 60_000)],
+            vec![
+                refresh_state(dispatched, TaskTerminalState::Failed, Some(completed), 3),
+                other,
+            ],
+            &inputs(vec![reader(3, Some(failure))]),
+            at,
+        )
+    };
+
+    let evaluation = round(succeeded(Y, A, dispatched + 10_000), NOW);
+    assert_eq!(refresh_intents_on(&evaluation, A), 0);
+    let refresh = refresh_decision(&evaluation, A).expect("R_I's decision");
+    assert_eq!(last_code(refresh), COOLDOWN);
+    assert_eq!(refresh.next_wake_unix_ms, Some(backoff_end));
+    let waiting = decision(&evaluation, ALPHA, A);
+    assert_eq!(refresh_codes(waiting), [PENDING]);
+    assert_values(
+        coded(waiting, PENDING)[0],
+        &pending(Some(COOLDOWN), Some(NAVIGATION_FAILED), Some(backoff_end)),
+    );
+    let evaluation = round(succeeded(Y, A, dispatched + 10_000), backoff_end);
+    assert_eq!(refresh_intents_on(&evaluation, A), 1);
+
+    for (case, other) in [
+        (
+            "dispatched before the failed dispatch",
+            succeeded(Y, A, dispatched - 5_000),
+        ),
+        ("on another instance", succeeded(Y, B, dispatched + 10_000)),
+    ] {
+        let evaluation = round(other, NOW);
+        assert_eq!(refresh_intents_on(&evaluation, A), 0, "{case}");
+        let waiting = decision(&evaluation, ALPHA, A);
+        assert_eq!(refresh_codes(waiting), [EXHAUSTED], "{case}");
+        assert_values(
+            coded(waiting, EXHAUSTED)[0],
+            &exhausted("failure_pause", Some(rest_end)),
+        );
+    }
+}
+
+// Test 6, the golden: without a failed R_I the round is the one of before. On the fixtures with no
+// failed reading (R_I never ran; R_I's latest reading succeeded a minute ago, inside its minimum
+// interval), the evaluation's reason chains, decisions and intents serialize to the same bytes
+// whatever `failure_backoff_ms` and `max_consecutive_failures` say (the shipped values, 0, 1 and
+// the largest), so the rest of rule 1 reaches no round without a failed reading; T18 and T21 pin
+// the values those rounds give.
+#[test]
+fn fr1_t6_without_a_failed_reader_the_round_is_byte_for_byte_the_one_of_before() {
+    let bytes = |refresh: &FactRefreshInputs, tasks: Vec<TaskRuntimeSnapshot>| {
+        let evaluation = evaluate_stock(refresh, tasks, NOW);
+        (
+            serde_json::to_vec(&evaluation.reason_chains).expect("reason chains"),
+            serde_json::to_vec(&evaluation.decisions).expect("decisions"),
+            serde_json::to_vec(&evaluation.dispatch_intents).expect("dispatch intents"),
+        )
+    };
+    for (case, tasks) in [
+        ("R_I never ran", Vec::new()),
+        (
+            "R_I read a minute ago",
+            vec![refresh_state(
+                NOW - 60_000,
+                TaskTerminalState::Succeeded,
+                Some(NOW - 50_000),
+                0,
+            )],
+        ),
+    ] {
+        let shipped = bytes(&inputs(vec![reader(1, None)]), tasks.clone());
+        for (threshold, backoff_ms) in [(0, 0), (1, 1), (u32::MAX, u64::MAX)] {
+            let mut changed = inputs(vec![reader(1, None)]);
+            changed.settings.max_consecutive_failures = threshold;
+            changed.settings.failure_backoff_ms = backoff_ms;
+            assert_eq!(bytes(&changed, tasks.clone()), shipped, "{case}");
+        }
+    }
 }

@@ -989,6 +989,18 @@ pause too, and a failure scheduled for a retry or continued serve their occurren
 after a sensitive task's lift, and after the restart that lifts its first interruption, the pair
 waits for its next occurrence.
 
+Workflow #490 FR-1 (since 0.12.81, register §1.517): **a pair of the fact refresh is never held
+by a pause.** A run of the reserved task `_fact_refresh` ([scheduling/README.md](scheduling/README.md),
+"Fact refresh") settles as every run does: a severe failure, the first one included, records
+`paused_task` as before, and the failure counts once in the fact refresh's failed runs in a row.
+But the evaluation and the admission admit such a pair at every check whatever its settlement
+recorded: no lift check runs for it, no `lift_check_hash_unmeasured` is linked, and no
+`policy_task_paused` names it. Its rest after failures is the fact refresh's own gate alone
+("Its own gates": a rest that grows with its failures in a row and ends by itself). Nothing
+persisted changes: a ledger that holds such a pause, written before 0.12.81, replays as before
+(the settlement's records and the decision memory are the same) and admits the fact refresh at
+the first evaluation after the start. Every other task's pause and its lifting are unchanged.
+
 ## `actingd suspended`
 
 ```text
@@ -1120,6 +1132,10 @@ only its registered names (`"detail":"codes"`).
   lifts it at its next check of the pair, without a restart. The first interrupted settlement of a
   pair in a row is listed here with `lifted_by` `restart` and `effective` `active` (Workflow #361
   M6); a second one in a row is listed under `suspended` like any other pause.
+- Workflow #490 FR-1 (since 0.12.81): a pair of the fact refresh (`_fact_refresh`) is never held
+  ("Lifting (R19)"), so an execution of it that recorded a pause is listed neither under
+  `suspended` nor under `lifted` and gives no `task_not_in_catalog` warning; it is judged as any
+  other failure (under `repeating` when it repeats).
 - `repeating`: each pair whose latest execution is a failure that does not accumulate and whose
   previous execution failed with the same identity prefix: a prerequisite or return-home
   package, the restart segment or the device failing again and again.

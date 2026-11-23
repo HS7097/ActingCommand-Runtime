@@ -47317,6 +47317,142 @@ back the same day: the interrupted or failed dispatch took the day's count
 out; nor the next day on the old occurrence, which its activity day's end serves, so it neither
 shifts nor loses a day. A rollback to 0.12.80 keeps nothing of it: the member is never stored.
 
+### 1.517 Slice #490 FR-1 (0.12.81): the fact refresh's rest after failures in a row ends by itself, and a fact refresh is never held by a pause (board #490; the rulings 1 to 5 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-490-fr1.md`; on main `5243fd8f`, the v0.12.80 release)
+
+This section takes 1.517 (1.511 and 1.516 belong to two other slices of this version). It ships in
+0.12.81. [scheduling/README.md](scheduling/README.md) ("Fact refresh", "Its own gates"),
+[policy-suspension.md](policy-suspension.md) ("Lifting (R19)", "`actingd suspended`") and
+[runtime-config.md](runtime-config.md) (the `scheduling.fact_refresh` keys) are the contract. The
+coordinator's principle (board #490): weak evidence must not trigger a consequence that does not
+end by itself; the consequence ends when its time is over or its cause is seen gone, rather than
+what triggers it being tightened.
+
+**The incident** (production, 11-23, after the machine's scheduled restart; read by the coordinator
+from the ledger). Two instances stayed stalled for hours, every task that reads a fact the fact
+refresh keeps waiting.
+- *Instance A.* Its recognition maintenance package's home page no longer matched the game's
+  screen, so its `_fact_refresh` runs failed several times in a row. From the third failure in a
+  row the gate rested the reader until the activity day's window ended, about sixteen hours, as
+  `fact_refresh_exhausted` with `refresh_limit` `failure_pause`; neither a later successful run on
+  the instance nor the package repaired and placed again ended that rest.
+- *Instance B.* Some days earlier a `_fact_refresh` run had ended with `artifact_store_failure`
+  (the volume of the artifact store was full once). The code is raised only as fatal, a fatal
+  failure without a terminal state is severe, and a severe failure pauses its pair at its first
+  occurrence (`policy_task_paused`, `pause_cause` `severe_failure`), whatever `on_failure` says. The
+  pause could never lift: "Lifting (R19)" lifts by a package's changed content hash, the fact
+  refresh's procedure binding names no package location, and every lift check ended with
+  `lift_check_hash_unmeasured`. Other runs published the fact for days; on 11-23 it expired and
+  nothing could read it again.
+
+**The rules as built** (the coordinator's rulings).
+- *Rule 1: the rest after failures in a row grows and ends by itself*
+  (`crates/policy/src/evaluator/fact_refresh.rs`, `failure_rest_until`, `rest_length`). The reader
+  rests when its latest run failed, its failed runs in a row since its last success reach
+  `max_consecutive_failures` and its latest dispatch lies in the current activity day. With `k`
+  the failures beyond the threshold (0 at it) the rest lasts `failure_backoff_ms × 2^(k+1)`, at most
+  7 200 000 ms, counted from the latest failed dispatch: the task snapshot's
+  `last_dispatched_unix_ms`, the admission instant of the pair's latest dispatch, which the gate
+  already read for "its latest run"; it never passes the current activity window's end. While it
+  lasts the gate answers as before (`fact_refresh_exhausted`, `failure_pause`), and its wake and
+  `next_eligible_unix_ms` are the rest's end. A failure of an earlier activity day rests nothing.
+  The arithmetic saturates; a `failure_backoff_ms` of 0 gives no rest, and the daily limit bounds
+  the reader as it does below the threshold. With the shipped values (600 000, 3): 20 minutes after
+  the third failure, 40 after the fourth, 80 after the fifth, two hours from the sixth on.
+- *Rule 2: a later success on the instance ends the rest at once* (`succeeded_since`). A pair of
+  the instance's task snapshots other than the fact refresh's own, whose latest admitted dispatch is
+  later than the reader's latest failed dispatch and settled as a success, ends the rest; what holds
+  the reader then is `task_cooldown_active` (its `min_interval_ms` and its `failure_backoff_ms` after
+  the failed run). No new input: the evaluation's own task snapshots, which the Runtime projects
+  from its policy dispatch journal (`PolicyHost::task_runtime_snapshots_of`), one per (task,
+  instance), the latest admitted dispatch's. Which runs count, from that code: a scheduled run of a
+  catalogue task, an owed rerun, an immediate retry and a chain successor, yes (each a policy
+  dispatch of the task); a run by hand (a client's or the Lab's direct run, `actingctl task-run`),
+  no; a recovery ladder's rung (its return-home run, the startup package of its application
+  restart), no (a standalone contained task, no policy dispatch); an entry recovery layer inside a
+  scheduled run, not as a run of its own: it counts through the run it belongs to, when that run
+  succeeds; a return-home layer likewise. A task of an accounting group counts under the task that
+  continues it.
+- *Rule 3: a fact refresh is never held by a pause* (`crates/runtime-host/src/policy_control.rs`,
+  `PolicyControlState::suspension_lifted`). For a dispatch intent of `_fact_refresh` the pair's
+  suspension is lifted, at the evaluation's closure and at the admission alike
+  (`preview_failure_disposition`, `next_admission_time`); no lift check runs for it. The settlement
+  is not touched: a severe failure of a reading records `paused_task` as before, the decision memory
+  keeps it, and a replay compares the same record. The failure counts in the row the gate reads:
+  the snapshot of a completed failed dispatch is `failed` (`snapshot_terminal`, no condition on a
+  severe failure) and its failure streak is the count its completion keeps
+  (`failures_through`: one more than the pair's previous completed dispatch), so a paused failure
+  is one failure in the row.
+- *What tells the pair paused no more.* The not-run explanation is built from the evaluation's
+  decisions, which no longer carry the admission's `policy_task_paused` for the reader (the
+  closure's `refresh_denial` mapping of that code to `failure_pause` stays and is no longer reached
+  for it): no change. `actingd suspended` (`crates/runtime-host/src/suspension_report.rs`) judges a
+  paused execution of `_fact_refresh` as any other failure: never under `suspended` nor `lifted`, no
+  `task_not_in_catalog` warning, under `repeating` when it repeats.
+- *Rule 5*: no game, package, instance or alias is named in code or contract.
+
+**Decided here** (each the smallest choice the rulings leave).
+- The cap of two hours is a constant of the gate (`FAILURE_REST_MAX_MS`), the ruling's number; no
+  configuration member was asked for.
+- "Dispatched after" is strictly later than the failed dispatch's admission instant.
+- A task snapshot holds each pair's latest admitted dispatch only: a success followed by a later
+  dispatch of the same pair that is still running or failed is not seen as one. The rest then ends
+  by itself at its time.
+
+**Worked timelines under these rules** (shipped settings).
+- *Instance A*: failures one and two each wait `failure_backoff_ms` (10 minutes) after the run's end.
+  At the third failure in a row, dispatched at T, the reader rests until T + 20 minutes, then is
+  dispatched again; failing again at T' it rests until T' + 40 minutes, then 80, then two hours
+  from the sixth failure on, at most `daily_limit` dispatches a day. Any successful scheduled run
+  of another task on the instance dispatched after the latest failure ends the rest at once, the
+  reader then waiting only its backoff. Once the repaired package is placed, the next reading (at
+  most two hours later, or right after such a success) succeeds and the row starts again from none.
+- *Instance B*: the pair's pause, recorded days before, is lifted at the first evaluation after this
+  version starts; that failure lies in an earlier activity day and is the only one in its row, so no
+  rest and no backoff hold it, and the reader is dispatched at that first evaluation (its other
+  gates, an instance hold, its daily limit, still apply).
+
+**Tests** (policy gate row "#490 FR-1" in `contracts/test-gates/policy.toml`,
+`crates/policy/src/tests/gate_d2_s4.rs`; host gate row "#490 FR-1" in
+`contracts/test-gates/host.toml`, `crates/runtime-host/src/tests/gate_490_fr1.rs`).
+
+| Test | What it shows |
+|---|---|
+| `fr1_t1_the_rest_after_failures_in_a_row_grows_and_ends_by_itself` (1) | After the 3rd, 4th, 5th, 6th and 7th failure in a row: a millisecond before 20, 40, 80 minutes and two hours (twice) from the failed dispatch nothing runs, the reader's decision wakes at the rest's end, the candidate `fact_refresh_exhausted` `failure_pause` with that end; at the end the reader is dispatched |
+| `fr1_t1_the_rest_never_passes_the_activity_windows_end` (1) | The third failure dispatched 15 minutes before the window's end: exhausted until the window's end, dispatched at it (the next activity day) |
+| `fr1_t1_a_failure_backoff_of_zero_gives_no_rest` (1) | `failure_backoff_ms` 0: the reader dispatched past its minimum interval after the third failure; at its daily limit `daily_limit` until the window's end |
+| `fr1_t2_a_later_success_of_another_task_on_the_instance_ends_the_rest` (2) | Task Y's success on the instance dispatched after the failure: the reader waits `task_cooldown_active` with the failure's code until its backoff's end and is dispatched then; Y's success dispatched before the failure, or on the other instance: exhausted until the rest's end |
+| `fr1_h3_a_severe_failure_of_the_reading_counts_once_and_it_reads_again_after_its_backoff` (3) | The reading settled `artifact_store_failure`, severe: the record `paused_task`, counts 1; the snapshot `failed`, failure streak 1; within the backoff `task_cooldown_active` (the waiting task's `fact_refresh_pending` with the failure's code and the backoff's end), a millisecond before its end nothing; at its end dispatched and admitted; no decision names `policy_task_paused` or `failure_pause` |
+| `fr1_h4_a_ledger_holding_a_paused_reading_admits_it_at_the_first_evaluation` (4) | The pause recorded on the root's first start; on its second (seeding, the settlement replayed, no fatal) and third (loading) start the first evaluation selects the reading and the third admits it; neither the decisions nor the not-run explanation name the pause; `actingd suspended` lists the pair under neither `suspended` nor `lifted` and warns nothing of it |
+| `fr1_t6_without_a_failed_reader_the_round_is_byte_for_byte_the_one_of_before` (6) | With no failed reading (none; a success inside the minimum interval) the reason chains, decisions and intents serialize byte for byte the same under the shipped settings, 0, 1 and the largest: the rest reaches no such round (T18 and T21 pin the values) |
+
+Test 5 is the existing tests of another task's pause and its lifting, unchanged:
+`policy_control::tests::recoverable_failures_back_off_then_escalate_same_error`,
+`interrupted_settlement_does_not_hold_the_pair`, `gate_469_h2` (every pause word, live, replayed,
+loaded and in `actingd suspended`) and the package-update lifts of `gate_336_pkgs3`. Test 7: of the
+gate's existing tests one is changed, `gate_d2_t24_a_failed_reader_backs_off_then_rests_after_its_failures_in_a_row`,
+whose second case now expects the rest's end (twice `failure_backoff_ms` after the failed dispatch)
+as the wake instead of the activity day's end (rule 1); `r6b2_a_stopped_reader_is_no_failure_in_a_row`,
+T18 to T23, T25 to T28, the IDLE-1P and W2-A cases and the P18 cases (whose closure still answers a
+paused pair, the policy crate's mapping of that answer being unchanged) pass unchanged. No test
+leaves the gate map; no golden is re-recorded.
+
+**What is not changed.** `max_consecutive_failures`, `failure_backoff_ms` and every other
+`scheduling.fact_refresh` key, their names and defaults; the daily limit, placement and the
+activity window limits; the outcome codes, their values and the vocabulary `refresh_limit`; every
+other task's pause and its lifting (R19); a failure at the entry (ENTRY-A); the idle plan's files
+(`idle.rs`, `idle_action.rs`, the idle planner), which read the reader's earlier wake as any wake;
+what a settlement records, the decision memory's records and every replay; every declared interface
+range; no `package` revision, configuration member or outcome code. The files the two other slices
+of this version own (the evaluator's clock predicate in `crates/policy/src/evaluator.rs`, the
+clock-slot records, the pair snapshot's filling in `crates/runtime-host/src/policy_host.rs`, the
+standard pack schedule's composition, `variables.rs`, the dispatch's variable values, the task
+object's schema) are not touched.
+
+**At deploy.** Nothing to configure. An installation whose fact refresh pair an old severe failure
+paused starts refreshing at the first evaluation after this version starts. A reader that fails in
+a row is tried again after 20, 40 and 80 minutes and then every two hours, within its daily limit,
+and at once after another task's successful run on its instance.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
