@@ -2065,6 +2065,9 @@ struct PolicyDriverSchedule {
     /// with what woke the driver since the last one (the schedule's own wakes among them: a time
     /// come, the reconciliation, a clock jump, deferred work come due).
     lines: PolicyCycleLines,
+    /// #486 ASLEEP-5 (fix round 1): the schedule's start on the monotonic clock, from which the
+    /// lines' cap of one a second is counted, so a wall clock set back holds no line back.
+    started: Instant,
 }
 
 impl PolicyDriverSchedule {
@@ -2086,6 +2089,7 @@ impl PolicyDriverSchedule {
             last_clock_observation_unix_ms: now_unix_ms,
             deferred: None,
             lines: PolicyCycleLines::default(),
+            started: Instant::now(),
             cadence,
         };
         schedule.apply_cycle(PolicyTrigger::Recovery, initial_cycle, now_unix_ms)?;
@@ -2233,6 +2237,12 @@ impl PolicyDriverSchedule {
         self.lines.note_wakes([(cause.to_owned(), 1)]);
     }
 
+    /// #486 ASLEEP-5 (fix round 1): the milliseconds since the schedule started, on the monotonic
+    /// clock, which the lines' cap counts by; it reads no clock that can fail.
+    fn line_clock_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
     /// Workflow #369 W-1 (review L1): wakes the driver at `wake_unix_ms` at the latest.
     fn wake_no_later_than(&mut self, wake_unix_ms: u64) {
         self.next_wake_unix_ms = Some(
@@ -2283,18 +2293,27 @@ fn drive_policy(
         control.note_wakes([(policy_cycle_line::CYCLE_FOLLOW_UP_WAKE.to_owned(), 1)])?;
         control.notify(PolicyTrigger::FactsChanged)?;
     }
+    let ended = run_policy_driver(&host, &policy, &control, &mut schedule);
+    // #486 ASLEEP-5 (fix round 1): the cycles still kept for a line are written as the driver
+    // ends, however it ends.
+    if let Some(line) = schedule.lines.finish() {
+        write_policy_cycle_line(&line);
+    }
+    ended
+}
+
+/// The driver's loop, until a shutdown or the failure that ends it.
+fn run_policy_driver(
+    host: &RuntimeHost,
+    policy: &PolicyBootstrap,
+    control: &Arc<PolicyDriverControl>,
+    schedule: &mut PolicyDriverSchedule,
+) -> Result<(), ActingdError> {
     loop {
         match control.wait(Duration::ZERO)? {
             PolicyDriverWake::Shutdown => return Ok(()),
             PolicyDriverWake::Trigger(trigger, recomputes) => {
-                handle_policy_driver_trigger(
-                    &host,
-                    &policy,
-                    &control,
-                    &mut schedule,
-                    trigger,
-                    recomputes,
-                )?;
+                handle_policy_driver_trigger(host, policy, control, schedule, trigger, recomputes)?;
                 continue;
             }
             PolicyDriverWake::TimedOut => {}
@@ -2302,33 +2321,21 @@ fn drive_policy(
 
         let now = system_unix_ms()?;
         // #486 ASLEEP-5 (register §1.524, ruling 4): the cycles kept less than a second after the
-        // last line, once the second has passed.
-        if let Some(line) = schedule.lines.flush(now) {
+        // last line, once the second has passed on the monotonic clock.
+        let at_ms = schedule.line_clock_ms();
+        if let Some(line) = schedule.lines.flush(at_ms) {
             write_policy_cycle_line(&line);
         }
         if let Some((trigger, recomputes)) = schedule.take_due_work(now)? {
             execute_ready_policy_trigger(
-                &host,
-                &policy,
-                &control,
-                &mut schedule,
-                trigger,
-                recomputes,
-                now,
+                host, policy, control, schedule, trigger, recomputes, now,
             )?;
             continue;
         }
         match control.wait(schedule.wait_duration(now))? {
             PolicyDriverWake::Shutdown => return Ok(()),
             PolicyDriverWake::Trigger(trigger, recomputes) => {
-                handle_policy_driver_trigger(
-                    &host,
-                    &policy,
-                    &control,
-                    &mut schedule,
-                    trigger,
-                    recomputes,
-                )?;
+                handle_policy_driver_trigger(host, policy, control, schedule, trigger, recomputes)?;
             }
             PolicyDriverWake::TimedOut => {}
         }
@@ -2376,16 +2383,17 @@ fn execute_ready_policy_trigger(
     };
     // #486 ASLEEP-5 (register §1.524, ruling 4): what woke the driver for this cycle (the host's
     // records and the driver's own wakes) and the cycle's whole time; an evaluated cycle writes
-    // its line, at most one a second, and any other writes none.
+    // its line, at most one a second, and any other writes none. Fix round 1: the line reads only
+    // the monotonic clock, so it can never cost a cycle its result.
     schedule.lines.note_wakes(control.take_wakes()?);
     let started = Instant::now();
     let result = execute_policy_cycle_in(host, policy, trigger, Some(control));
+    let at_ms = schedule.line_clock_ms();
     if let Ok(execution) = &result
         && let Some(measurement) = execution.cycle.measurement.as_ref()
-        && let Some(line) =
-            schedule
-                .lines
-                .record(system_unix_ms()?, trigger, measurement, started.elapsed())
+        && let Some(line) = schedule
+            .lines
+            .record(at_ms, trigger, measurement, started.elapsed())
     {
         write_policy_cycle_line(&line);
     }

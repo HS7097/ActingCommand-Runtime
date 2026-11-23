@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// #486 ASLEEP-5 (0.12.83; register §1.524, the coordinator's ruling 4): the daemon's line of each
-// evaluated policy cycle, the work order's test 7. One line per evaluated cycle with every member
-// (the cycle's number, its trigger's kind, what woke the driver with each cause's number, and the
-// milliseconds of the projection, the evaluation, the clock slots' preview with its counts, the
-// observation of the holds, what follows the capped record and the whole cycle); cycles that
-// follow one another faster than one a second make one line a second at most, which names how
-// many cycles it stands for and their summed times and counts. The times are given, so nothing
-// reads a clock.
+// #486 ASLEEP-5 (0.12.83; register §1.524, the coordinator's rulings 2 and 4), actingd's half.
+// - t7 (the work order's test 7): the daemon's line of each evaluated policy cycle. One line per
+//   evaluated cycle with every member, what woke the driver first (its wakes with each cause's
+//   number, then the cycle's number, its trigger's kind, and the milliseconds of the projection,
+//   the evaluation, the clock slots' preview with its counts, the observation of the holds, what
+//   follows the capped record and the whole cycle); cycles that follow one another faster than one
+//   a second make one line a second at most, which names how many cycles it stands for and their
+//   summed times and counts; fix round 1: the cycles still kept when the driver ends make their
+//   line then. The times are given (the driver's monotonic milliseconds), so nothing reads a clock.
+// - t2 (fix round 1, the work order's ruling 2 on the driver): the schedule's next wake after a
+//   cycle is the earlier of the evaluation's wake and the host's time for the instances its idle
+//   check left asleep, and none when neither names one.
 
 use super::policy_cycle_line::{PolicyCycleLines, RUN_ENDED_WAKE};
 use super::*;
@@ -52,7 +56,7 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
     let mut lines = PolicyCycleLines::default();
     assert_eq!(lines.flush(5_000), None, "no cycle, no line");
 
-    // One evaluated cycle: its line at once, every member present.
+    // One evaluated cycle: its line at once, every member present, its wakes first.
     lines.note_wakes([("lease.released".to_owned(), 2)]);
     lines.note_wakes([
         ("fact.published".to_owned(), 1),
@@ -68,8 +72,8 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
             )
             .as_deref(),
         Some(
-            "actingd policy_cycle seq=41 first_seq=41 cycles=1 triggers=resources_changed:1 \
-             wakes=lease.released:3,fact.published:1 projection_ms=1.500 \
+            "actingd policy_cycle wakes=lease.released:3,fact.published:1 seq=41 first_seq=41 \
+             cycles=1 triggers=resources_changed:1 projection_ms=1.500 \
              evaluation_ms=4000.000 clock_slots_ms=2000.250 clock_slot_pairs=12 \
              clock_slot_live_calls=3 clock_slot_store_reads=40 held_ms=0.250 \
              after_capped_ms=100.000 total_ms=5000.000"
@@ -108,8 +112,8 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
     assert_eq!(
         lines.flush(11_000).as_deref(),
         Some(
-            "actingd policy_cycle seq=43 first_seq=42 cycles=2 \
-             triggers=facts_changed:1,clock_observed:1 wakes=run_ended:1 projection_ms=4.500 \
+            "actingd policy_cycle wakes=run_ended:1 seq=43 first_seq=42 cycles=2 \
+             triggers=facts_changed:1,clock_observed:1 projection_ms=4.500 \
              evaluation_ms=12000.000 clock_slots_ms=6000.750 clock_slot_pairs=36 \
              clock_slot_live_calls=9 clock_slot_store_reads=120 held_ms=0.750 \
              after_capped_ms=300.000 total_ms=15000.000"
@@ -130,11 +134,106 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
             )
             .as_deref(),
         Some(
-            "actingd policy_cycle seq=44 first_seq=44 cycles=1 triggers=reconciliation:1 \
-             wakes=none projection_ms=1.500 evaluation_ms=4000.000 clock_slots_ms=2000.250 \
-             clock_slot_pairs=12 clock_slot_live_calls=3 clock_slot_store_reads=40 \
-             held_ms=0.250 after_capped_ms=50.000 total_ms=4950.000"
+            "actingd policy_cycle wakes=none seq=44 first_seq=44 cycles=1 \
+             triggers=reconciliation:1 projection_ms=1.500 evaluation_ms=4000.000 \
+             clock_slots_ms=2000.250 clock_slot_pairs=12 clock_slot_live_calls=3 \
+             clock_slot_store_reads=40 held_ms=0.250 after_capped_ms=50.000 total_ms=4950.000"
         ),
         "its own line"
     );
+
+    // Fix round 1: a cycle kept within the second is written as the driver ends, once.
+    assert_eq!(
+        lines.record(
+            13_200,
+            PolicyTrigger::FactsChanged,
+            &measurement(45, 1),
+            Duration::from_micros(5_000_000),
+        ),
+        None,
+        "kept"
+    );
+    assert_eq!(
+        lines.finish().as_deref(),
+        Some(
+            "actingd policy_cycle wakes=none seq=45 first_seq=45 cycles=1 \
+             triggers=facts_changed:1 projection_ms=1.500 evaluation_ms=4000.000 \
+             clock_slots_ms=2000.250 clock_slot_pairs=12 clock_slot_live_calls=3 \
+             clock_slot_store_reads=40 held_ms=0.250 after_capped_ms=100.000 total_ms=5000.000"
+        ),
+        "the line kept, as the driver ends"
+    );
+    assert_eq!(lines.finish(), None, "written once");
+}
+
+/// An evaluated cycle whose evaluation names `evaluation_wake` and the host `idle_wake`.
+fn evaluated_cycle(evaluation_wake: Option<u64>, idle_wake: Option<u64>) -> PolicyCycle {
+    PolicyCycle {
+        directive: PolicyRecomputeDirective {
+            kind: PolicyRecomputeKind::Incremental,
+            reason: PolicyRecomputeReason::Event,
+            eligible_at_unix_ms: NOW,
+        },
+        evaluation: Some(actingcommand_policy::PolicyEvaluation {
+            decisions: Vec::new(),
+            next_wake_unix_ms: evaluation_wake,
+            preload_hint: None,
+            dispatch_intents: Vec::new(),
+            reason_chains: Vec::new(),
+        }),
+        pending_dispatch_intents: Vec::new(),
+        detection_planning_signals: Vec::new(),
+        clock_slot_signals: Vec::new(),
+        task_held_signals: Vec::new(),
+        measurement: None,
+        fact_refresh_transitions: Vec::new(),
+        idle_wake_unix_ms: idle_wake,
+    }
+}
+
+/// The time of the fixture's cycles.
+const NOW: u64 = 1_800_000_000_000;
+
+#[test]
+fn asleep5_t2_the_drivers_next_wake_is_the_earlier_of_the_evaluations_and_the_hosts() {
+    let mut schedule =
+        PolicyDriverSchedule::new(PolicyCadence::default(), &evaluated_cycle(None, None), NOW)
+            .expect("the schedule");
+    assert_eq!(schedule.next_wake_unix_ms, None, "neither names one");
+    for (case, evaluation_wake, idle_wake, expected) in [
+        (
+            "the host's earlier",
+            Some(NOW + 60_000),
+            Some(NOW + 30_000),
+            Some(NOW + 30_000),
+        ),
+        (
+            "the evaluation's earlier",
+            Some(NOW + 30_000),
+            Some(NOW + 60_000),
+            Some(NOW + 30_000),
+        ),
+        (
+            "the host's alone",
+            None,
+            Some(NOW + 45_000),
+            Some(NOW + 45_000),
+        ),
+        (
+            "the evaluation's alone",
+            Some(NOW + 50_000),
+            None,
+            Some(NOW + 50_000),
+        ),
+        ("neither", None, None, None),
+    ] {
+        schedule
+            .apply_cycle(
+                PolicyTrigger::FactsChanged,
+                &evaluated_cycle(evaluation_wake, idle_wake),
+                NOW,
+            )
+            .expect("apply the cycle");
+        assert_eq!(schedule.next_wake_unix_ms, expected, "{case}");
+    }
 }

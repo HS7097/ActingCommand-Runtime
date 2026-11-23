@@ -4,19 +4,20 @@
 //! evaluated policy cycle, saying where its time went and what woke the driver for it. A cycle
 //! that did not evaluate writes no line; nothing is written to the ledger and nothing is stored.
 //!
-//! The line names the cycle's number (`seq`, the fact refresh recorder's count of evaluated
-//! cycles, which `actingctl overview` shows as `cycle_seq`), the kind of its trigger
-//! (`triggers`), what woke the driver since the line before (`wakes`: each type of committed
-//! record that raised the host's business notification, and the driver's own wakes, each with its
-//! number), and the milliseconds of the projection of the cycle's inputs, the evaluation itself,
-//! the clock slots' preview (with the task pairs it read, its calls of `clock_slot_live` and its
-//! reads of the planning-signal store), the observation of the holds for the held records, what
-//! follows the capped record up to the cycle's end, and the whole cycle.
+//! The line names first what woke the driver since the line before (`wakes`: each type of
+//! committed record that raised the host's business notification, and the driver's own wakes,
+//! each with its number), then the cycle's number (`seq`, the fact refresh recorder's count of
+//! evaluated cycles, which `actingctl overview` shows as `cycle_seq`), the kind of its trigger
+//! (`triggers`), and the milliseconds of the projection of the cycle's inputs, the evaluation
+//! itself, the clock slots' preview (with the task pairs it read, its calls of `clock_slot_live`
+//! and its reads of the planning-signal store), the observation of the holds for the held records,
+//! what follows the capped record up to the cycle's end, and the whole cycle.
 //!
-//! When cycles follow one another faster than one a second, one line a second at most: a cycle
-//! less than a second after the last line is kept, and the next line (that of a later cycle, or
-//! the driver's next look at the clock at least a second after the last line) stands for every
-//! cycle kept, with their number (`cycles`) and their summed times and counts.
+//! When cycles follow one another faster than one a second, one line a second at most, counted on
+//! the driver's monotonic clock: a cycle less than a second after the last line is kept, and the
+//! next line (that of a later cycle, or the driver's next look at the clock at least a second after
+//! the last line) stands for every cycle kept, with their number (`cycles`) and their summed times
+//! and counts. The cycles still kept when the driver ends are written then.
 
 use actingcommand_contract::EventType;
 use actingcommand_runtime_host::{PolicyEvaluationMeasurement, PolicyTrigger};
@@ -113,8 +114,8 @@ impl CycleSums {
                 .collect(),
         );
         format!(
-            "actingd policy_cycle seq={} first_seq={} cycles={} triggers={triggers} \
-             wakes={wakes} projection_ms={} evaluation_ms={} clock_slots_ms={} \
+            "actingd policy_cycle wakes={wakes} seq={} first_seq={} cycles={} \
+             triggers={triggers} projection_ms={} evaluation_ms={} clock_slots_ms={} \
              clock_slot_pairs={} clock_slot_live_calls={} clock_slot_store_reads={} held_ms={} \
              after_capped_ms={} total_ms={}",
             self.last_seq,
@@ -134,10 +135,10 @@ impl CycleSums {
 }
 
 /// The driver's lines of its evaluated cycles: what woke it since the last evaluated cycle, and
-/// the cycles kept since the last line.
+/// the cycles kept since the last line. Its times are the driver's monotonic milliseconds.
 #[derive(Debug, Default)]
 pub(crate) struct PolicyCycleLines {
-    last_line_unix_ms: Option<u64>,
+    last_line_ms: Option<u64>,
     pending: Option<CycleSums>,
     wakes: Vec<(String, u64)>,
 }
@@ -151,11 +152,11 @@ impl PolicyCycleLines {
         }
     }
 
-    /// One evaluated cycle at `now_unix_ms`: its trigger, the host's measurement of it and the
-    /// whole cycle's time. The line to write now, if one is due.
+    /// One evaluated cycle at `now_ms`: its trigger, the host's measurement of it and the whole
+    /// cycle's time. The line to write now, if one is due.
     pub(crate) fn record(
         &mut self,
-        now_unix_ms: u64,
+        now_ms: u64,
         trigger: PolicyTrigger,
         measurement: &PolicyEvaluationMeasurement,
         total: Duration,
@@ -188,20 +189,26 @@ impl PolicyCycleLines {
         ] {
             *sum = sum.saturating_add(value);
         }
-        self.flush(now_unix_ms)
+        self.flush(now_ms)
     }
 
-    /// The line of the cycles kept, when a second has passed since the last line at
-    /// `now_unix_ms`; none when no cycle is kept or the second has not passed.
-    pub(crate) fn flush(&mut self, now_unix_ms: u64) -> Option<String> {
+    /// The line of the cycles kept, when a second has passed since the last line at `now_ms`;
+    /// none when no cycle is kept or the second has not passed.
+    pub(crate) fn flush(&mut self, now_ms: u64) -> Option<String> {
         if self
-            .last_line_unix_ms
-            .is_some_and(|last| now_unix_ms.saturating_sub(last) < LINE_INTERVAL_MS)
+            .last_line_ms
+            .is_some_and(|last| now_ms.saturating_sub(last) < LINE_INTERVAL_MS)
         {
             return None;
         }
         let sums = self.pending.take()?;
-        self.last_line_unix_ms = Some(now_unix_ms);
+        self.last_line_ms = Some(now_ms);
         Some(sums.line())
+    }
+
+    /// The line of the cycles still kept as the driver ends, whatever the time since the last
+    /// line; none when no cycle is kept.
+    pub(crate) fn finish(&mut self) -> Option<String> {
+        self.pending.take().map(|sums| sums.line())
     }
 }

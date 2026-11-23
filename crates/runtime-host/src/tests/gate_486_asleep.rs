@@ -4130,12 +4130,15 @@ fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
 // asleep is the host's to say (`PolicyCycle::idle_wake_unix_ms`). The driver runs a cycle at a time
 // the evaluation or the host names, or when the host raises its business notification (a
 // committed record of a waking type, `policy_trigger_for_event`); so each test reads the times the
-// cycle names for the asleep instance and the waking records the cycle itself committed (the
-// performance monitor's own records aside: its sampler runs beside the cycle).
+// cycle names for the asleep instance and the waking records committed while the cycle ran, the
+// performance family left out (its sampler runs beside the cycle, and a cycle that admits a
+// dispatch may commit a capacity summary itself, register §1.524). Fix round 1: so these tests show
+// that the cycles they run commit no waking record outside that family; they do not show that a
+// cycle's own records never wake the next.
 // - h1 (the work order's test 1): asleep, its task held back by a closed pack schedule, a position
 //   that names no time: at the task's time and ten minutes later nothing of the instance names a
-//   time and the cycle commits no waking record; the schedule's reopening commits a fact, and the
-//   cycle after it starts the wake, for the task.
+//   time and the cycle commits no waking record outside the performance family; the schedule's
+//   reopening commits a fact, and the cycle after it starts the wake, for the task.
 // - h2 (test 2): asleep, its task due and nothing holding it: the cycle starts the wake and names
 //   no time while it is under way; the wake's end hands the key back (a waking lease end), and the
 //   cycle after it selects the task.
@@ -4144,12 +4147,14 @@ fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
 //   of its own after a failed wake (the work order's "the plan's retry time"): what follows is the
 //   emulator watch's and the evaluation's, as before.
 // - h4 (test 4): a time-bound gate holds the asleep instance's task (a spent budget): the host's
-//   time is the gate's release; and the planner's answer for each phase and plan.
+//   time is the gate's release, and that cycle commits no waking record outside the performance
+//   family; and the planner's answer for each phase and plan.
 // - h6 (test 6, the host's half): two instances, one asleep and one working: the asleep one's
 //   held task names no time, and the working one is never asked.
 
 /// #486 ASLEEP-5: the types of the records committed after `after` that wake the policy driver,
-/// the performance monitor's own records aside.
+/// the whole performance family left out (the monitor's sampler beside the cycle, and the capacity
+/// summary a cycle that admits a dispatch may commit itself).
 fn waking_after(replay: &Replay, after: u64) -> Vec<EventType> {
     all_events(&replay.host)
         .iter()
@@ -4163,7 +4168,7 @@ fn waking_after(replay: &Replay, after: u64) -> Vec<EventType> {
 }
 
 /// #486 ASLEEP-5: one cycle at `unix_ms` as the driver asks for it ([`Replay::cycle`]), with the
-/// waking records it committed itself ([`waking_after`]).
+/// waking records committed while it ran, outside the performance family ([`waking_after`]).
 fn cycle_waking(replay: &Replay, unix_ms: u64) -> (PolicyCycle, Vec<EventType>) {
     replay.set_time(unix_ms);
     let before = head(&replay.host);
@@ -4244,8 +4249,8 @@ fn asleep5_h1_a_task_held_with_no_time_causes_no_cycle_until_its_hold_is_lifted(
     let (replay, before) = asleep_behind_a_closed_pack();
 
     // At the task's time and ten minutes later: held back with no wake; nothing of the instance
-    // names a time, the host names none, and the cycle commits no waking record of its own, so
-    // nothing makes the driver run the next.
+    // names a time, the host names none, and the cycle commits no waking record outside the
+    // performance family (which `waking_after` leaves out).
     for now in [TIMED_AT, TIMED_AT + 10 * MINUTE_MS] {
         let (cycle, waking) = cycle_waking(&replay, now);
         assert_eq!(
@@ -4263,7 +4268,11 @@ fn asleep5_h1_a_task_held_with_no_time_causes_no_cycle_until_its_hold_is_lifted(
             cycle.idle_wake_unix_ms, None,
             "the host names none at {now}"
         );
-        assert_eq!(waking, Vec::new(), "no waking record of its own at {now}");
+        assert_eq!(
+            waking,
+            Vec::new(),
+            "no waking record outside the performance family at {now}"
+        );
     }
     assert_eq!(
         replay.records(before),
@@ -4453,7 +4462,11 @@ fn asleep5_h4_a_time_bound_gate_on_the_asleep_instance_makes_its_release_the_hos
         Some(release),
         "the host's time is the gate's release"
     );
-    assert_eq!(waking, Vec::new(), "no waking record of its own");
+    assert_eq!(
+        waking,
+        Vec::new(),
+        "no waking record outside the performance family"
+    );
     replay.close();
 
     // The planner's answer: an instance owing its wake whose plan holds its tasks back to a time

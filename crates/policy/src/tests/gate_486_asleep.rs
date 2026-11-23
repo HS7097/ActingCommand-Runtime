@@ -12,7 +12,8 @@
 //   (register §1.506) adapts it: an instance named whose snapshot holds it available is asleep now
 //   (its application closed by its idle action, T5 and T6), so that case left T1.
 // - T2: an asleep instance, one candidate past its trigger with every gate open: it is deferred
-//   with `instance_asleep_wake_due` (its alias) and the evaluation's time as its wake, not
+//   with `instance_asleep_wake_due` (its alias) and no wake of its own (#486 ASLEEP-5, register
+//   §1.524; the evaluation's time until 0.12.83), not
 //   selected, no intent and no reason chain; the eligible candidate behind it carries exactly the
 //   decision it carries behind the same candidate selected on the instance available.
 // - T3: the same instance with the candidate's budget spent (the admission's deferral), with its
@@ -261,8 +262,9 @@ fn asleep_t4_an_unavailable_instance_that_is_not_asleep_is_blocked_as_before() {
 // expected value comes from the rulings; nothing reads a clock.
 
 // T5 (the work order's test 2, the policy half): A available and named asleep. The candidate the
-// round would select is deferred `instance_asleep_wake_due` (its alias) with the evaluation's time
-// as its wake, nothing is selected, no intent and no reason chain; the candidate behind it carries
+// round would select is deferred `instance_asleep_wake_due` (its alias) with no wake of its own
+// (#486 ASLEEP-5; the evaluation's time until 0.12.83), nothing is selected, no intent and no
+// reason chain; the candidate behind it carries
 // the decision it carries behind the same candidate selected on A awake.
 #[test]
 fn asleep2_t5_a_closed_instance_selects_nothing_and_names_the_task_it_is_woken_for() {

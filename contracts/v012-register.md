@@ -48621,17 +48621,22 @@ capacity monitor's records (`performance/capacity.rs`); for a record of a waking
 `ResourcesChanged`; no other record. The driver's own wakes: a scheduled run's end (the lane's
 settlement), a cycle that left intents or whose run failed, the next wake the evaluation or the host
 names, the reconciliation's interval, a clock jump, work a cool-down or a debounce deferred.
-- *A cycle's own records wake nothing*: the capped record and the idle record
-  (`runtime.fact_recorded`), the planning signals (clock slots, held records, remedies, reruns,
-  suspensions; appended with no notification, of a family that raises none), the idle check's
-  records (`runtime.lifecycle_observed`), the warnings (`runtime.failed`), the control and activity
-  state records (`policy.*`), the fact refresh transitions (memory and daemon lines). The store's
-  synchronization after a runtime fact or a planning signal may commit a `fact.invalidated` that an
-  earlier record (a step's effect) made due: news of that record, not of the cycle. A dispatch the
-  performance control defers may record `perf.balance_changed` when its control state changes, which
-  raises `ResourcesChanged`, and names its `retry_after_ms`, which the driver wakes at: neither is
-  changed here. So no second loop was found to stop; h1 and h4 show a cycle's own records commit
-  nothing that wakes the driver.
+- *A cycle's own records*: the capped record and the idle record (`runtime.fact_recorded`), the
+  planning signals (clock slots, held records, remedies, reruns, suspensions; appended with no
+  notification, of a family that raises none), the idle check's records
+  (`runtime.lifecycle_observed`), the warnings (`runtime.failed`), the control and activity state
+  records (`policy.*`) and the fact refresh transitions (memory and daemon lines) wake nothing. The
+  store's synchronization after a runtime fact or a planning signal may commit a `fact.invalidated`
+  that an earlier record (a step's effect) made due: news of that record, not of the cycle. One
+  record of the cycle itself does wake the next: a cycle that admits a dispatch asks the capacity
+  monitor at admission (`admit_capacity`), which samples the capacity again when its fact has
+  expired and commits `perf.summary` at once, raising `ResourcesChanged`. It stays (the
+  coordinator's ruling of the fix round): a new capacity sample is news for the scheduler, since
+  what may be dispatched can change with it. Its bound: at most once per expiry window of the
+  capacity fact, and only in a cycle that admits a dispatch, so it cannot form a loop. No other
+  record of a cycle was found that wakes the next, so there was no second loop to stop. Tests h1
+  and h4 do not prove this paragraph: their reading of the waking records leaves the performance
+  family out; they show that the cycles they run commit no other waking record.
 - *While a run is under way* its own records raise nothing (task, input, capture, recognition,
   application and command records; `lease.renewed`) except the facts it publishes or invalidates
   (each `fact.published` or `fact.invalidated`: package by package, not counted here) and, at its
@@ -48643,16 +48648,16 @@ names, the reconciliation's interval, a clock jump, work a cool-down or a deboun
 
 **The line** (the daemon's stdout, as the frame retention's pass line; nothing in the ledger,
 nothing stored). One per evaluated cycle; a deferred, skipped or given-up cycle writes none.
-`actingd policy_cycle seq=<n> first_seq=<n> cycles=<n> triggers=<kind>:<n>,... wakes=<cause>:<n>,...
+`actingd policy_cycle wakes=<cause>:<n>,... seq=<n> first_seq=<n> cycles=<n> triggers=<kind>:<n>,...
 projection_ms=... evaluation_ms=... clock_slots_ms=... clock_slot_pairs=<n>
 clock_slot_live_calls=<n> clock_slot_store_reads=<n> held_ms=... after_capped_ms=... total_ms=...`
 
 | Member | What it says |
 |---|---|
+| `wakes` | first: what woke the driver since the line before, with each number: a committed record's type (`lease.released`, `fact.published`, `perf.summary`, ...) or the driver's own (`run_ended`, `cycle_follow_up`, `next_wake`, `reconciliation`, `clock_jump`, `deferred`); `none` when nothing was noted |
 | `seq`, `first_seq` | the number of the last and the first evaluated cycle the line stands for, the fact refresh recorder's count (`cycle_seq` of `actingctl overview`) |
 | `cycles` | how many evaluated cycles the line stands for: 1, or more when they came faster than one a second |
 | `triggers` | the kind of each cycle's trigger (`facts_changed`, `resources_changed`, `catalog_changed`, `reconciliation`, `recovery`, `clock_observed`), with its number |
-| `wakes` | what woke the driver since the line before, with each number: a committed record's type (`lease.released`, `fact.published`, `perf.summary`, ...) or the driver's own (`run_ended`, `cycle_follow_up`, `next_wake`, `reconciliation`, `clock_jump`, `deferred`); `none` when nothing was noted |
 | `projection_ms` | the projection of the cycle's inputs, the finished runs' outcomes among them |
 | `evaluation_ms` | the evaluation itself (`elapsed_micros`) |
 | `clock_slots_ms`, `clock_slot_pairs`, `clock_slot_live_calls`, `clock_slot_store_reads` | the clock slots' preview: its time, the task pairs with a dispatch history it read for their lapsed occurrences, its calls of `clock_slot_live`, its reads of the planning-signal store |
@@ -48663,7 +48668,9 @@ clock_slot_live_calls=<n> clock_slot_store_reads=<n> held_ms=... after_capped_ms
 Times are milliseconds with three decimals, summed over the cycles a line stands for; counts are
 summed too. A cycle less than a second after the last line is kept; the next line, that of a later
 cycle or the driver's next look at the clock a second or more after the last line, stands for all
-the cycles kept. To read an evening: the rate of `seq` against the clock says how often cycles
+the cycles kept. Fix round 1: the second is counted on the driver's monotonic clock (a wall clock
+set back holds no line back), the line reads no clock that can fail (it never costs a cycle its
+result), and the cycles still kept when the driver ends are written then. To read an evening: the rate of `seq` against the clock says how often cycles
 come; `wakes` says what brought them; `total_ms` against `projection_ms`, `evaluation_ms`,
 `clock_slots_ms`, `held_ms` and `after_capped_ms` says where the time of each went.
 
@@ -48673,14 +48680,24 @@ map; `crates/policy/src/tests/gate_486_asleep.rs`, policy gate map;
 
 | Test | What it shows |
 |---|---|
-| `asleep5_h1_a_task_held_with_no_time_causes_no_cycle_until_its_hold_is_lifted` (1) | ASLEEP-4's replay, asleep, its task held by its closed pack schedule: at the task's time and ten minutes later nothing of the instance names a time, the host's time is none and the cycle commits no waking record; the reopening commits a fact; the cycle after it names the task `instance_asleep_wake_due` with no wake and wakes the instance once |
+| `asleep5_h1_a_task_held_with_no_time_causes_no_cycle_until_its_hold_is_lifted` (1) | ASLEEP-4's replay, asleep, its task held by its closed pack schedule: at the task's time and ten minutes later nothing of the instance names a time, the host's time is none and the cycle commits no waking record outside the performance family (which the test leaves out); the reopening commits a fact; the cycle after it names the task `instance_asleep_wake_due` with no wake and wakes the instance once |
 | `asleep5_h2_a_task_due_starts_the_wake_and_the_wakes_end_brings_the_cycle_that_selects_it` (2) | Reopened past the task's time: the cycle starts the wake, nothing names a time while the emulator starts, the wake's end commits a lease end, the evaluation after it selects the task |
 | `asleep5_h3_a_wake_whose_start_fails_hands_the_key_back_and_leaves_the_instance_asleep_no_more` (3) | The wake's Start fails: `emulator_autostart_failed`, a lease end; the next cycle names nothing woken for and no host time. The idle plan keeps no retry time after a failed wake, so the work order's "the plan's retry time" has nothing to read: what follows is the emulator watch's and the evaluation's, as before |
-| `asleep5_h4_a_time_bound_gate_on_the_asleep_instance_makes_its_release_the_hosts_time` (4) | A spent budget on the asleep instance: the host's time is the budget's release; the planner names a time only for an instance owing its wake whose plan holds its tasks to a time not come (not for a time come, no time, a task due, no plan, an instance it does not hold, one being woken, one whose action runs) |
+| `asleep5_h4_a_time_bound_gate_on_the_asleep_instance_makes_its_release_the_hosts_time` (4) | A spent budget on the asleep instance: the host's time is the budget's release, and the cycle commits no waking record outside the performance family; the planner names a time only for an instance owing its wake whose plan holds its tasks to a time not come (not for a time come, no time, a task due, no plan, an instance it does not hold, one being woken, one whose action runs) |
 | `asleep5_t5_the_task_an_asleep_instance_is_woken_for_names_no_wake_and_nothing_else_changes` (5) | ASLEEP-1's and ASLEEP-2's fixtures: the task is `instance_asleep_wake_due`, eligible, with no wake and no intent; the candidate behind it as behind a selected one; the evaluation's wake is not now |
 | `asleep5_t6_of_two_instances_the_awake_one_decides_as_before_and_the_asleep_one_adds_no_wake` (6, policy) | A asleep, B awake: B's decisions and dispatch as with both awake; the evaluation's wake that round's |
 | `asleep5_h6_of_two_instances_the_asleep_one_names_no_time_and_the_working_one_is_not_asked` (6, host) | The planner: the asleep instance's held task names no time, the working one is not asked |
-| `asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at_most` (7) | A cycle's line at once with every member; two cycles within the second kept, then one line for both with summed times and counts; `wakes=none` when nothing was noted |
+| `asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at_most` (7) | A cycle's line at once with every member, `wakes` first; two cycles within the second kept, then one line for both with summed times and counts; `wakes=none` when nothing was noted; fix round 1: a cycle kept as the driver ends is written then, once |
+| `asleep5_t2_the_drivers_next_wake_is_the_earlier_of_the_evaluations_and_the_hosts` (2, actingd; fix round 1) | `PolicyDriverSchedule::apply_cycle`: the next wake is the earlier of the evaluation's wake and the host's time, either alone when the other names none, none when neither does |
+
+**Fix round 1** (pull request #1892, the coordinator's work order after the independent review).
+The line names `wakes` first. Two sentences of this section said what the code does not do: a
+dispatch the performance control defers writes nothing (`gate_dispatch` answers no event and no
+retry), and a cycle that admits a dispatch may commit a capacity summary that wakes the next cycle
+(above, with its bound); tests h1 and h4 say what they show. The line's cap counts on the monotonic
+clock, reads no clock that can fail, and the line kept at the driver's end is written. Left: a test
+of a task within its rounding error on an asleep instance, which needs a valued pool whose run nets
+a benefit within the tolerance, a fixture none of these tests has.
 
 Adapted, because they pinned the evaluation's time as the wake of `instance_asleep_wake_due`, which
 ruling 1 changes: the policy tests `asleep_t2_the_candidate_the_round_would_select_waits_as_the_task_it_is_woken_for`
