@@ -48023,6 +48023,228 @@ placement's, a person's) no longer leaves an error record; its answer is as befo
 0.12.81 meets nothing kept on disk. In the release notes' language:
 能闲置的实例上（醒着或睡着），还没到触发时刻、但到时会被没有时刻的门（任务包排程关闭且没有结束时间、包被暂停、应用上设的值排除这条规则、补跑节奏、补救轮次）挡住的任务，不再给闲置计划提供唤醒时刻：睡着的实例不会为它被叫醒，醒着的也不会因为它而不进入闲置；门一打开（排程重新开放、设定值清掉），下一次评估就把唤醒时刻带回来。由闲置动作停掉模拟器而睡着的实例，自检时不再写 `instance_not_running` 的错误记录，自检的回答照旧。
 
+### 1.521 Slice #392 DA-L0 (0.12.83): the layout probe, a Lab operation that says where each template mark of a page went on a saved frame wider than the base (board #392, the first slice toward handsets at their native size; the rulings 1 to 9 are the coordinator's of 11-23, no words of the owner's behind them; the owner's words behind the slice are her ruling of 11-13, one set of packages made at 1280x720 and a converter in the backend, and of 11-23, handsets scheduled at their native size with nothing changed on the handset; coordinator work order `rd-1123/brief-392-dal0.md` after the read-only study of 11-13, its section "DA-L0", its sections 5 and 8 and its decision K13; on main `bcd660bd`)
+
+This section takes 1.521. It ships in 0.12.83.
+[display-adapter.md](display-adapter.md) (the new section 14, "The layout probe (DA-L0)", and the
+slice table's row DA-L0) is the contract; [actinglab-capabilities.md](actinglab-capabilities.md)
+(the paragraph of DA-L0), [actinglab-dry-run.md](actinglab-dry-run.md) (the row `layout probe`,
+`no_effect`), [lab-two-entries.md](lab-two-entries.md) (§9, the rows served by children: 168 on
+Windows, 75 by children, 129 elsewhere), the operation table [lab-operations.json](lab-operations.json)
+(the row `layout probe`, module `authoring`, slice `392-DAL0`, runtime `offline`, writes false) and
+the MCP server's manual (`apps/actinglab-mcp/MANUAL.md`, "The layout probe") follow it. No
+declared interface range moves (`runtime-client`, `package`, `ledger`, `actingd-config` as they
+were), no configuration key is added, no record is written; one word is added to the vocabulary
+`display_problem` (`ratio_below_base`) and the code `lab_scene_size_unsupported` names the probe.
+
+**Why.** Today a frame wider than 16:9 is refused at its first frame. On such a frame an application
+does not enlarge its 16:9 interface: some elements stay centred, some follow an edge or a corner,
+some stretch, some move inward by a cutout's inset. Before anyone writes a declaration or builds
+the general map, somebody has to measure, per application and per page, what each element does;
+until now that meant comparing screenshots by eye. The probe measures it from one saved frame.
+
+**What it measures** (rulings 1 to 3, 5 to 7).
+- *The operation.* `actinglab layout probe --scene <png> (--package <path> | --zip <file>) [--page
+  <id>] [--tolerance-px <n>]`, MCP `ac_layout_probe` (the table's rule, the CLI words; the work order
+  proposed the name and this slice took it), served by a `serve` child as every authoring row of
+  actinglab's own commands. Offline: the package and the scene are read as the offline `recognize`
+  reads them, from the same input (`ReadonlyRecognitionInput`: the externally verified bundle the
+  one package reader admits, its recognition pack and page set, the scene file read by the Lab); no
+  capture, no device input, no run, no Runtime, nothing written but its answer.
+- *The frame* (ruling 2; fix round 1, item 3c). A frame the run path's frame gate takes as the
+  base's (its size, or its shape within a pixel: the kernel's `lab_scene_on_base`, which asks
+  `CaptureExtent::has_shape_of`) is that gate's reduced frame, with no room. Any other frame of the
+  base's orientation, at least the base's height and whose width over its height is not below the
+  base's is brought to the base's height by the display
+  adapter's map under the rule by height on the screen (`DisplayMap::build`) and resampled once by
+  `resample_pixels` (REC-5, area average), the function the kernel's frame gate resamples a frame of
+  the base's ratio with: the scale frame, the base's height and the base's width plus the room. A
+  frame of the base's ratio has no room. Refused, before anything is searched,
+  `lab_scene_size_unsupported` with its word: the base's other orientation `orientation_mismatch`
+  (the gate's word), lower than the base `scale_below_base` (the gate's word), narrower than the
+  base's ratio `ratio_below_base` (new: no existing word says it; `layout_undeclared` would say a
+  declaration is missing, which is no cause here).
+- *A mark* (ruling 3; fix round 1, items 2, 3a and 3b). Each template mark the chosen pages name
+  (`required`, the members of `any_of`, `optional`, `forbidden`, each answered with its `rule`) is
+  searched over the whole scale frame, its declared region aside, by the recognition crate's exact
+  score maps with region `None` (`Scene::exact_score_maps`, the search a `full_frame` template
+  takes), its template read from the bundle (`resource_entry`) and scored with the pack's metric,
+  the mask and the factors the recognition pack's own `scored_mask` and `searched_factors` give, its
+  threshold the recognition pack's `template_threshold`. The best place, the score, the threshold
+  and `matches` (the places that reach the threshold, overlaps suppressed: `matches_at_least`,
+  `suppress_overlaps` with 0) are answered; a mark whose score reaches its threshold is found, and
+  one with more than one match is `repeated`. Its base place is taken axis by axis from its box
+  (fix round 1 below); `dx` and `dy` the best place's offset from it where it is known.
+- *Classes* (ruling 3). Below. The tolerance is `tolerance_px`, default 4 scale-frame pixels.
+- *Pages* (rulings 4 and 5). With a page named, that page; without, every page, each with its own
+  answer, the answer's first member `pages_by_share` ordering them by the share of their template
+  marks found. Per page and overall: the counts by class, the distinct `dx` of the found marks with
+  their counts and one line of reading (display-adapter.md section 14 lists them), which describes
+  the measurement and decides nothing. The reading reads the found marks that take part: a known
+  base place across, not repeated, not forbidden.
+- *Only template marks* (ruling 6). A colour, a colour digest, an OCR or NN target, a check, a value
+  test and a template this build cannot evaluate are listed in `not_probed` with their rule, their
+  kind and their declared rectangle.
+- *What the answer holds* (ruling 7). Mark and page ids, rectangles, offsets, scores and thresholds,
+  counts, the frame's size, the base's, the factor, the scale frame's size, the room, the
+  tolerance, the places, the classes and the readings; no pixel, no text read from the frame, no
+  crop of it.
+
+**What it does not measure.** Whether a mark that is found is the element (a template that matches
+elsewhere is reported where it matches); a mark's colour check, luma floor or uniqueness; any mark
+that is no template; reflowed grids or lists that show more rows; whether the frame shows the page
+(the share says how much of each page's marks were found, nothing more); the safe area (no inset is
+read: an inset shows only as offsets); the vertical layout beyond `dy` (the scale frame has the
+base's height by construction).
+
+**The classes.**
+
+| Class | When |
+|---|---|
+| `start` | found; `dy` within the tolerance of 0; `dx` within it of 0 |
+| `centre` | found; `dy` within the tolerance of 0; `dx` within it of `⌊R / 2⌋` |
+| `end` | found; `dy` within the tolerance of 0; `dx` within it of `R` |
+| `as_mapped` | the room is 0 (a frame of the base's ratio): found, `dx` and `dy` within the tolerance of 0 |
+| `other` | found, its base place across known, and at none of the places: the offsets say where |
+| `missing` | its best score is below its threshold: the best score and its place are still answered |
+| none, counted `unknown` | found, its base place across unknown (fix round 1): no `dx`, out of the reading |
+| none | the room is above 0 and `⌊R / 2⌋` is at most twice the tolerance: `room_too_small`, no mark classed or counted |
+
+A `dy` that is unknown (the base place down not known) does not keep a mark from its place across.
+
+**Decided here.**
+- *The base place.* Superseded by fix round 1 (below): the template centred in its box was wrong
+  for a mark nearer an edge than the recording's margin.
+- *The bound of "too small to tell".* Ruling 3 puts it at a room below twice the tolerance, "so
+  that two classes overlap". With the centre at `⌊R / 2⌋` the windows of the start and the centre
+  overlap while `⌊R / 2⌋ ≤ 2 · tolerance` (up to a room of 17 for the tolerance 4), before those of
+  the start and the end; under the ruling's bound a room of 10 would put `dx` 2 in two classes. The
+  probe takes the bound the ruling's reason gives; a room below twice the tolerance is inside it.
+  Fix round 1 (its ruling 4) keeps it: with the tolerance 4 a room of 17 is too small
+  (`⌊17 / 2⌋ = 8 ≤ 8`) and a room of 18 is not (`9 > 8`); with a tolerance of 5, 18 is.
+- *`dy`.* A place is a place across and down: a mark whose `dy` is beyond the tolerance is `other`,
+  never a class of the places across.
+- *Fix round 1's own choices.* A mark not found is `missing` whatever its base place (it was not
+  found; where it would be does not matter). A forbidden mark is probed and answered, counted in its
+  page's summary and its share like the others, and takes no part in the reading (a forbidden mark
+  found says the frame is not the page, not where the page's elements went). `overall` takes each
+  mark as the first page that names it answers it. A frame the run path's gate refuses is judged by
+  the probe's own rule as before.
+- *The orientation.* "A frame whose height exceeds its width" is read as the base's other
+  orientation (`Orientation::agrees_with`, the adapter's): the same for every landscape base.
+
+**The worked example** (test 1, as fix round 1 laid it out). A synthetic package whose base is
+128x72, every box the recording's default box for its margin of 48; a frame of 240x108 (20:9)
+brought to 160x72 by 3/2; room 32, places 0, 16 and 32; tolerance 4.
+
+| Mark | Box (x, y, w, h) | Base place | Found place | `dx`, `dy` | Class |
+|---|---|---|---|---|---|
+| `centre_a` | 0, 0, 100, 64 | 44, 8 | 60, 8 | 16, 0 | `centre` |
+| `centre_b` | 28, 8, 100, 64 | 76, 56 | 92, 56 | 16, 0 | `centre` |
+| `start` | 0, 0, 66, 64 | 10, 8 | 10, 8 | 0, 0 | `start` |
+| `end` | 68, 0, 60, 64 | 116, 8 | 148, 8 | 32, 0 | `end` |
+| `inset` | 68, 8, 60, 64 | 116, 56 | 142, 56 | 26, 0 | `other` (an inset of about 6 from the end) |
+| `stretched` (a bar of 40, its fill 32 longer) | 0, 16, 92, 56 | 4, 64 | 4, 64 (score 0.88) | 0, 0 | `missing` |
+| `absent` (drawn nowhere) | 12, 8, 104, 64 | 60, 56 | 64, 8 (score 0.71) | 4, -48 | `missing` |
+
+The page's counts: `start` 1, `centre` 2, `end` 1, `other` 1, `missing` 2, found 5 of 7; its `dx`
+values 0 (1), 16 (2), 26 (1), 32 (1); its reading "edges are followed; an inset of about 6". The
+other page of the package (two templates drawn nowhere) reads "not this page" and comes last in
+`pages_by_share` though it is first in the page set. The third page, `neutral/rules`, requires
+`centre_a`, `repeated` (drawn twice) and `declared` (its box across declared by hand), has
+`member`, `absent` and the colour in an `any_of` group, `optional` optional and `other_b`
+forbidden: found 5 of 7, `declared` counted `unknown`, `repeated` 2 matches, reading "a centred
+base-ratio window" from `centre_a`, `member` and `optional`.
+
+**Fix round 1** (coordinator work order `rd-1123/brief-392-dal0-fix1.md`; the independent review of
+head `7fda2e2a`, two "must change" and three optional items taken; the rulings are the
+coordinator's). *The incident:* a package keeps a template mark's search box and its image, not
+where the image was cut, and the probe put the template in the middle of the box. The recording's
+default box is the crop grown by `LAB_RECORDING_DEFAULT_SEARCH_MARGIN` on each side and clamped to
+the frame (`default_search`), so a mark nearer an edge than the margin has a box cut off on that
+side: a back button at x = 10, its box from 0 to 66, came out at x = 29, `dx` -19 and `other`, and
+the marks in the corners and along the top bar are the ones the probe exists to measure.
+- *The base place* (ruling 1). Per axis, from the box (start `b`, end `e`), the template's own
+  length `t` and the base's length `F`, by the recording's rule read backwards with its own
+  constant `m`: `b > 0`, the crop at `b + m`; `b = 0` and `e < F`, the crop at `e − m − t`; taken
+  (`default_growth`) only where the crop lies in the base and the recording's own `default_search`
+  grows it back into exactly the box; anything else `unknown` (a box across the whole axis, a box of
+  another size, a `full_frame` or `template_relative` region). Each mark answers its box
+  (`region`), its template's size (`template`) and `base{x{at, by}, y{at, by}}`; an unknown axis
+  has no offset; a found mark whose base place across is unknown has no class, is counted
+  `unknown` and takes no part in the reading.
+- *One function where recognition has one* (ruling 2). The probe's own mask choice and default
+  factors are gone: the recognition pack's `scored_mask` and `searched_factors` are public and
+  called. The order of a template's threshold (its own, else the pack's default) is written once,
+  `RecognitionPack::template_threshold`, which the pack's six places that took it inline, the
+  kernel's selection check and the probe call.
+- *A repeated mark* (3a): `matches` beside the best place (the score maps' `matches_at_least` and
+  `suppress_overlaps`, as the review named them, verified in the recognition crate); above one,
+  `repeated` true and out of the reading.
+- *Every mark a page names* (3b), required or not, with its `rule`; what is not probed is listed
+  with its rule.
+- *The frame's shape* (3c): a frame the run path's gate takes as the base's has no room (257x144 and
+  255x144 for 128x72, where the probe had answered a room of 1 and `ratio_below_base`).
+- *Too small* (ruling 4): as built, now said with its boundary.
+- *Not taken:* the local path in the message of an unreadable scene (the offline `recognize`
+  reader's behaviour).
+- *Mended in the same round (CI of `7fda2e2a`):* Clippy's `explicit_auto_deref` in the test file
+  (`template(*id, …)`; the file is rewritten), and the C2 genericity guard's standalone word in this
+  section (the Chinese README was named by its file name; it is now named in words).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The probe | `crates/lab/src/layout_probe.rs` (`Lab::layout_probe`, `ScaleFrame::of`, `named`, `Places`, `Search`, `base_place`, `axis_crop`, `grown`, `summary`, `reading`) |
+| One function where recognition has one (fix round 1) | `crates/recognition-pack/src/lib.rs` (`RecognitionPack::template_threshold`; the exports of `scored_mask`, `searched_factors`), `template_mask.rs`, `template_scales.rs`, `target_unique.rs`, `candidate_layout.rs`; `crates/execution-kernel/src/contained_task/selection.rs` |
+| The refusal | `crates/lab/src/display_base.rs` (`scene_size_unsupported`, the one builder of `lab_scene_size_unsupported`, which `recognize`'s refusal now calls too) |
+| The word | `crates/display-adapter/src/codes.rs` (`DisplayProblem::RatioBelowBase`); `contracts/outcome-codes/catalog.json` |
+| The command | `apps/actinglab/src/layout_cli.rs` (`LAYOUT_PROBE_READS`, `run_layout`); `main.rs` (the group `layout`, its dispatch arm); `cli_parse.rs` |
+| The row and its faces | `contracts/lab-operations.json`; `apps/actinglab/src/cli_module/engine.rs`, `words.rs` (`BUILT_SLICES`), `own_flags.rs`; `apps/actinglab-mcp/src/tools.rs` (`ACTINGLAB_SLICES`) |
+| The lists that count | `ratchet/actinglab_commands.json` (47 dispatch arms, 110 commands), the two READMEs (English and Chinese), `contracts/lab-two-entries.md`, `capabilities.rs`, `dry_run_gate.rs`, `cli_information.rs` |
+
+**Tests** (incident `#392 DA-L0`: `apps/actinglab/src/tests/gate_392_dal0.rs`, exec gate map;
+`apps/actinglab-mcp/src/gate_392_dal0.rs`, apps gate map; no clock read). The frames are drawn on
+their scale frame in 2x2 blocks and enlarged by nearest neighbour, so that the area average gives
+the drawing back exactly; the patterns were chosen and every score checked by a simulation of the
+exact `ccoeff_normed` scores (threshold 0.95).
+
+| Test | What it shows |
+|---|---|
+| `dal0_t1_a_twenty_by_nine_frame_classes_each_mark_as_the_table_says` (1) | The worked example above, member by member (box, template size, base place, best place, offsets, class, matches), with the summaries of the wide and the other page and the overall one |
+| `dal0_t2_a_frame_of_the_base_ratio_twice_its_size_has_every_mark_as_mapped` (2) | 256x144: factor 2, room 0, every mark of the page `as_mapped` at its base place, "as mapped: a frame of the base's ratio" |
+| `dal0_t3_a_taller_a_smaller_and_a_portrait_frame_are_refused_with_their_word` (3) | 128x96 `ratio_below_base`, 96x54 `scale_below_base`, 72x128 `orientation_mismatch`, each `lab_scene_size_unsupported` with the two sizes |
+| `dal0_t4_a_room_below_twice_the_tolerance_classes_no_mark` (4) | 132x72, room 4: `room_too_small`, every class null, every count 0, every reading "the room is too small to tell", the offsets kept |
+| `dal0_t5_without_a_page_named_the_page_on_the_frame_comes_first` (5) | The drawn page first in `pages_by_share`; `--page` one page alone; an unknown page `validation_failed` |
+| `dal0_t6_marks_of_the_other_families_are_listed_as_not_probed` (6) | The colour and the check under `not_probed`, with rule, kind and rectangle |
+| `dal0_t7_the_answer_holds_no_member_beyond_its_list` (7; fix round 1's 7) | Test 1's answer member by member at every depth, with fix round 1's members; every text an id, a page, a rule, a kind, a class, a way a base place was taken or a reading |
+| `dal0_t8_the_mcp_face_answers_the_command_lines_members` (8) | `serve --stdio --front mcp` answers the command line's line, member for member |
+| `dal0_t8_the_layout_probe_is_offered_as_ac_layout_probe` (8, MCP server) | The tool offered, served by a child, read-only, its five properties, `scene` required, `tolerance_px` default 4 |
+| `dal0_fix1_t1_a_box_cut_off_at_an_edge_gives_the_place_the_mark_was_cut_at` (fix 1) | `start`, 10 pixels from the left, its box (0, 0, 66, 64) cut off at the left and the top: base place (10, 8) by `default_growth`, `dx` 0, `start` on the 20:9 frame; `end` cut off at the right, `member` at the bottom, each its place |
+| `dal0_fix1_t2_a_declared_search_area_leaves_its_axis_unknown` (fix 2) | `declared`, its box across 12 wide: `unknown` across, `default_growth` down, no `dx`, `dy` 0, no class, counted `unknown`, its page's reading without it |
+| `dal0_fix1_t3_a_repeated_mark_is_counted_and_left_out_of_the_reading` (fix 3) | `repeated` drawn twice: `matches` 2, `repeated`, its best place one of the two, its page "a centred base-ratio window" without it; drawn once on the base: 1, not repeated |
+| `dal0_fix1_t4_every_mark_a_page_names_is_probed_with_its_rule` (fix 4) | The rules page's marks in the order required, any_of, optional, forbidden, each with its rule; its colour under `not_probed` with `any_of` |
+| `dal0_fix1_t5_a_frame_a_pixel_off_the_base_shape_has_no_room` (fix 5) | 257x144 and 255x144: the base as the scale frame, room 0, factor 2, not refused |
+| `dal0_fix1_t6_the_boundary_of_too_small_and_a_tolerance_given` (fix 6) | Room 17 too small and room 18 not with the tolerance 4; room 18 too small with `--tolerance-px 5` |
+
+Two existing tests are changed, as the requirement changes what they pin:
+`gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read` lists 35 own commands, `layout
+probe` after `locate` (its row is a read-list row), and display-adapter's
+`gate_392_da1::da1_t16_every_display_problem_is_display_map_unresolved` counts `ratio_below_base`
+among the tokens no map gives. No test leaves the gate map; no golden is re-recorded.
+
+**What is not changed.** The run path: the kernel's frame gate, the host's input, the adapter's
+admission (`admit_input`), the policy crate; a run on a frame wider than the base's ratio is
+refused at its first frame exactly as before. What recognition scores and decides: fix round 1
+made two of the recognition pack's functions public and wrote the order of a template's threshold
+once, the same order every caller took inline. `recognize` and the other offline readers answer as
+before (their refusal is built by the same function, its bytes unchanged). No declaration is written and none is read. No game, package or alias is named in code
+(ruling 9).
+
+**At deploy.** A new offline operation of the Tools: `actinglab layout probe`, and `ac_layout_probe`
+on the Lab's MCP server. Nothing to configure; nothing a running instance sees; no Runtime needed.
+
 ### 1.522 Slice #455 B3-P (0.12.82): a pool that declares no valuation may declare the step and the importance a goal on it takes (`target_defaults`) (board #455, the main line's third step; the rulings 1 to 10 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b3p.md`; on main `bcd660bd`, v0.12.81 with B1 of #455)
 
 This section takes 1.522 (1.510, 1.520 and 1.521 belong to slices in flight). It ships in 0.12.82.

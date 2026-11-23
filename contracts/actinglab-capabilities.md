@@ -69,6 +69,22 @@ and `display_map_unresolved` for a Runtime capture. A frame of the base's size a
 Every `--record` form judges the recording and the frame it took before anything is sent or
 written ([lab-recording.md](lab-recording.md), "A recording's size").
 
+Workflow #392 DA-L0 (0.12.83; [display-adapter.md](display-adapter.md) section 14): `layout probe
+--scene <png> (--package <path> | --zip <file>) [--page <id>] [--tolerance-px <n>]` (MCP
+`ac_layout_probe`), a row of the authoring module, needs `offline` and `read_only`, is
+`available` and declares `no_effect`. It reads its package and its scene as `recognize` does and
+takes a frame of the base's orientation, at least its height and of its ratio or wider, brought to
+the base's height and resampled once (a frame the run path's frame gate takes as the base's has no
+room); for every template mark the chosen pages name, with the rule that names it, it answers where
+the mark is found on that frame against the place the base gives it (`dx`, `dy`, the base place
+taken per axis from the recording's default box, `unknown` where it cannot be), how many places
+reach its threshold, a class (`start`, `centre`, `end`, `other`, `missing`, or `as_mapped` without
+room; none for a found mark whose base place across is unknown, counted `unknown`), the counts,
+the distinct `dx` values and one line of reading per page and overall, and lists every other mark
+as not probed. Every option is given once; the line is parsed by its read list. A frame of another
+orientation, lower than the base or narrower than its ratio is refused `lab_scene_size_unsupported`
+with `orientation_mismatch`, `scale_below_base` or `ratio_below_base`.
+
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with
 `dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires

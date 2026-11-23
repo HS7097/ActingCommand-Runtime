@@ -188,9 +188,7 @@ impl RecognitionEvaluator {
             .best()
             .map_err(|error| search_error(&target.id, stage, error))?;
         let best = found.matched;
-        let threshold = target
-            .threshold
-            .unwrap_or(self.pack.defaults.template_threshold);
+        let threshold = self.pack.template_threshold(target);
         let template_ok = best.score >= threshold;
         let color = match &target.color_check {
             Some(check) => Some(self.evaluate_color_check(scene, &target.id, check)?),

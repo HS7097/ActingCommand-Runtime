@@ -1393,9 +1393,7 @@ impl SceneEvaluation<'_> {
                 ))
             })?;
         let region = target_region(&target.id, &target.region)?;
-        let threshold = target
-            .threshold
-            .unwrap_or(evaluator.pack.defaults.template_threshold);
+        let threshold = evaluator.pack.template_threshold(target);
         let scene = self.scene;
         // Workflow #404 FS-1: the anchor's mask and factors, as every exact search reads them.
         let mask = crate::template_mask::scored_mask(&evaluator.pack.schema_version, target);

@@ -736,6 +736,26 @@ naming this file.
   scene's own size). A scene of the base's size answers as before. Any other scene is refused
   `lab_scene_size_unsupported` (`display_problem`, `frame_width`, `frame_height`, `base_width`,
   `base_height`); a live capture the map cannot take is `display_map_unresolved` instead.
+- **The layout probe** (Workflow #392 DA-L0, 0.12.83; `contracts/display-adapter.md` section 14).
+  `ac_layout_probe` (`scene`, `package` or `zip`, `page`, `tolerance_px`, default 4), through a
+  child, offline and reading only: on a saved frame of the package's orientation, at least its
+  height and of its ratio or wider (2400x1080 for 1280x720), brought to the base's height, it
+  answers for every template mark the chosen pages name (one `page`, or every page, the first
+  member `pages_by_share` ordering them by the share of their marks found; each mark with the
+  `rule` that names it: `required`, `any_of`, `optional`, `forbidden`) its best place on that
+  frame, its score and threshold, how many places reach the threshold (`matches`; above one it is
+  `repeated` and left out of the reading), its declared box, its template's size, its base place
+  axis by axis (the recording's default box read backwards, `default_growth`, or `unknown` for a
+  box of another size), `dx` and `dy` where known, and a class: `start`, `centre`, `end` (within
+  `tolerance_px` of 0, half the room, the room), `other`, `missing`, or `as_mapped` on a frame of
+  the base's ratio (a frame a pixel off it too, as the run path takes it); a found mark whose base
+  place across is unknown has none and is counted `unknown`. Per page and overall: the counts, the
+  distinct `dx` values and one line of reading, which describes and decides nothing. Every other
+  mark is listed in `not_probed`. Where half the room is at most twice the tolerance no mark is
+  classed (`room_too_small`). The answer holds ids, rectangles, offsets, scores and counts, no
+  pixel and no text read from the frame. A scene of another orientation, lower than the base or
+  narrower than its ratio is refused `lab_scene_size_unsupported` (`orientation_mismatch`,
+  `scale_below_base`, `ratio_below_base`).
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`, and, #463 AD-1, 0.12.72, `session_state_dir`
