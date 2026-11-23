@@ -654,7 +654,7 @@ fn validate_identity_templates(
         if !identity.entries.iter().any(|known| known.id == entry.id) {
             return Err(refuse("template=out_of_domain"));
         }
-        if target.threshold.unwrap_or(pack.defaults.template_threshold) <= 0.0 {
+        if pack.template_threshold(target) <= 0.0 {
             return Err(refuse("template=threshold_zero"));
         }
         let PackRegion::Rect(rect) = target.region else {

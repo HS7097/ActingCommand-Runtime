@@ -192,6 +192,9 @@ mod gate_463_self_scan;
 mod gate_479_f3b;
 mod lab_run;
 mod lab_run_api;
+// Workflow #392 DA-L0: the layout probe, where each template mark of a page went on a saved frame
+// of the base's ratio or wider.
+mod layout_probe;
 mod ledger_port;
 mod maa_task_graph;
 mod ocr;
@@ -232,6 +235,12 @@ pub use lab_run::{
     target_evaluations_stable_for_wait, validate_lab_package_bytes, validate_lab_package_path,
 };
 pub use lab_run_api::*;
+// Workflow #392 DA-L0: the layout probe's request, its answer and its default tolerance.
+pub use layout_probe::{
+    AxisPlace, BasePlaceBy, ClassCounts, DxCount, LAYOUT_PROBE_DEFAULT_TOLERANCE_PX,
+    LayoutProbeRequest, LayoutProbeResponse, MarkClass, MarkProbe, MarkRule, NotProbedMark,
+    PageProbe, PageShare, ProbeBase, ProbeFactor, ProbePlaces, ProbeRect, ProbeSize, ProbeSummary,
+};
 pub use ledger_port::*;
 pub use maa_task_graph::{
     MaaFact, MaaFactOrigin, MaaFactSource, MaaFactValue, MaaTaskFacts, MaaTaskGraph,

@@ -45,7 +45,7 @@ use crate::commands::{
 use crate::flag_args::reads::FlagReads;
 use crate::resource_runtime_support::resource_declarations;
 use crate::{
-    cli_information, drive_cli, env_detection, lab_package_control, lab_run, lab2_cli,
+    cli_information, drive_cli, env_detection, lab_package_control, lab_run, lab2_cli, layout_cli,
     maa_task_graph, package_build, package_cli, package_tool, readonly_cli, recognition_regression,
     replay_cli, resource_restore, resource_runtime_support, resource_verify, runtime_debug,
     runtime_session_adapter, runtime_stream_adapter, scheduling_cli, session_management,
@@ -107,8 +107,9 @@ pub(crate) const STRICT_ROWS: [&str; 36] = [
 /// so they are strict too, by their list; no row of the two modules is lenient. Workflow #434
 /// LAB-5G4c: `record draft`, whose command that slice built, parsed by its list from the start.
 /// Workflow #449 REC-ARCH: `record archive` and `record reopen` the same. #463 S2-1: `record
-/// ready` too. #463 S2-13: and `record frames`. #463 S2-2: and `record review`.
-pub(crate) const READ_LIST_ROWS: [&str; 30] = [
+/// ready` too. #463 S2-13: and `record frames`. #463 S2-2: and `record review`. Workflow #392
+/// DA-L0: and `layout probe`, parsed by its list from the start.
+pub(crate) const READ_LIST_ROWS: [&str; 31] = [
     "touch-probe",
     "recover",
     "tap-target",
@@ -139,6 +140,7 @@ pub(crate) const READ_LIST_ROWS: [&str; 30] = [
     "current-page",
     "is-visible",
     "locate",
+    "layout probe",
 ];
 
 /// The table-driven rows: the row's declared words are what reaches the code. The CLI module
@@ -481,6 +483,8 @@ pub(crate) fn reads(row: &str) -> Option<Reads> {
         "current-page" => (&readonly_cli::CURRENT_PAGE_READS, None),
         "is-visible" => (&readonly_cli::IS_VISIBLE_READS, Some("--target")),
         "locate" => (&navigation_recovery::LOCATE_READS, Some("--template")),
+        // Workflow #392 DA-L0.
+        "layout probe" => (&layout_cli::LAYOUT_PROBE_READS, None),
         _ => return None,
     };
     Some(Reads {
@@ -515,7 +519,8 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
 /// Workflow #464 P2: `standard-pack build`, against its strict list. Workflow #463 S3-14:
 /// `standard-pack status`, against its strict list. #463 RC-1: `resource regression` the same.
-pub(crate) const REFUSING_COMMANDS: [&str; 69] = [
+/// Workflow #392 DA-L0: `layout probe`, by its read list.
+pub(crate) const REFUSING_COMMANDS: [&str; 70] = [
     "schema",
     "touch-probe",
     "tap",
@@ -581,6 +586,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 69] = [
     "standard-pack status",
     // Workflow #477 PC-1: refuses every flag but `--root` and `--plan` and any positional.
     "standard-pack catalog",
+    // Workflow #392 DA-L0: refuses every flag off its read list and any positional.
+    "layout probe",
     "runtime reset",
     "runtime observe",
     "session backend",

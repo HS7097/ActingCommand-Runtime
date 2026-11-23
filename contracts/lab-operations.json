@@ -3182,6 +3182,29 @@
       "notes": "offline on a saved frame; a device read takes its frame through the Runtime"
     },
     {
+      "name": "layout probe",
+      "module": "authoring",
+      "params": [
+        {"name": "scene", "form": "option", "type": "file", "required": true, "note": "one saved frame, a PNG: of the base's orientation, at least the base's height, its width over its height not below the base's"},
+        {"name": "package", "form": "option", "type": "path", "required": false, "note": "directory, .zip or .json container; not with zip"},
+        {"name": "zip", "form": "option", "type": "file", "required": false, "note": "a published .zip; not with package"},
+        {"name": "page", "form": "option", "type": "string", "required": false, "note": "one page of the package by its id; absent: every page, ordered first by the share of their template marks found"},
+        {"name": "tolerance_px", "form": "option", "type": "unsigned", "required": false, "default": "4", "note": "how far, in scale-frame pixels, a mark may lie from a place and still be at it"}
+      ],
+      "help": "Measures where each template mark of a package's pages is found on a saved frame of the base's ratio or wider, against the place the base gives it.",
+      "output": "pages_by_share[{page, found, probed}], frame{width, height}, base{width, height}, factor{num, den}, scale_frame{width, height}, room, tolerance_px, places{start, centre, end}, room_too_small, pages[{page, marks[{id, rule, region, template{width, height}, base{x{at, by}, y{at, by}}, best, score, threshold, matches, repeated, dx, dy, class}], not_probed[{id, rule, kind, region}], summary}], overall; a summary is {probed, found, counts{as_mapped, start, centre, end, other, missing, unknown}, dx_values[{dx, count}], reading}",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab layout probe", "MCP ac_layout_probe"],
+      "new": "#392",
+      "slice": "392-DAL0",
+      "status": "planned",
+      "notes": "Workflow #392 DA-L0 (0.12.83; contracts/display-adapter.md section 14): offline, the package and the scene read as recognize reads them; no capture, no input, no run, nothing written. A frame the run path's frame gate takes as the base's (its size or its shape within a pixel) is the gate's reduced frame, no room; any other is brought to the base's height by the display adapter's map measured by height on the screen and resampled once (REC-5, area average): the scale frame, the base's height and the base's width plus the room; a frame of another orientation, lower than the base or narrower than its ratio is refused lab_scene_size_unsupported (orientation_mismatch, scale_below_base, ratio_below_base). Each template mark the chosen pages name (required, any_of, optional, forbidden: its rule answered) is searched over the whole scale frame, scored as recognition scores it (its mask, factors and threshold by the recognition pack's own functions), with how many places reach its threshold (above one it is repeated, out of the reading); its base place is taken per axis by the recording's default box read backwards (default_growth), or is unknown for a box of another size; dx and dy the best place's offset from it where known; its class start, centre or end (dx within tolerance_px of 0, of half the room rounded down, of the room, dy within it of 0 where known), other, missing (its score below its threshold, its best place still answered) or, without room, as_mapped; a found mark whose base place across is unknown has none and is counted unknown; where the room is above 0 and half of it at most twice the tolerance, no class and the reading says the room is too small to tell. Every other mark is listed in not_probed with its rule, its kind and its declared rectangle. The answer holds mark ids, rectangles, offsets, scores, counts, the frame's size and the factor, no pixel and no text read from the frame; the reading describes and decides nothing"
+    },
+    {
       "name": "a11y",
       "module": "authoring",
       "params": [

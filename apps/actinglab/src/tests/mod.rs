@@ -82,6 +82,10 @@ mod gate_392_da4;
 // recording is refused on a display that is not the base size.
 #[path = "gate_392_da5cd.rs"]
 mod gate_392_da5cd;
+// Workflow #392 DA-L0: `layout probe` says where each template mark of a page went on a saved frame
+// of the base's ratio or wider; its CLI and MCP faces answer alike.
+#[path = "gate_392_dal0.rs"]
+mod gate_392_dal0;
 // Workflow #407 LOAD-2: `package check` answers a pack's loading set, and `resource validate`
 // reads `loading.json` and a pack's loading copy.
 #[path = "gate_load2.rs"]

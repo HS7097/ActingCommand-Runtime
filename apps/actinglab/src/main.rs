@@ -194,6 +194,9 @@ mod lab_draw;
 mod lab_package_control;
 mod lab_run;
 mod lab_tables;
+// Workflow #392 DA-L0: `layout probe`, where each template mark of a page went on a saved frame of
+// the base's ratio or wider.
+mod layout_cli;
 mod maa_task_graph;
 mod monitor_stream;
 mod offline_ocr;
@@ -402,8 +405,8 @@ const OWN_COMMANDS: [&str; 34] = [
 /// actinglab's command groups whose every subcommand word is theirs, as [`execute`] dispatches
 /// them: the group answers a word it does not know with its own refusal, as before LAB-2.
 /// Workflow #467 RPT-1: `report` is no group of its own any more; `report export` is the
-/// operation table's row.
-const OWN_GROUPS: [&str; 10] = [
+/// operation table's row. Workflow #392 DA-L0: `layout`, whose one word is `probe`.
+const OWN_GROUPS: [&str; 11] = [
     "env",
     "lab",
     "package",
@@ -412,6 +415,7 @@ const OWN_GROUPS: [&str; 10] = [
     "scheduling",
     "resource",
     "standard-pack",
+    "layout",
     "runtime",
     "session",
 ];
@@ -630,6 +634,8 @@ fn execute(invocation: &Invocation) -> CliOutcome<Value> {
         [group, sub] if group == "standard-pack" => {
             standard_pack_cli::run_standard_pack(sub, &invocation.global, &invocation.args)
         }
+        // Workflow #392 DA-L0: `layout probe`, offline, the operation table's row of those words.
+        [group, sub] if group == "layout" => layout_cli::run_layout(sub, &invocation.args),
         [group, sub] if group == "runtime" => {
             runtime_slice_cli::run(sub, &invocation.global, &invocation.args)
         }

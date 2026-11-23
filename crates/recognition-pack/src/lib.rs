@@ -61,8 +61,8 @@ pub use recognition::SearchClock;
 pub use target_consensus::{TargetConsensus, TargetSampleRecorder};
 pub use target_unique::{TargetUnique, TargetUniquenessEvidence};
 pub use template_luma::TemplateLumaFloor;
-pub use template_mask::{TEMPLATE_FLAT_FIELD_MARGIN_MILLI, TEMPLATE_MASK_MIN_PIXELS};
-pub use template_scales::{TEMPLATE_SCALED_MIN_SIDE, TemplateScales};
+pub use template_mask::{TEMPLATE_FLAT_FIELD_MARGIN_MILLI, TEMPLATE_MASK_MIN_PIXELS, scored_mask};
+pub use template_scales::{TEMPLATE_SCALED_MIN_SIDE, TemplateScales, searched_factors};
 pub use text_locate::{
     OcrLocate, OcrLocateBlocks, OcrLocateCells, OcrLocateGapFactor, OcrLocateLineMerge,
     OcrLocateLineMergeKeyword, OcrLocateNormalize, OcrLocatedEvidence, OcrProviderBlocks,
@@ -360,6 +360,15 @@ pub struct RecognitionPack {
     pub candidate_layouts: Vec<CandidateLayout>,
     #[serde(default)]
     pub target_consensus: std::collections::BTreeMap<String, TargetConsensus>,
+}
+
+impl RecognitionPack {
+    /// The threshold a template target's score is judged by: its own, else the pack's default.
+    /// Workflow #392 DA-L0 fix round 1: the one place that order is written; every evaluation of
+    /// a template and the Lab's layout probe take it here.
+    pub fn template_threshold(&self, target: &TemplateTarget) -> f32 {
+        target.threshold.unwrap_or(self.defaults.template_threshold)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -1899,9 +1908,7 @@ impl RecognitionEvaluator {
                 ))
             })?;
         let metric = self.pack.defaults.match_metric;
-        let threshold = target
-            .threshold
-            .unwrap_or(self.pack.defaults.template_threshold);
+        let threshold = self.pack.template_threshold(target);
         let mut rows = Vec::with_capacity(regions.len());
         for (index, requested_region) in regions.iter().copied().enumerate() {
             if target
@@ -2294,9 +2301,7 @@ impl RecognitionEvaluator {
         let matched = scene
             .match_template_with_metric(&template_png, region, self.default_match_metric())
             .map_err(|err| primitive_error(&target.id, err))?;
-        let threshold = target
-            .threshold
-            .unwrap_or(self.pack.defaults.template_threshold);
+        let threshold = self.pack.template_threshold(target);
         let template = TemplateEvaluation {
             x: matched.x,
             y: matched.y,
@@ -2479,9 +2484,7 @@ impl RecognitionEvaluator {
             Some(check) if !relative => Some(self.evaluate_color_check(scene, &target.id, check)?),
             _ => None,
         };
-        let threshold = target
-            .threshold
-            .unwrap_or(self.pack.defaults.template_threshold);
+        let threshold = self.pack.template_threshold(target);
         let mut best_color_score: Option<f32> = None;
         let mut best_color = None;
         let mut best_color_unresolved = None;

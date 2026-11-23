@@ -35,7 +35,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 74] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 75] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -237,6 +237,8 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 74] = [
     ("current-page", &["current-page"], Line::AsWritten),
     ("is-visible", &["is-visible"], Line::AsWritten),
     ("locate", &["locate"], Line::AsWritten),
+    // Workflow #392 DA-L0: where each template mark of a page went on a saved wider frame; offline.
+    ("layout probe", &["layout", "probe"], Line::AsWritten),
 ];
 
 /// The command's words of `operation` in [`COMMANDS`], and how its command line reaches it;

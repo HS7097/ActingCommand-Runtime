@@ -124,6 +124,30 @@ fn scene_refused(refusal: &ContainedTaskError, given: (u32, u32), base: (u32, u3
             refusal.code()
         ));
     };
+    scene_size_unsupported(
+        problem,
+        given,
+        base,
+        format!(
+            "the scene is {}x{} and its package's coordinate_space {}x{}: a scene of that size, \
+             or one the Lab's live observation would bring to it (its ratio, not smaller, its \
+             orientation), is evaluated; nothing was evaluated",
+            given.0, given.1, base.0, base.1
+        ),
+    )
+}
+
+/// `lab_scene_size_unsupported` of a scene of `given` size (width, height) for its package's base
+/// `base`, for the word `problem` of the vocabulary `display_problem`, `message` saying what was
+/// refused: the outcome with the word, the scene's size and the base's, and the details naming the
+/// two sizes. Workflow #392 DA-L0: the layout probe refuses a scene its own rule does not take with
+/// this refusal too (`crate::layout_probe`).
+pub(crate) fn scene_size_unsupported(
+    problem: DisplayProblem,
+    given: (u32, u32),
+    base: (u32, u32),
+    message: String,
+) -> LabError {
     let outcome = Outcome::new(LabCode::LabSceneSizeUnsupported)
         .display_problem(problem)
         .frame_width(given.0)
@@ -133,12 +157,7 @@ fn scene_refused(refusal: &ContainedTaskError, given: (u32, u32), base: (u32, u3
     LabError::new(
         LabErrorClass::UsageValidation,
         LabCode::LabSceneSizeUnsupported.as_str(),
-        format!(
-            "the scene is {}x{} and its package's coordinate_space {}x{}: a scene of that size, \
-             or one the Lab's live observation would bring to it (its ratio, not smaller, its \
-             orientation), is evaluated; nothing was evaluated",
-            given.0, given.1, base.0, base.1
-        ),
+        message,
         &[],
     )
     .with_details(json!({
