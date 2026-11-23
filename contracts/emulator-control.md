@@ -250,6 +250,27 @@ guard so nothing can bypass the host checks: `open_input`, `open_capture` and
 `control_application` on a pending entry fail with a device error at stage
 `adb_endpoint_pending` (category `protocol`).
 
+**An instance asleep by its idle action** (#486 ASLEEP-4, since 0.12.82;
+[v012-register.md](v012-register.md) §1.520, the coordinator's ruling 4 of 11-23). A self-check
+reads the emulator's status first (#411 A48,
+[runtime-fact-store.md](runtime-fact-store.md), "Emulator status first"); when that read finds no
+emulator process on an instance whose idle action holds its emulator stopped (`stop_emulator`, or
+`auto`'s highest tier, its wake not come: `IdlePlanner::emulators_held_stopped`), the instance is
+asleep, not broken. The check still ends `instance_not_running` (stage `read_instance_state`): its
+answer names that code as its `failure_code`, nothing opens, the instance stays unavailable and
+asleep, and a failed check's other steps happen as before. Nothing of it is recorded: no
+connection-preparation `runtime.failed` for the step and no `instance_preparation_finished` for the
+preparation, whose error-severity records said a failure where the idle action's own
+`instance_idle_action` record of the stop already says the emulator is stopped. So a person's
+`actingctl selfcheck`, the Lab's `emu selfcheck`, a placement's self-check and an instance resume's
+reconnect on a sleeping instance leave no error in the ledger. A start records nothing for it
+either: the start prepares no instance whose emulator its restored idle action holds stopped
+(ASLEEP-1). Production 0.12.81 on 11-23: such an instance got an error-severity
+`instance_not_running` at a start after a deployment and at a placement's self-check. An instance
+not running for any other reason (its emulator stopped by a person or outside the Runtime, a status
+read that failed on a pending binding, an instance whose idle action closed only its application)
+keeps both records, of error severity, as before. No code, severity or answer moved.
+
 Emulator control itself works on a pending instance: its claim, the fence and the close-before
 step do not require a bound endpoint (Workflow #369 Q-2a). After a successful Start (a `start`, or a restart's Start phase), still
 under the per-instance admission guard, the registry binds the entry to the host it was

@@ -3382,6 +3382,36 @@ then held back; the idle check stopped it again, with no end.
   closed pack schedule, after a start) and kept an awake one from its action. When the gate opens
   the evaluation selects the task, or on an asleep instance names it the task the instance is
   woken for. An entry block's candidates (position 4b) still count due.
+  - **The candidate before its time** (#486 ASLEEP-4, since 0.12.82; register §1.520, the
+    coordinator's rulings 1 to 3 of 11-23). On the same instances, a decision whose own wake is a
+    time that has not come (its trigger's next time, a cooldown's end, the release of a time-bound
+    position such as a blackout) names no wake in the idle plan when one of the positions above
+    would hold the candidate back once that time has come: the idle plan asks them for the
+    candidate as if its earlier position had let it through, each through the reader the
+    evaluation itself asks for an eligible candidate, read only, and judges each answer as above
+    (`PolicyHost::evaluate`, `names_no_time` and `hold_back_with_no_time`; no second list). It asks
+    every such position, not only the first, since one that names no time holds the candidate
+    whatever a time-bound one does before it: the package's suspension (without its lift check, as
+    #484's look ahead), the pack schedule's row, the value set on the application or the rule's
+    value the package refuses, an owed rerun's pacing and a remedy round. It reads nothing the time
+    that has not come decides: no availability (the budgets, the activity window and interval, a
+    backoff and a task's pause are judged on the dispatch the evaluation builds for an eligible
+    candidate, and there is none), no benefit gate, no pool line, no no-progress guard. Where it
+    cannot tell (the task is not in the catalog, a reader fails) the candidate keeps its wake: one
+    wake for nothing is the lesser harm than sleeping through a task; a failure is said in the
+    daemon's log as the look ahead behind a hold says its own. A decision already counted (behind
+    a hold, or held back at an untimed position while eligible) is left as it is. The decision,
+    its reason, its own wake (so the evaluation's next wake and the driver's timer) and the
+    not-run explanation are as before. Production 0.12.81 on 11-23: an instance under
+    `stop_emulator` asleep since 00:07 was woken at 03:34:40 for a reading task whose trigger
+    turned true at 03:39:40; its pack schedule, closed with no end, then held the task back,
+    nothing was admitted, and the emulator was stopped again at 03:49:50. When the holding position
+    opens nothing here changes: a pack schedule's edit and a value set or cleared are facts, which
+    wake the policy driver (`FactsChanged`); that evaluation's look ahead no longer holds the
+    candidate, so its time is the wake again (before it), or the evaluation names it the task the
+    instance is woken for (after it). A package repaired raises no wake; its suspension is lifted
+    by the lift check at position 3 when the candidate reaches it, in the evaluation at the
+    candidate's own time, which wakes the instance then, its lead lost.
 - **At a start** (#486 ASLEEP-3, ruling 3): a wake the start owes waits for the start's first
   plan and comes as a sleeping instance's, never for a reading alone
   ([runtime-config.md](../runtime-config.md), "At a start", with its known limit), and the wake a

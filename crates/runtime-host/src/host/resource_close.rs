@@ -2522,14 +2522,18 @@ impl HostShared {
             Ok(())
         };
         // #411 A48: a self-check first reads the emulator status; one that ends there opens
-        // nothing, and its code is the failing step's.
+        // nothing, and its code is the failing step's. #486 ASLEEP-4 (register §1.520, ruling 4):
+        // one that found the emulator its idle action stopped (`asleep`) recorded nothing, and the
+        // preparation records nothing either.
         let mut status_failure = None;
+        let mut asleep = false;
         let opened = match &retained_close {
             Ok(()) => {
                 self.invalidate_backend_selfcheck_facts(instance_id)?;
                 match self.read_emulator_status_first(status, instance_id, &links)? {
-                    Some(code) => {
-                        status_failure = Some(code.as_str());
+                    Some(end) => {
+                        status_failure = Some(end.code.as_str());
+                        asleep = end.asleep;
                         None
                     }
                     None => Some(self.execution()?.open_instance_backends_until(
@@ -2673,16 +2677,28 @@ impl HostShared {
             .iter()
             .map(|observation| observation.report.session_generation)
             .max();
-        let (event, ladder) = self.record_preparation_finished(
-            instance_id,
-            links.clone(),
-            stage,
-            &observations,
-            &selfcheck,
-            recoverable,
-        )?;
+        // #486 ASLEEP-4 (ruling 4): an instance asleep by its idle action gets no
+        // `instance_preparation_finished` of its `instance_not_running` (the stop's own record says
+        // it); its failed check admits no ladder (it opened nothing) and lifts no fence.
+        let (event, ladder) = if asleep {
+            (None, None)
+        } else {
+            let (event, ladder) = self.record_preparation_finished(
+                instance_id,
+                links.clone(),
+                stage,
+                &observations,
+                &selfcheck,
+                recoverable,
+            )?;
+            (Some(event), ladder)
+        };
         // Workflow #403: a passing self-check of a fenced instance proves its close.
-        if selfcheck.capture.ok && selfcheck.touch.ok && selfcheck.failure_code.is_none() {
+        if let Some(event) = event
+            && selfcheck.capture.ok
+            && selfcheck.touch.ok
+            && selfcheck.failure_code.is_none()
+        {
             self.lift_resource_fence(instance_id, event, links)?;
         }
         // Workflow #369-1: a recovery readiness wait retries a failed preparation the
@@ -2707,7 +2723,7 @@ impl HostShared {
         Ok(PreparationAttempt {
             selfcheck,
             cooldown_until: None,
-            event: Some(event),
+            event,
             recoverable,
             ladder,
             failure,

@@ -44,7 +44,12 @@ pub(crate) type IdleHeldBack = BTreeMap<String, Option<u64>>;
 /// position holds back is not here, and nothing a dispatch decides reads it. Fix round 2: here
 /// too, with no time, is each candidate of an instance the idle action closed that the evaluation
 /// blocked because the instance is unavailable while such a hold holds it (a pause a start
-/// restored, which skipped its preparation, until the resume's reconnect proves it again).
+/// restored, which skipped its preparation, until the resume's reconnect proves it again). #486
+/// ASLEEP-3 (register §1.512): with no time, each candidate a later position that names no time
+/// defers on an instance asleep or one whose idle action can put it to sleep; #486 ASLEEP-4
+/// (register §1.520): and each one there whose own wake is a time not come (its trigger's next
+/// time, a cooldown's end) that such a position would hold back once that time has come, so that
+/// time wakes nothing (`IdleDraft::add` takes no wake from it).
 pub(crate) type IdleHeldAhead = BTreeMap<String, BTreeMap<String, Option<u64>>>;
 
 /// What the idle plan reads beside an evaluation, which only the idle plan reads; the rows stay the
