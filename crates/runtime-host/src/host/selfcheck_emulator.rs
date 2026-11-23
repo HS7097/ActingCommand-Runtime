@@ -68,6 +68,18 @@ pub(super) enum EmulatorStatusRead {
     Skip,
 }
 
+/// #411 A48: how a self-check's emulator status read ended the check, when it did.
+pub(super) struct StatusEnd {
+    /// The code the check ends with: its `failure_code`.
+    pub(super) code: HostCode,
+    /// #486 ASLEEP-4 (register §1.520, ruling 4): the read saw no emulator process on an instance
+    /// whose idle action holds its emulator stopped (`stop_emulator`, its wake not come), which is
+    /// asleep, not broken. The step's `runtime.failed` record was not written, and the preparation
+    /// writes no `instance_preparation_finished` either: the idle action's own record of the stop
+    /// already says that the emulator is stopped.
+    pub(super) asleep: bool,
+}
+
 /// How the ADB wait of a recognition ended.
 enum AdbWait {
     Answered,
@@ -80,16 +92,17 @@ enum AdbWait {
 
 impl HostShared {
     /// #411 A48: the emulator status read of a self-check, before its opens (see the module
-    /// documentation). `None`: the opens go on. `Some(code)`: the check ended here with `code`,
-    /// whose `runtime.failed` record is written. The caller holds the instance's admission
-    /// guard and has closed any retained session. Only a failure the Runtime does not survive
-    /// is returned as an error.
+    /// documentation). `None`: the opens go on. `Some(end)`: the check ended here with its code,
+    /// whose `runtime.failed` record is written; #486 ASLEEP-4 (ruling 4): not written for an
+    /// instance asleep by its idle action ([`StatusEnd::asleep`]). The caller holds the instance's
+    /// admission guard and has closed any retained session. Only a failure the Runtime does not
+    /// survive is returned as an error.
     pub(super) fn read_emulator_status_first(
         &self,
         status: EmulatorStatusRead,
         instance_id: InstanceId,
         links: &EventLinksDraft,
-    ) -> RuntimeHostResult<Option<HostCode>> {
+    ) -> RuntimeHostResult<Option<StatusEnd>> {
         if status == EmulatorStatusRead::Skip {
             return Ok(None);
         }
@@ -129,6 +142,16 @@ impl HostShared {
         };
         if !state.process_started {
             self.note_emulator_reading(instance_id, false)?;
+            // #486 ASLEEP-4 (register §1.520, ruling 4; `emulator-control.md`, "An instance asleep
+            // by its idle action"): the emulator its idle action stopped is not running, which is
+            // no failure: the check ends `instance_not_running` as before (the instance stays
+            // unavailable, its self-check answers that code), and nothing of it is recorded.
+            if self.idle_holds_emulator_stopped(&record.instance_alias)? {
+                return Ok(Some(StatusEnd {
+                    code: HostCode::InstanceNotRunning,
+                    asleep: true,
+                }));
+            }
             return self.end_selfcheck(
                 not_running(instance_id, ContractLocation::ReadInstanceState),
                 links,
@@ -169,7 +192,7 @@ impl HostShared {
         adb_port: u16,
         links: &EventLinksDraft,
         started: Instant,
-    ) -> RuntimeHostResult<Option<HostCode>> {
+    ) -> RuntimeHostResult<Option<StatusEnd>> {
         let instance_id = record.instance_id();
         let previous_port = record.bound_adb_endpoint().map(ResolvedAdbEndpoint::port);
         let rebound = self.bind_observed_endpoint(instance_id, Some(adb_port))?;
@@ -267,9 +290,12 @@ impl HostShared {
         &self,
         (code, failure): (HostCode, RuntimeHostError),
         links: &EventLinksDraft,
-    ) -> RuntimeHostResult<Option<HostCode>> {
+    ) -> RuntimeHostResult<Option<StatusEnd>> {
         self.record_selfcheck_failure(&failure, links)?;
-        Ok(Some(code))
+        Ok(Some(StatusEnd {
+            code,
+            asleep: false,
+        }))
     }
 
     /// One connection-preparation `runtime.failed` record of a self-check step (its `stage` the

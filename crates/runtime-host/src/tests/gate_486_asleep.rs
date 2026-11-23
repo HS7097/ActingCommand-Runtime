@@ -66,6 +66,7 @@
 use super::emulator_controller::stopped_state;
 use super::gate_369_s6c::{connectivity, head, send};
 use super::gate_372k2::{SlotTask, at, slot_sources};
+use super::gate_386_sr3::{refused_package, write_package};
 use super::gate_idle1p::{emulator_starts, kept_rows, stops};
 use super::instance_workers::{all_events, phases};
 use super::*;
@@ -73,11 +74,13 @@ use crate::codes::{HostCode, IdleCode, IdleLocation, IdleWakeCause};
 use crate::idle_action::{
     IdleEnd, IdlePlan, IdlePlanner, IdleStep, IdleView, KeptIdle, WakeWork, WithheldStop,
 };
+use crate::pack_admission::PackAdmissionHold;
+use crate::policy_host::LOOK_AHEAD_FAILS_FOR_TEST;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     ConfigParameter, ConfigParameterSource, FactScalar, InstanceStuckRecovery,
     MAX_RUNTIME_SUBSCRIPTION_WAIT_MS, PackScheduleEditRow, RuntimeConfigManifest,
-    RuntimeLifecyclePhase, RuntimeSubscriptionRequest, SchedulingResumeSelfCheck,
+    RuntimeLifecyclePhase, RuntimePayload, RuntimeSubscriptionRequest, SchedulingResumeSelfCheck,
     SubscriptionCursor,
 };
 use actingcommand_host_metrics::NetworkConnectivity;
@@ -2969,6 +2972,28 @@ fn open_incident_host(
     package: &Path,
     keeps_idle_state: bool,
 ) -> RuntimeHost {
+    open_incident_host_held(
+        root,
+        registered,
+        clock,
+        state,
+        package,
+        keeps_idle_state,
+        None,
+    )
+}
+
+/// #486 ASLEEP-4: [`open_incident_host`], the admission after start held by `hold` when one is
+/// given (`gate_386_sr3`'s hold: it admits the bound package once released).
+fn open_incident_host_held(
+    root: &TempDir,
+    registered: InstanceId,
+    clock: &Arc<ManualRuntimeClock>,
+    state: &Arc<FakeState>,
+    package: &Path,
+    keeps_idle_state: bool,
+    hold: Option<Arc<PackAdmissionHold>>,
+) -> RuntimeHost {
     // `gate_ord1c`'s fix round 3, as `open_host` above.
     let moved = Arc::clone(clock);
     *state.capture_hook.lock().expect("capture hook") = Some(Box::new(move || moved.advance(1)));
@@ -3000,6 +3025,10 @@ fn open_incident_host(
         config
     } else {
         config.with_idle_state_unkept_for_test()
+    };
+    let config = match hold {
+        Some(hold) => config.with_pack_admission_hold_for_test(hold),
+        None => config,
     };
     RuntimeHost::start(
         config,
@@ -3647,4 +3676,432 @@ fn asleep3_h14_a_wake_always_due_and_no_run_admitted_stop_and_wake_four_times_in
         (41, 40, 0),
         "the loop the reading's answer let run"
     );
+}
+
+// ---- #486 ASLEEP-4 (0.12.82; register §1.520): the idle plan takes no wake from a candidate that a
+// position with no time will hold when its time comes; a sleeping instance is no error (the
+// coordinator's rulings 1 to 6 of 11-23).
+//
+// Production 0.12.81 on 11-23: an instance under `stop_emulator`, asleep since 00:07, was woken at
+// 03:34:40 (`planned_time_reached`) for a reading task whose trigger turned true at 03:39:40; at
+// that time its closed pack schedule (a row with no end) held the task back, nothing was admitted
+// and the emulator was stopped again at 03:49:50. While the task waited for its trigger, the plan
+// took the trigger's time: ASLEEP-3 counted the closed schedule only once the task was eligible.
+// And a self-check of the sleeping instance wrote an error record `instance_not_running`.
+// - r11 (tests 1 and 5): the incident's replay instance awake, a task whose trigger turns true
+//   twenty minutes later (closer than `idle.min_gap_ms`), its pack schedule closed with no end: the
+//   decision keeps its own wake, the plan names none, so the idle action is not kept from the awake
+//   instance; the emulator is stopped with no wake planned and the instance sleeps through the
+//   task's time, when ASLEEP-3 holds the eligible task back.
+// - r12 (tests 1 and 3): the same, the schedule reopened while the instance sleeps, before the
+//   task's time: the plan's wake is the trigger's time, as with a schedule never closed; the
+//   check wakes the instance at that time less the lead and the task is dispatched at its time.
+// - r13 (test 2): the task's package suspended by the admission after start instead: no wake, and
+//   the instance sleeps through the task's time. A value set on the application that excludes the
+//   task's rule is read through the same reader (`rule_value_deferral`); SV-2's composer-mode
+//   fixture has no instance an idle action puts to sleep, so it is not built here.
+// - r14 (test 4): the look ahead fails (the test switch of #484's): the candidate keeps its wake and
+//   the awake instance is kept as it is; the next cycle, the look ahead answering, the action is
+//   taken.
+// - r15 (test 6): a self-check of the instance its idle action stopped, and one after a start in
+//   the sleep, answer `instance_not_running` and record nothing of it; a self-check of an instance
+//   whose emulator stopped for another reason records the step's `runtime.failed` and the
+//   preparation's `instance_preparation_finished` with that code, as before.
+
+/// #486 ASLEEP-4: the incident's reading task: its trigger a UTC clock `at` [`TIMED_AT`] (false
+/// before that time, naming it as its next; true from it until a run serves it), its procedure the
+/// one [`bound_procedures`] binds to the package.
+const TIMED: &str = "fixture.asleep4_timed";
+/// Its time: twenty minutes after the first cycle, closer than `idle.min_gap_ms` (30 minutes).
+const TIMED_AT: u64 = at(1, 6, 30);
+/// The code of a candidate its suspended package holds back.
+const PACK_ADMISSION_SUSPENDED: &str = "pack_admission_suspended";
+
+/// [`TIMED`]: [`judged_task`]'s clock moved to [`TIMED_AT`], not judged, two runs a day.
+fn timed_task() -> SlotTask {
+    let mut trigger = judged_task().trigger;
+    trigger["schedule"]["at_ms"] = json!(TIMED_AT);
+    SlotTask {
+        id: TIMED,
+        trigger,
+        ..budget_task()
+    }
+}
+
+/// #486 ASLEEP-4: the incident's replay instance ([`open_incident_host_held`]) awake on its first
+/// start at 06:00 of day 1, its emulator running, with [`timed_task`] alone. With `suspended` its
+/// procedure is bound to a package the admission after start refuses with a suspend code
+/// (`gate_386_sr3`'s), otherwise to [`closed_pack_package`]; the admission after start has
+/// finished when this returns.
+fn timed_replay(suspended: bool) -> Replay {
+    let root = TempDir::new().expect("tempdir");
+    let registered = instance_id();
+    let clock = Arc::new(ManualRuntimeClock::new(at(1, 6, 0), 0));
+    let state = device_state();
+    let package = if suspended {
+        let refused = root.path().join("asleep4-refused.zip");
+        write_package(&refused, &refused_package(100));
+        refused
+    } else {
+        closed_pack_package(&root)
+    };
+    let (hold, release, finished) = PackAdmissionHold::open();
+    let host = open_incident_host_held(
+        &root,
+        registered,
+        &clock,
+        &state,
+        &package,
+        true,
+        Some(hold),
+    );
+    host.activate_policy_catalog(&sources(&[timed_task()]))
+        .expect("activate the timed task's catalogue");
+    release.send(()).expect("release the admission after start");
+    finished
+        .recv_timeout(GATE_WAIT)
+        .expect("the admission after start finishes");
+    Replay {
+        host,
+        clock,
+        state,
+        registered,
+        approved: BTreeSet::new(),
+        root,
+    }
+}
+
+/// #486 ASLEEP-4: a person's self-check of the replay instance (`actingctl selfcheck`; a
+/// placement's runs the same request): its `failure_code`.
+fn self_check_failure(host: &RuntimeHost) -> Option<String> {
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    let receipt = host
+        .process_request_for_test(
+            &runtime_request(
+                &ids,
+                RuntimeOperation::SelfCheckInstance {
+                    instance_alias: ALIAS.to_owned(),
+                },
+            ),
+            ConnectionId::new(4_863).expect("connection"),
+        )
+        .expect("the self-check's receipt");
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let Some(RuntimeResult::InstanceSelfChecked { selfcheck, .. }) = receipt.result() else {
+        panic!("a self-check result: {receipt:?}");
+    };
+    selfcheck.failure_code.as_deref().map(str::to_owned)
+}
+
+/// #486 ASLEEP-4: the records of the replay instance after `after` whose outcome is
+/// `instance_not_running`, in ledger order: `runtime.failed` for a step's record,
+/// `instance_preparation_finished` for a preparation's.
+fn not_running_records(replay: &Replay, after: u64) -> Vec<&'static str> {
+    let code = HostCode::InstanceNotRunning.as_str();
+    all_events(&replay.host)
+        .iter()
+        .filter(|event| {
+            event.sequence() > after && event.links().instance_id() == Some(&replay.registered)
+        })
+        .filter_map(|event| match event.payload() {
+            EventPayload::Runtime(RuntimePayload::Failed(record))
+                if record.outcome().code().as_str() == code =>
+            {
+                Some("runtime.failed")
+            }
+            EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) => {
+                match value.phase() {
+                    RuntimeLifecyclePhase::InstancePreparationFinished {
+                        outcome: Some(outcome),
+                        ..
+                    } if outcome.code().as_str() == code => Some("instance_preparation_finished"),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn asleep4_r11_a_closed_pack_schedule_ahead_of_the_trigger_wakes_nothing_and_holds_no_action_back()
+{
+    let replay = timed_replay(false);
+    let before = head(&replay.host);
+    // The operator closes the task's package with no end.
+    replay.set_time(at(1, 6, 5));
+    replay.schedule_pack(at(1, 6, 0), false);
+
+    // Awake, the task waits for its trigger, twenty minutes ahead: the decision is as before
+    // (blocked, its trigger false, its wake the trigger's time), but the plan names no wake, the
+    // closed schedule holding the task back at that time. Before, that wake, closer than the
+    // minimum gap, kept the idle action from the awake instance (test 5).
+    assert_eq!(
+        trigger_false_wake(&replay.cycle(at(1, 6, 10)), TIMED),
+        Some(TIMED_AT),
+        "the decision keeps its own wake"
+    );
+    let read = replay.plan();
+    assert!(
+        !read.due_now && read.next_wake_unix_ms.is_none(),
+        "no wake from the trigger's time: {read:?}"
+    );
+    assert_eq!(replay.due_task(), None, "no task to wake for");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(stops(&replay.state), 1, "the awake instance became idle");
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row_without_wake()]),
+        "kept stopped, no wake planned"
+    );
+
+    // Asleep through the task's time (test 1): at its time less the lead nothing wakes it; at its
+    // time and after it the task is eligible and its closed schedule holds it back with no wake
+    // (ASLEEP-3).
+    assert_eq!(
+        trigger_false_wake(&replay.cycle(TIMED_AT - LEAD_MS), TIMED),
+        Some(TIMED_AT),
+        "still waiting for its trigger"
+    );
+    assert_eq!(replay.plan().next_wake_unix_ms, None, "still no wake");
+    for now in [TIMED_AT, TIMED_AT + 10 * MINUTE_MS] {
+        assert_eq!(
+            deferred_by(&replay.cycle(now), TIMED, PACK_SCHEDULE_CLOSED),
+            None,
+            "held back with no wake at {now}"
+        );
+    }
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "one stop and no wake"
+    );
+    assert_eq!(
+        emulator_starts(&replay.state),
+        0,
+        "nothing started the emulator"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep4_r12_a_schedule_reopened_while_asleep_brings_the_wake_back_and_the_task_runs() {
+    let replay = timed_replay(false);
+    let before = head(&replay.host);
+    replay.set_time(at(1, 6, 5));
+    replay.schedule_pack(at(1, 6, 0), false);
+    replay.cycle(at(1, 6, 10));
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row_without_wake()]),
+        "kept stopped, no wake planned"
+    );
+
+    // Ruling 3: the schedule reopened while the instance sleeps, before the task's time. The edit
+    // writes a fact, which wakes the evaluation; the task still waits for its trigger and nothing
+    // would hold it back at its time, so the plan's wake is that time, as with a schedule never
+    // closed (test 1's open case).
+    replay.set_time(at(1, 6, 15));
+    replay.schedule_pack(at(1, 6, 15), true);
+    assert_eq!(
+        trigger_false_wake(&replay.cycle(at(1, 6, 20)), TIMED),
+        Some(TIMED_AT),
+        "waiting for its trigger"
+    );
+    let read = replay.plan();
+    assert!(
+        !read.due_now && read.next_wake_unix_ms == Some(TIMED_AT),
+        "the trigger's time is the wake again: {read:?}"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "no wake before its time less the lead"
+    );
+
+    // At that time less the lead the check wakes it (`planned_time_reached`): its configured start
+    // starts the emulator and its startup package runs. At its time the task is dispatched.
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    replay.cycle(TIMED_AT - LEAD_MS);
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), wake_record()],
+        "one wake, at its planned time"
+    );
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    replay.await_free(woken_at);
+    let cycle = replay.evaluate(TIMED_AT);
+    let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+    assert!(
+        evaluation
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == TIMED),
+        "the task is dispatched at its time: {evaluation:#?}"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep4_r13_a_suspended_package_ahead_of_the_trigger_wakes_nothing() {
+    let replay = timed_replay(true);
+    let before = head(&replay.host);
+    // The admission after start suspended the task's package. Awake, the task waits for its
+    // trigger: the plan names no wake and the idle action is taken.
+    assert_eq!(
+        trigger_false_wake(&replay.cycle(at(1, 6, 10)), TIMED),
+        Some(TIMED_AT),
+        "the decision keeps its own wake"
+    );
+    let read = replay.plan();
+    assert!(
+        !read.due_now && read.next_wake_unix_ms.is_none(),
+        "no wake from the trigger's time: {read:?}"
+    );
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row_without_wake()]),
+        "kept stopped, no wake planned"
+    );
+
+    // Asleep through the task's time: at its time the suspension holds the eligible task back with
+    // no wake, and nothing wakes the instance.
+    replay.cycle(TIMED_AT - LEAD_MS);
+    assert_eq!(
+        deferred_by(&replay.cycle(TIMED_AT), TIMED, PACK_ADMISSION_SUSPENDED),
+        None,
+        "held back by its suspended package with no wake"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "one stop and no wake"
+    );
+    assert_eq!(
+        emulator_starts(&replay.state),
+        0,
+        "nothing started the emulator"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep4_r14_a_look_ahead_that_fails_keeps_the_candidates_wake() {
+    let replay = timed_replay(false);
+    replay.set_time(at(1, 6, 5));
+    replay.schedule_pack(at(1, 6, 0), false);
+
+    // Ruling 2: where the look ahead cannot tell, the candidate keeps its wake. It fails here, as a
+    // reader that cannot answer fails: the plan names the trigger's time, closer than the minimum
+    // gap, and the awake instance is kept as it is; the cycle is not stopped by the failure.
+    LOOK_AHEAD_FAILS_FOR_TEST.with(|fails| fails.set(true));
+    let cycle = replay.cycle(at(1, 6, 10));
+    LOOK_AHEAD_FAILS_FOR_TEST.with(|fails| fails.set(false));
+    assert_eq!(
+        trigger_false_wake(&cycle, TIMED),
+        Some(TIMED_AT),
+        "the decision keeps its own wake"
+    );
+    let read = replay.plan();
+    assert!(
+        !read.due_now && read.next_wake_unix_ms == Some(TIMED_AT),
+        "the candidate keeps its wake: {read:?}"
+    );
+    assert!(replay.claims_free(), "no idle action was asked for");
+    assert_eq!(stops(&replay.state), 0, "not stopped");
+
+    // The look ahead answering again, the next cycle names no wake and the action is taken.
+    replay.cycle(at(1, 6, 11));
+    assert_eq!(replay.plan().next_wake_unix_ms, None, "no wake");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
+    let replay = timed_replay(false);
+    replay.set_time(at(1, 6, 5));
+    replay.schedule_pack(at(1, 6, 0), false);
+    replay.cycle(at(1, 6, 10));
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    let asleep_from = head(&replay.host);
+
+    // Ruling 4: a self-check of the instance its idle action stopped finds the emulator stopped; it
+    // answers `instance_not_running` as before and records nothing of it (the stop's own record
+    // says it).
+    replay.state.emulator.script_read(stopped_state());
+    assert_eq!(
+        self_check_failure(&replay.host).as_deref(),
+        Some(HostCode::InstanceNotRunning.as_str()),
+        "the self-check answers the stopped emulator"
+    );
+    assert!(
+        not_running_records(&replay, asleep_from).is_empty(),
+        "no record of the sleep as a failure"
+    );
+
+    // A start in the sleep (the root's seeding start, then a loading one, as `asleep_r2`) prepares
+    // nothing on the stopped emulator, and a self-check after it records nothing either.
+    let replay = replay.restart(at(1, 7, 0));
+    let replay = replay.restart(at(1, 7, 1));
+    replay.state.emulator.script_read(stopped_state());
+    assert_eq!(
+        self_check_failure(&replay.host).as_deref(),
+        Some(HostCode::InstanceNotRunning.as_str()),
+        "the self-check after the start answers the stopped emulator"
+    );
+    assert!(
+        not_running_records(&replay, asleep_from).is_empty(),
+        "no record of the sleep as a failure at or after the start"
+    );
+    replay.close();
+
+    // An instance whose emulator is stopped for another reason (its idle action took nothing): the
+    // self-check records the step's `runtime.failed` and the preparation's
+    // `instance_preparation_finished` with `instance_not_running`, as before.
+    let awake = Replay::start(at(1, 6, 0));
+    let from = head(&awake.host);
+    awake.state.emulator.script_read(stopped_state());
+    assert_eq!(
+        self_check_failure(&awake.host).as_deref(),
+        Some(HostCode::InstanceNotRunning.as_str()),
+        "the self-check answers the stopped emulator"
+    );
+    assert_eq!(
+        not_running_records(&awake, from),
+        ["runtime.failed", "instance_preparation_finished"],
+        "the error records, as before"
+    );
+    awake.close();
 }

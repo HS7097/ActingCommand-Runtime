@@ -927,7 +927,11 @@ close of a retained session and before its opens:
 A check that ends there writes one connection-preparation `runtime.failed`
 record with its code, values and step, then `instance_preparation_finished`,
 and answers that code as the self-check's `failure_code`, never
-`input_backend_open_failed`. An instance without a discovery binding, and
+`input_backend_open_failed`. #486 ASLEEP-4 (since 0.12.82): a check that finds
+no emulator process on an instance whose idle action holds its emulator stopped
+writes neither record and answers `instance_not_running` as before
+([emulator-control.md](emulator-control.md), "An instance asleep by its idle
+action"). An instance without a discovery binding, and
 every other preparation (daemon start, emulator control, ladder, handset
 restore), reads no status. Before A48 a self-check of an emulator started
 outside the Runtime opened nothing and reported `input_backend_open_failed`

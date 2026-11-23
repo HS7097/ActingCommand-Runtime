@@ -40,8 +40,7 @@ use actingcommand_contract::{
     PolicyPlanningSignalKind,
 };
 use actingcommand_policy::{
-    CandidateEligibility, DecisionReason, DispatchIntent, FACT_REFRESH_TASK_ID, OwedRerun,
-    OwedReruns,
+    CandidateEligibility, DecisionReason, FACT_REFRESH_TASK_ID, OwedRerun, OwedReruns,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -88,13 +87,18 @@ pub(crate) struct RerunPlan {
 }
 
 impl RerunPlan {
-    /// Position 6: the stage gate's deferral of `intent`'s pair, if it waits.
-    pub(crate) fn deferral(&self, intent: &DispatchIntent) -> Option<CandidateEligibility> {
+    /// Position 6: the stage gate's deferral of the pair (`task_id` on `instance_id`), if it
+    /// waits.
+    pub(crate) fn deferral(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<CandidateEligibility> {
         if self.waits.is_empty() {
             return None;
         }
         self.waits
-            .get(&(intent.task_id.clone(), intent.instance_id.clone()))
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
             .map(|(reason, wake)| CandidateEligibility::Deferred {
                 reason: reason.clone(),
                 next_wake_unix_ms: *wake,
