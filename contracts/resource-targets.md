@@ -939,7 +939,10 @@ production term `r(k,p)·W(k,p)/Q_p` to the task's net benefit `V − cost`, wit
 rounding bound; a satisfied, pending or unresolved target (`Γ = 0`) adds nothing, and no other
 pool it produces is read. So a goal on a pool without a valuation now moves the fixed-value
 stages that produce it within their tier and in a capped round; before, it reached only their
-score-stage term `R`. `R`, every reason above, `gap_remaining` and the goal's part in
+score-stage term `R`. Ruling 9 (a goal chooses which task spends a pool, the pool's lines choose
+when): below the `trigger_line` of a pool such a stage consumes, whether it may spend is judged
+without its goal terms, as before; at the line, in the capped spending order, they count
+([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"). `R`, every reason above, `gap_remaining` and the goal's part in
 `run_cap` (SS-6) are unchanged; a target needs nothing new: its pool is observed by a fact under
 `inventory.` or `resource.` (or rows of a list), as every target's.
 

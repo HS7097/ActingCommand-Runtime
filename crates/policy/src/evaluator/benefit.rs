@@ -68,7 +68,12 @@
 //!   it is weighed only by a goal in force that covers the task with an open gap, `W = Γ` and `Q`
 //!   the goal's `scale`. Any other pool it produces is not read: no goal, a pending goal (an
 //!   unknown reading, `Γ = 0`) and a met goal add nothing, so without such a goal `B`, `ε` and every
-//!   record are those of before, and a goal never lowers a `B`.
+//!   record are those of before, and a goal never lowers a `B`. Ruling 9 (a goal chooses which task
+//!   spends a pool, the pool's lines choose when): below the trigger line of a pool it consumes,
+//!   with no capped episode under way ([`super::capped`]), whether the task may spend is judged by
+//!   `S` and `ε` without its goal terms, as before them; its `benefit_fixed_value`, its items and
+//!   the order it takes once it passes read them with the terms. At or above the line, and for a
+//!   pool without a trigger line, the terms count everywhere.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -173,6 +178,10 @@ enum Judgement {
         downstream: bool,
         /// SS-2h: the term of each pool it consumes, in declaration order (each pool once).
         consumed: Vec<ConsumedTerm>,
+        /// #455 B1 ruling 9 (register §1.518): for a task with a fixed value and at least one
+        /// goal term, `S` and `ε` without its goal terms, which the pools' lines read below a
+        /// trigger line; `None` otherwise.
+        without_goals: Option<(ExactSum, ExactSum)>,
     },
     Unknown {
         gap: Gap,
@@ -212,6 +221,17 @@ impl ExactSum {
             numerator: 0,
             denominator: 1,
         }
+    }
+
+    /// #455 B1 (register §1.518): this sum with `other` added; `None` on overflow.
+    fn joined(&self, other: &Self) -> Option<Self> {
+        let mut sum = self.clone();
+        sum.add(
+            other.numerator.unsigned_abs(),
+            other.denominator.unsigned_abs(),
+            other.numerator < 0,
+        )?;
+        Some(sum)
     }
 
     /// SS-2h: this sum with one more term; `None` on overflow.
@@ -441,6 +461,11 @@ fn judge(
     }
     // SS-2d: the rounding bound `ε` of `sum`, accumulated as exactly (module doc).
     let mut tolerance = ExactSum::new();
+    // #455 B1 ruling 9 (register §1.518): a fixed value's goal terms and their bounds, summed apart
+    // and joined to `S` and `ε` at the end, so the pools' lines can read the two without them.
+    let mut goal_sum = ExactSum::new();
+    let mut goal_bound = ExactSum::new();
+    let mut goal_terms = false;
     let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
@@ -472,12 +497,20 @@ fn judge(
         };
         let produced = crate::resource_targets::per_run_yield(&task.produces, &effect.pool_id);
         downstream |= weight_milli > 0;
+        let (terms, bounds) = match fixed_value {
+            None => (&mut sum, &mut tolerance),
+            Some(_) => {
+                goal_terms = true;
+                (&mut goal_sum, &mut goal_bound)
+            }
+        };
         let (numerator, denominator) = ratio(
             &[produced, u128::from(weight_milli)],
             &[u128::from(scale), 1_000],
         )
         .ok_or_else(overflow)?;
-        sum.add(numerator, denominator, false)
+        terms
+            .add(numerator, denominator, false)
             .ok_or_else(overflow)?;
         // SS-2d: `R/(2000·Q) + n·(2W+1)/(4000·Q)`.
         let rounding = rounding_numerator(
@@ -488,7 +521,7 @@ fn judge(
         .ok_or_else(overflow)?;
         let (bound_numerator, bound_denominator) =
             ratio(&[rounding], &[u128::from(scale), 4_000]).ok_or_else(overflow)?;
-        tolerance
+        bounds
             .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
         items.push(format!(
@@ -602,13 +635,26 @@ fn judge(
                 .collect(),
         });
     }
+    // #455 B1: `S` and `ε` with the goal terms; ruling 9: without them beside, for the lines.
+    if !goal_terms {
+        return Ok(Judgement::Known {
+            sum,
+            tolerance,
+            items,
+            wake_unix_ms,
+            downstream,
+            consumed,
+            without_goals: None,
+        });
+    }
     Ok(Judgement::Known {
-        sum,
-        tolerance,
+        sum: sum.joined(&goal_sum).ok_or_else(overflow)?,
+        tolerance: tolerance.joined(&goal_bound).ok_or_else(overflow)?,
         items,
         wake_unix_ms,
         downstream,
         consumed,
+        without_goals: Some((sum, tolerance)),
     })
 }
 
@@ -730,6 +776,7 @@ pub(super) fn gate(
                 wake_unix_ms,
                 downstream,
                 consumed: _,
+                without_goals,
             } => {
                 let defer = |task_work: &mut TaskWork, reason: DecisionReason| {
                     task_work.state = SchedulingDecisionState::Deferred;
@@ -741,7 +788,7 @@ pub(super) fn gate(
                 };
                 // SS-2h: a capped pool's order decides before the sign of `B`. SCHED-C1a: a `B`
                 // computed from a fixed value says so first, whatever the gate then decides.
-                let hold = match disposition {
+                let (hold, below_trigger) = match disposition {
                     Disposition::Held(reason) => {
                         note_fixed_value(task_work, task, saturating_milli(sum.floor()), expected);
                         defer(task_work, reason);
@@ -761,12 +808,25 @@ pub(super) fn gate(
                         kept.push(candidate);
                         continue;
                     }
-                    Disposition::Normal { hold } => hold,
+                    Disposition::Normal {
+                        hold,
+                        below_trigger,
+                    } => (hold, below_trigger),
                 };
                 let benefit_milli = saturating_milli(sum.floor());
                 note_fixed_value(task_work, task, benefit_milli, expected);
+                // #455 B1 ruling 9 (register §1.518): below the trigger line of a pool it consumes,
+                // whether a task with a fixed value may spend is judged without its goal terms, as
+                // before them; once it passes, its order reads `B` with them.
+                let (gated_sum, gated_tolerance) = match &without_goals {
+                    Some((plain_sum, plain_tolerance)) if below_trigger => {
+                        (plain_sum, plain_tolerance)
+                    }
+                    _ => (&sum, &tolerance),
+                };
+                let gated_milli = saturating_milli(gated_sum.floor());
                 // SS-2d: within its rounding error the sign is not trusted (module doc).
-                let within = sum.within(&tolerance).ok_or_else(|| {
+                let within = gated_sum.within(gated_tolerance).ok_or_else(|| {
                     PolicyEvaluationError::invalid(format!(
                         "task '{}' net benefit tolerance is negative on instance '{}'",
                         task.id, instance.instance_id
@@ -785,8 +845,8 @@ pub(super) fn gate(
                         ZeroTier::Released
                     };
                     task_work.reasons.push(tolerance_reason(
-                        (benefit_milli, &sum),
-                        (saturating_milli(tolerance.ceil()), &tolerance),
+                        (gated_milli, gated_sum),
+                        (saturating_milli(gated_tolerance.ceil()), gated_tolerance),
                         tier,
                         &items,
                     ));
@@ -808,7 +868,7 @@ pub(super) fn gate(
                     }
                     continue;
                 }
-                if benefit_milli > 0 {
+                if gated_milli > 0 {
                     // SS-2h: positive, but a pool's lines hold it (its hard line, or a capped
                     // pool's order).
                     if let Some(hold) = hold {
@@ -830,7 +890,7 @@ pub(super) fn gate(
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work
                     .reasons
-                    .push(nonpositive_reason(benefit_milli, expected, &items));
+                    .push(nonpositive_reason(gated_milli, expected, &items));
                 if let Some(wake) = wake_unix_ms.filter(|wake| *wake > context.time.unix_ms) {
                     task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
                 }

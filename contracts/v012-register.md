@@ -47651,13 +47651,14 @@ paused starts refreshing at the first evaluation after this version starts. A re
 a row is tried again after 20, 40 and 80 minutes and then every two hours, within its daily limit,
 and at once after another task's successful run on its instance.
 
-### 1.518 Slice #455 B1 (0.12.82): a rule with a fixed value counts a goal's gap on the pools it produces that declare no valuation (board #455, the main line's third step; the rulings 1 to 8 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b1.md` after the read-only study `rd-1123/study-step3-pools.md`, its questions 2 to 4 and the coordinator's disposition of it; on main `2c0f949d`)
+### 1.518 Slice #455 B1 (0.12.82): a rule with a fixed value counts a goal's gap on the pools it produces that declare no valuation (board #455, the main line's third step; the rulings 1 to 9 are the coordinator's of 11-23 (9 after the implementer's first report), no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b1.md` after the read-only study `rd-1123/study-step3-pools.md`, its questions 2 to 4 and the coordinator's disposition of it; on main `2c0f949d`)
 
 This section takes 1.518. It ships in 0.12.82.
 [scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", its bullets "The net
 benefit" and "Unknown is never 0"; "Fixed values written in the pack", its bullets "Without a
 consumption", "With a consumption", "Its `produces`", "One scale" and the new "A goal on what it
-produces"; "Capped spending order", the bullet "A round") and
+produces" and "A goal chooses which task spends a pool, the pool's lines choose when"; "Pool
+lines", the bullet "Below the cap"; "Capped spending order", the bullet "A round") and
 [resource-targets.md](resource-targets.md) ("Resource weights (v2)", the new paragraph "A goal on
 what a task with a fixed value produces") are the contract;
 [standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value", its last bullet, and the
@@ -47703,20 +47704,55 @@ thresholds could promote one).
   `<pool>:+<⌊term⌋>`, before the consumption's.
 - *Decided here.* Since the compiler refuses a fixed value beside a priced or pending product, every
   pool a fixed-value task produces declares no valuation, so the judgement reads the weight and the
-  step the term gives without looking the pool up. A pending amount on a goal-covered pool yields
-  nothing rather than making `B` unknown, so a goal cannot stop a stage that ran before.
+  step the term gives without looking the pool up. A pending amount on a goal-covered pool counts as
+  a yield of 0 rather than making `B` unknown, so a goal cannot stop a stage that ran before (the
+  implementer's choice, which the coordinator accepted on 11-23; written in the contract).
+
+**Ruling 9: a goal chooses which task spends a pool, the pool's lines choose when** (the
+coordinator's, after the first report showed that a goal term making a benefit positive lets the
+task spend below the consumed pool's trigger line as soon as one run fits above the hard line, and
+come back each time the pool has regenerated one run: an instance woken for a single run, with no
+more spent in total).
+- *Below the line.* Where a task consumes a pool that writes a `trigger_line` and the pool is below
+  it with no capped episode under way (the lines' gate's "Below the cap", `capped.rs`, `plan`), whether
+  the task may spend is judged by its benefit without the goal terms, exactly as before them: one
+  positive without them spends as before (the hard line still holds it) and its order then reads
+  `B` with them; one positive only by a goal term waits for the line.
+- *How the two are told apart.* The judgement keeps, beside `S` and `ε`, the two without the goal
+  terms (`Judgement::Known`'s `without_goals`, summed apart in `judge` and joined at its end), and
+  the lines' plan marks a candidate below a trigger line (`Disposition::Normal`'s `below_trigger`,
+  set in `plan`'s branch "below the cap"). No second judgement call; nothing outside the policy
+  crate's evaluation.
+- *What a person sees.* A task that waits below the line only because its benefit without the goal
+  terms is not positive carries the reason it carries without the goal: `policy_benefit_nonpositive`
+  with that `benefit_milli` (or `benefit_within_tolerance` with that `S` and `ε`), the same code and
+  values; its items still name the goal terms, and its `benefit_fixed_value` gives `B` with them.
+  No code or word is new.
+- *At and above the line* (the capped episode) and in every order of the table below, `B` with the
+  goal terms is read: when the pool reaches its line the task that produces the lacking pool heads
+  the round and sweeps to the stop line by the capped rule. A consumed pool without a
+  `trigger_line` is unchanged from rulings 1 to 8: the terms count everywhere, and the rule's own
+  cooldown paces it.
+- *A worked timeline.* A pool of capacity 180, `trigger_line` 160, `stop_line` 140, `hard_line`
+  104, regenerating one unit in six minutes, valued 1000 milli a unit; a stage of `V` 9 500 consumes
+  10 a run (−500 without the goal) and produces 2 a run of a pool a goal lacks 30 of (term 600:
+  100 with it). From 110 the pool regenerates; from 114 one run fits above the hard line, but below
+  160 the stage waits `policy_benefit_nonpositive` −500. At 160, five hours later, the episode
+  begins, the stage heads it and is handed `run_cap` min(⌈20 ÷ 10⌉, ⌊56 ÷ 10⌋, ⌈30 ÷ 2⌉) = 2: one
+  dispatch, two runs, to 140; the next sweep comes two hours later, at 160 again. Under rulings 1 to
+  8 alone it ran once an hour from 114 on.
 
 **The readers of a fixed value that rank or gate** (ruling 4). Each reads the judgement's `S` (or
 `⌊S⌋`), so each now takes the goal terms; none was changed besides the judgement.
 
 | Reader | Where | Now |
 |---|---|---|
-| The gate's sign and band (positive, `policy_benefit_nonpositive`, `benefit_within_tolerance`) | `evaluator/benefit.rs`, `gate` | `⌊S⌋` and `ε` with the terms |
+| The gate's sign and band (positive, `policy_benefit_nonpositive`, `benefit_within_tolerance`) | `evaluator/benefit.rs`, `gate` | `⌊S⌋` and `ε` with the terms; ruling 9: without them below a consumed pool's trigger line |
 | The order within a tier, `B ÷ E` | `evaluator.rs`, `allocation_order`, `KnownBenefit::order` | the candidate's `KnownBenefit` is `⌊S⌋` |
 | The reserve gate's order | `evaluator.rs`, `apply_reserves` (the allocation order with tiers) | as the order within a tier |
 | A capped round's listing and frozen order, `V ÷ C` | `evaluator/capped.rs`, `start_round` (`S` plus the pool's cost, over its bound and over `C`) | with the terms and their bounds |
 | The capped block's head `B = V − W·(c − a)` and the block's place | `evaluator/capped.rs`, `RoundView::decide`; `evaluator.rs`, `OrderView` | `S` plus the refund |
-| The hard line's hold below the trigger line | `evaluator/capped.rs`, `plan` | reads no value; it holds a candidate that would pass, which a goal term can now make positive |
+| The hard line's hold below the trigger line | `evaluator/capped.rs`, `plan` | reads no value; it holds a candidate that would pass; ruling 9: below a trigger line the pool writes it also marks the candidate `below_trigger`, so the gate decides that "would pass" without the goal terms |
 | Records: `benefit_fixed_value` (`benefit_milli` `B`, `fixed_value_milli` `V`), `rank_breakdown` | `evaluator/benefit.rs`, `note_fixed_value`; `evaluator.rs`, `rank_breakdown_detail` | `B` with the terms, `V` itself |
 | Not readers of the value: the score stage's `R` (it weighed the goal before), the zero tier (refused beside `V`), the coverage and provenance of the composer, `goals.json`'s `goal_tier_without_fixed_value` (whether a rule writes one) | — | unchanged |
 
@@ -47737,7 +47773,8 @@ spent first. With an expected yield of 2.5 a run the term is 750 and its bound
 | Part | Where |
 |---|---|
 | The weight and step handed on | `crates/policy/src/resource_targets.rs` (`PoolWeight`, `ResourceTerm::pool_weights`) |
-| The goal terms | `crates/policy/src/evaluator/benefit.rs` (`judge`: the production loop reads, for a fixed value, only the pools its term weighs above 0, at the term's step) |
+| The goal terms | `crates/policy/src/evaluator/benefit.rs` (`judge`: the production loop reads, for a fixed value, only the pools its term weighs above 0, at the term's step, summed apart; `ExactSum::joined`; `Judgement::Known`'s `without_goals`) |
+| Ruling 9 | `crates/policy/src/evaluator/capped.rs` (`Disposition::Normal`'s and `Decided`'s `below_trigger`, set in `plan` below a trigger line); `crates/policy/src/evaluator/benefit.rs` (`gate`, phase 3: the sign and band read without the goal terms when it is set) |
 | The map of weights | `crates/policy/src/evaluator.rs` (the score stage's `weights`, now of `PoolWeight`) |
 
 **Tests** (incident `#455 B1`: `crates/policy/src/tests/gate_455_b1.rs`, policy gate map; no clock
@@ -47750,7 +47787,11 @@ read).
 | `b1_t3_without_a_goal_every_decision_is_byte_for_byte_the_one_of_before` (3) | catalog-a's V1 and V2 golden identities; without a goal the decisions serialize to the bytes of the same stages declaring no production, the lacking pool read or not; same dispatch and wake |
 | `b1_t4_in_a_capped_round_the_stage_that_produces_the_lacking_pool_is_frozen_first` (4) | Read at 200, `V` 36 000: the producer frozen first, `capped_spend` rank 1, B 36 600; the other `capped_not_head` with 36 000; without the goal the other way round (task ids) |
 | `b1_t5_an_expected_yield_brings_its_rounding_bound_and_its_item_names_the_pool` (5) | 2.5 a run expected: `V` 29 250 gives S 0 within `ε = 611001/40000` (⌈ε⌉ 16), items `pool.lacking:+750,pool.neutral:-30000`; `V` 40 000 gives 10 750; without the goal −750, the consumption's item alone |
-| `b1_t7_the_goals_spend_values_are_those_of_before` (7) | `gap_remaining` and `run_cap` as SS-6 and LF-1 build them: 30 and 1 below the trigger line (the hard line binds), 2 and 1 on a capped round's head (the goal binds) |
+| `b1_t7_the_goals_spend_values_are_those_of_before` (7) | `gap_remaining` and `run_cap` as SS-6 and LF-1 build them: 30 and 1 below the cap (the hard line binds), 2 and 1 on a capped round's head (the goal binds) |
+| `b1_t8_below_a_trigger_line_a_stage_positive_only_by_its_goal_waits_as_before` (ruling 9) | Trigger line 160, read at 150, `V` 9 500, 10 a run: not dispatched; `policy_benefit_nonpositive` with the outcome it has without the goal (−500), its items naming `pool.lacking:+600`; `benefit_fixed_value` 100 |
+| `b1_t9_at_the_trigger_line_that_stage_heads_the_capped_episode` (ruling 9) | Read at 160: the producer heads the round (`capped_spend` rank 1, `trigger_line` 160), B 10 100, `run_cap` 2, gap 30; the other `capped_not_head` with 9 500; without the goal the other way round |
+| `b1_t10_below_a_trigger_line_a_stage_positive_without_its_goal_spends_as_before` (ruling 9) | `V` 12 000 at 150: both positive without the terms; the producer dispatched with 2 600, the other 2 000 `instance_already_selected`; without the goal the first declared |
+| `b1_t11_a_consumed_pool_without_lines_lets_the_goal_count_below_its_cap` (ruling 9) | A capped pool without lines, read at 150: the producer dispatched with 100, the other −500 `policy_benefit_nonpositive`; without the goal neither |
 
 Test 6 is the existing refusals, unchanged: `sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer`
 (`fixed_value_conflict` beside a valued and a pending product) and
@@ -47770,7 +47811,9 @@ resource-target reason; the goal's spend values, `gap_remaining` and its part in
 **At deploy.** Nothing to configure. No installed root has a goal on a pool without a valuation, so
 nothing changes until a resource repository declares such pools on its rules ("Pools a goal asks
 for") and a goal is set on one; from then on the stages that yield it are judged `V` plus their goal
-terms. An older build reads the same root and ignores these productions as before.
+terms, and one that consumes a pool writing a `trigger_line` and is worth running only by its goal
+term waits for that line (ruling 9). An older build reads the same root and ignores these
+productions as before.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

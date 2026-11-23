@@ -12,7 +12,13 @@
 // - a met goal and an unknown reading add nothing (test 2); without a goal every decision is byte
 //   for byte the one of a task that declares no such production (test 3);
 // - an expected yield brings its rounding bound, and the judgement's items name the pool (test 5);
-// - the goal's spend values (`gap_remaining`, its part in `run_cap`) are SS-6's and LF-1's (test 7).
+// - the goal's spend values (`gap_remaining`, its part in `run_cap`) are SS-6's and LF-1's (test 7);
+// - ruling 9, a goal chooses which task spends a pool, the pool's lines choose when: below the
+//   trigger line a consumed pool writes, a stage positive only by its goal term waits with the
+//   reason it has without the goal (test 8); at the line it heads the capped episode and is handed
+//   the capped rule's run count (test 9); a stage positive without its goal term spends below the
+//   line as before, ordered by its benefit with the term (test 10); a consumed pool without lines
+//   lets the goal count below its cap (test 11).
 //
 // The catalog is neutral and V2, as SCHED-C1a's gate: judged tasks on one instance consuming 30 a
 // run of the capped pool `pool.neutral` read from `resource.neutral`, its capacity read from
@@ -65,7 +71,8 @@ const V1_EXAMPLE_HASH: &str =
 const V2_EXAMPLE_HASH: &str =
     "sha256:baf684c3f5864fb105ed351c2553831e7af1d76b165bd0a9233db7b26a725047";
 
-// Test 1, the goal counts. Read at 150 (below the trigger line), `task_a` and, declared after it,
+// Test 1, the goal counts. Read at 150 (below the cap; the pool writes no trigger line, so ruling 9
+// does not apply), `task_a` and, declared after it,
 // `task_b` each consume 30 at W = 1000 with `V` 40 000, so each is `B = 40 000 − 30 000 = 10 000`;
 // `task_b` also produces 2 of the lacking pool a run. With the goal (gap 30) `task_b` is
 // `B = 10 000 + 600 = 10 600` and is selected, its `rank_breakdown` naming B and V; `task_a` keeps
@@ -282,7 +289,7 @@ fn b1_t5_an_expected_yield_brings_its_rounding_bound_and_its_item_names_the_pool
     fixed_first(held, -750, 29_250, E);
 }
 
-// Test 7, the goal's spend values. Below the trigger line (test 1's round) `task_b` is handed the
+// Test 7, the goal's spend values. Below the cap (test 1's round) `task_b` is handed the
 // gap 30 at its production entry and `run_cap` 1: the hard line allows ⌊(150 − 104) ÷ 30⌋ = 1 run,
 // fewer than the ⌈30 ÷ 2⌉ = 15 the goal still needs. As the head of a capped round (read at 200)
 // with the lacking pool read at 38, the gap is 2 (`Γ` 200, its term 40, B = 36 040) and the goal's
@@ -300,6 +307,140 @@ fn b1_t7_the_goals_spend_values_are_those_of_before() {
     assert_eq!(dispatched(&evaluation), ["task_b"], "{evaluation:#?}");
     fixed_first(decision(&evaluation, "task_b"), 36_040, 36_000, E);
     spend_values_are(&evaluation, "task_b", 2, 1);
+}
+
+// Test 8, ruling 9 below the trigger line. The capped pool writes a trigger line 20 below its
+// capacity (160). Read at 150, `task_a` and `task_g` consume 10 a run at W = 1000 with `V` 9 500,
+// so each is `9 500 − 10 000 = −500`; `task_g` also produces 2 of the lacking pool a run, its goal
+// term 600, so with the goal it is 100. Below the line it may spend only by its benefit without
+// the term: neither is dispatched, and `task_g` waits `policy_benefit_nonpositive` with the values
+// it carries without the goal (`benefit_milli` −500), its items still naming the goal term, its
+// `benefit_fixed_value` the judgement's 100.
+#[test]
+fn b1_t8_below_a_trigger_line_a_stage_positive_only_by_its_goal_waits_as_before() {
+    let mut goal = World::new(paced(9_500, triggered_pools()), 150, Some(10)).with_goal();
+    let evaluation = goal.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let waits = decision(&evaluation, "task_g");
+    let with_goal = last(waits);
+    assert!(
+        with_goal.outcome.is(PolicyCode::PolicyBenefitNonpositive),
+        "{waits:#?}"
+    );
+    assert_eq!(
+        with_goal.detail,
+        "benefit_milli=-500 expected_duration_ms=60000 items=pool.lacking:+600,pool.neutral:-10000"
+    );
+    fixed_first(waits, 100, 9_500, E);
+
+    let mut plain = World::new(paced(9_500, triggered_pools()), 150, Some(10));
+    let evaluation = plain.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let before = decision(&evaluation, "task_g");
+    let without_goal = last(before);
+    assert_eq!(with_goal.outcome, without_goal.outcome);
+    assert_eq!(
+        without_goal.detail,
+        "benefit_milli=-500 expected_duration_ms=60000 items=pool.neutral:-10000"
+    );
+    fixed_first(before, -500, 9_500, E);
+}
+
+// Test 9, ruling 9 at the trigger line. Read at 160, the pool's capped episode begins: the two
+// stages of test 8 are listed by their value without the pool's cost over that cost, `task_g`'s
+// 10 100 with its goal term against `task_a`'s 9 500, so `task_g` heads the round (`capped_spend`,
+// rank 1) with B = 100 + 1000·min(10, 160 − 140) = 10 100, `task_a` waiting `capped_not_head` with
+// 9 500. Its run is handed the capped rule's count: `run_cap` min(⌈(160 − 140) ÷ 10⌉ = 2,
+// ⌊(160 − 104) ÷ 10⌋ = 5, ⌈30 ÷ 2⌉ = 15) = 2, the gap 30. Without the goal the two tie and
+// `task_a`, the first by id, heads the round.
+#[test]
+fn b1_t9_at_the_trigger_line_that_stage_heads_the_capped_episode() {
+    let mut goal = World::new(paced(9_500, triggered_pools()), 160, Some(10)).with_goal();
+    let evaluation = goal.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_g"], "{evaluation:#?}");
+    let head = spend(&evaluation, "task_g");
+    assert_eq!(head.value("capped_rank"), Some(&json!(1)));
+    assert_eq!(head.value("capped_round"), Some(&json!(1)));
+    assert_eq!(head.value("trigger_line"), Some(&json!(160)));
+    fixed_first(decision(&evaluation, "task_g"), 10_100, 9_500, E);
+    spend_values_are(&evaluation, "task_g", 30, 2);
+    let waits = decision(&evaluation, "task_a");
+    assert_eq!(
+        hold(waits).as_deref(),
+        Some("capped_not_head"),
+        "{waits:#?}"
+    );
+    fixed_first(waits, 9_500, 9_500, E);
+
+    let mut plain = World::new(paced(9_500, triggered_pools()), 160, Some(10));
+    let evaluation = plain.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_a"], "{evaluation:#?}");
+    assert_eq!(
+        spend(&evaluation, "task_a").value("capped_rank"),
+        Some(&json!(1))
+    );
+    assert_eq!(
+        hold(decision(&evaluation, "task_g")).as_deref(),
+        Some("capped_not_head")
+    );
+}
+
+// Test 10, ruling 9 below the line for a stage positive without its goal term. With `V` 12 000 both
+// stages are 2 000 without the term, so both may spend at 150 as before; the order then reads the
+// benefit with the term, `task_g`'s 2 600, so `task_g` is dispatched and `task_a` waits
+// `instance_already_selected` with 2 000. Without the goal both are 2 000 and `task_a`, declared
+// first, is dispatched.
+#[test]
+fn b1_t10_below_a_trigger_line_a_stage_positive_without_its_goal_spends_as_before() {
+    let mut goal = World::new(paced(12_000, triggered_pools()), 150, Some(10)).with_goal();
+    let evaluation = goal.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_g"], "{evaluation:#?}");
+    let winner = decision(&evaluation, "task_g");
+    fixed_first(winner, 2_600, 12_000, E);
+    assert_eq!(
+        reason(winner, PolicyCode::RankBreakdown)
+            .outcome
+            .value("benefit_milli"),
+        Some(&json!(2_600))
+    );
+    let other = decision(&evaluation, "task_a");
+    assert!(
+        last(other).outcome.is(PolicyCode::InstanceAlreadySelected),
+        "{other:#?}"
+    );
+    fixed_first(other, 2_000, 12_000, E);
+
+    let mut plain = World::new(paced(12_000, triggered_pools()), 150, Some(10));
+    let evaluation = plain.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_a"], "{evaluation:#?}");
+    fixed_first(decision(&evaluation, "task_g"), 2_000, 12_000, E);
+}
+
+// Test 11, a consumed pool without lines. The stages of test 8 on a capped pool that writes no
+// lines, read at 150: the goal term counts below the cap, so `task_g` (100) is dispatched as in
+// test 1 and `task_a` (−500) waits `policy_benefit_nonpositive`. Without the goal neither runs.
+#[test]
+fn b1_t11_a_consumed_pool_without_lines_lets_the_goal_count_below_its_cap() {
+    let mut goal = World::new(paced(9_500, unlined_pools()), 150, Some(10)).with_goal();
+    let evaluation = goal.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_g"], "{evaluation:#?}");
+    fixed_first(decision(&evaluation, "task_g"), 100, 9_500, E);
+    let other = decision(&evaluation, "task_a");
+    assert!(
+        last(other).outcome.is(PolicyCode::PolicyBenefitNonpositive),
+        "{other:#?}"
+    );
+    fixed_first(other, -500, 9_500, E);
+
+    let mut plain = World::new(paced(9_500, unlined_pools()), 150, Some(10));
+    let evaluation = plain.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let waits = decision(&evaluation, "task_g");
+    assert!(
+        last(waits).outcome.is(PolicyCode::PolicyBenefitNonpositive),
+        "{waits:#?}"
+    );
+    fixed_first(waits, -500, 9_500, E);
 }
 
 // ---- The world a test drives ----
@@ -695,6 +836,42 @@ fn stages(value: i64) -> CompiledCatalog {
         ],
         pools(),
     )
+}
+
+/// Ruling 9's stages: `task_a` and, declared after it, `task_g`, each judged, consuming 10 of the
+/// capped pool a run, with the fixed value `value`; `task_g` also produces 2 of the lacking pool a
+/// run. Over `pool_list`.
+fn paced(value: i64, pool_list: Value) -> CompiledCatalog {
+    catalog(
+        vec![
+            fixed(judged("task_a", 10), value),
+            fixed(
+                with(
+                    judged("task_g", 10),
+                    "produces",
+                    json!([produce(LACKING, 2)]),
+                ),
+                value,
+            ),
+        ],
+        pool_list,
+    )
+}
+
+/// [`pools`] with the capped pool's trigger line 20 below its capacity (160).
+fn triggered_pools() -> Value {
+    let mut list = pools();
+    list[0]["trigger_line"] = line(-20);
+    list
+}
+
+/// [`pools`] with a capped pool that writes no lines.
+fn unlined_pools() -> Value {
+    let mut list = pools();
+    let capped = list[0].as_object_mut().expect("a pool object");
+    capped.shift_remove("stop_line");
+    capped.shift_remove("hard_line");
+    list
 }
 
 /// A pool of the instance that does not regenerate, read from `resource.<the id without

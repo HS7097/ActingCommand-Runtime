@@ -557,7 +557,10 @@ writes a `consumes` of such a pool: it would wait `benefit_unknown` (`valuation_
 run. Nothing changes until a goal is set on the pool (`session.resource_targets`, with its own
 `scale` and `importance_milli`, which a goal on a pool without a valuation must carry); from then on
 the rules that yield it are judged `V` plus their goal terms, and of two of one value and one cost
-the one that yields it goes first. While its gap is open such a rule is handed the gap as
+the one that yields it goes first. A goal chooses which rule spends a pool, the pool's lines choose
+when (ruling 9): a rule that consumes a pool writing a `trigger_line` and is worth running only
+by its goal term waits for that line and then sweeps to the stop line; to pace such a rule on a
+pool without a trigger line, give the pool one (or the rule a cooldown). While its gap is open such a rule is handed the gap as
 `gap_remaining`, and its `run_cap` counts the runs the gap still needs only when every entry of the
 pool declares an integer `amount`: a production by `expected_amount_milli` gives it no `run_cap`
 ([remedies.md](remedies.md), section 4, "Spend values"; unchanged).

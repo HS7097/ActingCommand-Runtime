@@ -425,8 +425,13 @@ pub(super) struct Known<'a> {
 /// What a pool's lines decide for one ranked candidate.
 pub(super) enum Disposition {
     /// No capped order holds it: the gate decides as before; `hold`, when present, holds it if it
-    /// would pass (its hard line, or another consumer's capped order).
-    Normal { hold: Option<DecisionReason> },
+    /// would pass (its hard line, or another consumer's capped order). #455 B1 ruling 9 (register
+    /// §1.518): `below_trigger` when a pool it consumes writes a trigger line and is below it with
+    /// no episode under way, so the gate judges whether it may spend without its goal terms.
+    Normal {
+        hold: Option<DecisionReason>,
+        below_trigger: bool,
+    },
     /// A capped order holds it back this round.
     Held(DecisionReason),
     /// A capped round tries it: it passes with its own `B`, whatever its sign.
@@ -729,8 +734,12 @@ pub(super) fn plan(
             let Some(view) = in_round else {
                 // Below the cap (SCHED-C1c: the trigger line), or the episode ended: the hard line
                 // holds a run that would cross it (SCHED-C1f1: by its consumption in effect, which
-                // its judgement read).
+                // its judgement read). #455 B1 ruling 9 (register §1.518): below a trigger line the
+                // pool writes, the gate judges whether a candidate may spend without its goal
+                // terms.
+                let below_trigger = lines.trigger_line.is_some() && !lines.at_trigger();
                 for (&task_id, (index, _, term)) in &candidates {
+                    decided[*index].below_trigger |= below_trigger;
                     let after = lines.reading - i128::from(units(term.consumed_milli)?);
                     if after < i128::from(lines.hard) {
                         decided[*index].normal_hold(&for_task(
@@ -813,12 +822,14 @@ pub(super) fn settle(
 }
 
 /// What the pools decided for one candidate so far: the first capped hold, the first hard-line
-/// hold and the first capped slot, each in pool order.
+/// hold and the first capped slot, each in pool order; #455 B1 ruling 9: whether a pool it
+/// consumes is below the trigger line it writes, with no episode under way.
 #[derive(Default)]
 struct Decided {
     held: Option<DecisionReason>,
     hold: Option<DecisionReason>,
     member: Option<(KnownBenefit, CappedSlot)>,
+    below_trigger: bool,
 }
 
 impl Decided {
@@ -835,6 +846,7 @@ impl Decided {
     }
 
     fn disposition(self) -> Disposition {
+        let below_trigger = self.below_trigger;
         match (self.held, self.hold, self.member) {
             (Some(held), _, _) => Disposition::Held(held),
             (None, Some(hold), Some(_)) => Disposition::Held(hold),
@@ -842,7 +854,10 @@ impl Decided {
                 benefit,
                 slot: Box::new(slot),
             },
-            (None, hold, None) => Disposition::Normal { hold },
+            (None, hold, None) => Disposition::Normal {
+                hold,
+                below_trigger,
+            },
         }
     }
 }

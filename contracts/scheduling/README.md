@@ -1294,10 +1294,12 @@ task that writes it enters the score stage); the benefit gate never reads it.
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) name each term as
   `<pool>:+<term>`, before the consumption's. Nothing else of `produces` is read: a produced pool
   no goal covers is not looked up, one whose reading is unknown gives a pending goal (`Γ = 0`) and
-  adds nothing, a met goal adds nothing, an entry whose amount is the pending marker yields
-  nothing and never makes `B` unknown; a goal never lowers a `B`. Every reader of `B` takes the
+  adds nothing, a met goal adds nothing, and an entry of a goal-covered pool whose amount is the
+  pending marker counts as a yield of 0 (the coordinator's ruling of 11-23): it adds nothing and
+  never makes `B` unknown; a goal never lowers a `B`. Every reader of `B` takes the
   terms: the order within the business tier (`B ÷ E`) and the reserve gate that takes the
-  candidates in it, the gate's sign and its band, a capped round's listing and frozen order (its
+  candidates in it, the gate's sign and its band (but below the trigger line of a pool it
+  consumes, the next item), a capped round's listing and frozen order (its
   value without the pool's cost, `S` plus that cost, over the cost) and the head's own `B`
   ("Capped spending order"). For example, two stages of `V` 40 000 each consume 30 of a pool
   valued 1000 a unit (`B` 10 000 each, the tie-break deciding between them); one also produces 2
@@ -1308,6 +1310,30 @@ task that writes it enters the score stage); the benefit gate never reads it.
   before. Without such a goal every value, record, decision and identity is as before; what a
   catalog accepts or refuses, its hash and the `requires` names are unchanged, and an older
   Runtime ignores these productions as before.
+- **A goal chooses which task spends a pool, the pool's lines choose when** (#455 B1 ruling 9,
+  since 0.12.82; the coordinator's ruling of 11-23, not the owner's words). Where such a task
+  consumes a pool that writes a `trigger_line` ("Pool lines") and the pool is below that line with
+  no capped episode under way, whether it may spend is judged by its benefit **without** its goal
+  terms (`S` and `ε` without them, which the judgement keeps beside the sums with them), exactly
+  as before them: a task positive without them spends as before (its hard line still holds it),
+  and its order then reads its `B` with them; a task positive only by a goal term waits, with the
+  reason it carries without the goal (`policy_benefit_nonpositive` with that `benefit_milli`, or
+  `benefit_within_tolerance` with that `S` and `ε`), its items still naming the goal terms, and its
+  `benefit_fixed_value` giving `B` with them, so a person sees both. At or above the trigger line,
+  and for an episode under way, the capped spending order reads `S` with the terms (its listing,
+  its frozen order, the head's `B`): when the pool reaches its line the task that produces the
+  lacking pool heads the round and sweeps down to the stop line, its `run_cap` the capped rule's
+  (LF-1, "What the head's run is handed"). A consumed pool without a `trigger_line` (with or
+  without the two other lines) is unchanged: the goal terms count everywhere, and the rule's own
+  cooldown paces it. A worked timeline: a pool of capacity 180, `trigger_line` 160, `stop_line` 140,
+  `hard_line` 104, regenerating one unit in six minutes, valued 1000 milli a unit; a task of `V`
+  9 500 consumes 10 a run (`B` −500 without the goal, `S − W·c`) and produces 2 a run of a pool a
+  goal lacks 30 of (term 600, `B` 100 with it). From 110 the pool regenerates: from 114 on one run
+  would fit above the hard line, but below 160 the task waits `policy_benefit_nonpositive` −500,
+  as without the goal. At 160 (five hours after 110) the episode begins, the task heads it and is
+  handed `run_cap` min(⌈(160 − 140) ÷ 10⌉, ⌊(160 − 104) ÷ 10⌋, ⌈30 ÷ 2⌉) = 2: one dispatch, two
+  runs, to 140; the pool is read again after that run (LF-1), and the next sweep comes when it is
+  back at 160, two hours later. Without ruling 9 it would have run once each hour from 114 on.
 - **One scale** (the coordinator's point 3). Static and dynamic candidates of one instance are
   ordered by the keys the business tier already has, with no second stage: `promoted`, the tier,
   SS-2f's turns across instances, then `B ÷ E` compared exactly (`B·E' > B'·E`), then `affinity`
@@ -2608,7 +2634,10 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
   `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`, `amount_after`), waking at a
-  regenerating pool's next step as a not-positive candidate does.
+  regenerating pool's next step as a not-positive candidate does. #455 B1 ruling 9 (since
+  0.12.82): below a `trigger_line` the pool writes, whether a candidate with a fixed value would
+  pass is judged without its goal terms ("Fixed values written in the pack", "A goal chooses
+  which task spends a pool, the pool's lines choose when").
 - **Unknown or invalid.** A pool that writes its lines and whose capacity, reading or a line's fact
   gives no value enters no capped state, and its judged candidates that would pass are deferred
   with `pool_line_held` `capped_cap_unknown` (`fact_key`, `unknown_reason` when a fact gives
