@@ -4462,3 +4462,18 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_477_lr1::lr1_a_press_count_of_a_linear_steps_pack_needs_revision_25_and_nothing_else_does",
 ]
 incident = ["#477 LR-1"]
+
+# Workflow #392 DA-L0 (0.12.83; register §1.521; coordinator work order rd-1123/brief-392-dal0.md, its tests 1 to 8; contracts/display-adapter.md section 14): the layout probe, `actinglab layout probe` (MCP ac_layout_probe), offline, says where each template mark of a page went on a saved frame of the base's ratio or wider. On actinglab's command line with a synthetic package whose base is 128x72 (its page neutral/other, first, requires two templates drawn nowhere; its page neutral/wide seven template marks, a colour and a check), every frame drawn on its scale frame in 2x2 blocks and enlarged by nearest neighbour: a 240x108 frame (20:9) is brought to 160x72 by 3/2, room 32, places 0, 16, 32: centre_a and centre_b centre (dx 16), start start, end end (32), inset other (26, the reading's inset of about 6), stretched missing at its base place, absent missing (dx 4, dy -44), with their base places, best places and scores; the counts, the dx values and the readings "edges are followed; an inset of about 6" and "not this page" (1); 256x144 (the base's ratio, twice its size): factor 2, no room, every mark of the wide page as_mapped at its base place (2); 128x96 ratio_below_base, 96x54 scale_below_base and 72x128 orientation_mismatch, each lab_scene_size_unsupported, exit 2, with the frame's size and the base's (3); 132x72, room 4: no mark classed, every count 0, every reading "the room is too small to tell", the offsets kept (4); without a page named the wide page, second in the page set, first in pages_by_share; with --page neutral/other that page alone; an unknown page validation_failed (5); the wide page's colour and check under not_probed with their kind and rectangle (6); test 1's answer member by member at every depth, every text an id, a page, a kind, a class or a reading (7); through serve --stdio --front mcp the row answers exit 0 and the command line's line, member for member, and the line is the answer's members beside its outcome (8). Adapted: gate_434_lab5b4::every_own_command_refuses_a_flag_it_does_not_read lists 35 own commands, layout probe after locate (its row a read-list row); display-adapter's gate_392_da1::da1_t16_every_display_problem_is_display_map_unresolved counts ratio_below_base among the tokens the map never gives.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t1_a_twenty_by_nine_frame_classes_each_mark_as_the_table_says",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t2_a_frame_of_the_base_ratio_twice_its_size_has_every_mark_as_mapped",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t3_a_taller_a_smaller_and_a_portrait_frame_are_refused_with_their_word",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t4_a_room_below_twice_the_tolerance_classes_no_mark",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t5_without_a_page_named_the_page_on_the_frame_comes_first",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t6_marks_of_the_other_families_are_listed_as_not_probed",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t7_the_answer_holds_no_member_beyond_its_list",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_392_dal0::dal0_t8_the_mcp_face_answers_the_command_lines_members",
+]
+incident = ["#392 DA-L0"]

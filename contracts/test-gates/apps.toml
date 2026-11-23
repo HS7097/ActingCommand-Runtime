@@ -3022,3 +3022,11 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_fr1_a_broken_element_past_64_entries_refuses_the_adoption",
 ]
 incident = ["#477 CV-2b"]
+
+# Workflow #392 DA-L0 (0.12.83; register §1.521; coordinator work order rd-1123/brief-392-dal0.md, test 8; contracts/display-adapter.md section 14): the layout probe's MCP face. In the tools the Lab's MCP server generates from the operation table this build embeds, the row layout probe (authoring module, slice 392-DAL0) is offered as ac_layout_probe and served by a serve child; listed with the authoring module, read-only and not destructive; its input schema lists exactly scene, package, zip, page and tolerance_px, scene alone required, tolerance_px an integer from 0 with the default 4. The CLI face against the MCP face on test 1's fixture is the exec row's test 8.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_392_dal0::dal0_t8_the_layout_probe_is_offered_as_ac_layout_probe",
+]
+incident = ["#392 DA-L0"]

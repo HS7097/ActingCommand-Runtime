@@ -104,6 +104,10 @@ mod gate_480_pg2d;
 // (`pg2e_ac_status_and_ac_pause_take_the_parameters_they_took`).
 #[cfg(test)]
 mod gate_480_pg2e;
+// Test-only: Workflow #392 DA-L0, the layout probe's row is offered as `ac_layout_probe`, served by a
+// `serve` child (`dal0_t8_the_layout_probe_is_offered_as_ac_layout_probe`).
+#[cfg(test)]
+mod gate_392_dal0;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};

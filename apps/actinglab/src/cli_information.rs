@@ -219,6 +219,13 @@ pub(super) fn help_data() -> Value {
     ]);
     help["command_options"]["current-page"] = json!([scene, package]);
     help["command_options"]["is-visible"] = json!(["<target> | --target <id>", scene, package]);
+    // Workflow #392 DA-L0: one saved frame of the base's ratio or wider, read offline.
+    help["command_options"]["layout probe"] = json!([
+        "--scene <png> (one saved frame of the base's orientation, at least its height, of its ratio or wider)",
+        package,
+        "--page <id> (one page of the package; without it every page)",
+        "--tolerance-px <n> (how far a mark may lie from a place and still be at it; default 4)"
+    ]);
     help
 }
 

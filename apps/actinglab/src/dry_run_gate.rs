@@ -386,6 +386,8 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("current-page", Mode::NoEffect),
     ("is-visible", Mode::NoEffect),
     ("locate", Mode::NoEffect),
+    // Workflow #392 DA-L0: it reads a package and a saved frame and writes nothing.
+    ("layout probe", Mode::NoEffect),
     ("lab validate", Mode::NoEffect),
     ("lab status", Mode::NoEffect),
     ("lab receipt", Mode::NoEffect),

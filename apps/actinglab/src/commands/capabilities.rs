@@ -215,6 +215,9 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("current-page", ["device"], "available"),
         command_cap("is-visible", ["device"], "available"),
         command_cap("locate", ["device"], "available"),
+        // Workflow #392 DA-L0: where each template mark of a page went on a saved frame; it reads
+        // the package and the frame only.
+        command_cap("layout probe", ["offline", "read_only"], "available"),
         // Workflow #434 LW-1 fix round 1 (register §1.435): they only plan, on a saved frame
         // (`--scene` with `--dry-run`), and press nothing; `do --capture` and `ensure --capture`
         // press.

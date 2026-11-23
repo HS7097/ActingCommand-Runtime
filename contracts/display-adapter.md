@@ -16,6 +16,7 @@ onto whatever frame the device delivers. This document grows slice by slice:
 | DA-5cd | the Lab's offline recognition on a stored scene of another size than its package; the base size of a recording and the refusal of a recording on a display that is not the base size | section 12, 0.12.67 |
 | DA-5 | task schema `0.10` and box references; the conversion of a recording made on a display that is not the base size | later |
 | F-3b | without a rule, a display within a pixel of the base's shape is the base's display scaled, each axis by its own factor (Workflow #479) | section 13, 0.12.75 |
+| DA-L0 | the Lab's layout probe: where each template mark of a page went on a saved frame of the base's ratio or wider, offline | section 14, 0.12.83 |
 
 From DA-2a every frame a run recognises passes the crate's map (section 8), and from DA-3 every
 input a run makes leaves through it (section 10); a 1280×720 package on a 1280×720 frame behaves
@@ -762,3 +763,88 @@ declare a rule for them. This is a fact about displays, not about a game.
   `record_size_not_base`, as one of 1920×1080 frames is; and an ending's frame of such a size is
   converted to its recording's size, as one of twice its size is
   ([lab-recording.md](lab-recording.md), "Endings").
+
+## 14 The layout probe (DA-L0)
+
+Workflow #392 DA-L0 (0.12.83; register §1.521); the rules are the coordinator's rulings in the
+slice's work order, not the owner's words. On a frame wider than 16:9 an application does not
+enlarge its 16:9 interface: some elements stay centred, some follow an edge or a corner, some
+stretch, some move inward by a cutout's inset. Before anyone declares how an application lays out
+such a frame, somebody has to measure, per application and per page, what each element does. The
+Lab's offline operation `layout probe` (MCP `ac_layout_probe`; the operation table's row, slice
+`392-DAL0`) measures it from one saved frame. It describes: it writes no declaration and decides
+nothing, and the run path is as before (a run on a frame wider than the base's ratio is still
+refused at its first frame, section 8).
+
+- **What it reads.** A saved frame (`scene`, a PNG) and a package (`package` or `zip`), read as the
+  offline `recognize` reads them (section 12: the externally verified bundle, its recognition pack
+  and its page set, and the scene file); `page` names one page of the package, and without it
+  every page is answered; `tolerance_px` (default 4) is how far, in scale-frame pixels, a mark may
+  lie from a place and still be at it. No capture, no input, no run, no Runtime; nothing is
+  written.
+- **The frame.** A frame of the base's orientation, at least the base's height and whose width
+  over its height is not below the base's (`W · Hb ≥ Wb · H`) is taken. It is brought to the base's
+  height by the map this crate builds under the rule "by height, on the screen" (section 2.3,
+  `s = H / Hb`, reduced) and resampled once by the function the frame gate resamples a frame of the
+  base's ratio with (REC-5, area average, section 8): the **scale frame**, `round_half_up(W / s)`
+  by `Hb`, the base's width and the **room** `R`. A frame of the base's ratio has no room (its scale
+  frame is the gate's, the base). Any other frame is refused before anything is searched,
+  `lab_scene_size_unsupported` (section 12's refusal: exit 2 on a `--via` line; actinglab's own
+  line and `serve --stdio --front mcp` exit 1 for every refusal), with one word of
+  `display_problem`, in this order: the base's other orientation (for a landscape base, a frame
+  whose height exceeds its width) `orientation_mismatch`; lower than the base (a factor below 1)
+  `scale_below_base`; narrower than the base's ratio `ratio_below_base` (a word of DA-L0's, which
+  no map gives). `layout_undeclared` is never the probe's.
+- **A mark.** Each template mark the chosen pages require (their `required`), each once, is
+  searched over the whole scale frame, its declared region aside: its template scored as
+  recognition scores it, with the pack's metric, the mark's gray-range mask and its factors, on the
+  exact score maps (the search of a template declared over the whole frame). Its best place (a
+  rectangle in scale-frame pixels), its score and its threshold (the mark's, else the pack's
+  default) are answered; it is **found** when its score reaches its threshold. Its colour check,
+  its luma floor and its uniqueness are no part of the measurement. Its **base place** is its
+  template, of the size it was found at, centred in its declared rectangle (half the difference
+  rounded down): the place the base gives it, exact for a region that is its template or its
+  template with an equal margin on every side (a recording's marks: its 48-pixel search margin),
+  and off by up to half that margin where a region was cut at the base's edge. `dx` and `dy` are
+  the best place's offset from it, across and down. A template declared over the whole frame
+  (`full_frame`) has no base place and no offsets. A mark that is no template (a colour, a colour
+  digest, an OCR or NN target, a check, a value test) and a template this build cannot evaluate are
+  listed in `not_probed` with their kind and their declared rectangle in the base (null where they
+  declare none).
+- **Classes.** The places are `start` (`dx` 0), `centre` (`⌊R / 2⌋`, as the middle of section 3)
+  and `end` (`R`). A found mark whose `dy` lies within the tolerance of 0 and whose `dx` lies
+  within it of a place is at that place; any other found mark is `other` (the offsets say where);
+  a mark not found is `missing` (its best score and its best place still answered). Without room
+  the three places are one: a found mark within the tolerance of 0 both ways is `as_mapped`. Where
+  the room is above 0 and the windows of two places overlap, `⌊R / 2⌋ ≤ 2 · tolerance` (the
+  start's and the centre's overlap first; the centre's and the end's lie at least as far apart),
+  `room_too_small` is true and no mark is classed: every `class` is null.
+- **Per page and overall.** Each page answers its marks, its `not_probed` and a summary: how many
+  marks it searched and how many were found, the counts by class, the distinct `dx` of its found
+  marks with their counts (an inset shows as a value beside 0 or beside `R`), and one line of
+  reading. The reading, in this order: "the room is too small to tell"; "no template mark to
+  probe"; nothing found, "not this page"; without room, "as mapped: a frame of the base's ratio"
+  when every found mark is `as_mapped`, else "not where the base puts them: the offsets say where";
+  every found mark at the centre, "a centred base-ratio window"; otherwise, joined by "; ", "edges
+  are followed" (found marks at the start and at the end; "the start edge is followed" or "the end
+  edge is followed" for one of them) and "an inset of about N" for each distinct inset (an `other`
+  mark within the tolerance down, inward of an edge and nearer to it than to the centre, `N` its
+  distance from that edge), or, where none of these holds, "neither a centred window nor a
+  followed edge: the offsets say where". The reading describes the measurement; nothing reads it
+  as a decision. `overall` is the summary of every template mark of the chosen pages, each once.
+  The answer's first member, `pages_by_share`, orders the chosen pages by the share of their
+  template marks found, the highest first, pages of one share in the package's order: the frame
+  shows one page, and the caller reads the best.
+- **What the answer holds.** Mark and page ids, rectangles, offsets, scores and thresholds,
+  counts, the frame's size, the base's, the factor and the scale frame's size, the room, the
+  tolerance, the places, the classes and the readings; no pixel, no text read from the frame and no
+  crop of it, so that an answer about a frame that shows account data is safe to paste. Its
+  members: `pages_by_share[{page, found, probed}]`, `frame{width, height}`, `base`, `factor{num,
+  den}`, `scale_frame`, `room`, `tolerance_px`, `places{start, centre, end}`, `room_too_small`,
+  `pages[{page, marks[{id, base, best, score, threshold, dx, dy, class}], not_probed[{id, kind,
+  region}], summary}]` and `overall`; a summary is `{probed, found, counts{as_mapped, start,
+  centre, end, other, missing}, dx_values[{dx, count}], reading}`.
+- **What is not changed.** The kernel's frame gate (section 8), the host's input and the adapter's
+  admission (section 10), the recognition crates and every run: a run on a frame wider than the
+  base's ratio is refused at its first frame exactly as before. No interface revision moves and no
+  configuration key is added.

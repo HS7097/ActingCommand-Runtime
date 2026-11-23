@@ -233,7 +233,7 @@ fn command_path_and_args(rest: Vec<String>) -> (Vec<String>, Vec<String>) {
     let top = rest[0].clone();
     let path_len = match top.as_str() {
         "user-config" | "env" | "lab" | "package" | "operation" | "control" | "runtime"
-        | "resource" | "run" | "report" | "session" | "scheduling" | "standard-pack" => {
+        | "resource" | "run" | "report" | "session" | "scheduling" | "standard-pack" | "layout" => {
             rest.get(1).map(|_| 2).unwrap_or(1)
         }
         _ => 1,

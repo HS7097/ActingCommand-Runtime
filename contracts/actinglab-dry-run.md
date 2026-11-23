@@ -142,6 +142,7 @@ refused form runs before it refuses; every other check runs only on a real invoc
 | `current-page` | no_effect | | |
 | `is-visible` | no_effect | | |
 | `locate` | no_effect | | |
+| `layout probe` | no_effect | | reads a package and a saved frame only; writes nothing (Workflow #392 DA-L0, [display-adapter.md](display-adapter.md) section 14) |
 | `tap-target` | preview | `executed_false` | |
 | `navigate` | preview | `executed_false` | |
 | `monitor` | no_effect | | retired |

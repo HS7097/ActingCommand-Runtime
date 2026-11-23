@@ -72,6 +72,11 @@ actingcommand_contract::outcome_vocabulary! {
         /// Workflow #392 DA-4b-D: the device model's declaration file covers no display size and
         /// rotation the frame shows.
         SafeAreaFormUndeclared => "safe_area_form_undeclared",
+        /// Workflow #392 DA-L0: the frame's width over its height is below the base's (a frame
+        /// taller than the base's ratio), so that, brought to the base's height, it is narrower
+        /// than the base. No map refuses with it: the Lab's layout probe, which measures the room
+        /// a frame of the base's ratio or wider has across, refuses such a frame with it.
+        RatioBelowBase => "ratio_below_base",
     }
 }
 
