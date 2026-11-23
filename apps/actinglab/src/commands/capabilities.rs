@@ -80,6 +80,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("standard-pack catalog", ["offline"], "available"),
         command_cap("package fmt", ["offline"], "available"),
         command_cap("package edit", ["offline"], "available"),
+        // #463 SEL-F: rewrites a package's files from the package alone, as `package edit` does.
+        command_cap("package fix-select", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
         command_cap("package variables", ["offline", "read_only"], "available"),
         command_cap("operation validate", ["offline"], "available"),

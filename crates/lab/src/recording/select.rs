@@ -380,8 +380,8 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
         _ => {
             return Err(shape(
                 "wanted needs exactly one of default (the default of the package's variable, a \
-                 choice a person makes) and fixed (the names the package itself looks for, in an \
-                 order of preference; no variable)"
+                 choice of taste a person makes) and fixed (the names the package itself looks \
+                 for, in an order of preference; no variable)"
                     .to_string(),
             ));
         }

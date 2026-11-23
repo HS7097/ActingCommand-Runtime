@@ -98,13 +98,16 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// #463 RC-1: its row `resource regression` (`ac_resource_regression`), through a `serve` child.
 /// Workflow #392 DA-L0 (`392-DAL0`): its row `layout probe` (`ac_layout_probe`), through a `serve`
 /// child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 19] = [
+/// #463 SEL-F (`463-SELF`): its row `package fix-select` (`ac_package_fix_select`), through a
+/// `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 20] = [
     "392-DAL0",
     "463-RC1",
     "463-S2-13",
     "463-S21",
     "463-S22",
     "463-S3-14",
+    "463-SELF",
     "463-V3",
     "464-P3",
     "477-PC1",

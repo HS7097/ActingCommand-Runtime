@@ -210,6 +210,9 @@ mod recording_api;
 // #463 RC-1: a resource repository's regression case, its reader and its runner.
 mod regression_case;
 mod scheduling;
+// #463 SEL-F: `package fix-select`, a package's select converted to the fixed form from the
+// package's own files.
+mod select_fix;
 // #463 R2 fix 1: the scripted clock of a gate test that runs the kernel's interpreter on a device
 // of its own; no gate file reads a clock.
 #[cfg(test)]
@@ -258,6 +261,11 @@ pub use recording_api::*;
 // #463 RC-1: the regression case's reader and runner.
 pub use regression_case::*;
 pub use scheduling::*;
+// #463 SEL-F: the package route's request, its answer and the words its provenance note carries.
+pub use select_fix::{
+    SELECT_FIX_OPERATION, SELECT_FIX_PROVENANCE, SelectFix, SelectFixFile, SelectFixRequest,
+    fix_package_select,
+};
 pub use state::*;
 pub use touch::LabTouch;
 

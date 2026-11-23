@@ -201,6 +201,12 @@ pub(super) fn help_data() -> Value {
                 "--package <content directory>",
                 "--patch <JSON array of {file, op: add|replace, path: JSON pointer, value}>",
                 "--file <path in the package> with --add <JSON pointer> or --replace <JSON pointer> and --value <JSON>: one edit instead of --patch"
+            ],
+            // #463 SEL-F.
+            "package fix-select": [
+                "--package <content directory>",
+                "--variable <name> (the variable one select step of the package reads)",
+                "--fixed <name,name,...> (the names to fix the select to, in an order of preference; absent: the variable's default)"
             ]
         },
         "compatibility_notes": {

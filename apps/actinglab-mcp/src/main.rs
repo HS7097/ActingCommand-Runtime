@@ -108,6 +108,10 @@ mod gate_480_pg2e;
 // `serve` child (`dal0_t8_the_layout_probe_is_offered_as_ac_layout_probe`).
 #[cfg(test)]
 mod gate_392_dal0;
+// Test-only: #463 SEL-F, Addendum 1, the package route's row is offered as `ac_package_fix_select`
+// where `package edit`'s is (`self_t11_package_fix_select_is_offered_where_package_edit_is`).
+#[cfg(test)]
+mod gate_463_self;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};

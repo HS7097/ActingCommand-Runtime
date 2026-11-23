@@ -331,6 +331,19 @@ actingcommand_contract::outcome_vocabulary! {
         /// the finger further along the list than the kernel admits (its length less a row's, less
         /// one), which no given number changes: the scroll is recorded again with shorter swipes.
         ScanSwipeTooLong => "scan_swipe_too_long",
+        /// #463 SEL-F, `package fix-select`: the package declares no variable of the name given
+        /// (a package converted before has none).
+        VariableMissing => "variable_missing",
+        /// #463 SEL-F, `package fix-select`: the variable is not read by exactly one select of the
+        /// package and by nothing else (another step, another policy document, a task member).
+        VariableReadElsewhere => "variable_read_elsewhere",
+        /// #463 SEL-F, `package fix-select`: the variable's default is not an ordered list of
+        /// names, each once.
+        DefaultNotNames => "default_not_names",
+        /// #463 SEL-F, `package fix-select`: a member the conversion would rewrite (the variable's
+        /// declaration but its default, the select's policy facts, gates and scoring) or the select's
+        /// names it reads are not as `record stop` writes them for a select with a variable.
+        MembersEdited => "members_edited",
     }
 }
 

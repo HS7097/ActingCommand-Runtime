@@ -16,7 +16,16 @@
 // - `self_t4_a_fixed_select_presses_the_first_name_of_its_order_the_screen_shows` (4)
 // - `self_t6_a_package_with_a_variable_is_converted_without_recording_again` (6)
 // - `self_t7_a_root_whose_package_lost_its_variable_is_checked_as_one_without_variables` (7)
-// Test 5, a fixed select over a scan, is `gate_463_self_scan`.
+// - `self_review_each_wrong_fixed_declaration_is_refused_with_its_word` (the review's table)
+// Addendum 1 (ruling 8, `rd-1123/brief-463-self-fix1.md`; "Converting a package from its own
+// files"), the package route, `fix_package_select`, on packages `record stop` generated here:
+// - `self_t8_a_package_converted_from_its_files_is_what_a_fixed_recording_generates` (8)
+// - `self_t9_names_given_in_order_convert_to_what_a_recording_fixing_them_generates` (9)
+// - `self_t10_each_refusal_of_the_conversion_has_its_word` (10)
+// - `self_t12_a_package_converted_twice_refuses_the_second_time` (12)
+// Test 5, a fixed select over a scan, and the scan fixtures of tests 8 and 9 are
+// `gate_463_self_scan`; test 11 and the command line's side of test 10 are actinglab's
+// `gate_463_self` and actinglab-mcp's `gate_463_self`.
 
 use crate::recording::crosscheck::admit;
 use crate::recording::store::{old_record_path, recording_path};
@@ -24,8 +33,9 @@ use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
     LAB_RECORD_MARK_SCHEMA, LabOcr, MarkOutcome, MarkRequest, PlanClickRequest, PointPress,
     RecordFramePorts, RecordPoint, RecordPressRequest, RecordRect, RecordStartOptions,
-    RecordStopOptions, RecordingLock, RegressionVerdict, record_mark, record_press, record_ready,
-    record_start, record_stop, run_regression_case,
+    RecordStopOptions, RecordingLock, RegressionVerdict, SelectFix, SelectFixRequest,
+    fix_package_select, record_mark, record_press, record_ready, record_start, record_stop,
+    run_regression_case,
 };
 use actingcommand_contract::{
     InputAction, InputFrameReference, InstanceFactContext, InstanceFactSnapshot, LabError,
@@ -236,7 +246,7 @@ fn page_mark() -> Value {
     json!({"id": PAGE, "family": "color", "region": rect(2, 50, 4, 4)})
 }
 
-// The wanted value of a choice a person makes: the variable's default.
+// The wanted value of the variable form: the variable's default.
 fn chosen_by_a_person(default: &str) -> Value {
     json!({"name": WANTED, "default": default})
 }
@@ -750,16 +760,14 @@ fn written_cases(lab: &Value) -> BTreeMap<String, (Vec<u8>, Vec<u8>)> {
     cases
 }
 
-// The work order's lines on the cases: every case read from disk names neither the variable nor
-// the key a run reads it under (a case has no member that sets a value), and passes when the one
-// runner of the case contract runs it on the package at `dir`.
-fn cases_pass_and_set_no_value(bench: &Bench, lab: &Value, dir: &Path) -> Vec<String> {
+// The work order's lines on the cases: every case `record stop` wrote for `lab`, read from disk,
+// passes when the one runner of the case contract runs it on the package at `dir`. (A case holds
+// pages and targets and sets no value in either form, so the review had the earlier check that it
+// names no variable taken out: it showed nothing.)
+fn cases_pass(bench: &Bench, lab: &Value, dir: &Path) -> Vec<String> {
     let cases = written_cases(lab);
     assert!(!cases.is_empty(), "{lab}");
     for (id, (case_json, scene)) in &cases {
-        let case = text(case_json);
-        assert!(!case.contains(WANTED), "{id}: {case}");
-        assert!(!case.contains("session.dispatch.parameter"), "{id}: {case}");
         let verdict = run_regression_case(dir, case_json, scene, &bench.ocr);
         assert_eq!(
             verdict.verdict,
@@ -776,7 +784,7 @@ fn cases_pass_and_set_no_value(bench: &Bench, lab: &Value, dir: &Path) -> Vec<St
 // decision on slot 1, `lab.selects` naming the fixed names; `control.json` declares no
 // `variables`; the policy document is the fixed form, its gate comparing with the literal item_b;
 // the admitted package declares no variable and takes no value of the name (nothing a console can
-// list or set); and its regression cases set no value and pass.
+// list or set); and its regression cases pass.
 #[test]
 fn self_t1_a_fixed_select_declares_no_variable_and_its_policy_compares_with_the_literal() {
     let bench = Bench::new();
@@ -830,7 +838,7 @@ fn self_t1_a_fixed_select_declares_no_variable_and_its_policy_compares_with_the_
         "a value of the name is no value of the package"
     );
     let dir = bench.package_dir("package", &entries);
-    cases_pass_and_set_no_value(&bench, &lab, &dir);
+    cases_pass(&bench, &lab, &dir);
 }
 
 // The work order's test 2: the same recording with the variable form (the default item_b): the
@@ -959,7 +967,7 @@ fn self_t4_a_fixed_select_presses_the_first_name_of_its_order_the_screen_shows()
 // no variable, the policy document is the fixed form of item_b, the converted package chooses on
 // every screen what the old one chose handed no value (slot 1 on the list, the `on_empty` key where
 // item_b is absent), its simulation taps the slot the old one tapped, and its regression cases are
-// those of before, each passing from disk and setting no value.
+// those of before, each passing from disk.
 #[test]
 fn self_t6_a_package_with_a_variable_is_converted_without_recording_again() {
     let bench = Bench::new();
@@ -1023,7 +1031,7 @@ fn self_t6_a_package_with_a_variable_is_converted_without_recording_again() {
     };
     assert_eq!(ids(&after), ids(&before), "{after}");
     let dir = bench.package_dir("converted", &new);
-    let passed = cases_pass_and_set_no_value(&bench, &after, &dir);
+    let passed = cases_pass(&bench, &after, &dir);
     assert_eq!(passed.into_iter().collect::<BTreeSet<_>>(), ids(&after));
 }
 
@@ -1193,4 +1201,408 @@ fn self_t7_a_root_whose_package_lost_its_variable_is_checked_as_one_without_vari
     );
     assert_eq!(root_problems(&new), root_problems(&plain));
     assert!(plain.variable_provenance.is_none());
+}
+
+// The review's table of refusals of the recording's declaration ("A select the package fixes",
+// "The member"): on the list's first screen, step 1's select with a `wanted` that gives both
+// `default` and `fixed`, neither, an empty `fixed`, three names where the select has two, a name
+// twice: each `validation_failed`; a name that is none of the select's names: `record_select_invalid`
+// with `default_not_in_names`. Each refusal leaves the recording's bytes as they were.
+#[test]
+fn self_review_each_wrong_fixed_declaration_is_refused_with_its_word() {
+    let bench = Bench::new();
+    bench.press_on(list());
+    let before = bench.recording_bytes();
+    let both = json!({"name": WANTED, "default": "item_b", "fixed": ["item_b"]});
+    let neither = json!({"name": WANTED});
+    let cases = [
+        (both, "validation_failed", None),
+        (neither, "validation_failed", None),
+        (fixed(&[]), "validation_failed", None),
+        (
+            fixed(&["item_a", "item_b", "item_c"]),
+            "validation_failed",
+            None,
+        ),
+        (fixed(&["item_b", "item_b"]), "validation_failed", None),
+        (
+            fixed(&["item_c"]),
+            "record_select_invalid",
+            Some("default_not_in_names"),
+        ),
+    ];
+    for (wanted, code, problem) in cases {
+        let declared = select(wanted.clone(), Some("item_a"));
+        let error = match bench.mark(json!({"step": 1, "add": [page_mark()], "select": declared})) {
+            Ok(_) => panic!("{wanted}: the mark stood"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, code, "{wanted}: {}", error.message);
+        if let Some(problem) = problem {
+            let details = error.details.as_ref().expect("the refusal's details");
+            assert_eq!(details["select_problem"], problem, "{wanted}");
+        }
+        assert!(
+            bench.recording_bytes() == before,
+            "{wanted}: the recording is unchanged"
+        );
+    }
+}
+
+// #463 SEL-F, Addendum 1: `package fix-select` of the variable `variable` on the package
+// `entries`, fixed to `names` when they are given (the package route, `fix_package_select`).
+pub(crate) fn fix_select(
+    entries: &BTreeMap<String, Vec<u8>>,
+    variable: &str,
+    names: Option<&[&str]>,
+    ocr: &LabOcr,
+) -> LabResult<SelectFix> {
+    let fixed = names.map(|given| {
+        given
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>()
+    });
+    fix_package_select(
+        entries,
+        &SelectFixRequest {
+            variable: variable.to_owned(),
+            fixed,
+        },
+        ocr,
+    )
+}
+
+// The conversion of the variable `list_item` on `entries`, which must stand, and the package with
+// the files it changed written over the old ones, as the command writes them.
+pub(crate) fn convert_package(
+    entries: &BTreeMap<String, Vec<u8>>,
+    names: Option<&[&str]>,
+    ocr: &LabOcr,
+) -> (SelectFix, BTreeMap<String, Vec<u8>>) {
+    let fix = fix_select(entries, WANTED, names, ocr).unwrap_or_else(|error| {
+        panic!(
+            "package fix-select: {}: {} {:?}",
+            error.code, error.message, error.details
+        )
+    });
+    let mut changed = entries.clone();
+    for file in &fix.files {
+        changed.insert(file.file.clone(), file.bytes.clone());
+    }
+    (fix, changed)
+}
+
+// The note the conversion adds to the task's `provenance.select_fixes` for the select step
+// `operation`: its variable `list_item`, whose default was `default`, fixed to `fixed`.
+pub(crate) fn conversion_note(operation: &str, default: &[&str], fixed: &[&str]) -> Value {
+    json!({
+        "operation": "package fix-select",
+        "step_operation": operation,
+        "variable": WANTED,
+        "default": default,
+        "fixed": fixed
+    })
+}
+
+// A task document without what a converted package's task may differ in from a recorded one's:
+// its provenance and each operation's.
+fn without_provenance(task: &Value) -> Value {
+    let mut stripped = task.clone();
+    if let Some(object) = stripped.as_object_mut() {
+        object.shift_remove("provenance");
+    }
+    if let Some(operations) = stripped["operations"].as_array_mut() {
+        for operation in operations {
+            if let Some(object) = operation.as_object_mut() {
+                object.shift_remove("provenance");
+            }
+        }
+    }
+    stripped
+}
+
+// Ruling 8's comparison: the package `converted` from its own files against `recorded`, the one
+// `record stop` generated for the same recording declared `fixed` with the same names. The same
+// files; every one but the task `task` byte for byte (`control.json` and the policy document among
+// them); the task the same but for its provenance and its operations'; the conversion's `note` the
+// one entry of `provenance.select_fixes`, which the recorded task does not have.
+pub(crate) fn assert_as_recorded(
+    converted: &BTreeMap<String, Vec<u8>>,
+    recorded: &BTreeMap<String, Vec<u8>>,
+    task: &str,
+    note: &Value,
+) {
+    assert_eq!(
+        converted.keys().collect::<Vec<_>>(),
+        recorded.keys().collect::<Vec<_>>()
+    );
+    for (path, bytes) in recorded {
+        if path != task {
+            assert!(
+                converted[path] == *bytes,
+                "{path} differs from the recorded package's"
+            );
+        }
+    }
+    let ours = document(converted, task);
+    let theirs = document(recorded, task);
+    assert_eq!(without_provenance(&ours), without_provenance(&theirs));
+    assert_eq!(ours["provenance"]["select_fixes"], json!([note]));
+    assert_eq!(theirs["provenance"].get("select_fixes"), None);
+}
+
+// A package generated with the variable form, the default item_b, the demonstration pressing
+// item_a in slot 0: the `lab` output and the package's entries.
+fn variable_package(bench: &Bench) -> (Value, BTreeMap<String, Vec<u8>>) {
+    let lab = bench.generated(list(), select(chosen_by_a_person("item_b"), Some("item_a")));
+    let entries = package(&lab);
+    (lab, entries)
+}
+
+// The work order's test 8 (Addendum 1, ruling 8): the package of the variable form converted from
+// its own files, no names given: the variable's default fixed. It answers the select step's
+// operation, the variable, its default and the names fixed, and each file it changed with the
+// members: `control.json` (`/variables`, the last), the policy document (`/facts`, `/gates`,
+// `/scoring`) and the task (`/provenance/select_fixes`). The converted package is the one `record
+// stop` generates for the same recording declared `fixed: [item_b]`, byte for byte but for the
+// task's provenance (`assert_as_recorded`); it declares no variable, is admitted, and the regression
+// cases written with the old package pass on it from disk.
+#[test]
+fn self_t8_a_package_converted_from_its_files_is_what_a_fixed_recording_generates() {
+    let bench = Bench::new();
+    let (lab, old) = variable_package(&bench);
+
+    let (fix, new) = convert_package(&old, None, &bench.ocr);
+
+    assert_eq!(fix.operation, OPERATION);
+    assert_eq!(fix.variable, WANTED);
+    assert_eq!(fix.default, ["item_b"]);
+    assert_eq!(fix.fixed, ["item_b"]);
+    let changed = fix
+        .files
+        .iter()
+        .map(|file| (file.file.as_str(), file.members.clone()))
+        .collect::<Vec<_>>();
+    let members = |listed: &[&str]| {
+        listed
+            .iter()
+            .map(|member| (*member).to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        changed,
+        [
+            ("control.json", members(&["/variables"])),
+            (POLICY, members(&["/facts", "/gates", "/scoring"])),
+            (TASK, members(&["/provenance/select_fixes"])),
+        ]
+    );
+    let recorded = Bench::new();
+    let fixed_lab = recorded.generated(list(), select(fixed(&["item_b"]), Some("item_a")));
+    assert_as_recorded(
+        &new,
+        &package(&fixed_lab),
+        TASK,
+        &conversion_note(OPERATION, &["item_b"], &["item_b"]),
+    );
+    assert_eq!(document(&new, "control.json").get("variables"), None);
+    assert_eq!(
+        text(&new[POLICY]),
+        written(&fixed_policy(
+            json!(["item_b"]),
+            json!([place("item_b", 1)])
+        ))
+    );
+    let prepared =
+        admit(&new, &bench.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    assert!(prepared.declared_variables().is_empty());
+    let dir = bench.package_dir("converted", &new);
+    cases_pass(&bench, &lab, &dir);
+}
+
+// The work order's test 9: the same package converted with names given in an order of preference,
+// `[item_a, item_b]` (its default was item_b): the one `record stop` generates for the same recording
+// declared `fixed: [item_a, item_b]`, byte for byte but for the task's provenance, its policy
+// document the fixed form of that order; admitted, it chooses item_a's slot 0 on the list and slot 0
+// where item_b alone shows.
+#[test]
+fn self_t9_names_given_in_order_convert_to_what_a_recording_fixing_them_generates() {
+    let bench = Bench::new();
+    let (_, old) = variable_package(&bench);
+
+    let (fix, new) = convert_package(&old, Some(&["item_a", "item_b"][..]), &bench.ocr);
+
+    assert_eq!(fix.default, ["item_b"]);
+    assert_eq!(fix.fixed, ["item_a", "item_b"]);
+    let recorded = Bench::new();
+    let fixed_lab =
+        recorded.generated(list(), select(fixed(&["item_a", "item_b"]), Some("item_a")));
+    assert_as_recorded(
+        &new,
+        &package(&fixed_lab),
+        TASK,
+        &conversion_note(OPERATION, &["item_b"], &["item_a", "item_b"]),
+    );
+    assert_eq!(
+        text(&new[POLICY]),
+        written(&fixed_policy(
+            json!(["item_a", "item_b"]),
+            json!([place("item_a", 1), place("item_b", 2)])
+        ))
+    );
+    let prepared =
+        admit(&new, &bench.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    assert_eq!(chosen(&prepared, list()), Some(0));
+    assert_eq!(chosen(&prepared, list_of([BRAVO, BRAVO])), Some(0));
+}
+
+// The work order's test 10: each refusal of the package route, with its word, on test 8's package
+// changed as each case says (`record_select_invalid` and its `select_problem` unless said):
+// no such variable (`variable_missing`); the variable read by another policy document, and by
+// another step of the task (`variable_read_elsewhere`, the files that read it named); the policy's
+// gate and the declaration's title edited by hand (`members_edited`, the file and the member
+// named); a default that is no list of names, repeats one or is empty (`default_not_names`); a
+// default's name, and a name given, none of the select's names (`default_not_in_names`, the name);
+// names given that are no list of 1 to 2 names, each once (`validation_failed`). A refusal answers
+// no file to write; that the command then writes none is actinglab's `gate_463_self`.
+#[test]
+fn self_t10_each_refusal_of_the_conversion_has_its_word() {
+    let bench = Bench::new();
+    let (_, old) = variable_package(&bench);
+    let refused = |entries: &BTreeMap<String, Vec<u8>>, variable: &str, names: Option<&[&str]>| {
+        match fix_select(entries, variable, names, &bench.ocr) {
+            Ok(fix) => panic!(
+                "converted, answering {:?}",
+                fix.files.iter().map(|file| &file.file).collect::<Vec<_>>()
+            ),
+            Err(error) => error,
+        }
+    };
+    // The refusal's code, its `select_problem` and its details.
+    let word = |error: &LabError| {
+        let details = error.details.clone().unwrap_or(Value::Null);
+        (
+            error.code.clone(),
+            details["select_problem"].clone(),
+            details,
+        )
+    };
+    // The package with the document `path` written `value`, as the generator writes a document.
+    let with = |path: &str, value: &Value| {
+        let mut changed = old.clone();
+        changed.insert(path.to_owned(), written(value).into_bytes());
+        changed
+    };
+    let invalid = "record_select_invalid";
+
+    let (code, problem, _) = word(&refused(&old, "other_item", None));
+    assert_eq!(
+        (code.as_str(), problem),
+        (invalid, json!("variable_missing"))
+    );
+
+    let extra = "resources/operations/neutral_task/policies/extra.json";
+    let reads = json!({"facts": [{"fact_key": VARIABLE_KEY}]});
+    let (code, problem, details) = word(&refused(&with(extra, &reads), WANTED, None));
+    assert_eq!(
+        (code.as_str(), problem),
+        (invalid, json!("variable_read_elsewhere"))
+    );
+    assert_eq!(details["readers"], json!([extra, POLICY]));
+    let mut task = document(&old, TASK);
+    task["operations"]
+        .as_array_mut()
+        .expect("the operations")
+        .push(json!({"id": "step_09_other", "cap": {"fact_key": VARIABLE_KEY}}));
+    let (code, problem, details) = word(&refused(&with(TASK, &task), WANTED, None));
+    assert_eq!(
+        (code.as_str(), problem),
+        (invalid, json!("variable_read_elsewhere"))
+    );
+    assert_eq!(details["readers"], json!([POLICY, TASK]));
+
+    let mut policy = document(&old, POLICY);
+    policy["gates"][0]["predicate"]["threshold"] = json!(2);
+    let (code, problem, details) = word(&refused(&with(POLICY, &policy), WANTED, None));
+    assert_eq!((code.as_str(), problem), (invalid, json!("members_edited")));
+    assert_eq!(
+        (&details["file"], &details["member"]),
+        (&json!(POLICY), &json!("gates"))
+    );
+    let mut control = document(&old, "control.json");
+    control["variables"][0]["title"] = json!({"en-US": "Edited"});
+    let (code, problem, details) = word(&refused(&with("control.json", &control), WANTED, None));
+    assert_eq!((code.as_str(), problem), (invalid, json!("members_edited")));
+    assert_eq!(
+        (&details["file"], &details["member"]),
+        (&json!("control.json"), &json!("/variables/0"))
+    );
+
+    for default in [json!("item_b"), json!(["item_b", "item_b"]), json!([])] {
+        let mut control = document(&old, "control.json");
+        control["variables"][0]["default"] = default.clone();
+        let (code, problem, _) = word(&refused(&with("control.json", &control), WANTED, None));
+        assert_eq!(
+            (code.as_str(), problem),
+            (invalid, json!("default_not_names")),
+            "{default}"
+        );
+    }
+
+    let mut control = document(&old, "control.json");
+    control["variables"][0]["default"] = json!(["item_c"]);
+    let (code, problem, details) = word(&refused(&with("control.json", &control), WANTED, None));
+    assert_eq!(
+        (code.as_str(), problem),
+        (invalid, json!("default_not_in_names"))
+    );
+    assert_eq!(details["name"], "item_c");
+    let (code, problem, details) = word(&refused(&old, WANTED, Some(&["item_c"][..])));
+    assert_eq!(
+        (code.as_str(), problem),
+        (invalid, json!("default_not_in_names"))
+    );
+    assert_eq!(details["name"], "item_c");
+
+    let given: [&[&str]; 3] = [&[], &["item_a", "item_a"], &["item_a", "item_b", "item_c"]];
+    for names in given {
+        let (code, _, _) = word(&refused(&old, WANTED, Some(names)));
+        assert_eq!(code, "validation_failed", "{names:?}");
+    }
+}
+
+// The work order's test 12: converting twice. Test 8's package converted once, then again, with and
+// without names: the second call refuses with `variable_missing` (the variable is gone) and answers
+// no file; the package as the first conversion left it is still admitted, its policy document still
+// the fixed form of item_b and its provenance still one conversion.
+#[test]
+fn self_t12_a_package_converted_twice_refuses_the_second_time() {
+    let bench = Bench::new();
+    let (_, old) = variable_package(&bench);
+    let (_, once) = convert_package(&old, None, &bench.ocr);
+
+    for names in [None, Some(&["item_a"][..])] {
+        let error = match fix_select(&once, WANTED, names, &bench.ocr) {
+            Ok(_) => panic!("{names:?}: converted twice"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "record_select_invalid", "{names:?}");
+        let details = error.details.as_ref().expect("the refusal's details");
+        assert_eq!(details["select_problem"], "variable_missing", "{names:?}");
+    }
+    let prepared =
+        admit(&once, &bench.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    assert!(prepared.declared_variables().is_empty());
+    assert_eq!(
+        text(&once[POLICY]),
+        written(&fixed_policy(
+            json!(["item_b"]),
+            json!([place("item_b", 1)])
+        ))
+    );
+    assert_eq!(
+        document(&once, TASK)["provenance"]["select_fixes"],
+        json!([conversion_note(OPERATION, &["item_b"], &["item_b"])])
+    );
 }

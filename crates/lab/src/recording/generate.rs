@@ -14,8 +14,8 @@ use super::marks::{value_test_declaration, value_test_side_ocr};
 use super::model::{
     ClickFollowForm, ClickGesture, LabRecording, MarkFamily, RecordDestination, RecordRect,
     RecordSize, RecordedFrame, RecordedKey, RecordedMark, RecordingDefaults, RecordingEnding,
-    RecordingStep, ScanNumber, SelectConfirmSpec, SelectSpec, SelfTest, SelfTestMargin,
-    SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
+    RecordingStep, ScanNumber, SelectConfirmSpec, SelectNameSpec, SelectSpec, SelfTest,
+    SelfTestMargin, SelfTestStatus, StepClick, StepOptional, StepSelect, StepTransition,
 };
 use super::select::{empty_end_key, on_empty_key, select_invalid};
 use super::steps::path_order;
@@ -2629,7 +2629,25 @@ pub(crate) fn select_policy_document(
 /// declares) and the term `rank.<name>` (weight −1000) puts the first of the order first. With the
 /// variable's default `[default]` it keeps what R1's gate kept.
 fn choice_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
-    let wanted = &select.wanted.name;
+    let mut document = select_policy_document(plan, step, select, select.wanted.first());
+    for (member, value) in variable_policy_members(&select.wanted.name) {
+        document[member] = value;
+    }
+    document
+}
+
+/// #463 SEL-F: the three members of a select's policy document that its wanted value decides, in
+/// the order the document holds them; the rest of the document is R1's
+/// ([`select_policy_document`]) in both forms.
+pub(crate) const WANTED_POLICY_MEMBERS: [&str; 3] = ["facts", "gates", "scoring"];
+
+/// #463 S2-6 fix round 1, the members [`choice_policy_document`] writes for the variable `wanted`
+/// (#463 SEL-F: one function, which the package route, `select_fix`, compares a package's
+/// document with): `facts`, the record list `session.dispatch.parameter.<wanted>` of rows
+/// `{key, rank}`; `gates`, `wanted.<wanted>` keeping a name the list holds (`keyed_fact` rank at
+/// least 1, absent 0; `abort_evaluation`, as a gate that reads a record list declares); `scoring`,
+/// the term `rank.<wanted>` (weight −1000) that puts the first of the order first.
+pub(crate) fn variable_policy_members(wanted: &str) -> [(&'static str, Value); 3] {
     let fact_key = format!("{VARIABLE_FACT_KEY_PREFIX}{wanted}");
     let rank = json!({
         "source": "keyed_fact",
@@ -2638,30 +2656,78 @@ fn choice_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> 
         "value_column": ORDERED_VARIABLE_RANK_COLUMN,
         "absent": {"type": "integer", "value": 0}
     });
-    let mut document = select_policy_document(plan, step, select, select.wanted.first());
-    document["facts"] = json!([{
-        "fact_key": fact_key,
-        "max_age_ms": MAX_FACT_TTL_MS,
-        "minimum_confidence_milli": 1000,
-        "value_type": {
-            "type": "record_list",
-            "key_column": ORDERED_VARIABLE_KEY_COLUMN,
-            "columns": {ORDERED_VARIABLE_RANK_COLUMN: {"type": "integer"}}
-        }
-    }]);
-    document["gates"] = json!([{
-        "gate_id": format!("wanted.{wanted}"),
-        "predicate": {"kind": "integer_at_least", "value": rank, "threshold": 1},
-        "on_unknown": {"kind": "abort_evaluation"}
-    }]);
-    document["scoring"] = json!([{
-        "term_id": format!("rank.{wanted}"),
-        "value": rank,
-        "transform": {"kind": "identity"},
-        "weight_milli": -1000,
-        "on_unknown": {"kind": "abort_evaluation"}
-    }]);
-    document
+    [
+        (
+            WANTED_POLICY_MEMBERS[0],
+            json!([{
+                "fact_key": fact_key,
+                "max_age_ms": MAX_FACT_TTL_MS,
+                "minimum_confidence_milli": 1000,
+                "value_type": {
+                    "type": "record_list",
+                    "key_column": ORDERED_VARIABLE_KEY_COLUMN,
+                    "columns": {ORDERED_VARIABLE_RANK_COLUMN: {"type": "integer"}}
+                }
+            }]),
+        ),
+        (
+            WANTED_POLICY_MEMBERS[1],
+            json!([{
+                "gate_id": format!("wanted.{wanted}"),
+                "predicate": {"kind": "integer_at_least", "value": rank, "threshold": 1},
+                "on_unknown": {"kind": "abort_evaluation"}
+            }]),
+        ),
+        (
+            WANTED_POLICY_MEMBERS[2],
+            json!([{
+                "term_id": format!("rank.{wanted}"),
+                "value": rank,
+                "transform": {"kind": "identity"},
+                "weight_milli": -1000,
+                "on_unknown": {"kind": "abort_evaluation"}
+            }]),
+        ),
+    ]
+}
+
+/// #463 SEL-F, the members [`fixed_policy_document`] writes for the wanted value `wanted` fixed to
+/// `fixed` (one function, which the package route, `select_fix`, writes a converted package's
+/// document with): no fact; the gate `wanted.<wanted>` keeping the fixed names (`string_in` over
+/// the field `name`, the literals; an unknown name dropped, as R1's); the term `rank.<wanted>`
+/// (weight −1000) that scores each by its place in the order through a `lookup` of those literals,
+/// 1 for the first, so that the first the screen shows is chosen.
+pub(crate) fn fixed_policy_members(wanted: &str, fixed: &[&str]) -> [(&'static str, Value); 3] {
+    let entries = fixed
+        .iter()
+        .zip(1_i64..)
+        .map(|(name, rank)| json!({"key": {"type": "string", "value": name}, "value_milli": rank}))
+        .collect::<Vec<_>>();
+    [
+        (WANTED_POLICY_MEMBERS[0], json!([])),
+        (
+            WANTED_POLICY_MEMBERS[1],
+            json!([{
+                "gate_id": format!("wanted.{wanted}"),
+                "predicate": {
+                    "kind": "string_in",
+                    "value": {"source": "field", "field": SELECT_FEATURE},
+                    "allowed": fixed
+                },
+                "on_unknown": {"kind": "drop_candidate"}
+            }]),
+        ),
+        (
+            WANTED_POLICY_MEMBERS[2],
+            json!([{
+                "term_id": format!("rank.{wanted}"),
+                "value": {"source": "field", "field": SELECT_FEATURE},
+                "transform": {"kind": "lookup", "entries": entries},
+                "weight_milli": -1000,
+                "on_unknown": {"kind": "drop_candidate"}
+            }]),
+        ),
+    ]
 }
 
 /// #463 S2-6: the package variable of the wanted value of a select step (fix round 1: of every
@@ -2671,13 +2737,30 @@ fn choice_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> 
 /// preference, its default the one name `wanted.default`; its texts are under the package's locale
 /// and made of what the recording holds.
 fn choice_variable_json(plan: &Plan, select: &SelectSpec) -> Value {
+    variable_declaration(
+        &plan.locale,
+        &select.names,
+        &select.wanted.name,
+        select.wanted.first(),
+    )
+}
+
+/// #463 SEL-F: the declaration [`choice_variable_json`] writes, from what it is made of: the
+/// package's `locale`, the select's `names` (each its id and aliases), the variable's name
+/// `wanted` and its one default name `default`. One function, which the package route
+/// (`select_fix`) compares a package's declaration with.
+pub(crate) fn variable_declaration(
+    locale: &str,
+    names: &[SelectNameSpec],
+    wanted: &str,
+    default: &str,
+) -> Value {
     let text = |value: &str| {
         let mut text = Map::new();
-        text.insert(plan.locale.clone(), json!(value));
+        text.insert(locale.to_owned(), json!(value));
         Value::Object(text)
     };
-    let options = select
-        .names
+    let options = names
         .iter()
         .map(|name| {
             let title = name
@@ -2688,53 +2771,30 @@ fn choice_variable_json(plan: &Plan, select: &SelectSpec) -> Value {
             json!({"value": name.id, "title": text(title)})
         })
         .collect::<Vec<_>>();
-    let max_count = u64::try_from(select.names.len())
+    let max_count = u64::try_from(names.len())
         .unwrap_or(MAX_GOAL_ORDERED_COUNT)
         .min(MAX_GOAL_ORDERED_COUNT);
     json!({
-        "name": select.wanted.name,
+        "name": wanted,
         "type": "ordered",
-        "title": text(select.wanted.name.as_str()),
+        "title": text(wanted),
         "options": options,
         "min_count": 1,
         "max_count": max_count,
-        "default": [select.wanted.first()]
+        "default": [default]
     })
 }
 
 /// #463 SEL-F (`contracts/lab-recording.md`, "A select the package fixes"): the policy document of
 /// a select step whose wanted item the package fixes (`wanted.fixed`): R1's document
-/// ([`select_policy_document`]) whose one gate `wanted.<name>` keeps the fixed names (`string_in`
-/// over the field `name`, the literals; an unknown name dropped, as R1's), and the term
-/// `rank.<name>` (weight −1000) that scores each by its place in the order through a `lookup` of
-/// those literals, 1 for the first, so that the first the screen shows is chosen. It declares no
+/// ([`select_policy_document`]) with the members [`fixed_policy_members`] writes. It declares no
 /// fact: the package declares no variable for the step. With one fixed name it keeps what the
 /// variable form keeps with that default and no value handed.
 fn fixed_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
-    let wanted = &select.wanted.name;
-    let fixed = select.wanted.looked_for();
-    let entries = fixed
-        .iter()
-        .zip(1_i64..)
-        .map(|(name, rank)| json!({"key": {"type": "string", "value": name}, "value_milli": rank}))
-        .collect::<Vec<_>>();
     let mut document = select_policy_document(plan, step, select, select.wanted.first());
-    document["gates"] = json!([{
-        "gate_id": format!("wanted.{wanted}"),
-        "predicate": {
-            "kind": "string_in",
-            "value": {"source": "field", "field": SELECT_FEATURE},
-            "allowed": fixed
-        },
-        "on_unknown": {"kind": "drop_candidate"}
-    }]);
-    document["scoring"] = json!([{
-        "term_id": format!("rank.{wanted}"),
-        "value": {"source": "field", "field": SELECT_FEATURE},
-        "transform": {"kind": "lookup", "entries": entries},
-        "weight_milli": -1000,
-        "on_unknown": {"kind": "drop_candidate"}
-    }]);
+    for (member, value) in fixed_policy_members(&select.wanted.name, &select.wanted.looked_for()) {
+        document[member] = value;
+    }
     document
 }
 
@@ -3287,7 +3347,9 @@ fn page_rules(plan: &Plan) -> Map<String, Value> {
     rules
 }
 
-fn pretty(value: &Value) -> LabResult<Vec<u8>> {
+/// The bytes of one package document as `record stop` writes it: pretty JSON and a final line feed
+/// (#463 SEL-F: the package route, `select_fix`, writes the documents it changes so too).
+pub(crate) fn pretty(value: &Value) -> LabResult<Vec<u8>> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| {
         invalid(
             "validation_failed",

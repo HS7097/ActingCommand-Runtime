@@ -301,7 +301,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "actinglab package edit admitted the edited package and could not write an edited file over the old one (written to a .part file beside it, then renamed over it). The details name the file it stopped at, the files already written and any .part file left behind; nothing is removed (Workflow #390 TOOL-1).",
+      "description": "actinglab package edit admitted the edited package and could not write an edited file over the old one (written to a .part file beside it, then renamed over it). The details name the file it stopped at, the files already written and any .part file left behind; nothing is removed (Workflow #390 TOOL-1). actinglab package fix-select writes the files it converted the same way and answers this code when one cannot be written (Workflow #463 SEL-F).",
       "common_causes": "The file is open in another program, or the directory is read-only.",
       "handling": "Close the program holding the file, remove a .part file left behind, and run the same edits again on the package as it now is."
     },

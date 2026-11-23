@@ -190,6 +190,9 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     ("session stream", Mode::Preview("capture_dry_run")),
     // Workflow #390 TOOL-1: the edits are applied and admitted in memory; no file is written.
     ("package edit", DRY_RUN),
+    // #463 SEL-F: the conversion is made and the converted package admitted in memory; no file
+    // is written.
+    ("package fix-select", DRY_RUN),
     // Workflow #464 P1: every check runs, the check tree under the state directory included;
     // nothing is written in the repository and no copy is kept.
     ("standard-pack adopt", DRY_RUN),

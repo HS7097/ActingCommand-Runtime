@@ -17,7 +17,12 @@
 // stand-in reader; the tests read no clock and never sleep.
 // - `self_t5_a_fixed_select_over_a_scan_read_to_its_end_declares_no_variable`
 // - `self_t5_a_fixed_select_over_a_scan_that_stops_early_declares_no_variable`
+// Addendum 1, the package route on a scan (the review's item 5: tests 8 and 9 take a scan fixture):
+// - `self_t8_a_scrolling_select_converted_from_its_files_is_what_a_fixed_recording_generates`
+// - `self_t9_a_scrolling_select_converted_to_names_given_is_what_a_recording_fixing_them_generates`
 
+use crate::gate_463_self::{assert_as_recorded, conversion_note, convert_package};
+use crate::recording::crosscheck::admit;
 use crate::recording::store::old_record_path;
 use crate::{
     AfterCapture, AttachFrameRequest, CapturedFrame, ClickEffect, ClickPlan, CommitClickRequest,
@@ -296,6 +301,11 @@ fn request(mut value: Value) -> MarkRequest {
 // demonstration pressed: of the first kind (`stop: "end"`, with its end mark) or, `straight`, of
 // the second (`stop: "wanted"`, without one).
 fn scrolling(item: &str, straight: bool) -> Value {
+    scrolling_with(json!({"name": WANTED, "fixed": [item]}), straight)
+}
+
+// The same scrolling select with the wanted value `wanted` (Addendum 1: the variable form too).
+fn scrolling_with(wanted: Value, straight: bool) -> Value {
     let scan = if straight {
         json!({"list": LIST, "start": START_MARK, "stop": "wanted"})
     } else {
@@ -312,7 +322,7 @@ fn scrolling(item: &str, straight: bool) -> Value {
             .map(|(id, alias)| json!({"id": id, "aliases": [alias]}))
             .collect::<Vec<_>>(),
         "match": {"max_distance": 1, "minimum_margin": 1},
-        "wanted": {"name": WANTED, "fixed": [item]}
+        "wanted": wanted
     })
 }
 
@@ -733,4 +743,89 @@ fn self_t5_a_fixed_select_over_a_scan_that_stops_early_declares_no_variable() {
         "{checked}"
     );
     assert_fixed(&lab, &entries, "india");
+}
+
+// The variable form's wanted value, the default `default`.
+fn chosen_by_a_person(default: &str) -> Value {
+    json!({"name": WANTED, "default": default})
+}
+
+// The work order's test 8 on a scan (Addendum 1; the review's item 5): the second kind's
+// demonstration with the variable form, the default `india`, its package converted from its own
+// files with no names given: the select step's operation, `india` fixed; the package `record stop`
+// generates for the same demonstration declared `fixed: [india]`, byte for byte but for the task's
+// provenance (`gate_463_self`'s `assert_as_recorded`); its policy document the fixed form of
+// `india`, no `variables`, its scan as before (`early_stop: "upper_bound"`, no end); admitted.
+#[test]
+fn self_t8_a_scrolling_select_converted_from_its_files_is_what_a_fixed_recording_generates() {
+    let chosen = two_forward();
+    chosen.marked(json!({"step": 4, "select": scrolling_with(chosen_by_a_person("india"), true)}));
+    let old = package(&chosen.stopped());
+
+    let (fix, new) = convert_package(&old, None, &chosen.ocr);
+
+    assert_eq!(fix.operation, OPERATION);
+    assert_eq!(fix.default, ["india"]);
+    assert_eq!(fix.fixed, ["india"]);
+    let recorded = two_forward();
+    recorded.marked(json!({"step": 4, "select": scrolling("india", true)}));
+    assert_as_recorded(
+        &new,
+        &package(&recorded.stopped()),
+        TASK,
+        &conversion_note(OPERATION, &["india"], &["india"]),
+    );
+    assert_eq!(document(&new, "control.json").get("variables"), None);
+    assert_eq!(
+        String::from_utf8(new[POLICY].clone()).expect("UTF-8"),
+        written(&fixed_policy("india"))
+    );
+    let operation = select_operation(&document(&new, TASK));
+    let scan = &operation["select"]["scan"];
+    assert_eq!(scan["early_stop"], "upper_bound", "{scan}");
+    assert_eq!(scan.get("end"), None, "{scan}");
+    let prepared =
+        admit(&new, &chosen.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    assert!(prepared.declared_variables().is_empty());
+}
+
+// The work order's test 9 on a scan: the first kind's demonstration with the variable form, the
+// default `delta`, its package converted with the names `[delta, charlie]` given: the package
+// `record stop` generates for the same demonstration declared `fixed: [delta, charlie]`, byte for
+// byte but for the task's provenance; its gate keeps the two names in that order; its scan keeps its
+// end; admitted.
+#[test]
+fn self_t9_a_scrolling_select_converted_to_names_given_is_what_a_recording_fixing_them_generates() {
+    let chosen = to_the_end();
+    chosen.marked(json!({"step": 7, "select": scrolling_with(chosen_by_a_person("delta"), false)}));
+    let old = package(&chosen.stopped());
+
+    let (fix, new) = convert_package(&old, Some(&["delta", "charlie"][..]), &chosen.ocr);
+
+    assert_eq!(fix.default, ["delta"]);
+    assert_eq!(fix.fixed, ["delta", "charlie"]);
+    let recorded = to_the_end();
+    recorded.marked(json!({
+        "step": 7,
+        "select": scrolling_with(json!({"name": WANTED, "fixed": ["delta", "charlie"]}), false)
+    }));
+    assert_as_recorded(
+        &new,
+        &package(&recorded.stopped()),
+        TASK,
+        &conversion_note(OPERATION, &["delta"], &["delta", "charlie"]),
+    );
+    let policy = document(&new, POLICY);
+    assert_eq!(
+        policy["gates"][0]["predicate"]["allowed"],
+        json!(["delta", "charlie"])
+    );
+    let operation = select_operation(&document(&new, TASK));
+    assert_eq!(
+        operation["select"]["scan"]["end"],
+        json!({"check": "select/step_02/end"})
+    );
+    let prepared =
+        admit(&new, &chosen.ocr).unwrap_or_else(|error| panic!("admission: {}", error.code));
+    assert!(prepared.declared_variables().is_empty());
 }

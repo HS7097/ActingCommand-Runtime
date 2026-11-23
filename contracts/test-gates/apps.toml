@@ -3031,6 +3031,14 @@ tests = [
 ]
 incident = ["#392 DA-L0"]
 
+# #463 SEL-F, Addendum 1 (0.12.83; register §1.523; brief rd-1123/brief-463-self-fix1.md, test 11; contracts/lab-recording.md, "Converting a package from its own files"): the package route's MCP face. In the tools the Lab's MCP server generates from the operation table this build embeds, the row package fix-select (authoring module, slice 463-SELF, package edit's module) is offered as ac_package_fix_select and served by a serve child as package edit is; listed with the authoring module, with package edit's hints (it writes, not destructive), and with neither the core nor the debugging module; its input schema names package, variable and fixed, package and variable required. The command line's face and its MCP face on a package are the exec row's test 11.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_463_self::self_t11_package_fix_select_is_offered_where_package_edit_is",
+]
+incident = ["#463 SEL-F"]
+
 # #455 B3-P fix round 1 (0.12.82; register §1.522; brief rd-1123/brief-455-b3p-fix1.md, item 3; contracts/actingd-check-config.md, the row pool_target_defaults): this build's assembled configuration manifest names pool_target_defaults, enabled, beside standard_pack_schedule, and the composer given those subsystems composes a schedule.json whose pool writes target_defaults (10 and 1000) and lists the subsystem in requires, the composed catalog's pool holding the two numbers
 [[gate]]
 coverage = "Y"
