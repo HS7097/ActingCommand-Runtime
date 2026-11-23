@@ -354,8 +354,8 @@ order `id`, `package_id`, `maintenance`, `priority`, `trigger`, `feedback_stop`,
 `strategic_weight_milli`, `loop_budget`, each only when written. `requires` gains the words the
 rule needs and the file does not name ([standard-pack-schedule.md](standard-pack-schedule.md),
 "`requires`": `benefit_fixed_value`, `fact_reference`, `pool_fact_reference`,
-`fact_unknown_probe`, `consumption_fact`, `queue_wait`), after `schema_version` when the file has no
-`requires`; the answer lists them in `requires_added`.
+`fact_unknown_probe`, #477 CK-1 (0.12.83) `clock_monthly`, `consumption_fact`, `queue_wait`), after
+`schema_version` when the file has no `requires`; the answer lists them in `requires_added`.
 
 ## What it writes
 

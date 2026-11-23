@@ -328,6 +328,17 @@
             "minute_of_day": { "type": "integer", "minimum": 0, "maximum": 1439 }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "clock_source", "day_of_month", "minute_of_day"],
+          "properties": {
+            "kind": { "const": "monthly" },
+            "clock_source": { "$ref": "#/$defs/wallClockSource" },
+            "day_of_month": { "type": "integer", "minimum": 1, "maximum": 28 },
+            "minute_of_day": { "type": "integer", "minimum": 0, "maximum": 1439 }
+          },
+          "additionalProperties": false
         }
       ]
     },

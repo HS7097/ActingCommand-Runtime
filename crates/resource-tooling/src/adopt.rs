@@ -4759,8 +4759,8 @@ fn drift(
 
 /// The subsystems `requires` must name for what `rule` writes
 /// (`contracts/standard-pack-schedule.md`, "`requires`"), each once, in this order: a fixed
-/// value, a fact reference, a pool fact reference, a probe, a consumption read from a fact, a
-/// queue wait.
+/// value, a fact reference, a pool fact reference, a probe, a monthly clock, a consumption read
+/// from a fact, a queue wait.
 fn required_words(rule: &Map<String, Value>) -> Vec<&'static str> {
     let mut words = Vec::new();
     if rule.contains_key(SCHEDULE_RULE_FIXED_VALUE_MEMBER) {
@@ -4809,6 +4809,12 @@ fn predicate_words(node: &Value, words: &mut Vec<&'static str>) {
     }
     if kind == Some("fact") && members.contains_key("on_unknown") {
         add_word(words, FACT_UNKNOWN_PROBE_SUBSYSTEM);
+    }
+    // #477 CK-1 (register §1.510): a clock of the kind `monthly`.
+    if kind == Some("clock")
+        && actingcommand_policy::is_monthly_clock_schedule(members.get("schedule"))
+    {
+        add_word(words, actingcommand_policy::CLOCK_MONTHLY_SUBSYSTEM);
     }
     if let Some(Value::Array(children)) = members.get("predicates") {
         for child in children {

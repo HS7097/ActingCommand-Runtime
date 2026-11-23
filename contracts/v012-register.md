@@ -48157,6 +48157,140 @@ refused by the installer's plan while that root, or a generation composed from i
 kept. In the release notes' language:
 没有估值的池子现在可以在 `schedule.json` 里写 `target_defaults`（步长 `scale` 和重要度 `importance_milli`），给落在它上面的目标用；写了它的文件要在 `requires` 里写 `pool_target_defaults`。目标页上对这样的池子只填 `{at_least}` 就能设目标，`goals.json` 里的 `resource` 条目也能指向它；这两个数随调度目录走，下次目录改了数，已经设好的目标在下一次评估就按新数算，不用重设。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
 
+### 1.510 Slice #477 CK-1 (0.12.83): a clock that occurs once a month (board #477, the tail of the main line's second step; the rulings 1 to 8 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-477-ck1.md` after the read-only study `rd-1122/study-477-step2.md`, its section 7 and the coordinator's disposition at its end; on main `bcd660bd`)
+
+This section takes 1.510, the number reserved for it on 11-22; the register is ordered by landing,
+so it stands after §1.518. It ships in 0.12.83. [scheduling/README.md](scheduling/README.md)
+("Clock Sources": the calendar kinds and the new `monthly` paragraph) is the contract;
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`" and the composer's step 2),
+[actingd-check-config.md](actingd-check-config.md) (the row `clock_monthly`),
+[standard-pack-authoring.md](standard-pack-authoring.md) (the words `adopt` adds) and the two schema
+files `scheduling/common.schema.json` and `scheduling/v2/common.schema.json` (`$defs.clockSchedule
+.oneOf`) follow it. One `requires` name, `clock_monthly`; no `package` revision, no declared
+interface range, no document version, no configuration key, no code or word.
+
+**Why.** The owner's order of 11-22 for the main line's second step takes the alarm clocks out of
+the rules: a task runs when its condition holds. The coordinator's ruling 3 of that day: a clock
+pinned on a game's refresh moment is no alarm clock, the daily, weekly and monthly refresh being a
+condition of the game. `ClockSchedule` had `interval`, `at`, `daily` and `weekly`, so a business
+whose stock or limit refreshes once a month could not say "once after this month's refresh".
+
+**The rule** (rulings 1 to 3).
+- *The grammar.* `{"kind": "monthly", "clock_source", "day_of_month", "minute_of_day"}`
+  (`ClockSchedule::Monthly`). `day_of_month` is 1 to 28 (`MAX_CLOCK_DAY_OF_MONTH`), a day every
+  month has; `minute_of_day` 0 to 1439. Day 0, 29, 30 or 31 and minute 1440 are refused with the
+  diagnostic an out-of-range `weekday` or `minute_of_day` of the weekly kind gets:
+  `predicate_uncomputable` at the clock (a task's `…/trigger` node, an event's `…/schedule`), "clock
+  schedule is outside the frozen V1 bounds". V1 and V2 documents take it, as they take the weekly
+  kind.
+- *The occurrence.* Minute M of day D of every month of the Gregorian calendar, in the source's
+  local time, reached by the weekly kind's path (`ClockCoordinate`: the evaluation's Unix time less
+  `maintenance_drift_ms`, plus `utc_offset_minutes` and `dst_offset_minutes`; back to Unix time by
+  the same). The calendar is two pure functions of the evaluator, days since 1970-01-01 to a month
+  and a month and day back (a year counted from 1 March, eras of 400 years), with no dependency;
+  the policy crate uses no date library. `local` is refused as for the weekly kind: a monotonic
+  coordinate names no wall-clock day.
+- *Everything else is the weekly kind's.* Every place that takes a `ClockSchedule` reads its
+  occurrences through the one function `schedule_occurrences_on_clock`, which gains the arm: a
+  task's `clock` predicate (trigger and `feedback_stop`, through `all`, `any` and `not`), its
+  `missed` grace (the grace's end as the wake while due, `clock_occurrence_expired` after it), the
+  owed occurrence and CK-2's two cases (§1.516: the snapshot's `clock_owed`, which reads no kind),
+  `clock_slot_view` and `clock_slot_lapses` (the clock-slot records), a timeline event's `schedule`
+  (its window for `timeline_active` and `inspect_timeline`, its resets' invalidation, a maintenance
+  event's blackout), the round's next wake and the not-run explanation built on them. No decision,
+  reason or outcome code is added; the refusals are existing ones.
+
+**`requires`** (ruling 4). A `schedule.json` whose rule's clock or timeline event is monthly names
+`clock_monthly` (`CLOCK_MONTHLY_SUBSYSTEM`): without it the composer refuses the file, Runtime and
+tools alike, `standard_pack_root_invalid` with the word `schedule_invalid` at the first such
+`schedule`, rules (`trigger`, then `feedback_stop`) before timeline events
+(`/rules/0/trigger/predicates/1/schedule`, `/timeline/0/schedule`). This build names it in
+`config.subsystems`, always on. A Runtime of 0.12.82 or older does not: it refuses such a file at
+`requires` (`schedule_requires_missing`) before its compiler meets the kind, and keeps the game's
+last good rules; the installer's plan (§1.514) refuses a rollback or an update to such a build while
+an installed schedule or a fragment of the active generation lists the name, with no change. A
+catalog document (`actingcommand.scheduling.v1`/`v2`, `policy.catalog`, `actinglab scheduling
+compile`) has no `requires` of its own: an older build's reader refuses one that writes the kind
+(`type_mismatch`, the unknown variant `monthly`, the whole catalog), as `ClockSchedule` is a closed,
+tagged enum; it never reads it as another kind. No stop condition of the work order held.
+
+**The Lab's faces** (ruling 7). `actinglab scheduling compile` and `scheduling timeline`
+(`crates/lab/src/scheduling.rs`: `compile_catalog`, `inspect_timeline`), the `standard-pack` faces
+that compose a root (`check`, `compose`, `ready`, `catalog`, `adopt`: `compose_standard_pack_rules`
+through `crates/resource-tooling`), `packs` (`crates/lab-ops/src/packs.rs`, the composer) and
+check-config read a schedule through the policy crate's one reader, composer and compiler, so each
+takes the kind where it takes the weekly one, with no change. `standard-pack adopt` writes `requires`
+itself: it adds `clock_monthly` when the rule it writes holds a monthly clock (`required_words`,
+through the policy crate's `is_monthly_clock_schedule`), as it adds the other words. No face puts a
+clock kind into words, so none gains words for it.
+
+**A worked example** (a server clock nine hours ahead of UTC, `{"kind": "monthly", "day_of_month":
+1, "minute_of_day": 240}`).
+- December 2026's occurrence is 04:00 local on 1 December, 19:00 UTC on 30 November:
+  1 796 065 200 000. January 2027's: 1 798 743 600 000 (19:00 UTC on 31 December).
+- A pair whose last dispatch served November's (1 793 473 200 000) is not due before
+  1 796 065 200 000; from that instant it is owed at every evaluation until a dispatch admitted at
+  or after it. A dispatch admitted at 1 796 065 260 000 serves it: the trigger is false, the pair's
+  and the round's wake 1 798 743 600 000, when the next occurrence is owed until a dispatch serves
+  it (say at 1 798 743 660 000).
+- Had the December dispatch settled as interrupted, or had its failure paused the pair of a task
+  that is not `sensitive`, the snapshot's `clock_owed` keeps 1 796 065 200 000 owed for the rest of
+  that dispatch's activity day (§1.516). With `"missed": {"kind": "skip_after", "grace_ms":
+  7200000}` it is due only before 1 796 072 400 000, then expired, the wake again
+  1 798 743 600 000.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The grammar | `crates/policy/src/schema.rs` (`ClockSchedule::Monthly`, `CLOCK_MONTHLY_KIND`, `MAX_CLOCK_DAY_OF_MONTH`, `CLOCK_MONTHLY_SUBSYSTEM`) |
+| The bounds | `crates/policy/src/validation.rs` (`validate_schedule`) |
+| The occurrence | `crates/policy/src/evaluator.rs` (`schedule_occurrences_on_clock` and the three readers of a schedule's source; `monthly_occurrences`, `month_of_day`, `day_of_month_in`) |
+| `requires` | `crates/policy/src/compose.rs` (`read_game`, `first_monthly_clock`, `monthly_clock_in`, `is_monthly_clock_schedule`); `apps/actingd/src/config/manifest.rs` (the row) |
+| `adopt` | `crates/resource-tooling/src/adopt.rs` (`predicate_words`) |
+
+**Tests** (incident `#477 CK-1`: `crates/policy/src/tests/gate_477_ck1.rs`, policy gate map, and
+`apps/actingd/src/config/gate_477_ck1.rs`, apps gate map; no clock read; every instant the
+calendar's, written in UTC beside it).
+
+| Test | What it shows |
+|---|---|
+| `ck1_t1_occurrences_across_a_months_end_a_years_end_februaries_and_centuries` (1) | Day 28 at 23:00 UTC: 28 January and 28 February a millisecond before February's, 28 February and 28 March at it and on 1 March; day 1 at 00:00 across the end of 2026; day 1 at noon of February's last day: 1 February and 1 March, 29 days apart in 2024 and 2000, 28 in 2025 and 2100; day 28 on 29 February 2024 and on 1 March 2100 |
+| `ck1_t1_a_source_ahead_of_or_behind_utc_reaches_its_local_day_as_the_weekly_kind` (1) | Nine hours ahead, day 1 at 04:00: 19:00 UTC of the day before; ten hours behind, day 28 at 23:00: 09:00 UTC of the day after (1 March for February); a revealed source (480 + 60 minutes, 120 000 ms of drift) on day 15 at 10:00 gives the weekly clock's Tuesday occurrence at the same minute |
+| `ck1_t1_a_local_source_is_refused_as_for_the_weekly_kind` (1) | `local`: the monthly kind's diagnostics are the weekly kind's, `predicate_uncomputable` at the clock |
+| `ck1_t2_day_28_is_taken_and_days_0_and_29_and_minute_1440_are_refused_as_the_weekly_kind` (2) | Day 28 and minute 1439 compile in V1 and V2; days 0 and 29 and minute 1440 give exactly the diagnostic weekdays 0 and 8 and minute 1440 of the weekly kind give |
+| `ck1_t3_an_occurrence_is_owed_until_a_dispatch_serves_it_and_after_ck2_s_two_cases` (3) | The monthly clock on day 1 and the weekly on Tuesday, both 07:00 UTC on 1 December 2026: not due a millisecond before; due at it, an hour and six days after; served by a dispatch at 07:01, succeeded or failed; due again with `clock_owed` (the interrupted and the paused dispatch, which the Runtime projects alike); served by the run after it until the kind's next occurrence |
+| `ck1_t4_the_next_wake_is_the_next_months_occurrence_and_a_grace_bounds_it` (4) | Served: the pair's and the round's wake are 1 January 2027 07:00 (the weekly's a week on), `clock_slot_view` the same; `missed` of two hours: due with the wake at the grace's end, at it `trigger_false` with `clock_occurrence_expired` and the wake the next occurrence; an owed occurrence due only inside the grace |
+| `ck1_t5_a_monthly_clock_needs_clock_monthly_in_requires` (5) | Without the name: `schedule_invalid` at `/rules/0/trigger/predicates/1/schedule` and at `/timeline/0/schedule`; weekly clocks need nothing; with it the monthly clock in the composed task and event; subsystems without it `schedule_requires_missing` at `/requires/0`, with it composed |
+| `ck1_t6_a_timeline_event_with_a_monthly_schedule` (6) | A V2 activity event nine hours ahead, day 1 at 04:00, two days: closed waking at its occurrence, open for two days waking at their end, closed after them until the next month's; its task dispatched inside and not before, the round waking at the occurrence |
+| `ck1_t7_a_catalogue_without_the_kind_keeps_its_golden_hashes` (7) | catalog-a's V1 and V2 golden identities, which no monthly clock enters |
+| `ck1_this_runtime_names_clock_monthly_and_composes_a_file_that_requires_it` (5, actingd) | The manifest names `clock_monthly` enabled; the composer given its subsystems composes a file that requires it, the task holding the monthly clock |
+| `published_schema_bounds_match_compiler_constants` (8, extended) | In both schema sets the clock kinds are the enum's in its order, and the monthly variant's required members, `additionalProperties` and bounds (day 1 to 28, minute 0 to 1439) are the compiler's |
+
+Adapted: one existing test, `published_schema_bounds_match_compiler_constants` (`schema.rs`), gains
+the assertions above (test 8: the kind is new there); what it pinned before is unchanged. Every other
+test passes unchanged (test 9). No test leaves the gate map; no golden is re-recorded.
+
+**What is not changed.** A catalogue or `schedule.json` without the kind: its bytes, hash,
+decisions, records and `requires` (ruling 5); the other clock kinds and their bounds; the goal
+declaration's reader and the idle plan (other slices); every declared interface range. No game,
+package or alias is named in code (ruling 8).
+
+**At deploy.** Nothing to configure. No installed root writes a monthly clock, so nothing changes.
+A root that writes one names `clock_monthly` and needs this build: an older Runtime refuses its
+`schedule.json` at `requires` and keeps the game's last good rules, and the installer's plan refuses
+a rollback below 0.12.83 while that root, or a fragment of the active generation composed from it,
+is installed.
+
+**Fix round 1** (pull request #1887; coordinator work order `rd-1123/brief-477-ck1-fix1.md`). The
+first build of the tests did not compile: t7 serialized the compiled catalog's bundle, which is no
+serializable type. It now serializes the bundle's four documents, which are, and asserts the same;
+no production type changed. The composer's module comment lists `clock_monthly` among the names
+step 2 checks. `adopt`'s branch gains its test, `ck1_an_adopted_rule_on_a_monthly_clock_adds_clock_monthly_to_requires`
+(`crates/resource-tooling/src/gate_464_p1.rs`, the apps gate map's row "#477 CK-1"): #464 P1's first
+adoption with the decision's trigger a monthly clock writes the rule with that trigger and answers
+`requires_added` `benefit_fixed_value` then `clock_monthly`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
