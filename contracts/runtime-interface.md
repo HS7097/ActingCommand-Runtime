@@ -641,7 +641,13 @@ the root's judgement's, its detail (`variable_cause`), its state (`not_applied` 
 the default with a word, the variable not applying in the game root included; `in_effect`
 otherwise, `keys_left_out` included) and the stored keys the run leaves out. The values come from
 the run's own resolution over the same projection and the variable table a dispatch reads; the
-view judges no stored value itself. `orphans` are the stored values no entry shows (no tier, no
+view judges no stored value itself. Workflow #500 SV-2 (Runtime 0.12.81, register §1.511): of a
+variable a catalog task bound on the application carries a value for (its rule's `variables`),
+when no stored value is applied, the rule of the task that runs decides the value, so the entry
+names none: no `effective_json`, `source` or `display` (both are optional members; no shape
+changes, and `runtime-client` does not move); with a stored value applied, the entry is as before,
+since every dispatch then hands that value ([package-variables.md](package-variables.md), "A value
+set on the application decides which rules run"). `orphans` are the stored values no entry shows (no tier, no
 placement and no listed variable has the name: a value under a heading's name is one);
 `remedy_parameters` are the bound packages' remedy parameters, read-only, with what the last
 evaluation resolved; `other_targets` are the stored targets on no declared resource entry's pool.

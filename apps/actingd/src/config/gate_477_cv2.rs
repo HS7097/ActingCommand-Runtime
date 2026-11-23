@@ -165,6 +165,7 @@ fn cv2_this_runtime_names_catalog_business_and_composes_a_switched_root() {
         Some(DeclaredCapabilities {
             provides: BTreeMap::new(),
             remedies: BTreeSet::new(),
+            variables: Some(Vec::new()),
         }),
     )]));
     let schedule = schedule();

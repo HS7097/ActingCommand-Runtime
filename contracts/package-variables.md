@@ -57,6 +57,14 @@ judges before the run's admission as a dispatch judges a value and overlays wher
 values are overlaid; actinglab's `run start` and `standard-pack trial` take
 `--variable <name>=<json>` and send them.
 
+**Built in SV-2** (Workflow #500, Runtime 0.12.81, register §1.511; "Carried by the rule" and "A
+value set on the application decides which rules run" below;
+[standard-pack-schedule.md](standard-pack-schedule.md), "A rule's variable values"): a rule of
+`schedule.json` may carry `variables`, values for its package's variables (`requires` names
+`rule_variables`), so that one package runs as several rules, each with its own value, costs and
+yields; a dispatch of the rule hands its run the rule's value with the source `rule`; a value set
+on the application decides which of those rules may run.
+
 **What does not apply is enforced at run time since V2.** "Does not apply" (a name the root check
 reports, "Shared names and the root check") is, in `actinglab standard-pack check`, a warning: the
 check only warns wherever it runs (its exit stays 0). The installer runs it: the post check of
@@ -263,22 +271,50 @@ version 1 file is `goal_version_retired` at `/schema_version`; no pack carries e
 
 Workflow #463 V2 (Runtime 0.12.61; register §1.382). The owner's requirement (board #463, 11-14):
 the number in a variable may come from a mathematical model, from a person or an agent, or from
-elsewhere. The Runtime hands a run the value it is given and computes none: there are two sources,
-the value set on the application and the package default.
+elsewhere. The Runtime hands a run the value it is given and computes none: there are three
+sources (Workflow #500 SV-2, since 0.12.81: until 0.12.80 the first two), the value set on the
+application, the package default, and the value the dispatched task's rule carries.
 
 **Resolution, once per selected dispatch.** For every variable of the dispatched package, in
 declaration order:
 
-1. **Set on the application**: the entry row of the variable's name in the application's
-   `session.resource_targets` v3 record ([resource-targets.md](resource-targets.md), "Document
-   `actingcommand.resource-targets.v3`"), with its `set_unix_ms` and `channel`, as the evaluation's
-   facts hold it (the Runtime's memory store, projected for the evaluation: no ledger read is added
-   to a dispatch); a record of another version, or one the v3 reader refuses, holds no entry.
+0. **Carried by the rule** (Workflow #500 SV-2, since 0.12.81, register §1.511): when the
+   dispatched task carries a value for the variable (the `variables` of its rule of
+   `schedule.json`, which the composer passes through to the composed task and holds to the
+   package's declaration; [standard-pack-schedule.md](standard-pack-schedule.md), "A rule's
+   variable values"), that value, source `rule`. A task whose value the application holds another
+   value set for is not dispatched ("A value set on the application decides which rules run"
+   below), so a rule's value is handed only where the application holds no value for the variable
+   or holds that same one. The root's judgement ("A variable that does not apply") and a set
+   value's own judgement are not read for it: the composer judged it against the declaration, and
+   the run's admission judges it again under the package it prepares ("The overlay").
+1. **Set on the application**, for a variable the task carries no value for: the entry row of the
+   variable's name in the application's `session.resource_targets` v3 record
+   ([resource-targets.md](resource-targets.md), "Document `actingcommand.resource-targets.v3`"),
+   with its `set_unix_ms` and `channel`, as the evaluation's facts hold it (the Runtime's memory
+   store, projected for the evaluation: no ledger read is added to a dispatch); a record of another
+   version, or one the v3 reader refuses, holds no entry.
 2. **The package default**, otherwise.
 
-There is no third source: the Runtime never computes a value and never rewrites a stored one. An
-option such as `auto` hands the choice to the package's own policy, which reads facts and tables.
-Resolution does not read `scheduling.remedy.enabled`: it runs with remedies on or off.
+A variable the task carries no value for resolves exactly as before SV-2, in this order. The
+Runtime never computes a value and never rewrites a stored one. An option such as `auto` hands the
+choice to the package's own policy, which reads facts and tables. Resolution does not read
+`scheduling.remedy.enabled`: it runs with remedies on or off. A run without a dispatch (a direct
+run, a run the host starts itself, a Lab run) reads no rule's value ("Runs without a dispatch").
+
+**A value set on the application decides which rules run** (Workflow #500 SV-2, since 0.12.81,
+register §1.511; [scheduling-blackout.md](scheduling-blackout.md), "Order of the deferrals",
+position 5a). While the application holds a value set for a variable (an entry row of its name,
+whatever its judgement says of it) and a task's rule carries a **different** value for it, that
+task's candidate on the application is held back: no error, no failure, no budget taken; its
+decision and its not-run explanation carry `goal_value_excludes_rule` (info; `instance_id`,
+`task_id`, `variable_name`, the first such variable in declaration order); it has no wake of its
+own: it ends when the set value is cleared or changed, a change of facts. A rule that carries the
+**same** value (compared as JSON), or does not carry the variable, is not affected. With no set
+value every rule is a candidate and the evaluation picks among them as among any tasks, by their
+own costs, yields and order. So "designate this one" is setting the value and "let the scheduler
+choose" is clearing it; the application's record gains no member. For the idle plan such a
+candidate is held back with no time, as a closed pack schedule's row with no end holds one.
 
 **A set value that no longer fits its declaration** is judged when a run is to read it
 (`PackageVariable::judge`, the contract crate's one copy, which the kernel and the Lab read too);
@@ -401,7 +437,9 @@ the package's defaults, whatever is set. Nothing is skipped silently: the cycle 
 `package_id`, all required), once per (application, package, state of the package's files: its
 declaration files' marks and the reader's refusal) after a start, in memory only, as a Warning
 `runtime.failed` record of the policy driver; the package's own `standard_pack_package_unreadable`
-says why it cannot be read. Without a composed standard pack the remedy table names such a package
+says why it cannot be read. Workflow #500 SV-2: such a dispatch hands no value its task's rule
+carries either, and no set value holds its candidate back, since which variables the package
+declares is not known. Without a composed standard pack the remedy table names such a package
 on its developer line (`actingd remedy_table unreadable`), as before.
 
 **The overlay.** Each variable is overlaid as `session.dispatch.parameter.<name>`, the key remedy
@@ -436,7 +474,10 @@ the values of its dispatch the run read, so such a run's record names no value f
 gains `variable_values`, one record per variable of the package in declaration order:
 `{variable_name, variable_source, value_json?, set_unix_ms?, set_channel?, variable_problem?}`,
 and (fix round 2, in the ledger record only) `value_sha256?, value_bytes?, value_json_left_out?`.
-`variable_source` is `set` or `default`; `value_json` is the value the run reads, as compact JSON,
+`variable_source` is `set` or `default`, or (Workflow #500 SV-2, since 0.12.81) `rule` for the
+value the dispatched task's rule carries, with `set_unix_ms` and `set_channel` when the
+application holds a value (then the same one) and never a `variable_problem`; `value_json` is the
+value the run reads, as compact JSON,
 a key of the type `json` (fix round 1: up to 1024 bytes, the goal store's bound; absent for a
 default longer than that, which the run reads from its package, and, fix round 2, in a ledger
 record whose text did not fit, "The record's size" below); `set_unix_ms` and `set_channel`
@@ -536,7 +577,8 @@ text's SHA-256 (64 lowercase hexadecimal digits) and length only (`AdmittedVaria
   of at most 1024 bytes as it hands down a set value, "The record" above), and does not say which
   were set and which were defaults (CH-1 fix round 1, the coordinator's ruling: the code stays as
   it is): the member is what was handed to the run from outside, and the dispatch's own reason
-  says where each value came from (`variable_source`);
+  says where each value came from (`variable_source`; Workflow #500 SV-2: a rule's value is listed
+  as any other, its reason saying `rule`);
 - a run handed no value (none given, a package without variables, a run the host starts itself)
   writes no `variables` member: its record is byte for byte the record without it.
 
@@ -613,7 +655,15 @@ record ([resource-targets.md](resource-targets.md), "One value by name").
   type, the name's place, or the cap's readers and member; its members
   `irreversible_capabilities` and `unreadable_packages` stay in the shape, which Workflow #455
   G-SLx does not change, and no Runtime of 0.12.78 or later answers them); a value applied in part is `in_effect` with `keys_left_out` and the keys
-  left out. Beside the bound packages that declare a variable (`packages`), the root's other
+  left out. Workflow #500 SV-2 (since 0.12.81, register §1.511): with rules that carry values the
+  next dispatch's value is no longer one per variable. The view resolves each variable from the
+  value set on the application and the default alone (`VariablePlan::resolutions`); a stored value
+  that is applied is shown as before (`source` `set`, its value), since every dispatch then hands
+  it (a rule that carries another value is held back); without one, a variable that a catalog task
+  bound on the application carries a value for (its rule's `variables`) names no `effective_json`,
+  `source` or `display`: the rule of the task that runs decides. Its state and word are as before
+  (`not_applied` with the word of a stored value not applied). The rules' values are not listed
+  (a new member would move `runtime-client`); the composed catalog holds them. Beside the bound packages that declare a variable (`packages`), the root's other
   packages that declare it are named `unbound_packages`. A placement whose variable no bound
   package declares is `not_offered`. The view judges no stored value itself. A stored value no
   entry shows (no tier, no placement, no listed variable: a value under a heading's name
@@ -712,6 +762,15 @@ bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15
   declares, and an earlier Runtime then refuses that package at every run. A rollback below 23
   stays open while no root holds such a pack. `ledger`, `runtime-client`, `actingd-config` and
   `runtime-outcomes` do not move.
+- **Workflow #500 SV-2** (Runtime 0.12.81, register §1.511) moves no declared range. A rule's
+  values are a feature of `schedule.json`, which goes by `requires` (`rule_variables`, a new row of
+  the configuration manifest's subsystems), not by `package`; the composed task's new V2 member
+  `variables` is read only by a build that names the subsystem, and a build that does not refuses
+  the file at `requires` first; `variable_source` gains the word `rule` and the catalog the info
+  code `goal_value_excludes_rule` (`runtime-outcomes` stays 1: a word and a code in the catalog);
+  `variable_values` and `task.requested.variables` keep their shapes (`ledger` stays); `GoalView`
+  leaves out two optional members it had always answered (`runtime-client` stays); no
+  configuration key (`actingd-config` stays).
 
 ## What arrives later
 

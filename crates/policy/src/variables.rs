@@ -23,7 +23,11 @@
 //!   `session.resource_targets` v3 record, as the evaluation's facts hold it, judged at use by
 //!   [`resolve_variable`] (fix round 2: public, the one function a view calls too); else the
 //!   package default. A variable the root's judgement keeps from applying is handed no value from
-//!   outside. There is no third source: nothing here computes or rewrites a value.
+//!   outside. Nothing here computes or rewrites a value. Workflow #500 SV-2 (register §1.511): a
+//!   third source, `rule`: a variable the pair's task carries a value for (its `variables`, a
+//!   `schedule.json` rule's) is handed that value; a pair whose task carries a value the
+//!   application holds another value for is held back by the host ([`VariablePlan::excluded_by`]).
+//!   A variable the task carries no value for resolves as before.
 //! - **The record** ([`RemedyPlan::with_variable_values`]): the pair's
 //!   `policy_dispatch_parameters` gains `variable_values`, one record per variable of the
 //!   package, which the evaluator attaches to a selected dispatch only. A pair whose package
@@ -47,7 +51,7 @@ use sha2::{Digest, Sha256};
 
 use crate::codes::PolicyCode;
 use crate::evaluator::scope_matches_instance;
-use crate::resource_targets::{StoredEntry, set_channel, stored_v3_entries};
+use crate::resource_targets::{StoredEntry, goal_entry_value_fits, set_channel, stored_v3_entries};
 use crate::{
     CompiledCatalog, DecisionReason, EvaluationFacts, RemedyPlan, STANDARD_PACK_PROCEDURE_PREFIX,
     TaskSpec,
@@ -434,11 +438,13 @@ pub struct ResolvedVariable {
 
 impl ResolvedVariable {
     /// Fix round 1: why a value set on the application was not applied, the run reading the
-    /// default; `None` when it was applied, whole or in part, or none is set.
+    /// default; `None` when it was applied, whole or in part, or none is set. Workflow #500 SV-2:
+    /// `None` for a rule's value, which the run reads whatever is set (a set value that differs
+    /// holds the rule's candidate back instead).
     pub fn not_applied(&self) -> Option<VariableProblem> {
         match self.source {
             VariableSource::Default => self.problem,
-            VariableSource::Set => None,
+            VariableSource::Set | VariableSource::Rule => None,
         }
     }
 }
@@ -459,8 +465,18 @@ pub struct NotAppliedValue {
 /// The variables of one (task, instance) pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PairVariables {
+    /// What a dispatch of the pair hands its run, in declaration order (Workflow #500 SV-2: the
+    /// rule's value, source `rule`, of a variable its task carries one for).
     values: Vec<ResolvedVariable>,
+    /// Workflow #500 SV-2: each variable resolved from the value set on the application and the
+    /// package default alone, in declaration order, whether or not its task carries a value.
+    resolved: Vec<ResolvedVariable>,
     not_applied: Vec<NotAppliedValue>,
+    /// Workflow #500 SV-2: the variables the pair's task carries a value for, by name.
+    carried: BTreeSet<String>,
+    /// Workflow #500 SV-2: the first variable, in declaration order, the pair's task carries a
+    /// value for while the application holds another value for it.
+    excluded_by: Option<String>,
 }
 
 /// The variable values of one evaluation, per (task, instance) pair whose package declares
@@ -478,11 +494,43 @@ impl VariablePlan {
     }
 
     /// The values a dispatch of `task_id` on `instance_id` hands its run, in declaration order;
-    /// `None` when its package declares no variable.
+    /// `None` when its package declares no variable. Workflow #500 SV-2: a variable the task
+    /// carries a value for is handed that value, source `rule`.
     pub fn values(&self, task_id: &str, instance_id: &str) -> Option<&[ResolvedVariable]> {
         self.pairs
             .get(&(task_id.to_owned(), instance_id.to_owned()))
             .map(|pair| pair.values.as_slice())
+    }
+
+    /// Workflow #500 SV-2 (`contracts/package-variables.md`, "Reading and setting a value by
+    /// name"): each variable of the package of `task_id` resolved on `instance_id` from the value
+    /// set on the application and the package default alone, in declaration order, whether or not
+    /// the task carries a value for it: what the goal page shows of the application's own value.
+    /// `None` when its package declares no variable.
+    pub fn resolutions(&self, task_id: &str, instance_id: &str) -> Option<&[ResolvedVariable]> {
+        self.pairs
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .map(|pair| pair.resolved.as_slice())
+    }
+
+    /// Workflow #500 SV-2 (`contracts/package-variables.md`, "A value set on the application
+    /// decides which rules run"): the first variable, in declaration order, that the task
+    /// `task_id` carries a value for while `instance_id` holds another value set for it: the
+    /// task's candidate there is held back. `None` when no such variable is.
+    pub fn excluded_by(&self, task_id: &str, instance_id: &str) -> Option<&str> {
+        self.pairs
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .and_then(|pair| pair.excluded_by.as_deref())
+    }
+
+    /// Workflow #500 SV-2: the names of the variables that a task of a pair of `instance_id`
+    /// carries a value for.
+    pub fn carried(&self, instance_id: &str) -> BTreeSet<&str> {
+        self.pairs
+            .iter()
+            .filter(|((_, instance), _)| instance.as_str() == instance_id)
+            .flat_map(|(_, pair)| pair.carried.iter().map(String::as_str))
+            .collect()
     }
 
     /// The values set on `instance_id` that a dispatch of `task_id` there does not hand its run.
@@ -507,7 +555,12 @@ impl VariablePlan {
 /// the instance's entry row of its name (its v3 record's, [`stored_v3_entries`]) and the word
 /// that keeps it from applying in the instance's game ([`VariableTable::root_word`]). A value not
 /// applied is also one [`NotAppliedValue`] of the pair. Fix round 2: a pair whose package the
-/// workbench could not read is [`VariablePlan::unread`] instead.
+/// workbench could not read is [`VariablePlan::unread`] instead. Workflow #500 SV-2 (register
+/// §1.511): a variable the task carries a value for (its `variables`) is handed that value, source
+/// `rule`, with who set the application's value when it holds one and no word, and is no value not
+/// applied; when the application holds a value for it that is not the task's, the pair is held
+/// back by that variable ([`VariablePlan::excluded_by`]), the first in declaration order. A name
+/// the task carries that its package does not declare is not read.
 pub fn plan_variable_values(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -549,23 +602,51 @@ pub(crate) fn plan_with_entries(
             let stored = entries.get_or_insert_with(|| entries_of(instance.instance_id.as_str()));
             let mut variables = PairVariables {
                 values: Vec::with_capacity(declared.variables.len()),
+                resolved: Vec::with_capacity(declared.variables.len()),
                 not_applied: Vec::new(),
+                carried: BTreeSet::new(),
+                excluded_by: None,
             };
             for declared_variable in &declared.variables {
                 let variable = &declared_variable.variable;
                 let root = table.root_word(&instance.game_id, &variable.name);
                 let entry = stored.get(&variable.name);
                 let resolved = resolve_variable(variable, entry, root);
-                if let (Some(problem), Some(entry)) = (resolved.not_applied(), entry) {
-                    variables.not_applied.push(NotAppliedValue {
-                        package_id: declared.package_id.clone(),
-                        variable_name: variable.name.clone(),
-                        declaration_sha256: declared_variable.declaration_sha256.clone(),
-                        value_sha256: value_sha256(&entry.value),
-                        problem,
-                    });
+                // Workflow #500 SV-2: the value the task's rule carries for the variable, if any.
+                match task
+                    .variables
+                    .as_ref()
+                    .and_then(|rule_values| rule_values.get(&variable.name))
+                {
+                    Some(rule_value) => {
+                        if variables.excluded_by.is_none()
+                            && entry.is_some_and(|held| held.value != *rule_value)
+                        {
+                            variables.excluded_by = Some(variable.name.clone());
+                        }
+                        variables.carried.insert(variable.name.clone());
+                        variables.values.push(ResolvedVariable {
+                            variable_name: variable.name.clone(),
+                            value: rule_value.clone(),
+                            source: VariableSource::Rule,
+                            set_by: resolved.set_by,
+                            problem: None,
+                        });
+                    }
+                    None => {
+                        if let (Some(problem), Some(entry)) = (resolved.not_applied(), entry) {
+                            variables.not_applied.push(NotAppliedValue {
+                                package_id: declared.package_id.clone(),
+                                variable_name: variable.name.clone(),
+                                declaration_sha256: declared_variable.declaration_sha256.clone(),
+                                value_sha256: value_sha256(&entry.value),
+                                problem,
+                            });
+                        }
+                        variables.values.push(resolved.clone());
+                    }
                 }
-                variables.values.push(resolved);
+                variables.resolved.push(resolved);
             }
             plan.pairs.insert(pair, variables);
         }
@@ -637,6 +718,30 @@ pub fn resolve_variable(
             }
         }
         Err(problem) => default(Some(problem)),
+    }
+}
+
+/// Workflow #500 SV-2 (register §1.511; `contracts/standard-pack-schedule.md`, "A rule's variable
+/// values"): whether `variable`'s declaration takes `value`, a value a rule of `schedule.json`
+/// carries for it, by the check a value set on the application passes (`EditGoal`'s, and a direct
+/// run's values'): the goal store keeps its text ([`goal_entry_value_fits`], `value_too_large`),
+/// and the judgement [`resolve_variable`] gives a stored entry whose setter is known, with no word
+/// of the root, takes it whole (the contract crate's one judgement, `PackageVariable::judge`; an
+/// `ordered` value it would take only in part is `keys_left_out`). `Ok` when it is taken; `Err`
+/// with `None` when the store would not keep its text, else with the judgement's word.
+pub fn judge_rule_variable_value(
+    variable: &PackageVariable,
+    value: &serde_json::Value,
+) -> Result<(), Option<VariableProblem>> {
+    if goal_entry_value_fits(value).is_err() {
+        return Err(None);
+    }
+    match variable.judge(value) {
+        Ok(read) if variable.leaves_keys_out(value, &read) => {
+            Err(Some(VariableProblem::KeysLeftOut))
+        }
+        Ok(_) => Ok(()),
+        Err(problem) => Err(Some(problem)),
     }
 }
 

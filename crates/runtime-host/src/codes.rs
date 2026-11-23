@@ -3654,6 +3654,13 @@ actingcommand_contract::outcome_codes! {
         /// its run no value and the run reads the package's defaults. Written once per
         /// (application, package, state of the package's files) after a start; the run goes on.
         PackageUnreadable => "goal_value_package_unreadable": warning / none,
+        /// Info (Workflow #500 SV-2, since 0.12.81). The candidate of the task (`task_id`) on the
+        /// application (`instance_id`) is held back: the task's rule of `schedule.json` carries a
+        /// value for the variable (`variable_name`) other than the value set on the application,
+        /// which decides which rules may run. A decision's reason, at position 5a of the order of
+        /// the deferrals, with no wake of its own: clearing or changing the set value, a change of
+        /// facts, ends it. Nothing fails and no budget is taken.
+        ExcludesRule => "goal_value_excludes_rule": info / none,
     }
 }
 

@@ -573,12 +573,16 @@ fn set_by(setter: TargetSetter) -> GoalSetBy {
 
 /// One variable of the page: its name, its first declaration, every bound package that declares
 /// it, and the value the next dispatch of the first catalog task that runs one of them hands its
-/// run ([`ResolvedVariable`], the run's own resolution), when one was resolved.
+/// run ([`ResolvedVariable`], the run's own resolution), when one was resolved. Workflow #500 SV-2
+/// (register §1.511): the resolution is the one of the value set on the application and the
+/// package default alone, and `carried` says whether a catalog task bound on the application
+/// carries a value of its own for the variable (its rule's `variables`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PageVariable<'a> {
     pub(crate) variable: &'a PackageVariable,
     pub(crate) packages: Vec<String>,
     pub(crate) resolved: Option<&'a ResolvedVariable>,
+    pub(crate) carried: bool,
 }
 
 /// The variables of `page`, each once, in the order the bound packages first declare them, each
@@ -609,6 +613,7 @@ pub(crate) fn page_variables<'a>(
                             .iter()
                             .find(|value| value.variable_name == variable.name)
                     }),
+                    carried: false,
                 }),
             }
         }
@@ -819,7 +824,9 @@ fn resource_entry(
 /// stored keys of an `ordered` value the run leaves out, and whether it is in effect:
 /// `not_applied` when the run reads the default with a word (a stored value not applied, or a
 /// variable that does not apply), `in_effect` otherwise (`keys_left_out`, a value applied in part,
-/// included).
+/// included). Workflow #500 SV-2 (register §1.511): of a variable a bound task's rule carries a
+/// value for (`row.carried`), with no stored value applied, the rules decide: no source, value or
+/// display is named.
 fn variable_entry(
     row: &PageVariable<'_>,
     stored: Option<&StoredGoalEntry>,
@@ -858,10 +865,16 @@ fn variable_entry(
         ),
         None => (default, VariableSource::Default, not_applying),
     };
-    entry.source = Some(match source {
-        VariableSource::Set => GoalValueSource::Set,
-        VariableSource::Default => GoalValueSource::Default,
-    });
+    // Workflow #500 SV-2 (register §1.511): a set value that is applied is what every next
+    // dispatch hands its run (a rule that carries another value is held back); without one, a
+    // variable a bound task carries a value for is decided by the rule of the task that runs, so
+    // the page names no one value: no `source`, `effective_json` or `display`.
+    let shown = match source {
+        VariableSource::Set => Some(GoalValueSource::Set),
+        VariableSource::Default if !row.carried => Some(GoalValueSource::Default),
+        VariableSource::Default | VariableSource::Rule => None,
+    };
+    entry.source = shown;
     // The keys of a stored `ordered` value the run's value does not hold: the ones it left out.
     if let (VariableKind::Ordered { .. }, Some(stored), VariableSource::Set) =
         (&variable.kind, stored, source)
@@ -877,8 +890,10 @@ fn variable_entry(
             .map(str::to_owned)
             .collect();
     }
-    entry.display = display(variable, &effective);
-    entry.effective_json = Some(variable_value_json(&effective));
+    if shown.is_some() {
+        entry.display = display(variable, &effective);
+        entry.effective_json = Some(variable_value_json(&effective));
+    }
     entry.variable_problem = problem.map(|problem| problem.as_str().to_owned());
     // The root's detail, when the word the run gives is the root's own (not `root_unchecked`,
     // which a root that fails its check gives every name, nor a stored value's own word).

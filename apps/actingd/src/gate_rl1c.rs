@@ -290,6 +290,7 @@ impl Fixture {
                         Some(actingcommand_contract::DeclaredCapabilities {
                             provides: BTreeMap::new(),
                             remedies: std::collections::BTreeSet::new(),
+                            variables: Some(Vec::new()),
                         }),
                     )
                 })

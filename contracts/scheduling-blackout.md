@@ -348,6 +348,22 @@ that orders tasks changes;
    built by Workflow #429 R-8, since 0.12.55: every candidate of the closed package, an owed
    rerun, an immediate rerun and a chain's successor included, with the covering row's end as
    its wake, none for an open-ended row);
+
+**5a.** a value set on the application excludes the task's rule (`goal_value_excludes_rule`, info,
+values `instance_id`, `task_id` and `variable_name`; Workflow #500 SV-2, since 0.12.81, register
+§1.511; [package-variables.md](package-variables.md), "A value set on the application decides which
+rules run"): the candidate's task carries a value for a variable of its package (its rule's
+`variables`) while the application holds another value set for it, the first such variable in
+declaration order. Every candidate of the pair waits, an owed rerun, an immediate rerun, a remedy
+request or retry and a chain's successor included, with no wake of its own: clearing or changing
+the set value is a change of facts, which wakes the evaluation. Nothing fails and no budget is
+taken. The fact refresh's candidate carries no rule value and never waits here. The look ahead
+behind a hold reads it after position 5, and the idle plan counts such a candidate held back with
+no time (#486 ASLEEP-3, "A later position that names no time": `hold_back_untimed`), as it counts
+one a closed pack schedule's row with no end holds. A rule that carries the set value, or does not
+carry the variable, is not held. Its code is no gate the clock-slot planning records of Workflow
+#372 K2 name (below), so a due clock slot it holds writes no clock-slot record;
+
 6. performance pacing pauses the instance or its run interval has not passed
    (`perf_scheduling_paused`, `perf_pacing_gap`, Workflow #385), an owed rerun waits for the
    pacing stage (`policy_rerun_waiting`), or an entry-cost task waits for it

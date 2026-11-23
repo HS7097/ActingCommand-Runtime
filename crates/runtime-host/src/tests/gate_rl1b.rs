@@ -245,6 +245,7 @@ pub(super) fn readable_root(
                     Some(actingcommand_contract::DeclaredCapabilities {
                         provides: BTreeMap::new(),
                         remedies: BTreeSet::new(),
+                        variables: Some(Vec::new()),
                     }),
                 )
             })

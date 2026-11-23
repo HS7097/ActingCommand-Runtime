@@ -1570,7 +1570,9 @@ A later position that names no time makes no task due for the idle plan (#486 AS
 and its fix round 1; the production case above). On an instance whose idle action can put it to
 sleep, awake or asleep, and under no hold of positions 1 or 2, a candidate that a later position
 of the order of the deferrals defers with no time of its own (a suspended package, a closed pack
-schedule's row with no end, an owed rerun's pacing, a remedy round, an availability denial with no
+schedule's row with no end, Workflow #500 SV-2's value set on the application that excludes the
+task's rule (position 5a, since 0.12.81), an owed rerun's pacing, a remedy round, an availability
+denial with no
 release; the quiet before a blackout always names its time) counts for the idle plan as held back by a later position that
 names no time, as #484's look ahead counts it behind a hold: not due, no wake of its own
 (`PolicyHost::evaluate`, `hold_back_untimed`). "An eligible decision with no wake of its own is

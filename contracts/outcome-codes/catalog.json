@@ -2779,7 +2779,7 @@
     },
     "variable_source": {
       "type": "vocab:variable_source",
-      "description": "Where the value a policy run reads of a variable comes from: the value set on the application, or the package's default (Workflow #463 V2, since 0.12.61)."
+      "description": "Where the value a policy run reads of a variable comes from: the value set on the application, or the package's default (Workflow #463 V2, since 0.12.61); or, Workflow #500 SV-2 (since 0.12.81), the value the dispatched task's rule carries (rule)."
     },
     "set_unix_ms": {
       "type": "unix_ms",
@@ -9900,6 +9900,9 @@
         },
         "default": {
           "description": "The package's declared default."
+        },
+        "rule": {
+          "description": "Workflow #500 SV-2 (since 0.12.81): the value the dispatched task's rule of schedule.json carries for the variable (its member variables)."
         }
       }
     },

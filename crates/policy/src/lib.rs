@@ -194,6 +194,9 @@ mod tests {
     // #477 LF-1 (0.12.80; register §1.509): the turn cap a dispatch carries counts the lines of the
     // pools its task consumes.
     mod gate_477_lf1;
+    // #500 SV-2 (0.12.81; register §1.511): a rule of `schedule.json` carries values for its
+    // package's variables.
+    mod gate_500_sv2;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
@@ -210,6 +213,7 @@ mod tests {
                         Some(actingcommand_contract::DeclaredCapabilities {
                             provides: std::collections::BTreeMap::new(),
                             remedies: std::collections::BTreeSet::new(),
+                            variables: Some(Vec::new()),
                         }),
                     )
                 })

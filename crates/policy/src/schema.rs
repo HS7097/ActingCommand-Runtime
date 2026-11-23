@@ -454,6 +454,22 @@ pub struct TaskSpec {
     /// still refused as an unknown member. Absent, the member serializes as nothing at all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub irreversible_reach: Option<bool>,
+    /// Workflow #500 SV-2 (register §1.511, `actingcommand.scheduling.v2` only): the values a
+    /// dispatch of the task hands its run for its package's variables, by the variable's name (the
+    /// `schedule.json` rule member `variables`, which the standard-pack composer passes through and
+    /// holds to the package's declaration; `contracts/package-variables.md`, "The run"). A
+    /// variable the task carries is handed its value with the source `rule`; while a value set on
+    /// the application for it differs, the task's candidate there is held back. The compiler holds
+    /// it to 1 to [`MAX_TASK_VARIABLES`] names of a variable's form, each with a value of a
+    /// variable's kind whose compact text is at most 1024 bytes. Absent, the member serializes as
+    /// nothing at all, so a catalog without it keeps its hash; an explicit `null` is refused
+    /// (`type_mismatch`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "written_bound"
+    )]
+    pub variables: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 impl TaskSpec {
@@ -1350,6 +1366,19 @@ pub const POOL_LIST_ROWS_SUBSYSTEM: &str = "pool_list_rows";
 /// 0.12.79 names it, so every Runtime of that version refuses such a file
 /// (`schedule_requires_missing`) and keeps the game's last good rules.
 pub const CATALOG_BUSINESS_SUBSYSTEM: &str = "catalog_business";
+
+/// Workflow #500 SV-2 (register §1.511; `contracts/standard-pack-schedule.md`, "A rule's variable
+/// values"): the configuration-manifest subsystem of a Runtime that hands a dispatch of a rule the
+/// values the rule carries for its package's variables (its `variables`), holds back a rule whose
+/// value differs from the one set on the application, and reads the composed task's `variables`;
+/// a `schedule.json` any of whose rules carries `variables` names it in `requires`. No Runtime of
+/// 0.12.80 names it, so every Runtime of that version refuses such a file
+/// (`schedule_requires_missing`) and keeps the game's last good rules.
+pub const RULE_VARIABLES_SUBSYSTEM: &str = "rule_variables";
+
+/// Workflow #500 SV-2 (register §1.511): the most values a task's `variables` carries, as many as a
+/// package declares variables.
+pub const MAX_TASK_VARIABLES: usize = actingcommand_contract::MAX_PACKAGE_VARIABLES;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

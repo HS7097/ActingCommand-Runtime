@@ -101,6 +101,13 @@ pub const SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER: &str = "fixed_value_origin";
 pub const SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER: &str = "valuation_origin";
 /// SCHED-C1a: the one value of an origin member.
 pub const SCHEDULE_VALUE_ORIGIN_MODEL: &str = "model";
+/// Workflow #500 SV-2 (register §1.511; `contracts/standard-pack-schedule.md`, "A rule's variable
+/// values"): the optional rule member `variables`, an object from the name of a variable the
+/// rule's package declares to the value the rule's runs are handed for it. It passes through to
+/// the composed task as a V2 task member; the policy crate's composer holds it to `requires` and to
+/// the package's declaration. The reader leaves it out of its search for `scope` members only: its
+/// members are variables' names, and a package may name a variable `scope`.
+pub const SCHEDULE_RULE_VARIABLES_MEMBER: &str = "variables";
 
 /// SCHED-C1a (register §1.299; `contracts/standard-pack-schedule.md`, "Provenance"): who wrote a
 /// value of `schedule.json`, a rule's fixed value or a pool's valuation block. Only the reports
@@ -252,7 +259,8 @@ fn segment(name: &str) -> String {
 /// duplicate key, `schema_version` `actingcommand.schedule.v1`, only the members `requires`,
 /// `rules`, `pools`, `activity`, `timeline` and `held` besides it (each absent means empty), and:
 ///
-/// - no member named `scope` at any depth of a rule or an item (no instance names);
+/// - no member named `scope` at any depth of a rule or an item (no instance names), a rule's
+///   `variables` left out (Workflow #500 SV-2: its members name variables);
 /// - every rule and item is an object with a string `id`, unique within its list
 ///   (`rule_id_conflict` at the second one);
 /// - every rule names a string `package_id` (1–128 bytes, no control character), and holds no
@@ -306,7 +314,12 @@ pub fn parse_standard_pack_schedule(
     let mut rule_ids = BTreeSet::new();
     for (index, value) in list("rules")?.into_iter().enumerate() {
         let pointer = format!("/rules/{index}");
-        let (id, mut body) = item_object(value, &pointer, &mut rule_ids)?;
+        let (id, mut body) = item_object(
+            value,
+            &pointer,
+            &mut rule_ids,
+            Some(SCHEDULE_RULE_VARIABLES_MEMBER),
+        )?;
         let package_id = match body.shift_remove("package_id") {
             Some(Value::String(package_id)) if package_id_text(&package_id) => package_id,
             _ => return Err(invalid(format!("{pointer}/package_id"))),
@@ -391,7 +404,7 @@ pub fn parse_standard_pack_schedule(
         let mut items = Vec::new();
         for (index, value) in list(member.as_str())?.into_iter().enumerate() {
             let pointer = format!("/{}/{index}", member.as_str());
-            let (id, mut body) = item_object(value, &pointer, &mut ids)?;
+            let (id, mut body) = item_object(value, &pointer, &mut ids, None)?;
             let server = match body.shift_remove("server") {
                 None => None,
                 Some(Value::String(server)) if bundle_identifier(&server) && !server.is_empty() => {
@@ -441,14 +454,23 @@ pub fn parse_standard_pack_schedule(
     })
 }
 
-/// One rule or item: an object with no `scope` member at any depth and a string `id` not yet in
-/// `ids` (`rule_id_conflict` otherwise); its members without `id`.
+/// One rule or item: an object with no `scope` member at any depth (Workflow #500 SV-2: but in its
+/// own member `opaque`, a rule's `variables`, whose members name variables) and a string `id` not
+/// yet in `ids` (`rule_id_conflict` otherwise); its members without `id`.
 fn item_object(
     value: Value,
     pointer: &str,
     ids: &mut BTreeSet<String>,
+    opaque: Option<&str>,
 ) -> Result<(String, Map<String, Value>), StandardPackRootIssue> {
-    if let Some(scope) = scope_member(&value, pointer) {
+    let scope = match &value {
+        Value::Object(members) => members
+            .iter()
+            .filter(|(name, _)| Some(name.as_str()) != opaque)
+            .find_map(|(name, child)| member_scope(name, child, pointer)),
+        other => scope_member(other, pointer),
+    };
+    if let Some(scope) = scope {
         return Err(invalid(scope));
     }
     let Value::Object(mut body) = value else {
@@ -469,19 +491,25 @@ fn item_object(
 /// The pointer of the first member named `scope` at any depth of `value`, in document order.
 fn scope_member(value: &Value, pointer: &str) -> Option<String> {
     match value {
-        Value::Object(members) => members.iter().find_map(|(name, child)| {
-            let child_pointer = format!("{pointer}/{}", segment(name));
-            if name == "scope" {
-                Some(child_pointer)
-            } else {
-                scope_member(child, &child_pointer)
-            }
-        }),
+        Value::Object(members) => members
+            .iter()
+            .find_map(|(name, child)| member_scope(name, child, pointer)),
         Value::Array(items) => items
             .iter()
             .enumerate()
             .find_map(|(index, child)| scope_member(child, &format!("{pointer}/{index}"))),
         _ => None,
+    }
+}
+
+/// The pointer of the member `name` of the object at `pointer` when it is named `scope`, else of
+/// the first member named `scope` at any depth of its value `child`, in document order.
+fn member_scope(name: &str, child: &Value, pointer: &str) -> Option<String> {
+    let child_pointer = format!("{pointer}/{}", segment(name));
+    if name == "scope" {
+        Some(child_pointer)
+    } else {
+        scope_member(child, &child_pointer)
     }
 }
 

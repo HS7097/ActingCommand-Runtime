@@ -2,7 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use actingcommand_contract::MAX_STRATEGIC_WEIGHT_MILLI;
+use actingcommand_contract::{
+    MAX_STRATEGIC_WEIGHT_MILLI, MAX_VARIABLE_VALUE_JSON_BYTES, remedy_token_valid,
+    variable_value_json,
+};
 
 use crate::source::SourceMap;
 use crate::{
@@ -14,7 +17,7 @@ use crate::{
     MAX_FACT_MAX_AGE_MS, MAX_FACT_TIME_OFFSET_MS, MAX_GOALS_PER_PROFILE, MAX_ID_BYTES,
     MAX_INSTANCE_OVERRIDES_PER_TASK, MAX_MISSED_GRACE_MS, MAX_POOLS, MAX_PREDICATE_DEPTH,
     MAX_PREDICATE_NODES, MAX_PRIORITY_PERCENTILE, MAX_QUEUE_WAIT_MS, MAX_REFERENCES_PER_TASK,
-    MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES,
+    MAX_TASK_VARIABLES, MAX_TASKS, MAX_TEXT_BYTES, MAX_TIMELINE_EVENTS, MAX_UTC_OFFSET_MINUTES,
     MAX_VALUATION_BASE_WEIGHT_MILLI, MAX_VALUATION_GAP_WEIGHT_MILLI, MAX_VALUATION_NAME_BYTES,
     MAX_VALUATION_UNIT_BYTES, MAX_VALUE_MILLI, MAX_WINDOWS_PER_PROFILE, MIN_CANONICAL_INTEGER,
     MIN_DST_OFFSET_MINUTES, MIN_FACT_TIME_OFFSET_MS, MIN_MISSED_GRACE_MS, MIN_QUEUE_WAIT_MS,
@@ -409,6 +412,9 @@ fn validate_tasks(
             diagnostics,
         );
         validate_queue_wait(task, &path, map, descriptor, diagnostics);
+        // Workflow #500 SV-2 (register §1.511): the values a rule carries for its package's
+        // variables.
+        validate_task_variables(task, &path, map, descriptor, diagnostics);
         // Workflow #455 G-R2s (register §1.369): the composer's irreversible mark is a V2
         // member; a V1 document that names it is refused as an unknown member. G-R2x (register
         // §1.499): withdrawn, it stays a readable V2 member without effect.
@@ -657,6 +663,82 @@ fn validate_queue_wait(
             format!("max_queue_wait_ms must be within {MIN_QUEUE_WAIT_MS}..={MAX_QUEUE_WAIT_MS}"),
             descriptor,
         ));
+    }
+}
+
+/// Workflow #500 SV-2 (register §1.511; `contracts/scheduling/v2/README.md`): a task's
+/// `variables`, the values its rule carries for its package's variables. It is a V2 member (a V1
+/// document that names it is refused as an unknown member); it holds 1 to [`MAX_TASK_VARIABLES`]
+/// values (`limit_exceeded` at the member), each under a name of a variable's form (the parameter
+/// grammar, `type_mismatch` at the value) and of a variable's kind (a string, a whole number of the
+/// safe range, a boolean, or a list of strings; `type_mismatch` at the value), its compact text at
+/// most [`MAX_VARIABLE_VALUE_JSON_BYTES`] bytes, the longest a dispatch's record carries
+/// (`limit_exceeded` at the value). Whether the task's package declares the name and takes the
+/// value is the standard-pack composer's check, which has the package's declaration
+/// (`contracts/standard-pack-schedule.md`, "A rule's variable values").
+fn validate_task_variables(
+    task: &TaskSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(carried) = &task.variables else {
+        return;
+    };
+    let member = format!("{path}/variables");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "variables requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if !(1..=MAX_TASK_VARIABLES).contains(&carried.len()) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            &member,
+            format!("variables holds 1..={MAX_TASK_VARIABLES} values"),
+            descriptor,
+        ));
+    }
+    for (name, value) in carried {
+        let at = format!("{member}/{}", name.replace('~', "~0").replace('/', "~1"));
+        if !remedy_token_valid(name) || !variable_kind_value(value) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::TypeMismatch,
+                at,
+                "a variable's value is named [a-z][a-z0-9_]{0,63} and is a string, a whole \
+                 number, a boolean or a list of strings",
+                descriptor,
+            ));
+        } else if variable_value_json(value).len() > MAX_VARIABLE_VALUE_JSON_BYTES {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                at,
+                format!(
+                    "a variable's value is at most {MAX_VARIABLE_VALUE_JSON_BYTES} bytes of \
+                     compact JSON"
+                ),
+                descriptor,
+            ));
+        }
+    }
+}
+
+/// Workflow #500 SV-2: whether `value` is of a variable's kind: a `choice`'s string, an
+/// `integer`'s whole number of the safe range, a `switch`'s boolean or an `ordered` variable's list
+/// of strings.
+fn variable_kind_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(_) | serde_json::Value::Bool(_) => true,
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .is_some_and(|whole| (MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&whole)),
+        serde_json::Value::Array(items) => items.iter().all(serde_json::Value::is_string),
+        serde_json::Value::Null | serde_json::Value::Object(_) => false,
     }
 }
 

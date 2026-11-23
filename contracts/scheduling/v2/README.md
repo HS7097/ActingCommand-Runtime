@@ -363,6 +363,23 @@ mark"), which still refuses a rule that writes it itself; a catalog written by h
 A V1 document that names it is refused as an unknown field at the member. A task without the
 member serializes, hashes and decides exactly as before.
 
+Workflow #500 SV-2 (since 0.12.81; register §1.511;
+[../../package-variables.md](../../package-variables.md), "The run"), V2 only: a task may carry
+`variables`, an object from the name of a variable its package declares to the value a dispatch of
+the task hands its run for it (`variable_values`, source `rule`); while the application holds
+another value set for one of them, the task's candidate there is held back
+(`goal_value_excludes_rule`, [../../scheduling-blackout.md](../../scheduling-blackout.md), "Order of
+the deferrals", position 5a). A `schedule.json` rule writes it as any V2 member and it passes
+through to the composed task; the file then names `rule_variables` in `requires`, and the composer
+holds each name and value to the package's declaration
+([../../standard-pack-schedule.md](../../standard-pack-schedule.md), "A rule's variable values").
+Refused by the compiler, at the member: in a V1 document, `unknown_field`; no object (an explicit
+`null` included) `type_mismatch`; none or more than 16 values `limit_exceeded`; at a value, a name
+outside `^[a-z][a-z0-9_]{0,63}$` or a value of no variable's kind (a string, a whole number of the
+safe range, a boolean, a list of strings) `type_mismatch`, and one whose compact text is longer than
+1024 bytes `limit_exceeded`. A task without the member serializes, hashes and decides exactly as
+before.
+
 SS-2g (since 0.12.34; register §1.232; `../README.md`, "Expected quantities (v2)"): a `consumes`
 entry may declare `expected_amount_milli` instead of `amount`, as a `produces` entry may: an
 integer in `0..=9007199254740991` thousandths of a unit per run, at most a constant capacity ×

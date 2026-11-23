@@ -409,9 +409,12 @@ pub fn cut_standard_pack_catalog(
             .registry
             .package_ids()
             .map(|package_id| {
+                // Workflow #500 SV-2 (register §1.511): the cut reads no package, so it holds no
+                // rule's values to a declaration; both compositions it compares read the same.
                 let declared = DeclaredCapabilities {
                     provides: BTreeMap::new(),
                     remedies: BTreeSet::new(),
+                    variables: None,
                 };
                 (package_id.to_owned(), Some(declared))
             })

@@ -47106,6 +47106,167 @@ this build does (its `adopt` writes the members into the rule, which every compo
 refuses, `catalog_business_member`), so a repository adopts only with tools of this build once it
 has cut over.
 
+### 1.511 Slice #500 SV-2 (0.12.81): a rule of the standard pack schedule carries values for its package's variables; a dispatch of it hands its run the rule's value, and a value set on the application decides which rules run (board #500, the main line's third step; the owner's words of 11-22 are only that the stages are listed and the program goes by itself into the chosen or designated one; the rulings 1 to 9 are the coordinator's of 11-23; coordinator work order `rd-1123/brief-500-sv2.md` after the read-only study `rd-1122/study-stage-variable.md` and its disposition; on main `5243fd8f`, v0.12.80)
+
+This section takes 1.511 (1.516 belongs to another slice of this version). It ships in 0.12.81.
+[package-variables.md](package-variables.md) ("Built in SV-2", "The run": the three sources,
+"Carried by the rule", "A value set on the application decides which rules run", "The record",
+"The run's admission record", `GoalView`, "Interface"),
+[standard-pack-schedule.md](standard-pack-schedule.md) (the file, the reader's `scope` row,
+"`requires`", "A rule's variable values", "Composition" step 2),
+[scheduling/v2/README.md](scheduling/v2/README.md) and `scheduling/v2/tasks.schema.json` (the task
+member `variables`), [scheduling-blackout.md](scheduling-blackout.md) (position 5a),
+[actingd-check-config.md](actingd-check-config.md) (the subsystem row),
+[runtime-interface.md](runtime-interface.md) (`GoalView`), [runtime-config.md](runtime-config.md)
+and [scheduling/README.md](scheduling/README.md) (the idle plan's list of untimed positions) are the
+contract. Why: until 0.12.80 a variable had two sources, the value set on the application and the
+package default ("There is no third source"), so two rules of one package handed their runs the
+same value; a package whose stage is a variable could not run as one rule per stage, each with its
+own costs and yields, among which the scheduler picks by the account's gap.
+
+**The rule.**
+- *The member* (ruling 1). A rule of `schedule.json` may carry `variables`, an object from the name
+  of a variable its package declares to a value that variable's declaration takes, judged by the
+  check a value set on the application passes: the goal store keeps its text
+  (`goal_entry_value_fits`) and the declaration's one judgement takes it whole
+  (`PackageVariable::judge` and `leaves_keys_out`, as `resolve_variable` judges an entry whose
+  setter is known with no word of the root: `EditGoal`'s and a direct run's check), the policy
+  crate's `judge_rule_variable_value`. The composer refuses, with the document's own word,
+  `standard_pack_root_invalid` `schedule_invalid`, after the classification, the first rule in file
+  order and value in the member's order: an empty member or one that is no object at
+  `/rules/<i>/variables`, a name the package does not declare or a value its declaration does not
+  take at `/rules/<i>/variables/<name>`, the developer text naming the rule, the variable and the
+  judgement's word. No code is added for it: `schedule_invalid` at the member is how the document
+  refuses a member, and the pointer names the rule and the variable. The declarations are those the
+  caller's reader read of every package (`DeclaredCapabilities::variables`, a third required
+  member: the Runtime's metadata reader gives them through `RemedyDeclarations::declared_capabilities`
+  to the workbench, check-config and the resource tools; the offline pack rows and
+  `standard-pack catalog --cut`, which read no variables, give `None` and judge no value; a package
+  that could not be read has its rules' values judged by no declaration, and the run's admission
+  judges every dispatched value under the package it prepares). The member passes through to the
+  composed task as the V2 task member `variables` (`TaskSpec::variables`), which the compiler
+  holds to 1 to 16 names of a variable's form, each value of a variable's kind and at most 1024
+  bytes of compact text, V2 only. The contract crate's reader leaves a rule's `variables` out of its
+  search for `scope` members (a package may name a variable `scope`).
+- *`requires`* (ruling 2). A file any of whose rules carries the member names `rule_variables`
+  (`actingcommand_policy::RULE_VARIABLES_SUBSYSTEM`); otherwise `schedule_invalid` at the first
+  such rule's `variables`, whatever it holds. The configuration manifest names it, always on
+  (`apps/actingd/src/config/manifest.rs`). A Runtime that does not name it refuses the file at
+  `requires`, `schedule_requires_missing`, and the order holds: in `read_game` the requirement checks
+  and the subsystems' check come before the compile, and no earlier check reads `variables`, so an
+  older Runtime refuses at `requires` before its compiler meets a task member it does not know (its
+  reader refuses a variable named `scope` as `schedule_invalid` first, a refusal too). The
+  installer's plan of §1.514 reads `requires` with the one reader and the target's enabled
+  subsystems name by name (`crates/lab-rescue/src/install/requires.rs`, `unnamed`): it covers the
+  name with no change.
+- *The third source* (ruling 3; `crates/policy/src/variables.rs`, `plan_with_entries`). For a
+  variable the dispatched task carries a value for, the run is handed that value, source `rule`, with
+  `set_unix_ms` and `set_channel` when the application holds a value (the same one) and no word; it
+  is no value not applied (no `goal_value_not_applied`). A variable the task carries no value for
+  resolves as before (set on the application, else the default). The order is in that one loop: the
+  task's carried value first, else `resolve_variable`. A direct run is as before. The run's
+  admission record lists a rule's value as any value handed from outside; the dispatch's reason
+  names `rule` (`variable_source` gains the word).
+- *A set value decides which rules run* (ruling 4). While the application holds a value set for a
+  variable (an entry row, whatever its judgement) and the task carries another (compared as JSON),
+  the pair is held back (`VariablePlan::excluded_by`, the first such variable in declaration order).
+  The host's eligibility closure defers it at position 5a, between the pack schedule (5) and the
+  owed rerun's pacing (6), with the new info code `goal_value_excludes_rule` (`instance_id`,
+  `task_id`, `variable_name`) and no wake (`crates/runtime-host/src/policy_host.rs`,
+  `set_value_exclusion`, in `evaluate`'s closure and its look ahead): no failure, no intent, no
+  admission, no budget; the decision and the not-run explanation carry it; clearing or changing the
+  value is a change of facts. A task that carries the same value, or not the variable, is not held.
+  No member of the application's record is added. Placed away from the clock code: the code is no
+  host code the clock-slot records name, so a slot it holds writes no clock-slot record.
+- *The idle plan* (ruling 5). The closure calls `hold_back_untimed` for the deferral, as for a closed
+  pack schedule's row with no end, and the look ahead behind a hold answers it with no time: the
+  existing rule of §1.512 counts such a candidate held back with no time, not due and no wake;
+  `idle.rs`, `idle_action.rs` and the idle planner are not touched.
+- *Two rules of one package* (ruling 6) are two tasks already; on a switched root each rule's
+  business part comes from its package's entry of `pack-catalog.json`, its per-rule part where the
+  entry holds one for the rule's id ([pack-catalog.md](pack-catalog.md), "Per-rule parts": in place of
+  the entry's own part, whole), so two rules of one package carry different parts there today.
+  `variables` is no business member and stays on the rule.
+- *`GoalView`* (ruling 7; `crates/runtime-host/src/goals.rs`, `variable_entry`;
+  `crates/runtime-host/src/host/goals.rs`). The view resolves each variable from the value set on
+  the application and the default alone (`VariablePlan::resolutions`); a set value applied is shown
+  as before (`source` `set`, its value: every dispatch then hands it); without one, a variable a
+  bound catalog task carries a value for (`VariablePlan::carried`, `PageVariable::carried`) names
+  no `effective_json`, `source` or `display`: the rule of the task that runs decides. Its state and
+  word stay. The rules' values are not listed: a new member of `GoalViewEntry`, which denies unknown
+  members, would move `runtime-client`; the composed catalog holds them. `runtime-client` stays at
+  [12, 14].
+- *Neutral* (ruling 9): no game, package or alias is named in code.
+
+**A worked example** (made-up names). A package `pack.stages` declares `stage`, a `choice` of `s1`,
+`s2` and `s3`, default `s1`. Its `schedule.json` names `rule_variables` and holds three rules:
+`stages.s1` with `"variables": {"stage": "s1"}`, consuming 6 of the pool `energy` and producing 1 of
+`material_a`; `stages.s2` with `s2`, consuming 10 and producing 2 of `material_b`; `stages.s3` with
+`s3`, consuming 15 and producing 3 of `material_a`. Composed, each is a task carrying its value.
+With no value set on the application all three are candidates: the evaluation ranks them by their
+own net benefit (the produced pools' valuations and goals' gaps less the cost of the energy), so
+with a large gap of `material_b` it is `stages.s2` that runs, its run reading `stage` = `s2`, its
+record `{variable_name: stage, variable_source: rule, value_json: "\"s2\""}`. With `stage` set to
+`s3` (`goals set <inst> stage "\"s3\""`), `stages.s1` and `stages.s2` wait
+`goal_value_excludes_rule` (`variable_name` `stage`) with no wake, and `stages.s3` alone may run
+(when its net benefit is positive), its run reading `s3`; `goals clear <inst> stage` hands the
+choice back to the scheduler at the next evaluation. `GoalView` shows `stage` as set to `s3`, or,
+cleared, with no value named.
+
+**Interfaces.** No declared range moves. The configuration manifest's subsystems gain
+`rule_variables`, which is no interface revision: a feature of `schedule.json` goes by `requires`
+(as §1.508's `catalog_business`), and [component-interfaces.md](component-interfaces.md) says
+nothing of subsystem names (not changed). `package`: no pack format changes. `ledger`:
+`variable_values` and the admission record keep their shapes (a new word in a vocabulary value,
+read as a string). `runtime-outcomes` stays 1: a code and a word in the catalog only.
+`runtime-client`: `GoalView` leaves out two optional members it always answered, no shape changes.
+`actingd-config`: no key.
+
+**Codes.** One new code, one new word:
+
+| Name | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `goal_value_excludes_rule` (runtime-host, info, ladder `none`) | a candidate's task carries a value for a variable the application holds another value set for; its decision's reason at position 5a | neither: an info reason of a deferred decision | none (no command fails) |
+| `rule` (vocabulary `variable_source`) | the value a dispatch hands its run is its task's rule's | neither: a value of a record | none |
+
+The outcome code index (`runtime-host.md`, `README.md`) gains the code's row and counts, written to
+what `ci/outcome_codes_index.py` generates and confirmed by its `--check`.
+
+**Tests** (policy gate row "#500 SV-2", host gate row "#500", "SV-2").
+
+| Test | Brief's test | What it shows |
+|---|---|---|
+| `sv2_t1_two_rules_of_one_package_hand_their_runs_their_own_values` | 1, 2 | Two rules of one package compose, each task carrying its value; each pair's record hands its rule's value, source `rule`, every other variable its default; with another variable set, that value with who set it |
+| `sv2_t3_a_set_value_holds_back_the_rule_that_carries_another` | 3, 4 (plan) | A set value equal to one rule's holds the other back by the variable, the other way round for the other value, neither for another variable's value or once cleared; the page's resolution is the set value |
+| `sv2_t5_an_undeclared_name_or_a_refused_value_is_refused_at_the_member` | 5 | An undeclared name; a choice no option; an integer out of range, off its step; a switch no boolean; an ordered key not offered, too few keys; an empty member, no object: `schedule_invalid` at the member |
+| `sv2_t6_the_member_needs_rule_variables_in_requires` | 6 | Without the name: at the member; with it and subsystems lacking it: `schedule_requires_missing` at `/requires/0`; with it named: composed |
+| `sv2_t9_a_root_without_the_member_keeps_its_golden_bytes` | 9 | catalog-a's task composes to its golden tasks document; the compiled task carries no `variables` |
+| `sv2_h1_each_rule_hands_its_run_its_value_and_a_set_value_holds_the_other_back` | 1, 3, 4 | Through the host: nothing set, the first rule runs its `item_b` (source `rule`); `item_c` set, both wait `goal_value_excludes_rule`, no wake, no dispatch; `item_a` set, the first waits and the second runs `item_a` with who set it; cleared, neither waits |
+| `sv2_h2_the_goal_view_names_a_set_value_and_leaves_the_rules_choice_unnamed` | 8 | `GoalView` names no value, source or display with nothing set; the set value with one set |
+| `sv2_h3_a_direct_run_reads_its_request_s_values_and_no_rule_s` | 7 | A direct run reads its request's value, or the default, never a rule's |
+
+Touched (test 10), each only for the new required member `DeclaredCapabilities::variables`
+(`Some(Vec::new())`, a package that declares none): the policy crate's `readable_root` (`lib.rs`) and
+`gate_455_gr2s`, the host's `gate_rl1b`, actingd's `gate_455_p1`, `gate_477_cv2` and `gate_rl1c`, the
+resource tooling's `readable_root` (`standard_pack_schedule.rs`). No assertion changes.
+
+**What is not changed** (must not change). The two existing sources and their order for a variable
+no rule carries; direct run requests; what a package reads of a variable
+(`session.dispatch.parameter.<name>` and its readers); the application's stored record; budgets,
+costs, yields and the order of candidates; every root without the member (its composition,
+catalogue, hash, dispatches and records: the golden of t9 and every existing test); the idle plan's
+files; the clock code, the clock-slot records and `scheduling/README.md`'s "Clock Sources" and
+"Clock-slot records" (another slice's). A dispatched package the workbench could not read hands no
+rule value either, and no set value holds its candidate back, as it hands no value today.
+
+**At deploy.** No installed root carries the member, so nothing changes until a resource
+repository writes `variables` on a rule and lists `rule_variables`. A build before 0.12.81 refuses
+such a root with `schedule_requires_missing` at that entry and keeps the game's last good rules (as
+§1.505's "At deploy" for `pool_list_rows`: none when the active generation was composed from the
+file), and the installer's plan of §1.514 refuses a rollback (or an update) to such a build while a
+game's `schedule.json` or a fragment of the active generation lists the name. In the release notes'
+language: 一个任务包可以在 `schedule.json` 里写成多条规则，每条规则用 `variables` 给包的变量带自己的值（比如一关一条规则、各自的消耗和产出），`requires` 要写 `rule_variables`；调度到哪条规则，运行就拿到哪条规则的值（记录里来源写 `rule`）。在应用上设了这个变量的值，就只跑带同一个值的规则，别的规则以 `goal_value_excludes_rule` 等着、不算失败也不占额度；清掉设的值，就由调度在这些规则里挑。目标页上设了值显示设的值，没设值时不再显示单一的生效值（由规则决定）。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

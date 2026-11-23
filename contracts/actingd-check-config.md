@@ -394,6 +394,16 @@ The members of `report`:
       composed only by a Runtime that names this row. check-config's preview
       of the schedule composes such a root with its catalog, and names
       `pack-catalog.json` in a refusal of a part taken from there.
+    - `rule_variables` (Workflow #500 SV-2, since 0.12.81, register §1.511):
+      always on (`config_subsystem_always_on`). A dispatch of a rule hands its
+      run the values the rule carries for its package's variables (its
+      `variables`, source `rule`), and a rule whose value is not the one set on
+      the application waits (`goal_value_excludes_rule`)
+      ([standard-pack-schedule.md](standard-pack-schedule.md), "A rule's
+      variable values"); a `schedule.json` any of whose rules carries the member
+      requires it, so it is composed only by a Runtime that names this row. The
+      installer's plan reads the name as it reads every name `requires` lists
+      ([install-cli.md](install-cli.md), "Subsystems the schedules require").
     - `consumption_fact` (#428 SCHED-C1f1, since 0.12.54, register §1.303):
       always on (`config_subsystem_always_on`). The Runtime reads a `consumes`
       entry's `amount` written as a fact with a fallback, one run's amount read

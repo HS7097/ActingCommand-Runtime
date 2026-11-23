@@ -1618,7 +1618,8 @@ pub(crate) fn latest_task_admission<'a>(
 /// #486 ASLEEP-3 (register §1.512, ruling 3; `runtime-config.md`, "What wakes an idle instance"):
 /// for the idle plan alone, a task candidate that a later position of the order of the deferrals
 /// defers with no time of its own while no hold of its instance defers it (`eligibility`: a
-/// suspended package, a closed pack schedule's row with no end, an owed rerun's pacing, a remedy
+/// suspended package, a closed pack schedule's row with no end, Workflow #500 SV-2's value set on
+/// the application that excludes the task's rule, an owed rerun's pacing, a remedy
 /// round, a denial with no release) counts as held back by a later
 /// position that names no time (`held_ahead`, `None`), as #484's look ahead counts such a candidate
 /// behind a hold: not due, no wake of its own. Before, the plan counted an eligible decision with no
@@ -1649,6 +1650,34 @@ fn hold_back_untimed(
             .or_default()
             .insert(intent.task_id.clone(), None);
     }
+}
+
+/// Workflow #500 SV-2 (register §1.511; `scheduling-blackout.md`, "Order of the deferrals",
+/// position 5a; `package-variables.md`, "A value set on the application decides which rules
+/// run"): the deferral of a candidate whose task carries a value for a variable the application
+/// holds another value set for (`plan`'s `excluded_by`, the first such variable in declaration
+/// order): the info `goal_value_excludes_rule` naming the application, the task and the variable,
+/// and no wake of its own, since clearing or changing the set value is a change of facts, which
+/// wakes the evaluation. `None` for every other candidate, the fact refresh's included.
+pub(crate) fn set_value_exclusion(
+    plan: &actingcommand_policy::VariablePlan,
+    intent: &DispatchIntent,
+) -> Option<CandidateEligibility> {
+    let variable_name = plan.excluded_by(&intent.task_id, &intent.instance_id)?;
+    let outcome = Outcome::new(crate::codes::GoalValueCode::ExcludesRule)
+        .instance_id(intent.instance_id.as_str())
+        .task_id(intent.task_id.as_str())
+        .variable_name(variable_name);
+    Some(CandidateEligibility::Deferred {
+        reason: DecisionReason {
+            outcome,
+            detail: format!(
+                "the value set on the application for {variable_name} is not the one this task's \
+                 rule carries"
+            ),
+        },
+        next_wake_unix_ms: None,
+    })
 }
 
 /// Per instance, the highest `effective_milli` and the longest `aging_ms` over the ranked
@@ -4326,11 +4355,18 @@ impl PolicyHost {
             {
                 return Ok(Some(deferred_wake(&waiting)));
             }
-            // Positions 5 and 6.
-            if let Some(deferral) = pack_schedule
-                .deferral(intent, false)
-                .or_else(|| rerun_plan.deferral(intent))
+            // Positions 5 and 6, and between them (Workflow #500 SV-2) position 5a: a value set on
+            // the application excludes the task's rule, with no time of its own.
+            if let Some(deferral) = pack_schedule.deferral(intent, false) {
+                return Ok(Some(deferred_wake(&deferral)));
+            }
+            if variable_plan
+                .excluded_by(&intent.task_id, &intent.instance_id)
+                .is_some()
             {
+                return Ok(Some(None));
+            }
+            if let Some(deferral) = rerun_plan.deferral(intent) {
                 return Ok(Some(deferred_wake(&deferral)));
             }
             // Position 7.
@@ -4527,6 +4563,15 @@ impl PolicyHost {
                     // #486 ASLEEP-3 (ruling 3): a row with no end names no time.
                     hold_back_untimed(&mut held_ahead, sleepers, intent, &closed);
                     return Ok(closed);
+                }
+                // Workflow #500 SV-2 (register §1.511; `scheduling-blackout.md`, "Order of the
+                // deferrals", position 5a): the task's rule carries a value for a variable the
+                // application holds another value set for, which decides which rules run; the
+                // candidate waits with no wake of its own and, for the idle plan, is held back with
+                // no time as any untimed later position (#486 ASLEEP-3, `hold_back_untimed`).
+                if let Some(excluded) = set_value_exclusion(&variable_plan, intent) {
+                    hold_back_untimed(&mut held_ahead, sleepers, intent, &excluded);
+                    return Ok(excluded);
                 }
                 // Workflow #386 SR-2b-2 (`scheduling-blackout.md`, "Order of the deferrals",
                 // position 6): an owed rerun waits for the instance's pacing stage.

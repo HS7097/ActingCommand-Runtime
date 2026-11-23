@@ -29,6 +29,13 @@
 //!    `pack-catalog.json` (`actingcommand_contract::take_catalog_business`) before any other check
 //!    reads the rules, so the composition is the one the rules would give had they written it;
 //!    every refusal at a member a rule took from there names the catalog's entry and member.
+//!    Workflow #500 SV-2 (register §1.511): a rule that carries `variables` (values for its
+//!    package's variables, which pass through to its task) needs `requires` to name
+//!    `rule_variables`, and its values are held to its package's declaration as the caller's reader
+//!    read it (`IrreversiblePackages::package_variables`): an object of one or more values, each
+//!    of a variable the package declares and taken by that declaration as a value set on the
+//!    application is ([`crate::judge_rule_variable_value`]); `schedule_invalid` at the member
+//!    otherwise.
 //! 3. **Instantiate**: per bound instance `i` of game `g` on server `s`, every rule whose package
 //!    belongs to `s` and is not held, and every pool, profile and event for every server or for
 //!    `s`, each scope filled with `{kind: instance, instance_id: i}` (the item's own and those of
@@ -60,10 +67,10 @@ use actingcommand_contract::{
     APPLICATION_UPDATE_REQUIRED_FACT_KEY, BundleMaintenance, CatalogBusinessPlaces,
     CatalogCompileWarning, IrreversiblePackages, SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER,
     SCHEDULE_RULE_FIXED_VALUE_MEMBER, SCHEDULE_RULE_REALIZATION_MEMBER,
-    STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember, ScheduleRule, ScheduleValueOrigin,
-    StandardPackClassification, StandardPackProblem, StandardPackRoot, StandardPackRootIssue,
-    StandardPackSchedule, classify_standard_pack_packages, parse_standard_pack_schedule,
-    standard_pack_maintenance_packages, take_catalog_business,
+    SCHEDULE_RULE_VARIABLES_MEMBER, STANDARD_PACK_SCHEDULE_FILE, ScheduleItem, ScheduleMember,
+    ScheduleRule, ScheduleValueOrigin, StandardPackClassification, StandardPackProblem,
+    StandardPackRoot, StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
+    parse_standard_pack_schedule, standard_pack_maintenance_packages, take_catalog_business,
     validate_standard_pack_schedule_references,
 };
 use serde::Serialize;
@@ -109,6 +116,9 @@ pub struct StandardPackGameFiles<'a> {
     /// Workflow #455 G-R2x (register §1.499): the composer marks no task by it any more and reads
     /// only which packages could not be read, for its `standard_pack_package_unreadable` warning
     /// ([`StandardPackComposition::warnings`]); nothing else of the composition depends on it.
+    /// Workflow #500 SV-2 (register §1.511): but what each package declares of variables, as its
+    /// reader read them ([`IrreversiblePackages::package_variables`]), which the composer holds a
+    /// rule's `variables` to.
     pub irreversible: &'a IrreversiblePackages,
     /// Workflow #477 CV-2 (register §1.508): the root's `pack-catalog.json`'s bytes, `None` when
     /// the root holds none. Read only for a `schedule.json` that names `catalog_business` in
@@ -1673,6 +1683,30 @@ fn read_game(
             ),
         ));
     }
+    // Workflow #500 SV-2 (register §1.511): likewise a rule that carries `variables`, the first in
+    // file order, whatever it holds (the package's declaration judges its values below). No
+    // Runtime of 0.12.80 names the subsystem, so every such Runtime refuses the file at `requires`
+    // before its compiler would meet the task member.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::RULE_VARIABLES_SUBSYSTEM)
+        && let Some(index) = schedule
+            .rules
+            .iter()
+            .position(|rule| rule.body.contains_key(SCHEDULE_RULE_VARIABLES_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/rules/{index}/{SCHEDULE_RULE_VARIABLES_MEMBER}"),
+            ),
+            format!(
+                "a rule's {SCHEDULE_RULE_VARIABLES_MEMBER} needs requires to name {}",
+                crate::RULE_VARIABLES_SUBSYSTEM
+            ),
+        ));
+    }
     // UPD-1 fix round 5 (`standard-pack-schedule.md`, "The store update rule"): no timeline event
     // invalidates the Runtime's application update fact. A reset that cleared it would leave the
     // store update rule's trigger reading the key missing (Unknown), so the rule would never run,
@@ -1872,7 +1906,80 @@ fn read_game(
             ),
         ));
     }
+    // Workflow #500 SV-2 (register §1.511): each rule's values, held to its package's declaration.
+    if let Some((pointer, detail)) = refused_rule_variables(&schedule, files.irreversible) {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            detail,
+        ));
+    }
     Ok((schedule, classification, places))
+}
+
+/// Workflow #500 SV-2 (register §1.511; `contracts/standard-pack-schedule.md`, "A rule's variable
+/// values"): the first rule of `schedule`, in file order, whose `variables` is refused, with the
+/// pointer of the member at fault and the developer text: no object, or an empty one (a rule that
+/// carries no value writes no member), at `/rules/<i>/variables`; then, value by value in the
+/// member's order, a name its package does not declare, or a value the declaration does not take
+/// as a value set on the application is taken ([`crate::judge_rule_variable_value`]), at
+/// `/rules/<i>/variables/<name>`. A package whose variables `irreversible` does not hold (its
+/// declaration could not be read, its reader read no variables) has its rules' values judged by
+/// no declaration here: the run's own admission judges each again
+/// (`contracts/package-variables.md`, "The overlay"). `None` when every rule's values are taken.
+fn refused_rule_variables(
+    schedule: &StandardPackSchedule,
+    irreversible: &IrreversiblePackages,
+) -> Option<(String, String)> {
+    for (index, rule) in schedule.rules.iter().enumerate() {
+        let Some(carried) = rule.body.get(SCHEDULE_RULE_VARIABLES_MEMBER) else {
+            continue;
+        };
+        let pointer = format!("/rules/{index}/{SCHEDULE_RULE_VARIABLES_MEMBER}");
+        let values = match carried {
+            Value::Object(object) if !object.is_empty() => object,
+            _ => {
+                return Some((
+                    pointer,
+                    format!(
+                        "the rule {}'s {SCHEDULE_RULE_VARIABLES_MEMBER} is an object of one or \
+                         more values, each under the name of a variable of its package",
+                        rule.id
+                    ),
+                ));
+            }
+        };
+        let Some(declared) = irreversible.package_variables(&rule.package_id) else {
+            continue;
+        };
+        for (name, value) in values {
+            let at = format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1"));
+            let Some(variable) = declared.iter().find(|variable| variable.name == *name) else {
+                return Some((
+                    at,
+                    format!(
+                        "the rule {} carries a value for {name}, which its package {} does not \
+                         declare",
+                        rule.id, rule.package_id
+                    ),
+                ));
+            };
+            if let Err(problem) = crate::judge_rule_variable_value(variable, value) {
+                let why = match problem {
+                    Some(judged) => format!("the declaration's judgement is {judged}"),
+                    None => "its text is longer than the goal store keeps".to_owned(),
+                };
+                return Some((
+                    at,
+                    format!(
+                        "the declaration of {name} in the package {} does not take the rule {}'s \
+                         value: {why}",
+                        rule.package_id, rule.id
+                    ),
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// SCHED-C1a (register §1.299): the pointer of the first member that requires
