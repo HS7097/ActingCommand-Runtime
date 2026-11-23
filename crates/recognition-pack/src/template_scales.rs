@@ -34,8 +34,10 @@ pub struct TemplateScales {
     pub factors_milli: Vec<u32>,
 }
 
-/// The factors a template target is searched at: its declared ones, or 1000 alone.
-pub(crate) fn searched_factors(target: &TemplateTarget) -> Vec<u32> {
+/// The factors a template target is searched at: its declared ones, or 1000 alone. Workflow #392
+/// DA-L0 fix round 1: public, so that the Lab's layout probe searches at the factors recognition
+/// searches at.
+pub fn searched_factors(target: &TemplateTarget) -> Vec<u32> {
     target.scales.as_ref().map_or_else(
         || vec![SCALE_IDENTITY_MILLI],
         |scales| scales.factors_milli.clone(),

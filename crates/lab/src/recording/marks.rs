@@ -276,7 +276,9 @@ fn empty_mark(spec: &MarkSpec, step: u32, transition_of: Option<u32>, now: u64) 
 /// rejections of the batch, not shape errors.
 /// Workflow #390 LAB-2: the search area of a template mark that declares none: its crop grown by
 /// `LAB_RECORDING_DEFAULT_SEARCH_MARGIN` pixels on each side and clamped to the frame, so that a
-/// control that moved a little still matches; a declared `search` replaces it.
+/// control that moved a little still matches; a declared `search` replaces it. Workflow #392 DA-L0
+/// fix round 1: the layout probe reads it backwards (`crate::layout_probe`), asking this function
+/// whether the crop it derives from a package's box grows back into that box.
 pub(crate) fn default_search(region: RecordRect, size: RecordSize) -> RecordRect {
     let margin = i64::from(LAB_RECORDING_DEFAULT_SEARCH_MARGIN);
     let left = (i64::from(region.x) - margin).max(0);

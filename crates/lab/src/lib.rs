@@ -230,9 +230,9 @@ pub use lab_run::{
 pub use lab_run_api::*;
 // Workflow #392 DA-L0: the layout probe's request, its answer and its default tolerance.
 pub use layout_probe::{
-    ClassCounts, DxCount, LAYOUT_PROBE_DEFAULT_TOLERANCE_PX, LayoutProbeRequest,
-    LayoutProbeResponse, MarkClass, MarkProbe, NotProbedMark, PageProbe, PageShare, ProbeFactor,
-    ProbePlaces, ProbeRect, ProbeSize, ProbeSummary,
+    AxisPlace, BasePlaceBy, ClassCounts, DxCount, LAYOUT_PROBE_DEFAULT_TOLERANCE_PX,
+    LayoutProbeRequest, LayoutProbeResponse, MarkClass, MarkProbe, MarkRule, NotProbedMark,
+    PageProbe, PageShare, ProbeBase, ProbeFactor, ProbePlaces, ProbeRect, ProbeSize, ProbeSummary,
 };
 pub use ledger_port::*;
 pub use maa_task_graph::{

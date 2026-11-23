@@ -1,22 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Workflow #392 DA-L0 (register §1.521; `contracts/display-adapter.md` section 14; coordinator work
-// order rd-1123/brief-392-dal0.md, its tests 1 to 8): `actinglab layout probe`, offline, says where
-// each template mark of a page went on a saved frame of the base's ratio or wider. A synthetic
-// package whose base is 128x72 (16:9): its page `neutral/other`, first in the page set, requires two
-// templates drawn on no frame; its page `neutral/wide` requires seven template marks (8x8 patterns
-// of 2x2 cells, and `stretched`, a 40x8 bar of a pattern, a fill and a pattern of low contrast), a
-// colour and a check. Each region is its mark grown by 2 pixels on every side. Every frame is drawn
-// on its scale frame in 2x2 blocks and enlarged by nearest neighbour, so that the probe's one area
-// average gives the drawing back exactly. The patterns were chosen, and every score below checked,
-// by a simulation of the exact `ccoeff_normed` scores (threshold 0.95): a drawn mark scores 1 at its
-// place and at most 0.75 anywhere else; `stretched` 0.885 on the 20:9 frame, `absent` 0.707.
+// orders rd-1123/brief-392-dal0.md, its tests 1 to 8, and rd-1123/brief-392-dal0-fix1.md, its
+// tests 1 to 7): `actinglab layout probe`, offline, says where each template mark of a page went on
+// a saved frame of the base's ratio or wider. A synthetic package whose base is 128x72 (16:9): its
+// page `neutral/other`, first in the page set, requires two templates drawn on no frame; its page
+// `neutral/wide` requires seven template marks (8x8 patterns of 2x2 cells, and `stretched`, a 40x8
+// bar of a pattern, a fill and a pattern of low contrast), a colour and a check; its page
+// `neutral/rules` requires `centre_a`, `repeated` (drawn twice on the wide frame) and `declared`,
+// has `member`, `absent` and the colour in an `any_of` group, `optional` optional and `other_b`
+// forbidden. Every template's search box is the recording's default box for a margin of 48 (its
+// crop grown by 48 on each side and clamped to the base), but `declared`'s, whose box across is a
+// search area declared by hand. Every 8-high mark lies on a row whose box gives its place back.
+// Every frame is drawn on its scale frame in 2x2 blocks and enlarged by nearest neighbour, so that
+// the probe's one area average gives the drawing back exactly. The patterns were chosen, and every
+// score below checked, by a simulation of the exact `ccoeff_normed` scores (threshold 0.95): a drawn
+// mark scores 1 at its place and at most 0.75 anywhere else; `stretched` 0.885 on the 20:9 frame,
+// `absent` 0.707.
 // - `dal0_t1_a_twenty_by_nine_frame_classes_each_mark_as_the_table_says` (1): the 240x108 frame (20:9)
 //   is brought to 160x72 by 3/2, room 32, places 0, 16 and 32: `centre_a` and `centre_b` centre (dx
 //   16), `start` start (0), `end` end (32), `inset` other (26: the end edge less an inset of 6),
 //   `stretched` missing (its best place its base place, at its start), `absent` missing (its best
-//   place 4 across and -44 down); the counts, the dx values and the reading "edges are followed; an
-//   inset of about 6"; the other page missing twice, "not this page"; overall the nine marks.
+//   place 4 across and -48 down); the counts, the dx values and the reading "edges are followed; an
+//   inset of about 6"; the other page missing twice, "not this page"; overall the thirteen marks.
 // - `dal0_t2_a_frame_of_the_base_ratio_twice_its_size_has_every_mark_as_mapped` (2): 256x144, factor
 //   2, no room: every mark of the wide page as_mapped at its base place, "as mapped: a frame of the
 //   base's ratio".
@@ -29,18 +35,40 @@
 //   the page set, first in `pages_by_share`; with `--page neutral/other` that page alone; an
 //   unknown page refused.
 // - `dal0_t6_marks_of_the_other_families_are_listed_as_not_probed` (6): the colour and the check of
-//   the wide page under `not_probed` with their kind and declared rectangle, no mark of them.
-// - `dal0_t7_the_answer_holds_no_member_beyond_its_list` (7): test 1's answer, member by member at
-//   every depth, and every text of it an id, a page, a kind, a class or a reading.
+//   the wide page under `not_probed` with their rule, kind and declared rectangle, no mark of them.
+// - `dal0_t7_the_answer_holds_no_member_beyond_its_list` (7; fix round 1, test 7): test 1's answer,
+//   member by member at every depth with the members fix round 1 adds, and every text of it an id,
+//   a page, a rule, a kind, a class, a way the base place was taken or a reading.
 // - `dal0_t8_the_mcp_face_answers_the_command_lines_members` (8): through `serve --stdio --front
 //   mcp`, the row `layout probe` on test 1's fixture answers exit 0 and the line the command line
 //   prints, member for member.
+// - `dal0_fix1_t1_a_box_cut_off_at_an_edge_gives_the_place_the_mark_was_cut_at` (fix 1): `start`,
+//   10 pixels from the left edge, its box (0, 0, 66, 64) cut off at the left and the top, has its
+//   base place (10, 8) by `default_growth` both ways, and on the 20:9 frame, where it stays at the
+//   start edge, `dx` 0 and `start` (the box's middle would have said `dx` -19, `other`); `end`'s box
+//   cut off at the right, `member`'s at the bottom: their places by the same rule.
+// - `dal0_fix1_t2_a_declared_search_area_leaves_its_axis_unknown` (fix 2): `declared`, its box across
+//   12 wide (no default growth), is `unknown` across and `default_growth` down: no `dx`, `dy` 0, no
+//   class, counted `unknown`, out of its page's reading.
+// - `dal0_fix1_t3_a_repeated_mark_is_counted_and_left_out_of_the_reading` (fix 3): `repeated`, drawn
+//   twice on the 20:9 frame, answers `matches` 2 and `repeated` true with one of its two places;
+//   its page reads "a centred base-ratio window" without it; drawn once on the base, 1 and false.
+// - `dal0_fix1_t4_every_mark_a_page_names_is_probed_with_its_rule` (fix 4): the rules page's marks in
+//   the order required, any_of, optional, forbidden, each with its rule, and the colour of its
+//   `any_of` group under `not_probed` with the rule `any_of`.
+// - `dal0_fix1_t5_a_frame_a_pixel_off_the_base_shape_has_no_room` (fix 5): 257x144 and 255x144, taken
+//   by the run path's frame gate as the base's shape: no room, the base as the scale frame, factor
+//   2, never `ratio_below_base` nor a room of 1.
+// - `dal0_fix1_t6_the_boundary_of_too_small_and_a_tolerance_given` (fix 6): rooms 17 (too small: 8 is
+//   at most 8) and 18 (not: 9) with the default tolerance 4; room 18 with `--tolerance-px 5` too
+//   small (9 is at most 10).
 // No Runtime, no device, no clock: temporary files and the embedded operation table.
 
 use super::gate_434_lab5b4::printed;
 use super::*;
 use crate::cli_module::{self, serve};
 use actingcommand_device::{CaptureBackendName, Frame, PixelFormat};
+use actingcommand_lab::LAB_RECORDING_DEFAULT_SEARCH_MARGIN;
 use actingcommand_lab_ops::initiator::ENVIRONMENT_VARIABLE;
 use std::io::{Cursor, Write};
 use zip::{ZipWriter, write::FileOptions};
@@ -53,70 +81,115 @@ const BACKGROUND: u8 = 128;
 const FILL: u8 = 200;
 /// Every template mark's threshold (the pack's default).
 const THRESHOLD: f64 = 0.95;
-const WIDE_PAGE: &str = "neutral/wide";
 const OTHER_PAGE: &str = "neutral/other";
+const WIDE_PAGE: &str = "neutral/wide";
+const RULES_PAGE: &str = "neutral/rules";
 
 /// A square template mark: its id, its 4x4 cells (`#` white, `.` black, each 2x2 pixels) and its
 /// base place, the corner of its 8x8 template.
 type Square = (&'static str, [&'static str; 4], (u32, u32));
 
-/// The square marks of the wide page.
-const WIDE_SQUARES: [Square; 6] = [
+/// The square marks the base draws, at their base places.
+const DRAWN: [Square; 10] = [
+    ("start", ["###.", ".##.", ".##.", "...#"], (10, 8)),
     ("centre_a", ["#.#.", "###.", "#..#", "...#"], (44, 8)),
-    ("centre_b", ["##..", ".###", "#...", "#..#"], (76, 30)),
-    ("start", ["###.", ".##.", ".##.", "...#"], (4, 8)),
+    ("repeated", ["#...", "..##", ".#.#", "#.##"], (80, 8)),
     ("end", ["#.#.", "..##", "##..", "#.#."], (116, 8)),
-    ("inset", ["#.##", "..##", ".##.", ".#.."], (116, 52)),
-    ("absent", ["#.##", "#.#.", ".#.#", ".#.."], (60, 52)),
+    ("declared", ["##.#", ".###", "#...", "...#"], (30, 56)),
+    ("absent", ["#.##", "#.#.", ".#.#", ".#.."], (60, 56)),
+    ("centre_b", ["##..", ".###", "#...", "#..#"], (76, 56)),
+    ("inset", ["#.##", "..##", ".##.", ".#.."], (116, 56)),
+    ("member", [".#..", "#.##", "..#.", ".###"], (84, 64)),
+    ("optional", ["##.#", "#..#", "..#.", ".#.#"], (104, 64)),
 ];
 /// The square marks of the other page, drawn on no frame.
 const OTHER_SQUARES: [Square; 2] = [
-    ("other_a", ["..#.", "..##", ".##.", "##.#"], (20, 30)),
-    ("other_b", ["#...", "##..", ".###", ".##."], (100, 52)),
+    ("other_a", ["..#.", "..##", ".##.", "##.#"], (20, 8)),
+    ("other_b", ["#...", "##..", ".###", ".##."], (100, 56)),
 ];
 /// The bar: its id, its start (black and white), its end (96 and 160), its base place and the fill
-/// between them at the base.
+/// between its ends at the base.
 const BAR: &str = "stretched";
-const BAR_START: [&str; 4] = ["#...", "..##", ".#.#", "#.##"];
-const BAR_END: [&str; 4] = ["##.#", ".###", "#...", "...#"];
-const BAR_AT: (u32, u32) = (44, 40);
+const BAR_START: [&str; 4] = ["..##", "##..", "#.##", "#..."];
+const BAR_END: [&str; 4] = ["##..", ".##.", "##..", "..##"];
+const BAR_AT: (u32, u32) = (4, 64);
 const BAR_MIDDLE: u32 = 24;
-/// The colour mark of the wide page and its rectangle.
+/// Every template mark's search box (x, y, width, height), written by hand: the recording's
+/// default box for a margin of 48 (the crop grown by 48 on each side and clamped to the base), but
+/// `declared`'s, whose box across is 2 pixels around its crop.
+const BOXES: [(&str, [i64; 4]); 13] = [
+    ("start", [0, 0, 66, 64]),
+    ("centre_a", [0, 0, 100, 64]),
+    ("repeated", [32, 0, 96, 64]),
+    ("end", [68, 0, 60, 64]),
+    ("declared", [28, 8, 12, 64]),
+    ("absent", [12, 8, 104, 64]),
+    ("centre_b", [28, 8, 100, 64]),
+    ("inset", [68, 8, 60, 64]),
+    ("member", [36, 16, 92, 56]),
+    ("optional", [56, 16, 72, 56]),
+    ("other_a", [0, 0, 76, 64]),
+    ("other_b", [52, 8, 76, 64]),
+    (BAR, [0, 16, 92, 56]),
+];
+/// The colour mark and its rectangle.
 const SWATCH: &str = "swatch";
-const SWATCH_AT: (i64, i64, i64, i64) = (2, 64, 6, 6);
+const SWATCH_AT: (i64, i64, i64, i64) = (120, 64, 6, 6);
 /// The check of the wide page.
 const CHECK: &str = "check";
 /// The marks the wide page requires, in its order.
 const WIDE_REQUIRED: [&str; 9] = [
     "centre_a", "centre_b", "start", "end", "inset", BAR, "absent", SWATCH, CHECK,
 ];
-
-/// Where test 1's 20:9 frame draws the square marks of the wide page on its 160x72 scale frame:
-/// `centre_a` and `centre_b` moved by half the room (16), `start` by nothing, `end` by the room
-/// (32), `inset` by the room less an inset of 6; `absent` is drawn nowhere. Its bar keeps its start
-/// at the start edge and its end at the end edge: its fill is 32 longer.
-const WIDE_AT: [(&str, (u32, u32)); 5] = [
-    ("centre_a", (60, 8)),
-    ("centre_b", (92, 30)),
-    ("start", (4, 8)),
-    ("end", (148, 8)),
-    ("inset", (142, 52)),
+/// The template marks of the rules page with their rules, in the order the page names them.
+const RULES_MARKS: [(&str, &str); 7] = [
+    ("centre_a", "required"),
+    ("repeated", "required"),
+    ("declared", "required"),
+    ("member", "any_of"),
+    ("absent", "any_of"),
+    ("optional", "optional"),
+    ("other_b", "forbidden"),
 ];
+
+/// Where test 1's 20:9 frame draws the single square marks on its 160x72 scale frame: the centred
+/// ones moved by half the room (16), `start` by nothing, `end` by the room (32), `inset` by the room
+/// less an inset of 6, `declared` by nothing; `absent` is drawn nowhere. `repeated` is drawn at
+/// [`WIDE_REPEATED`]. Its bar keeps its start at the start edge: its fill is 32 longer.
+const WIDE_AT: [(&str, (u32, u32)); 8] = [
+    ("start", (10, 8)),
+    ("centre_a", (60, 8)),
+    ("end", (148, 8)),
+    ("declared", (30, 56)),
+    ("centre_b", (92, 56)),
+    ("inset", (142, 56)),
+    ("member", (100, 64)),
+    ("optional", (120, 64)),
+];
+/// `repeated` twice: at its base place and moved by the room.
+const WIDE_REPEATED: [(u32, u32); 2] = [(80, 8), (112, 8)];
 const WIDE_BAR_MIDDLE: u32 = 56;
 
-/// A row of test 1's table: the mark, its base place (x, y, width, height), the corner of its best
-/// place, its offsets (dx, dy) and its class.
-type TableRow = (&'static str, [i64; 4], [i64; 2], [i64; 2], &'static str);
+/// A row of test 1's table: the mark, its base place (x, y), its template's size, the corner of its
+/// best place, its offsets (dx, dy) and its class.
+type TableRow = (
+    &'static str,
+    [i64; 2],
+    [i64; 2],
+    [i64; 2],
+    [i64; 2],
+    &'static str,
+);
 
 /// Test 1's table, in the wide page's order.
 const WIDE_TABLE: [TableRow; 7] = [
-    ("centre_a", [44, 8, 8, 8], [60, 8], [16, 0], "centre"),
-    ("centre_b", [76, 30, 8, 8], [92, 30], [16, 0], "centre"),
-    ("start", [4, 8, 8, 8], [4, 8], [0, 0], "start"),
-    ("end", [116, 8, 8, 8], [148, 8], [32, 0], "end"),
-    ("inset", [116, 52, 8, 8], [142, 52], [26, 0], "other"),
-    ("stretched", [44, 40, 40, 8], [44, 40], [0, 0], "missing"),
-    ("absent", [60, 52, 8, 8], [64, 8], [4, -44], "missing"),
+    ("centre_a", [44, 8], [8, 8], [60, 8], [16, 0], "centre"),
+    ("centre_b", [76, 56], [8, 8], [92, 56], [16, 0], "centre"),
+    ("start", [10, 8], [8, 8], [10, 8], [0, 0], "start"),
+    ("end", [116, 8], [8, 8], [148, 8], [32, 0], "end"),
+    ("inset", [116, 56], [8, 8], [142, 56], [26, 0], "other"),
+    ("stretched", [4, 64], [40, 8], [4, 64], [0, 0], "missing"),
+    ("absent", [60, 56], [8, 8], [64, 8], [4, -48], "missing"),
 ];
 
 /// A gray picture, row by row.
@@ -208,12 +281,12 @@ impl Picture {
 
 /// The picture of the square mark `id`.
 fn square(id: &str) -> Picture {
-    let (_, rows, _) = WIDE_SQUARES
-        .iter()
-        .chain(&OTHER_SQUARES)
-        .find(|(name, _, _)| *name == id)
+    let (_, rows, _) = DRAWN
+        .into_iter()
+        .chain(OTHER_SQUARES)
+        .find(|(name, ..)| *name == id)
         .unwrap_or_else(|| panic!("{id} is a square mark"));
-    Picture::cells(*rows, 0, 255)
+    Picture::cells(rows, 0, 255)
 }
 
 /// The bar with `middle` pixels of fill between its start and its end.
@@ -228,22 +301,25 @@ fn bar(middle: u32) -> Picture {
     picture
 }
 
-/// The wide page as the base lays it out, every mark of it at its base place, on a canvas of
-/// `width` x 72 (the base's 128, or wider with background to its right).
+/// The base's layout, every drawn mark at its base place, on a canvas of `width` x 72 (the base's
+/// 128, or wider with background to its right).
 fn base_layout(width: u32) -> Picture {
     let mut picture = Picture::blank(width, BASE.1);
-    for (id, _, at) in WIDE_SQUARES {
+    for (id, _, at) in DRAWN {
         picture.paste(&square(id), at);
     }
     picture.paste(&bar(BAR_MIDDLE), BAR_AT);
     picture
 }
 
-/// Test 1's scale frame: the wide page on 160x72 as [`WIDE_AT`] draws it.
+/// Test 1's scale frame: 160x72 as [`WIDE_AT`] and [`WIDE_REPEATED`] draw it.
 fn wide_layout() -> Picture {
     let mut picture = Picture::blank(160, BASE.1);
     for (id, at) in WIDE_AT {
         picture.paste(&square(id), at);
+    }
+    for at in WIDE_REPEATED {
+        picture.paste(&square("repeated"), at);
     }
     picture.paste(&bar(WIDE_BAR_MIDDLE), BAR_AT);
     picture
@@ -257,20 +333,17 @@ fn asset(id: &str) -> String {
 /// The package: control, manifest and task, the recognition pack (schema 0.7, base 128x72,
 /// `ccoeff_normed`, threshold 0.95), the page set (the other page first) and the templates.
 fn package_bytes() -> Vec<u8> {
-    let template = |id: &str, at: (u32, u32), width: u32, height: u32| {
-        json!({
-            "type": "template",
-            "id": id,
-            "template_path": asset(id),
-            "region": {"x": at.0 - 2, "y": at.1 - 2, "width": width + 4, "height": height + 4}
+    let mut targets = BOXES
+        .into_iter()
+        .map(|(id, region)| {
+            json!({
+                "type": "template",
+                "id": id,
+                "template_path": asset(id),
+                "region": {"x": region[0], "y": region[1], "width": region[2], "height": region[3]}
+            })
         })
-    };
-    let mut targets = OTHER_SQUARES
-        .iter()
-        .chain(&WIDE_SQUARES)
-        .map(|(id, _, at)| template(*id, *at, 8, 8))
         .collect::<Vec<_>>();
-    targets.push(template(BAR, BAR_AT, 16 + BAR_MIDDLE, 8));
     targets.push(json!({
         "type": "color",
         "id": SWATCH,
@@ -290,7 +363,14 @@ fn package_bytes() -> Vec<u8> {
     });
     let pages = json!({"schema_version": "0.3", "pages": [
         {"id": OTHER_PAGE, "required": ["other_a", "other_b"]},
-        {"id": WIDE_PAGE, "required": WIDE_REQUIRED}
+        {"id": WIDE_PAGE, "required": WIDE_REQUIRED},
+        {
+            "id": RULES_PAGE,
+            "required": ["centre_a", "repeated", "declared"],
+            "any_of": [["member", "absent", SWATCH]],
+            "optional": ["optional"],
+            "forbidden": ["other_b"]
+        }
     ]});
     let mut entries = vec![
         (
@@ -318,7 +398,7 @@ fn package_bytes() -> Vec<u8> {
             serde_json::to_vec(&pages).expect("JSON"),
         ),
     ];
-    for (id, _, _) in OTHER_SQUARES.iter().chain(&WIDE_SQUARES) {
+    for (id, ..) in OTHER_SQUARES.into_iter().chain(DRAWN) {
         entries.push((format!("resources/{}", asset(id)), square(id).png()));
     }
     entries.push((format!("resources/{}", asset(BAR)), bar(BAR_MIDDLE).png()));
@@ -406,7 +486,7 @@ impl Probe {
     }
 }
 
-/// Test 1's frame: the wide page on a 240x108 frame (20:9), its scale frame enlarged 3/2 times.
+/// Test 1's frame: 240x108 (20:9), its scale frame enlarged 3/2 times.
 fn twenty_by_nine() -> Picture {
     wide_layout().enlarged(240, 108)
 }
@@ -415,15 +495,37 @@ fn rect(x: i64, y: i64, width: i64, height: i64) -> Value {
     json!({"x": x, "y": y, "width": width, "height": height})
 }
 
+fn boxed(region: [i64; 4]) -> Value {
+    rect(region[0], region[1], region[2], region[3])
+}
+
 fn size(width: u32, height: u32) -> Value {
     json!({"width": width, "height": height})
 }
 
-/// The counts of a summary, in the classes' order.
-fn counts(as_mapped: u32, start: u32, centre: u32, end: u32, other: u32, missing: u32) -> Value {
+/// A base place on one axis: `at`, taken by `default_growth`, or `unknown`.
+fn axis(at: Option<i64>) -> Value {
+    match at {
+        Some(at) => json!({"at": at, "by": "default_growth"}),
+        None => json!({"at": null, "by": "unknown"}),
+    }
+}
+
+/// The search box of the template mark `id`.
+fn region_of(id: &str) -> [i64; 4] {
+    BOXES
+        .into_iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, region)| region)
+        .unwrap_or_else(|| panic!("{id} is a template mark"))
+}
+
+/// The counts of a summary, in the classes' order, `unknown` last.
+fn counts(classes: [u32; 6], unknown: u32) -> Value {
+    let [as_mapped, start, centre, end, other, missing] = classes;
     json!({
         "as_mapped": as_mapped, "start": start, "centre": centre, "end": end, "other": other,
-        "missing": missing
+        "missing": missing, "unknown": unknown
     })
 }
 
@@ -461,6 +563,16 @@ fn score(mark: &Value) -> f64 {
     mark["score"].as_f64().expect("a score")
 }
 
+/// The ids of a page answer's marks, in order.
+fn mark_ids(answered: &Value) -> Vec<&str> {
+    answered["marks"]
+        .as_array()
+        .expect("marks")
+        .iter()
+        .map(|entry| entry["id"].as_str().expect("an id"))
+        .collect()
+}
+
 #[test]
 fn dal0_t1_a_twenty_by_nine_frame_classes_each_mark_as_the_table_says() {
     let context = Probe::new();
@@ -481,44 +593,48 @@ fn dal0_t1_a_twenty_by_nine_frame_classes_each_mark_as_the_table_says() {
     assert_eq!(answer["room_too_small"], json!(false), "{answer}");
 
     let wide = page(&answer, WIDE_PAGE);
-    for (id, base, best, offsets, class) in WIDE_TABLE {
+    for (id, base, template, best, offsets, class) in WIDE_TABLE {
         let found = mark(wide, id);
+        assert_eq!(found["rule"], "required", "{id}: {found}");
+        assert_eq!(found["region"], boxed(region_of(id)), "{id}: {found}");
+        assert_eq!(
+            found["template"],
+            json!({"width": template[0], "height": template[1]}),
+            "{id}: {found}"
+        );
         assert_eq!(
             found["base"],
-            rect(base[0], base[1], base[2], base[3]),
+            json!({"x": axis(Some(base[0])), "y": axis(Some(base[1]))}),
             "{id}: {found}"
         );
         assert_eq!(
             found["best"],
-            rect(best[0], best[1], base[2], base[3]),
+            rect(best[0], best[1], template[0], template[1]),
             "{id}: {found}"
         );
         assert_eq!(found["dx"], offsets[0], "{id}: {found}");
         assert_eq!(found["dy"], offsets[1], "{id}: {found}");
         assert_eq!(found["class"], class, "{id}: {found}");
+        assert_eq!(found["repeated"], json!(false), "{id}: {found}");
         assert!(
             (found["threshold"].as_f64().expect("a threshold") - THRESHOLD).abs() < 1e-6,
             "{id}: {found}"
         );
         if class == "missing" {
             assert!(score(found) < THRESHOLD, "{id}: {found}");
+            assert_eq!(found["matches"], 0, "{id}: {found}");
         } else {
             assert!(score(found) > 0.999, "{id}: {found}");
+            assert_eq!(found["matches"], 1, "{id}: {found}");
         }
     }
-    let marks = wide["marks"]
-        .as_array()
-        .expect("marks")
-        .iter()
-        .map(|entry| entry["id"].as_str().expect("an id"))
-        .collect::<Vec<_>>();
-    assert_eq!(marks, WIDE_TABLE.map(|(id, ..)| id), "{wide}");
+    assert_eq!(mark_ids(wide), WIDE_TABLE.map(|(id, ..)| id), "{wide}");
     assert_eq!(
         wide["summary"],
         json!({
             "probed": 7,
             "found": 5,
-            "counts": counts(0, 1, 2, 1, 1, 2),
+            "counts": counts([0, 1, 2, 1, 1, 2], 0),
             "dx_values": [
                 {"dx": 0, "count": 1}, {"dx": 16, "count": 2}, {"dx": 26, "count": 1},
                 {"dx": 32, "count": 1}
@@ -537,21 +653,34 @@ fn dal0_t1_a_twenty_by_nine_frame_classes_each_mark_as_the_table_says() {
     assert_eq!(
         other["summary"],
         json!({
-            "probed": 2, "found": 0, "counts": counts(0, 0, 0, 0, 0, 2), "dx_values": [],
+            "probed": 2, "found": 0, "counts": counts([0, 0, 0, 0, 0, 2], 0), "dx_values": [],
             "reading": "not this page"
         }),
         "{other}"
     );
+    // Overall: the thirteen template marks once, `repeated` at the start or at the end.
+    let overall = &answer["overall"];
+    assert_eq!(overall["probed"], 13, "{overall}");
+    assert_eq!(overall["found"], 9, "{overall}");
+    let tally = &overall["counts"];
     assert_eq!(
-        answer["overall"],
-        json!({
-            "probed": 9,
-            "found": 5,
-            "counts": counts(0, 1, 2, 1, 1, 4),
-            "dx_values": wide["summary"]["dx_values"],
-            "reading": "edges are followed; an inset of about 6"
-        }),
-        "{answer}"
+        (
+            &tally["centre"],
+            &tally["other"],
+            &tally["missing"],
+            &tally["unknown"]
+        ),
+        (&json!(4), &json!(1), &json!(4), &json!(1)),
+        "{overall}"
+    );
+    assert_eq!(
+        tally["start"].as_u64().expect("a count") + tally["end"].as_u64().expect("a count"),
+        3,
+        "{overall}"
+    );
+    assert_eq!(
+        overall["reading"], "edges are followed; an inset of about 6",
+        "{overall}"
     );
 }
 
@@ -572,11 +701,13 @@ fn dal0_t2_a_frame_of_the_base_ratio_twice_its_size_has_every_mark_as_mapped() {
     );
     assert_eq!(answer["room_too_small"], json!(false), "{answer}");
     let wide = page(&answer, WIDE_PAGE);
-    for (id, base, ..) in WIDE_TABLE {
+    for (id, base, template, ..) in WIDE_TABLE {
         let found = mark(wide, id);
-        let place = rect(base[0], base[1], base[2], base[3]);
-        assert_eq!(found["base"], place, "{id}: {found}");
-        assert_eq!(found["best"], place, "{id}: {found}");
+        assert_eq!(
+            found["best"],
+            rect(base[0], base[1], template[0], template[1]),
+            "{id}: {found}"
+        );
         assert_eq!((&found["dx"], &found["dy"]), (&json!(0), &json!(0)), "{id}");
         assert_eq!(found["class"], "as_mapped", "{id}: {found}");
         assert!(score(found) > 0.999, "{id}: {found}");
@@ -584,7 +715,7 @@ fn dal0_t2_a_frame_of_the_base_ratio_twice_its_size_has_every_mark_as_mapped() {
     assert_eq!(
         wide["summary"],
         json!({
-            "probed": 7, "found": 7, "counts": counts(7, 0, 0, 0, 0, 0),
+            "probed": 7, "found": 7, "counts": counts([7, 0, 0, 0, 0, 0], 0),
             "dx_values": [{"dx": 0, "count": 7}],
             "reading": "as mapped: a frame of the base's ratio"
         }),
@@ -599,6 +730,7 @@ fn dal0_t2_a_frame_of_the_base_ratio_twice_its_size_has_every_mark_as_mapped() {
         answer["pages_by_share"],
         json!([
             {"page": WIDE_PAGE, "found": 7, "probed": 7},
+            {"page": RULES_PAGE, "found": 6, "probed": 7},
             {"page": OTHER_PAGE, "found": 0, "probed": 2}
         ]),
         "{answer}"
@@ -666,7 +798,7 @@ fn dal0_t4_a_room_below_twice_the_tolerance_classes_no_mark() {
         "{answer}"
     );
     assert_eq!(answer["room_too_small"], json!(true), "{answer}");
-    let none = counts(0, 0, 0, 0, 0, 0);
+    let none = counts([0; 6], 0);
     for answered in answer["pages"].as_array().expect("pages") {
         for entry in answered["marks"].as_array().expect("marks") {
             assert_eq!(entry["class"], Value::Null, "{entry}");
@@ -710,7 +842,7 @@ fn dal0_t5_without_a_page_named_the_page_on_the_frame_comes_first() {
             .iter()
             .map(|entry| entry["page"].clone())
             .collect::<Vec<_>>(),
-        [json!(OTHER_PAGE), json!(WIDE_PAGE)],
+        [json!(OTHER_PAGE), json!(WIDE_PAGE), json!(RULES_PAGE)],
         "{answer}"
     );
     assert_eq!(
@@ -718,10 +850,12 @@ fn dal0_t5_without_a_page_named_the_page_on_the_frame_comes_first() {
         Some("pages_by_share"),
         "the first line: {answer}"
     );
+    // The wide page and the rules page each find 5 of their 7 marks: the package's order.
     assert_eq!(
         answer["pages_by_share"],
         json!([
             {"page": WIDE_PAGE, "found": 5, "probed": 7},
+            {"page": RULES_PAGE, "found": 5, "probed": 7},
             {"page": OTHER_PAGE, "found": 0, "probed": 2}
         ]),
         "{answer}"
@@ -765,20 +899,17 @@ fn dal0_t6_marks_of_the_other_families_are_listed_as_not_probed() {
         json!([
             {
                 "id": SWATCH,
+                "rule": "required",
                 "kind": "color",
                 "region": rect(SWATCH_AT.0, SWATCH_AT.1, SWATCH_AT.2, SWATCH_AT.3)
             },
-            {"id": CHECK, "kind": "composite", "region": null}
+            {"id": CHECK, "rule": "required", "kind": "composite", "region": null}
         ]),
         "{wide}"
     );
     for id in [SWATCH, CHECK] {
         assert!(
-            wide["marks"]
-                .as_array()
-                .expect("marks")
-                .iter()
-                .all(|entry| entry["id"] != id),
+            !mark_ids(wide).contains(&id),
             "{id} is no probed mark: {wide}"
         );
     }
@@ -809,18 +940,33 @@ fn shape(value: &Value, at: &str, texts: &mut Vec<String>, failures: &mut Vec<St
         "page" => &["page", "marks", "not_probed", "summary"],
         "mark" => &[
             "id",
+            "rule",
+            "region",
+            "template",
             "base",
             "best",
             "score",
             "threshold",
+            "matches",
+            "repeated",
             "dx",
             "dy",
             "class",
         ],
-        "not_probed" => &["id", "kind", "region"],
+        "base_place" => &["x", "y"],
+        "axis" => &["at", "by"],
+        "not_probed" => &["id", "rule", "kind", "region"],
         "rect" => &["x", "y", "width", "height"],
         "summary" => &["probed", "found", "counts", "dx_values", "reading"],
-        "counts" => &["as_mapped", "start", "centre", "end", "other", "missing"],
+        "counts" => &[
+            "as_mapped",
+            "start",
+            "centre",
+            "end",
+            "other",
+            "missing",
+            "unknown",
+        ],
         "dx" => &["dx", "count"],
         other => {
             failures.push(format!("no shape for {other}"));
@@ -837,14 +983,16 @@ fn shape(value: &Value, at: &str, texts: &mut Vec<String>, failures: &mut Vec<St
     for (name, member) in object {
         let inner = match (at, name.as_str()) {
             ("answer", "pages_by_share") => Some("share"),
-            ("answer", "frame" | "base" | "scale_frame") => Some("size"),
+            ("answer", "frame" | "base" | "scale_frame") | ("mark", "template") => Some("size"),
             ("answer", "factor") => Some("factor"),
             ("answer", "places") => Some("places"),
             ("answer", "pages") => Some("page"),
             ("answer" | "page", "overall" | "summary") => Some("summary"),
             ("page", "marks") => Some("mark"),
             ("page", "not_probed") => Some("not_probed"),
-            ("mark", "base" | "best") | ("not_probed", "region") => Some("rect"),
+            ("mark", "base") => Some("base_place"),
+            ("base_place", "x" | "y") => Some("axis"),
+            ("mark", "region" | "best") | ("not_probed", "region") => Some("rect"),
             ("summary", "counts") => Some("counts"),
             ("summary", "dx_values") => Some("dx"),
             _ => None,
@@ -874,15 +1022,21 @@ fn dal0_t7_the_answer_holds_no_member_beyond_its_list() {
     let mut failures = Vec::new();
     shape(&answer, "answer", &mut texts, &mut failures);
     assert!(failures.is_empty(), "{failures:#?}: {answer}");
-    // Every text is a page, a mark's id, a kind, a class or a reading: nothing read from the frame.
+    // Every text is a page, a mark's id, a rule, a kind, a class, a way a base place was taken or
+    // a reading: nothing read from the frame.
     let ids = WIDE_REQUIRED
-        .iter()
-        .chain(&["other_a", "other_b"])
-        .copied()
+        .into_iter()
+        .chain(RULES_MARKS.map(|(id, _)| id))
+        .chain(["other_a"])
         .collect::<Vec<_>>();
     let words = [
-        WIDE_PAGE,
         OTHER_PAGE,
+        WIDE_PAGE,
+        RULES_PAGE,
+        "required",
+        "any_of",
+        "optional",
+        "forbidden",
         "color",
         "composite",
         "centre",
@@ -890,8 +1044,11 @@ fn dal0_t7_the_answer_holds_no_member_beyond_its_list() {
         "end",
         "other",
         "missing",
+        "default_growth",
+        "unknown",
         "not this page",
         "edges are followed; an inset of about 6",
+        "a centred base-ratio window",
     ];
     for text in &texts {
         assert!(
@@ -946,5 +1103,248 @@ fn dal0_t8_the_mcp_face_answers_the_command_lines_members() {
     assert_eq!(
         envelope["line"], line,
         "the MCP face's members are the command line's"
+    );
+}
+
+#[test]
+fn dal0_fix1_t1_a_box_cut_off_at_an_edge_gives_the_place_the_mark_was_cut_at() {
+    assert_eq!(
+        LAB_RECORDING_DEFAULT_SEARCH_MARGIN, 48,
+        "the boxes of this fixture are the recording's default boxes for a margin of 48"
+    );
+    let context = Probe::new();
+    let scene = context.scene("wide", &twenty_by_nine());
+    let answer = context.answered(&scene, &["--page", WIDE_PAGE]);
+    let wide = page(&answer, WIDE_PAGE);
+    // `start`, 10 from the left and 8 from the top: its box cut off at the left and the top. The
+    // box's middle would have been (29, 28): dx -19, `other`.
+    assert_eq!(region_of("start"), [0, 0, 66, 64]);
+    // `end`: its box cut off at the right and the top.
+    assert_eq!(region_of("end"), [68, 0, 60, 64]);
+    // The mark, its base place, its best place on the 20:9 frame, its offsets and its class.
+    for (id, base, best, offsets, class) in [
+        ("start", [10, 8], [10, 8], [0, 0], "start"),
+        ("centre_a", [44, 8], [60, 8], [16, 0], "centre"),
+        ("end", [116, 8], [148, 8], [32, 0], "end"),
+    ] {
+        let found = mark(wide, id);
+        assert_eq!(found["region"], boxed(region_of(id)), "{id}: {found}");
+        assert_eq!(found["template"], size(8, 8), "{id}: {found}");
+        assert_eq!(
+            found["base"],
+            json!({"x": axis(Some(base[0])), "y": axis(Some(base[1]))}),
+            "{id}: {found}"
+        );
+        assert_eq!(found["best"], rect(best[0], best[1], 8, 8), "{id}: {found}");
+        assert_eq!(
+            (&found["dx"], &found["dy"]),
+            (&json!(offsets[0]), &json!(offsets[1])),
+            "{id}: {found}"
+        );
+        assert_eq!(found["class"], class, "{id}: {found}");
+    }
+    // Cut off at the bottom: its crop one margin inside its top.
+    let whole = context.answered(&scene, &["--page", RULES_PAGE]);
+    let member = mark(page(&whole, RULES_PAGE), "member");
+    assert_eq!(member["region"], boxed([36, 16, 92, 56]), "{member}");
+    assert_eq!(
+        member["base"],
+        json!({"x": axis(Some(84)), "y": axis(Some(64))}),
+        "{member}"
+    );
+    assert_eq!(
+        (&member["dx"], &member["dy"], &member["class"]),
+        (&json!(16), &json!(0), &json!("centre")),
+        "{member}"
+    );
+}
+
+#[test]
+fn dal0_fix1_t2_a_declared_search_area_leaves_its_axis_unknown() {
+    let context = Probe::new();
+    let scene = context.scene("wide", &twenty_by_nine());
+    let answer = context.answered(&scene, &["--page", RULES_PAGE]);
+    let rules = page(&answer, RULES_PAGE);
+    let declared = mark(rules, "declared");
+    assert_eq!(declared["region"], boxed([28, 8, 12, 64]), "{declared}");
+    assert_eq!(
+        declared["base"],
+        json!({"x": axis(None), "y": axis(Some(56))}),
+        "{declared}"
+    );
+    assert_eq!(declared["best"], rect(30, 56, 8, 8), "{declared}");
+    assert!(score(declared) > 0.999, "{declared}");
+    assert_eq!(
+        (&declared["dx"], &declared["dy"], &declared["class"]),
+        (&Value::Null, &json!(0), &Value::Null),
+        "{declared}"
+    );
+    assert_eq!(rules["summary"]["counts"]["unknown"], 1, "{rules}");
+    assert_eq!(rules["summary"]["counts"]["other"], 0, "{rules}");
+    assert_eq!(
+        rules["summary"]["reading"], "a centred base-ratio window",
+        "{rules}"
+    );
+}
+
+#[test]
+fn dal0_fix1_t3_a_repeated_mark_is_counted_and_left_out_of_the_reading() {
+    let context = Probe::new();
+    let scene = context.scene("wide", &twenty_by_nine());
+    let answer = context.answered(&scene, &["--page", RULES_PAGE]);
+    let rules = page(&answer, RULES_PAGE);
+    let repeated = mark(rules, "repeated");
+    assert_eq!(repeated["matches"], 2, "{repeated}");
+    assert_eq!(repeated["repeated"], json!(true), "{repeated}");
+    assert!(score(repeated) > 0.999, "{repeated}");
+    // Its best place is one of its two copies, classed by it.
+    let best = (
+        repeated["best"]["x"].as_i64().expect("x"),
+        repeated["best"]["y"].as_i64().expect("y"),
+    );
+    let (dx, class) = match best {
+        (80, 8) => (0, "start"),
+        (112, 8) => (32, "end"),
+        other => panic!("not one of the two copies: {other:?}: {repeated}"),
+    };
+    assert_eq!(
+        (&repeated["dx"], &repeated["dy"], &repeated["class"]),
+        (&json!(dx), &json!(0), &json!(class)),
+        "{repeated}"
+    );
+    // The page reads its other found marks, all at the centre, as it would without `repeated`.
+    let summary = &rules["summary"];
+    assert_eq!(summary["counts"]["centre"], 3, "{summary}");
+    assert_eq!(
+        summary["reading"], "a centred base-ratio window",
+        "{summary}"
+    );
+
+    // Drawn once, on the base: one place, not repeated.
+    let once = context.scene("once", &base_layout(BASE.0));
+    let base = context.answered(&once, &["--page", RULES_PAGE]);
+    let single = mark(page(&base, RULES_PAGE), "repeated");
+    assert_eq!(
+        (&single["matches"], &single["repeated"], &single["class"]),
+        (&json!(1), &json!(false), &json!("as_mapped")),
+        "{single}"
+    );
+}
+
+#[test]
+fn dal0_fix1_t4_every_mark_a_page_names_is_probed_with_its_rule() {
+    let context = Probe::new();
+    let scene = context.scene("wide", &twenty_by_nine());
+    let answer = context.answered(&scene, &["--page", RULES_PAGE]);
+    let rules = page(&answer, RULES_PAGE);
+    let named = rules["marks"]
+        .as_array()
+        .expect("marks")
+        .iter()
+        .map(|entry| {
+            (
+                entry["id"].as_str().expect("an id"),
+                entry["rule"].as_str().expect("a rule"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(named, RULES_MARKS, "{rules}");
+    assert_eq!(
+        rules["not_probed"],
+        json!([{
+            "id": SWATCH,
+            "rule": "any_of",
+            "kind": "color",
+            "region": rect(SWATCH_AT.0, SWATCH_AT.1, SWATCH_AT.2, SWATCH_AT.3)
+        }]),
+        "{rules}"
+    );
+    // Probed as the required ones are: the any_of member and the optional mark found at the
+    // centre, the forbidden mark and the other any_of member not found.
+    for (id, class) in [
+        ("member", "centre"),
+        ("optional", "centre"),
+        ("absent", "missing"),
+        ("other_b", "missing"),
+    ] {
+        assert_eq!(mark(rules, id)["class"], class, "{id}: {rules}");
+    }
+    assert_eq!(
+        (&rules["summary"]["probed"], &rules["summary"]["found"]),
+        (&json!(7), &json!(5)),
+        "{rules}"
+    );
+}
+
+#[test]
+fn dal0_fix1_t5_a_frame_a_pixel_off_the_base_shape_has_no_room() {
+    let context = Probe::new();
+    for width in [257, 255] {
+        let scene = context.scene(
+            &format!("off-{width}"),
+            &base_layout(BASE.0).enlarged(width, 144),
+        );
+        let answer = context.answered(&scene, &[]);
+        assert_eq!(answer["frame"], size(width, 144), "{width}: {answer}");
+        assert_eq!(
+            answer["scale_frame"],
+            size(BASE.0, BASE.1),
+            "{width}: {answer}"
+        );
+        assert_eq!(answer["room"], 0, "{width}: {answer}");
+        assert_eq!(
+            answer["factor"],
+            json!({"num": 2, "den": 1}),
+            "{width}: {answer}"
+        );
+        assert_eq!(
+            answer["places"],
+            json!({"start": 0, "centre": 0, "end": 0}),
+            "{width}: {answer}"
+        );
+        assert_eq!(answer["room_too_small"], json!(false), "{width}: {answer}");
+    }
+}
+
+#[test]
+fn dal0_fix1_t6_the_boundary_of_too_small_and_a_tolerance_given() {
+    let context = Probe::new();
+    // The base's height, 17 and 18 columns more than its width: no resample.
+    let seventeen = context.scene("room-17", &base_layout(BASE.0 + 17));
+    let answer = context.answered(&seventeen, &[]);
+    assert_eq!(answer["room"], 17, "{answer}");
+    assert_eq!(
+        answer["places"],
+        json!({"start": 0, "centre": 8, "end": 17}),
+        "{answer}"
+    );
+    assert_eq!(answer["room_too_small"], json!(true), "{answer}");
+    assert_eq!(
+        mark(page(&answer, WIDE_PAGE), "start")["class"],
+        Value::Null,
+        "{answer}"
+    );
+
+    let eighteen = context.scene("room-18", &base_layout(BASE.0 + 18));
+    let answer = context.answered(&eighteen, &[]);
+    assert_eq!(answer["room"], 18, "{answer}");
+    assert_eq!(
+        answer["places"],
+        json!({"start": 0, "centre": 9, "end": 18}),
+        "{answer}"
+    );
+    assert_eq!(answer["room_too_small"], json!(false), "{answer}");
+    assert_eq!(
+        mark(page(&answer, WIDE_PAGE), "start")["class"],
+        "start",
+        "{answer}"
+    );
+
+    let given = context.answered(&eighteen, &["--tolerance-px", "5"]);
+    assert_eq!(given["tolerance_px"], 5, "{given}");
+    assert_eq!(given["room_too_small"], json!(true), "{given}");
+    assert_eq!(
+        given["overall"]["reading"], "the room is too small to tell",
+        "{given}"
     );
 }

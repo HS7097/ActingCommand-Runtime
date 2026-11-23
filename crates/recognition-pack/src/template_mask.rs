@@ -25,8 +25,9 @@ pub const TEMPLATE_FLAT_FIELD_MARGIN_MILLI: u32 = 50;
 
 /// The mask a template target's search scores with: its gray range, in a schema `0.7` pack. An
 /// older schema's mask is an unsupported semantic ([`UnsupportedRecognitionTarget`]), and
-/// admission refuses any other mask in schema `0.7`.
-pub(crate) fn scored_mask(
+/// admission refuses any other mask in schema `0.7`. Workflow #392 DA-L0 fix round 1: public, so
+/// that the Lab's layout probe scores a template with the mask recognition scores it with.
+pub fn scored_mask(
     schema_version: &str,
     target: &TemplateTarget,
 ) -> Option<recognition::TemplateMask> {
@@ -224,7 +225,7 @@ impl RecognitionEvaluator {
                 continue;
             }
             let mask = scored_mask(&pack.schema_version, target);
-            let threshold = target.threshold.unwrap_or(pack.defaults.template_threshold);
+            let threshold = pack.template_threshold(target);
             let floored = ccorr && threshold > 0.0;
             if mask.is_none() && !floored && target.scales.is_none() {
                 continue;

@@ -2,57 +2,78 @@
 
 //! Workflow #392 DA-L0 (`contracts/display-adapter.md` section 14; register §1.521): the layout
 //! probe, an offline Lab operation (`layout probe`, MCP `ac_layout_probe`). From one saved frame of
-//! the base's ratio or wider and a package it says, for every template mark the chosen pages
-//! require, where the mark is found on the frame brought to the base's height and how that place
-//! relates to the place the base gives it. It describes a measurement: it writes no declaration and
-//! decides nothing.
+//! the base's ratio or wider and a package it says, for every template mark the chosen pages name,
+//! where the mark is found on the frame brought to the base's height and how that place relates to
+//! the place the base gives it. It describes a measurement: it writes no declaration and decides
+//! nothing.
 //!
 //! - **What it reads.** The package and the scene as the offline `recognize` reads them, from the
 //!   same input ([`crate::ReadonlyRecognitionInput`]: the externally verified bundle with its
 //!   recognition pack and page set, and the scene file). No capture, no device input, no run, no
 //!   Runtime; nothing is written.
-//! - **The frame** ([`ScaleFrame::of`]). A frame of the base's orientation, at least the base's
-//!   height and whose width over its height is not below the base's is brought to the base's height
-//!   by the display adapter's map measured by height on the screen (`DisplayMap::build`) and
-//!   resampled once by the function the frame gate resamples a frame of the base's ratio with
-//!   (REC-5, `resample_pixels`, area average): the scale frame, of the base's height and the base's
-//!   width plus the room. A frame of the base's ratio has no room. Any other frame is refused
-//!   `lab_scene_size_unsupported` before anything is searched, with its word: the base's other
-//!   orientation `orientation_mismatch`, lower than the base `scale_below_base`, narrower than the
-//!   base's ratio `ratio_below_base`.
+//! - **The frame** ([`ScaleFrame::of`]). A frame the run path's frame gate takes as the base's (its
+//!   size, or its shape within a pixel: the kernel's `lab_scene_on_base`) is that gate's reduced
+//!   frame, with no room. Any other frame of the base's orientation, at least the base's height and
+//!   whose width over its height is not below the base's is brought to the base's height by the
+//!   display adapter's map measured by height on the screen (`DisplayMap::build`) and resampled
+//!   once by the function the frame gate resamples with (REC-5, `resample_pixels`, area average):
+//!   the scale frame, of the base's height and the base's width plus the room. Any other frame is
+//!   refused `lab_scene_size_unsupported` before anything is searched, with its word: the base's
+//!   other orientation `orientation_mismatch`, lower than the base `scale_below_base`, narrower
+//!   than the base's ratio `ratio_below_base`.
+//! - **The marks of a page** ([`named`]): every mark its rules name, `required`, then the members
+//!   of its `any_of` groups, `optional`, `forbidden`, each once, with the rule that names it.
 //! - **A mark** ([`Search::template`]). A template mark is searched over the whole scale frame, its
 //!   declared region aside, with its template scored as recognition scores it (the pack's metric,
-//!   the mark's mask and factors, on the exact score maps): its best place, its score and its
-//!   threshold. Its base place is its template, of the size it was found at, centred in its
-//!   declared rectangle; `dx` and `dy` are the best place's offset from it. A template declared over
-//!   the whole frame has no base place and no offsets. Every other mark (a colour, a colour digest,
-//!   an OCR, a check, a value test, a template this build cannot evaluate) is listed as not probed,
-//!   with its kind and its declared rectangle.
+//!   its mask by `scored_mask`, its factors by `searched_factors`, its threshold by
+//!   `RecognitionPack::template_threshold`, on the exact score maps): its best place, its score, its
+//!   threshold and how many places reach the threshold, overlaps suppressed (`matches`; above one
+//!   the mark is `repeated`). Every other mark (a colour, a colour digest, an OCR, a check, a value
+//!   test, a template this build cannot evaluate) is listed as not probed, with its kind and its
+//!   declared rectangle.
+//! - **The base place** ([`base_place`]). A package keeps a mark's search box, not where its
+//!   template was cut. On each axis the base place is the recording's default box read backwards
+//!   (`default_search`, the crop grown by `LAB_RECORDING_DEFAULT_SEARCH_MARGIN` on each side and
+//!   clamped to the base): a box off the start edge puts the crop one margin inside its start; a box
+//!   at the start edge and off the end edge puts it one margin and the template's length before its
+//!   end; the place is taken (`default_growth`) only when the recording's own function grows it back
+//!   into the declared box. A box across the whole axis, one of any other size (a search area
+//!   someone declared), a template declared over the whole frame or relative to another mark: that
+//!   axis is `unknown`. `dx` and `dy` are the best place's offset from the base place, on the axes
+//!   where it is known.
 //! - **Classes** ([`Places`]). With a room `R`, the places are `start` (0), `centre` (`R / 2`
 //!   rounded down, as the nine-grid's middle) and `end` (`R`); a found mark (its score reaches its
-//!   threshold) whose `dy` and `dx` lie within the tolerance of 0 and of a place is at that place,
-//!   any other found mark `other`, a mark not found `missing`. Without room the three places are
-//!   one: `as_mapped`. Where the windows of two places would overlap (`R > 0` and `R / 2` within
-//!   twice the tolerance) the answer says the room is too small to tell and classes no mark.
+//!   threshold) whose `dy` (when known) and `dx` lie within the tolerance of 0 and of a place is at
+//!   that place, any other found mark `other`, a mark not found `missing`. Without room the three
+//!   places are one: `as_mapped`. A found mark whose base place across is unknown has no class and
+//!   is counted `unknown`. Where the windows of the start and the centre would overlap (`R > 0` and
+//!   `R / 2` rounded down at most twice the tolerance) the answer says the room is too small to
+//!   tell and classes no mark.
 //! - **Per page and overall** ([`summary`]): the counts by class, the distinct `dx` of the found
-//!   marks with their counts and one line of reading ([`reading`]); the pages ordered by the share
+//!   marks with their counts and one line of reading ([`reading`]) over the found marks that take
+//!   part in it (a known place across, not repeated, not forbidden); the pages ordered by the share
 //!   of their template marks found come first.
 
 use crate::display_base::scene_size_unsupported;
 use crate::readonly::{load_evaluator, load_page_detector, recognition_scene};
-use crate::{Lab, LabPorts, ReadonlyRecognitionInput, package_base};
+use crate::recording::marks::default_search;
+use crate::{
+    LAB_RECORDING_DEFAULT_SEARCH_MARGIN, Lab, LabPorts, ReadonlyRecognitionInput, RecordRect,
+    RecordSize, package_base,
+};
 use actingcommand_contract::{CaptureExtent, DisplayArea, DisplayScaleBy, LabError, LabResult};
 use actingcommand_display_adapter::{
     DisplayMap, DisplayMapError, DisplayObservation, DisplayProblem, DisplayRule, Orientation,
 };
+use actingcommand_execution_kernel::lab_scene_on_base;
 use actingcommand_page_detector::{PageDefinition, PageDetector};
-use actingcommand_recognition::resample::{SCALE_IDENTITY_MILLI, resample_pixels};
+use actingcommand_recognition::resample::resample_pixels;
 use actingcommand_recognition::{
-    RegionSpectra, Scene, SearchClock, TemplateMask, TemplateMatchTimingStage,
+    RecognitionError, RegionSpectra, Scene, SearchClock, TemplateMatchTimingStage,
 };
 use actingcommand_recognition_pack::{
-    PackRect, PackRegion, RecognitionEvaluator, RecognitionMask, RecognitionTarget, TargetKind,
-    TemplateTarget,
+    PackRect, PackRegion, RecognitionEvaluator, RecognitionTarget, TargetKind, TemplateTarget,
+    scored_mask, searched_factors,
 };
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -65,10 +86,13 @@ pub const LAYOUT_PROBE_DEFAULT_TOLERANCE_PX: u32 = 4;
 
 /// The reading of a room too small to tell the places apart.
 const ROOM_TOO_SMALL: &str = "the room is too small to tell";
-/// The reading of a page none of whose required marks is a template.
+/// The reading of a page none of whose marks it looks for is a template.
 const NOTHING_PROBED: &str = "no template mark to probe";
-/// The reading where no template mark is found.
+/// The reading where no template mark the page looks for is found.
 const NOT_THIS_PAGE: &str = "not this page";
+/// The reading where marks are found but none takes part in the reading.
+const NOTHING_PLACED: &str =
+    "no found mark to read: its base place across is unknown or it is repeated";
 /// The reading of a frame without room whose every found mark is where the base puts it.
 const AS_MAPPED: &str = "as mapped: a frame of the base's ratio";
 /// The reading of a frame without room where a found mark is elsewhere.
@@ -115,7 +139,7 @@ pub struct ProbeFactor {
     pub den: u32,
 }
 
-/// A rectangle: in scale-frame pixels, or (a mark not probed) in the base's.
+/// A rectangle: in scale-frame pixels, or (a declared box) in the base's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ProbeRect {
     pub x: i64,
@@ -130,6 +154,52 @@ pub struct ProbePlaces {
     pub start: i64,
     pub centre: i64,
     pub end: i64,
+}
+
+/// The rule of a page that names a mark: it requires it, it is a member of one of its `any_of`
+/// groups, it is optional, or it is forbidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkRule {
+    Required,
+    AnyOf,
+    Optional,
+    Forbidden,
+}
+
+/// How a mark's base place was taken on one axis: the recording's default box read backwards, or
+/// not at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BasePlaceBy {
+    DefaultGrowth,
+    Unknown,
+}
+
+/// A mark's base place on one axis: where its template starts in the base, and how that was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AxisPlace {
+    /// `None` where the axis is `unknown`.
+    pub at: Option<i64>,
+    pub by: BasePlaceBy,
+}
+
+impl AxisPlace {
+    fn of(at: Option<i64>) -> Self {
+        let by = if at.is_some() {
+            BasePlaceBy::DefaultGrowth
+        } else {
+            BasePlaceBy::Unknown
+        };
+        Self { at, by }
+    }
+}
+
+/// A mark's base place, across and down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ProbeBase {
+    pub x: AxisPlace,
+    pub y: AxisPlace,
 }
 
 /// Where a mark is: at one of the places, elsewhere (`other`), not found (`missing`), or, without
@@ -149,19 +219,31 @@ pub enum MarkClass {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MarkProbe {
     pub id: String,
-    /// The mark's base place: its template, of the size it was found at, centred in its declared
-    /// rectangle; `None` for a template declared over the whole frame.
-    pub base: Option<ProbeRect>,
+    /// The page's rule that names the mark.
+    pub rule: MarkRule,
+    /// The mark's declared search box in the base; `None` for a template declared over the whole
+    /// frame or relative to another mark.
+    pub region: Option<ProbeRect>,
+    /// The size of its template as the package holds it.
+    pub template: ProbeSize,
+    /// Its base place, axis by axis (see the module header).
+    pub base: ProbeBase,
     /// The best place of its template on the scale frame, found or not.
     pub best: ProbeRect,
     /// The best place's score, normalised (0 to 1).
     pub score: f32,
     /// The mark's threshold: it is found when its score reaches it.
     pub threshold: f32,
-    /// The best place's offset from the base place, across and down; `None` without a base place.
+    /// How many places of the scale frame reach the threshold, overlapping places taken once.
+    pub matches: u32,
+    /// More than one place reaches the threshold: the best place is one of them.
+    pub repeated: bool,
+    /// The best place's offset from the base place, across and down; `None` where that axis of the
+    /// base place is unknown.
     pub dx: Option<i64>,
     pub dy: Option<i64>,
-    /// `None` where the room is too small to tell.
+    /// `None` where the room is too small to tell, or for a found mark whose base place across is
+    /// unknown.
     pub class: Option<MarkClass>,
 }
 
@@ -170,19 +252,27 @@ impl MarkProbe {
     pub fn found(&self) -> bool {
         self.score >= self.threshold
     }
+
+    /// Whether the mark takes part in its page's reading: found, its base place across known, not
+    /// repeated and not forbidden.
+    fn takes_part(&self) -> bool {
+        self.found() && self.dx.is_some() && !self.repeated && self.rule != MarkRule::Forbidden
+    }
 }
 
-/// A mark a page requires that the probe does not search: no template, or a template this build
+/// A mark a page names that the probe does not search: no template, or a template this build
 /// cannot evaluate.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NotProbedMark {
     pub id: String,
+    /// The page's rule that names the mark.
+    pub rule: MarkRule,
     pub kind: TargetKind,
     /// Its declared rectangle in the base; `None` for a mark that declares none.
     pub region: Option<ProbeRect>,
 }
 
-/// The marks of one class each.
+/// The marks of one class each, and the found marks without a class (`unknown`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ClassCounts {
     pub as_mapped: u32,
@@ -191,6 +281,7 @@ pub struct ClassCounts {
     pub end: u32,
     pub other: u32,
     pub missing: u32,
+    pub unknown: u32,
 }
 
 impl ClassCounts {
@@ -259,7 +350,8 @@ pub struct LayoutProbeResponse {
     pub places: ProbePlaces,
     pub room_too_small: bool,
     pub pages: Vec<PageProbe>,
-    /// Every template mark of the chosen pages, each once.
+    /// Every template mark of the chosen pages, each once, as the first page that names it
+    /// answers it.
     pub overall: ProbeSummary,
 }
 
@@ -299,17 +391,16 @@ impl<P: LabPorts> Lab<P> {
             evaluator: &evaluator,
             input: &input,
             scene: &frame.scene,
+            base,
             spectra: RegionSpectra::default(),
             clock: SearchClock::system(),
         };
-        // Each mark once, in the order the pages first require it.
+        // Each mark once, in the order the pages first name it.
         let mut measured = BTreeMap::new();
-        let mut order = Vec::new();
         for definition in &pages {
-            for id in &definition.required {
-                if let Entry::Vacant(entry) = measured.entry(id.clone()) {
+            for (id, _) in named(definition) {
+                if let Entry::Vacant(entry) = measured.entry(id.to_owned()) {
                     entry.insert(search.mark(id, &places)?);
-                    order.push(id.clone());
                 }
             }
         }
@@ -317,10 +408,16 @@ impl<P: LabPorts> Lab<P> {
         for definition in &pages {
             let mut marks = Vec::new();
             let mut not_probed = Vec::new();
-            for id in &definition.required {
+            for (id, rule) in named(definition) {
                 match measured.get(id) {
-                    Some(Measured::Probed(mark)) => marks.push(mark.clone()),
-                    Some(Measured::NotProbed(mark)) => not_probed.push(mark.clone()),
+                    Some(Measured::Probed(mark)) => marks.push(MarkProbe {
+                        rule,
+                        ..mark.clone()
+                    }),
+                    Some(Measured::NotProbed(mark)) => not_probed.push(NotProbedMark {
+                        rule,
+                        ..mark.clone()
+                    }),
                     None => {
                         return Err(LabError::device(format!(
                             "the layout probe measured no mark {id} of the page {}",
@@ -337,13 +434,16 @@ impl<P: LabPorts> Lab<P> {
                 summary: page_summary,
             });
         }
-        let every = order
-            .iter()
-            .filter_map(|id| match measured.get(id) {
-                Some(Measured::Probed(mark)) => Some(mark),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        // Each mark once, as the first page that names it answers it.
+        let mut seen = BTreeSet::new();
+        let mut every = Vec::new();
+        for answer in &answers {
+            for mark in &answer.marks {
+                if seen.insert(mark.id.as_str()) {
+                    every.push(mark);
+                }
+            }
+        }
         let overall = summary(&places, &every);
         let mut pages_by_share = answers
             .iter()
@@ -406,6 +506,41 @@ fn chosen_pages<'a>(
     }
 }
 
+/// Every mark the rules of the page `definition` name, each once with the first rule that names
+/// it, in the order `required`, the members of `any_of`, `optional`, `forbidden`.
+fn named(definition: &PageDefinition) -> Vec<(&str, MarkRule)> {
+    let rules = definition
+        .required
+        .iter()
+        .map(|id| (id, MarkRule::Required))
+        .chain(
+            definition
+                .any_of
+                .iter()
+                .flatten()
+                .map(|id| (id, MarkRule::AnyOf)),
+        )
+        .chain(
+            definition
+                .optional
+                .iter()
+                .map(|id| (id, MarkRule::Optional)),
+        )
+        .chain(
+            definition
+                .forbidden
+                .iter()
+                .map(|id| (id, MarkRule::Forbidden)),
+        );
+    let mut list: Vec<(&str, MarkRule)> = Vec::new();
+    for (id, rule) in rules {
+        if !list.iter().any(|(known, _)| *known == id.as_str()) {
+            list.push((id.as_str(), rule));
+        }
+    }
+    list
+}
+
 /// `left`'s share of its template marks found against `right`'s (0 for a page without one), in
 /// whole numbers.
 fn share_order(left: &PageShare, right: &PageShare) -> Ordering {
@@ -429,6 +564,29 @@ impl ScaleFrame {
     /// probe does not take.
     fn of(base: (u32, u32), scene: Scene) -> LabResult<Self> {
         let given = (scene.width(), scene.height());
+        // A frame the run path takes as the base's: the frame gate's own reduction, no room. A
+        // frame it refuses is the probe's to judge below.
+        if let Ok(reduced) = lab_scene_on_base(base, &scene) {
+            let (scene, factor) = match reduced {
+                None => (scene, ProbeFactor { num: 1, den: 1 }),
+                Some(reduced) => {
+                    let down = reduced.map.height_scale();
+                    (
+                        reduced.scene,
+                        ProbeFactor {
+                            num: down.num(),
+                            den: down.den(),
+                        },
+                    )
+                }
+            };
+            return Ok(Self {
+                given,
+                factor,
+                scene,
+                room: 0,
+            });
+        }
         let (Some(base_extent), Some(frame_extent)) = (
             CaptureExtent::new(base.0, base.1),
             CaptureExtent::new(given.0, given.1),
@@ -528,7 +686,8 @@ struct Places {
     centre: i64,
     tolerance: i64,
     /// The room is above 0 and the windows of the start and the centre overlap (and so those of
-    /// the centre and the end, which lie at least as far apart).
+    /// the centre and the end, which lie at least as far apart): `R / 2` rounded down at most twice
+    /// the tolerance.
     too_small: bool,
 }
 
@@ -550,19 +709,18 @@ impl Places {
         (value - place).abs() <= self.tolerance
     }
 
-    /// The class of a mark `found` or not, whose best place lies `offsets` (`dx`, `dy`) from its
-    /// base place, `None` without one; `None` where the room is too small to tell.
-    fn class_of(&self, found: bool, offsets: Option<(i64, i64)>) -> Option<MarkClass> {
+    /// The class of a mark `found` or not, whose best place lies `dx` across and `dy` down from
+    /// its base place (`None` on an axis where that is unknown); `None` where the room is too small
+    /// to tell, and for a found mark whose base place across is unknown.
+    fn class_of(&self, found: bool, dx: Option<i64>, dy: Option<i64>) -> Option<MarkClass> {
         if self.too_small {
             return None;
         }
         if !found {
             return Some(MarkClass::Missing);
         }
-        let Some((dx, dy)) = offsets else {
-            return Some(MarkClass::Other);
-        };
-        Some(if !self.near(dy, 0) {
+        let dx = dx?;
+        Some(if dy.is_some_and(|dy| !self.near(dy, 0)) {
             MarkClass::Other
         } else if self.room == 0 {
             if self.near(dx, 0) {
@@ -582,10 +740,11 @@ impl Places {
     }
 
     /// The inset of a mark at none of the places whose best place lies `dx` across from its base
-    /// place and within the tolerance of it down: its distance from the edge it lies nearer than to
-    /// the centre, inward of it; `None` for one nearest the centre or outward of the edge.
-    fn inset(&self, dx: i64, dy: i64) -> Option<i64> {
-        if !self.near(dy, 0) {
+    /// place and, where `dy` is known, within the tolerance of it down: its distance from the edge
+    /// it lies nearer than to the centre, inward of it; `None` for one nearest the centre or
+    /// outward of the edge.
+    fn inset(&self, dx: i64, dy: Option<i64>) -> Option<i64> {
+        if dy.is_some_and(|dy| !self.near(dy, 0)) {
             return None;
         }
         let from_start = dx.abs();
@@ -607,8 +766,12 @@ fn summary(places: &Places, marks: &[&MarkProbe]) -> ProbeSummary {
     let mut dx_values = BTreeMap::<i64, u32>::new();
     let mut found = 0_u32;
     for mark in marks {
-        if let Some(class) = mark.class {
-            counts.add(class);
+        match mark.class {
+            Some(class) => counts.add(class),
+            // Found, its base place across unknown: counted apart (no count where the room is too
+            // small to tell).
+            None if !places.too_small && mark.found() => counts.unknown += 1,
+            None => {}
         }
         if mark.found() {
             found += 1;
@@ -634,16 +797,24 @@ fn reading(places: &Places, marks: &[&MarkProbe]) -> String {
     if places.too_small {
         return ROOM_TOO_SMALL.to_owned();
     }
-    if marks.is_empty() {
+    let looked_for = marks
+        .iter()
+        .filter(|mark| mark.rule != MarkRule::Forbidden)
+        .copied()
+        .collect::<Vec<_>>();
+    if looked_for.is_empty() {
         return NOTHING_PROBED.to_owned();
     }
-    let found = marks
+    if !looked_for.iter().any(|mark| mark.found()) {
+        return NOT_THIS_PAGE.to_owned();
+    }
+    let found = looked_for
         .iter()
-        .filter(|mark| mark.found())
+        .filter(|mark| mark.takes_part())
         .copied()
         .collect::<Vec<_>>();
     if found.is_empty() {
-        return NOT_THIS_PAGE.to_owned();
+        return NOTHING_PLACED.to_owned();
     }
     let any = |class: MarkClass| found.iter().any(|mark| mark.class == Some(class));
     let all = |class: MarkClass| found.iter().all(|mark| mark.class == Some(class));
@@ -668,7 +839,7 @@ fn reading(places: &Places, marks: &[&MarkProbe]) -> String {
     let insets = found
         .iter()
         .filter(|mark| mark.class == Some(MarkClass::Other))
-        .filter_map(|mark| places.inset(mark.dx?, mark.dy?))
+        .filter_map(|mark| places.inset(mark.dx?, mark.dy))
         .collect::<BTreeSet<_>>();
     parts.extend(
         insets
@@ -681,7 +852,7 @@ fn reading(places: &Places, marks: &[&MarkProbe]) -> String {
     parts.join("; ")
 }
 
-/// A mark a page requires, as the probe measured it.
+/// A mark a page names, as the probe measured it; its rule is the page's, set per page.
 #[derive(Debug, Clone)]
 enum Measured {
     Probed(MarkProbe),
@@ -693,6 +864,8 @@ struct Search<'a> {
     evaluator: &'a RecognitionEvaluator,
     input: &'a ReadonlyRecognitionInput,
     scene: &'a Scene,
+    /// The package's base, the frame its marks' boxes were grown in.
+    base: (u32, u32),
     spectra: RegionSpectra,
     clock: SearchClock,
 }
@@ -709,7 +882,7 @@ impl Search<'_> {
             .find(|target| declared(target).0 == id)
             .ok_or_else(|| {
                 LabError::package_invalid(format!(
-                    "a page requires the mark {id}, which the recognition pack does not declare"
+                    "a page names the mark {id}, which the recognition pack does not declare"
                 ))
             })?;
         let unsupported = self
@@ -725,6 +898,7 @@ impl Search<'_> {
                 let (name, kind, region) = declared(other);
                 Ok(Measured::NotProbed(NotProbedMark {
                     id: name.to_owned(),
+                    rule: MarkRule::Required,
                     kind,
                     region,
                 }))
@@ -745,82 +919,144 @@ impl Search<'_> {
                     target.template_path, target.id
                 ))
             })?;
-        // A mark this build evaluates declares a gray range in a schema 0.7 pack or no mask: a
-        // mask of another schema is unsupported, and admission refuses any other in 0.7.
-        let mask = match &target.mask {
-            None => None,
-            Some(RecognitionMask::Range { lower, upper }) => Some(TemplateMask {
-                lower: *lower,
-                upper: *upper,
-            }),
-            Some(RecognitionMask::Bitmap { .. }) => {
-                return Err(LabError::package_invalid(format!(
-                    "the mark {} declares a bitmap mask, which no admitted package holds",
-                    target.id
-                )));
-            }
+        let own = Scene::from_png(png).map_err(|error| {
+            LabError::package_invalid(format!(
+                "the template {} of the mark {} does not decode: {error}",
+                target.template_path, target.id
+            ))
+        })?;
+        let template = (own.width(), own.height());
+        let pack = self.evaluator.pack();
+        let threshold = pack.template_threshold(target);
+        let searched = |error: RecognitionError| {
+            LabError::device(format!(
+                "the layout probe could not search the mark {}: {error}",
+                target.id
+            ))
         };
-        let factors = target.scales.as_ref().map_or_else(
-            || vec![SCALE_IDENTITY_MILLI],
-            |scales| scales.factors_milli.clone(),
-        );
-        let best = self
+        let maps = self
             .scene
             .exact_score_maps(
                 png,
                 None,
                 self.evaluator.default_match_metric(),
                 TemplateMatchTimingStage::Exact,
-                mask,
-                &factors,
+                scored_mask(&pack.schema_version, target),
+                &searched_factors(target),
                 &mut self.spectra,
                 &self.clock,
             )
-            .and_then(|maps| maps.best())
-            .map_err(|error| {
-                LabError::device(format!(
-                    "the layout probe could not search the mark {}: {error}",
-                    target.id
-                ))
-            })?
-            .matched;
-        let threshold = target
-            .threshold
-            .unwrap_or(self.evaluator.pack().defaults.template_threshold);
+            .map_err(searched)?;
+        let best = maps.best().map_err(searched)?.matched;
+        let at_threshold = maps
+            .matches_at_least(threshold, |_| Ok(true))
+            .and_then(|places_found| maps.suppress_overlaps(places_found, 0))
+            .map_err(searched)?;
+        let matches = u32::try_from(at_threshold.len()).unwrap_or(u32::MAX);
         let best_place = ProbeRect {
             x: i64::from(best.x),
             y: i64::from(best.y),
             width: i64::from(best.width),
             height: i64::from(best.height),
         };
-        let base = match &target.region {
-            PackRegion::Rect(region) => Some(base_place(*region, best_place)),
-            PackRegion::Keyword(_) | PackRegion::TemplateRelative(_) => None,
-        };
-        let offsets = base.map(|base| (best_place.x - base.x, best_place.y - base.y));
+        let region = region_rect(&target.region);
+        let base = base_place(region, template, self.base);
+        let dx = base.x.at.map(|at| best_place.x - at);
+        let dy = base.y.at.map(|at| best_place.y - at);
         let found = best.score >= threshold;
         Ok(MarkProbe {
             id: target.id.clone(),
+            rule: MarkRule::Required,
+            region,
+            template: ProbeSize {
+                width: template.0,
+                height: template.1,
+            },
             base,
             best: best_place,
             score: best.score,
             threshold,
-            dx: offsets.map(|(dx, _)| dx),
-            dy: offsets.map(|(_, dy)| dy),
-            class: places.class_of(found, offsets),
+            matches,
+            repeated: matches > 1,
+            dx,
+            dy,
+            class: places.class_of(found, dx, dy),
         })
     }
 }
 
-/// The base place of a template found at `best`: a rectangle of `best`'s size centred in the
-/// declared `region` (half the difference rounded down).
-fn base_place(region: PackRect, best: ProbeRect) -> ProbeRect {
-    ProbeRect {
-        x: i64::from(region.x) + (i64::from(region.width) - best.width).div_euclid(2),
-        y: i64::from(region.y) + (i64::from(region.height) - best.height).div_euclid(2),
-        width: best.width,
-        height: best.height,
+/// The base place of a template of `template` size (width, height) searched in the declared box
+/// `region` of the base `base`, axis by axis (see the module header); every axis unknown without a
+/// box.
+fn base_place(region: Option<ProbeRect>, template: (u32, u32), base: (u32, u32)) -> ProbeBase {
+    let Some(region) = region else {
+        return ProbeBase {
+            x: AxisPlace::of(None),
+            y: AxisPlace::of(None),
+        };
+    };
+    let across = axis_crop(
+        region.x,
+        region.width,
+        i64::from(template.0),
+        i64::from(base.0),
+    )
+    .filter(|x| {
+        grown(*x, 0, template, base).is_some_and(|default_box| {
+            (i64::from(default_box.x), i64::from(default_box.width)) == (region.x, region.width)
+        })
+    });
+    let down = axis_crop(
+        region.y,
+        region.height,
+        i64::from(template.1),
+        i64::from(base.1),
+    )
+    .filter(|y| {
+        grown(0, *y, template, base).is_some_and(|default_box| {
+            (i64::from(default_box.y), i64::from(default_box.height)) == (region.y, region.height)
+        })
+    });
+    ProbeBase {
+        x: AxisPlace::of(across),
+        y: AxisPlace::of(down),
     }
+}
+
+/// Where on one axis the crop of a box starting at `start`, `length` long, began, by the
+/// recording's default growth read backwards, for a template `template` long in a base `frame`
+/// long: one margin inside a start off the edge; one margin and the template before an end off the
+/// edge, for a box at the start edge; `None` for a box across the whole axis or a crop outside the
+/// base. Whether the recording grows that crop back into the box is [`grown`]'s to say.
+fn axis_crop(start: i64, length: i64, template: i64, frame: i64) -> Option<i64> {
+    let margin = i64::from(LAB_RECORDING_DEFAULT_SEARCH_MARGIN);
+    let end = start + length;
+    let crop = if start > 0 {
+        start + margin
+    } else if start == 0 && end < frame {
+        end - margin - template
+    } else {
+        return None;
+    };
+    (0..=frame - template).contains(&crop).then_some(crop)
+}
+
+/// The recording's default box (`default_search`) of a crop of `template` size at (`x`, `y`) in
+/// the base `base`; `None` for a length outside the recording's range.
+fn grown(x: i64, y: i64, template: (u32, u32), base: (u32, u32)) -> Option<RecordRect> {
+    let crop = RecordRect {
+        x: i32::try_from(x).ok()?,
+        y: i32::try_from(y).ok()?,
+        width: i32::try_from(template.0).ok()?,
+        height: i32::try_from(template.1).ok()?,
+    };
+    Some(default_search(
+        crop,
+        RecordSize {
+            width: base.0,
+            height: base.1,
+        },
+    ))
 }
 
 /// A declared rectangle of the base.
