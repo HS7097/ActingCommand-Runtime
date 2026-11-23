@@ -728,6 +728,7 @@ fn refresh_state(
         failure_streak: Some(failure_streak),
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 
@@ -1610,6 +1611,7 @@ fn succeeded(task_id: &str, instance_id: &str, dispatched_at: u64) -> TaskRuntim
         failure_streak: Some(0),
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 

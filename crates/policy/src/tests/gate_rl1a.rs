@@ -491,6 +491,7 @@ fn grid_facts_after_a_run() -> EvaluationFacts {
         failure_streak: None,
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     });
     facts
 }

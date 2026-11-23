@@ -971,6 +971,24 @@ interrupted settlement in a row is lifted at the next start of this Runtime. The
 no manual lift; `actingctl task-run` is not gated by the policy and does not lift a
 suspension.
 
+What such a failure leaves behind for a clock (#477 CK-2, since 0.12.81;
+[v012-register.md](v012-register.md) §1.516; [scheduling/README.md](scheduling/README.md),
+"Clock Sources"): when the pair's latest dispatch settled as interrupted (its run started or
+not), or failed and paused its pair, whatever the failure's class (every `pause_cause` but
+`sensitive_task`: a screen the package never recorded, the common case, included; not a run over
+its runtime budget that reported its success), and the task is not `sensitive`, the clock
+occurrence it answered stays owed, until the activity day that dispatch's admission was counted in
+ends. So the pair is due on it while it is held: its
+`policy_task_paused` is its deferral at every evaluation (a lift check each time, measuring a
+package at most once per interval, as above), and its occurrence is recorded refused once. A
+lift, or the first interrupted settlement in a row, which holds nothing, lets it run on that same
+occurrence at the next evaluation instead of at the next occurrence: a package repaired after a
+screen it never recorded runs the same day. A lift in a later activity day finds the occurrence
+served and waits for the next one. A sensitive task's failure or interrupted settlement, which
+pause too, and a failure scheduled for a retry or continued serve their occurrence as before:
+after a sensitive task's lift, and after the restart that lifts its first interruption, the pair
+waits for its next occurrence.
+
 Workflow #490 FR-1 (since 0.12.81, register §1.517): **a pair of the fact refresh is never held
 by a pause.** A run of the reserved task `_fact_refresh` ([scheduling/README.md](scheduling/README.md),
 "Fact refresh") settles as every run does: a severe failure, the first one included, records

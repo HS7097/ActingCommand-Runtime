@@ -1080,6 +1080,7 @@ fn earlier_run(task_id: &str, alias: &str) -> TaskRuntimeSnapshot {
         failure_streak: None,
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 
@@ -1099,6 +1100,7 @@ fn lead_state() -> TaskRuntimeSnapshot {
         failure_streak: None,
         expected_runtime_ms: None,
         expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 

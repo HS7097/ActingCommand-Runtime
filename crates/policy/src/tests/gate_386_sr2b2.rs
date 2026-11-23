@@ -77,6 +77,7 @@ fn evaluate(owed: &OwedReruns) -> PolicyEvaluation {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         }],
         instances: vec![instance.clone()],
         priority_offsets: Vec::new(),

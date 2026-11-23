@@ -544,6 +544,7 @@ impl World {
             failure_streak: None,
             expected_runtime_ms: None,
             expected_runtime_runs: None,
+            clock_owed: false,
         });
         if let Some(reading) = self.readings.get_mut(intent.instance_id.as_str()) {
             *reading -= spent;

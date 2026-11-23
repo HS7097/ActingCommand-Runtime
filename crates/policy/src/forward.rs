@@ -695,6 +695,8 @@ fn update_task_states(
             state.eligible_since_unix_ms = None;
             state.terminal_state = Some(TaskTerminalState::Succeeded);
             state.completed_window = None;
+            // #477 CK-2: a simulated success serves the clock occurrence it answered.
+            state.clock_owed = false;
         } else {
             states.push(TaskRuntimeSnapshot {
                 task_id: intent.task_id.clone(),
@@ -707,6 +709,7 @@ fn update_task_states(
                 failure_streak: None,
                 expected_runtime_ms: None,
                 expected_runtime_runs: None,
+                clock_owed: false,
             });
         }
     }
