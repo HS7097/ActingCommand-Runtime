@@ -459,7 +459,7 @@ most two hours, from the latest failed dispatch and never past the activity wind
 the defaults 20, 40 and 80 minutes after the third, fourth and fifth failure in a row and two
 hours from the sixth on; a successful scheduled run of another task on the instance, dispatched
 after that failed dispatch, ends it at once. A `failure_backoff_ms` of 0 gives no backoff and no rest (the arithmetic saturates):
-`daily_limit` then bounds the readings.
+`min_interval_ms` and `daily_limit` then bound the readings.
 Workflow #384 D2-S5 reads `fact_refresh.overdue_ms`
 at every policy cycle: how long one instance's candidates may wait for one key before the
 transition recorder reports `fact_reader_overdue`; it has no default, so without it nothing is

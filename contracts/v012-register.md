@@ -47649,7 +47649,8 @@ object's schema) are not touched.
 **At deploy.** Nothing to configure. An installation whose fact refresh pair an old severe failure
 paused starts refreshing at the first evaluation after this version starts. A reader that fails in
 a row is tried again after 20, 40 and 80 minutes and then every two hours, within its daily limit,
-and at once after another task's successful run on its instance.
+and, after another task's successful run on its instance, as soon as its ordinary backoff and its
+minimum interval have passed.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

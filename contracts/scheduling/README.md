@@ -844,7 +844,10 @@ read it, and the candidate waits.
   the row beyond the threshold (0 at it), at most 7 200 000 ms (two hours),
   counted from its latest failed dispatch (the admission instant of the pair's
   latest dispatch, `last_dispatched_unix_ms` of its task snapshot) and never
-  past the end of the current activity window, waking at the rest's end: with
+  past the end of the current activity window, waking at the rest's end (the
+  earliest instant it may run again: after a long run, with a minimum interval
+  longer than the rest, or with a backoff above two hours, the cooldown gate
+  that follows names the later, real one): with
   the shipped settings 20 minutes after the third failure in a row, 40 after
   the fourth, 80 after the fifth and two hours from the sixth on. The rest ends
   by itself at its end, and at once when a scheduled run of another task of
@@ -853,7 +856,8 @@ read it, and the candidate waits.
   admitted dispatch of the scheduler, no direct run, recovery ladder rung or
   return-home run). A failure of an earlier activity day rests nothing. The
   arithmetic saturates, and a `failure_backoff_ms` of 0 gives no rest: the
-  daily limit then bounds R_I, as it does below the threshold. Then its
+  minimum interval and the daily limit then bound R_I, as they do below the
+  threshold. Then its
   dispatches in the current activity day reaching `daily_limit` (a limit,
   waking when the activity day's window ends); an unavailable instance, a host
   that cannot take its load (for now); and `task_cooldown_active` until both
