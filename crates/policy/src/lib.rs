@@ -206,6 +206,9 @@ mod tests {
     // pools it produces that declare no valuation.
     mod gate_455_b1;
 
+    // #477 CK-1 (0.12.83; register §1.510): a clock that occurs once a month.
+    mod gate_477_ck1;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

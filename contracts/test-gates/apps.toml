@@ -3022,3 +3022,11 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_477_cv2b::cv2b_fr1_a_broken_element_past_64_entries_refuses_the_adoption",
 ]
 incident = ["#477 CV-2b"]
+
+# #477 CK-1 (0.12.83; register §1.510; brief rd-1123/brief-477-ck1.md, its ruling 4 and its test 5; contracts/standard-pack-schedule.md, "`requires`"; contracts/actingd-check-config.md, config_manifest), actingd's half: this build's configuration manifest names clock_monthly among its enabled subsystems, and the composer given those subsystems composes a schedule.json that lists it and whose rule's clock is monthly (day 1 at 04:00, nine hours ahead of UTC), the composed task holding the monthly clock
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_477_ck1::ck1_this_runtime_names_clock_monthly_and_composes_a_file_that_requires_it",
+]
+incident = ["#477 CK-1"]

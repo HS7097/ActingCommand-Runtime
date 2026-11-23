@@ -2321,6 +2321,17 @@ fn validate_schedule(
                 && (1..=7).contains(weekday)
                 && *minute_of_day <= 1439
         }
+        // #477 CK-1 (register §1.510): as the weekly kind, a day every month has in its place.
+        ClockSchedule::Monthly {
+            clock_source,
+            day_of_month,
+            minute_of_day,
+        } => {
+            validate_clock_source(clock_source, path, map, descriptor, diagnostics);
+            !matches!(clock_source, ClockSource::Local)
+                && (1..=crate::MAX_CLOCK_DAY_OF_MONTH).contains(day_of_month)
+                && *minute_of_day <= 1439
+        }
     };
     if !valid {
         diagnostics.push(map.diagnostic(

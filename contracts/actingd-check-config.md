@@ -406,6 +406,14 @@ The members of `report`:
       requires it, so it is composed only by a Runtime that names this row. The
       installer's plan reads the name as it reads every name `requires` lists
       ([install-cli.md](install-cli.md), "Subsystems the schedules require").
+    - `clock_monthly` (#477 CK-1, since 0.12.83, register §1.510): always on
+      (`config_subsystem_always_on`). The Runtime reads a clock of the kind
+      `monthly`, minute M of day D (1 to 28) of every calendar month in its
+      source's local time ([scheduling/README.md](scheduling/README.md),
+      "Clock Sources"); a `schedule.json` whose rule's clock or timeline event
+      writes one requires it, so it is composed only by a Runtime that names
+      this row, and the installer's plan reads the name as it reads every
+      other.
     - `consumption_fact` (#428 SCHED-C1f1, since 0.12.54, register §1.303):
       always on (`config_subsystem_always_on`). The Runtime reads a `consumes`
       entry's `amount` written as a fact with a fallback, one run's amount read

@@ -755,7 +755,30 @@ pub enum ClockSchedule {
         weekday: u8,
         minute_of_day: u16,
     },
+    /// #477 CK-1 (register §1.510): minute `minute_of_day` (0 to 1439) of day `day_of_month` (1 to
+    /// [`MAX_CLOCK_DAY_OF_MONTH`], a day every month has) of every month of the Gregorian
+    /// calendar, in the clock source's local time, reached as [`ClockSchedule::Weekly`] reaches
+    /// it. A `schedule.json` that writes one names [`CLOCK_MONTHLY_SUBSYSTEM`] in `requires`.
+    Monthly {
+        clock_source: ClockSource,
+        day_of_month: u8,
+        minute_of_day: u16,
+    },
 }
+
+/// #477 CK-1 (register §1.510): the `kind` of [`ClockSchedule::Monthly`], as written.
+pub const CLOCK_MONTHLY_KIND: &str = "monthly";
+
+/// #477 CK-1: the last day of the month a monthly clock may name (the first is 1): 29, 30 and 31
+/// are not days of every month.
+pub const MAX_CLOCK_DAY_OF_MONTH: u8 = 28;
+
+/// #477 CK-1 (register §1.510; `contracts/standard-pack-schedule.md`, "`requires`"): the
+/// configuration-manifest subsystem of a Runtime that reads a clock of the kind `monthly`; a
+/// `schedule.json` whose rule's clock or timeline event writes one names it in `requires`. No
+/// Runtime of 0.12.82 names it, so every Runtime of that version refuses such a file
+/// (`schedule_requires_missing`) and keeps the game's last good rules.
+pub const CLOCK_MONTHLY_SUBSYSTEM: &str = "clock_monthly";
 
 /// Selects the independently pinned clock coordinate used by a schedule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1819,6 +1842,41 @@ mod tests {
         }
     }
 
+    /// #477 CK-1: the `kind` of each variant of [`ClockSchedule`], in its order, as it is written.
+    fn clock_schedule_kinds() -> Vec<serde_json::Value> {
+        let source = ClockSource::Local;
+        [
+            ClockSchedule::Interval {
+                clock_source: source.clone(),
+                every_ms: 1,
+                anchor_ms: 0,
+            },
+            ClockSchedule::At {
+                clock_source: source.clone(),
+                at_ms: 0,
+            },
+            ClockSchedule::Daily {
+                clock_source: source.clone(),
+                minutes_of_day: vec![0],
+            },
+            ClockSchedule::Weekly {
+                clock_source: source.clone(),
+                weekday: 1,
+                minute_of_day: 0,
+            },
+            ClockSchedule::Monthly {
+                clock_source: source,
+                day_of_month: 1,
+                minute_of_day: 0,
+            },
+        ]
+        .iter()
+        .map(|schedule| {
+            serde_json::to_value(schedule).expect("a clock schedule serializes")["kind"].clone()
+        })
+        .collect()
+    }
+
     #[test]
     fn published_schema_bounds_match_compiler_constants() {
         let [(_, v1), (_, v2)] = published_schema_sets();
@@ -1884,6 +1942,26 @@ mod tests {
                     "{set}"
                 );
             }
+            // #477 CK-1 (register §1.510): the published kinds are the enum's, in its order, and
+            // the monthly kind's members and bounds are the compiler's.
+            let kinds = schedules
+                .iter()
+                .map(|schedule| schedule["properties"]["kind"]["const"].clone())
+                .collect::<Vec<_>>();
+            assert_eq!(kinds, clock_schedule_kinds(), "{set}");
+            let monthly = &schedules[4];
+            assert_eq!(
+                monthly["required"],
+                serde_json::json!(["kind", "clock_source", "day_of_month", "minute_of_day"]),
+                "{set}"
+            );
+            assert_eq!(monthly["additionalProperties"], false, "{set}");
+            let day_of_month = &monthly["properties"]["day_of_month"];
+            assert_eq!(day_of_month["minimum"], 1, "{set}");
+            assert_eq!(day_of_month["maximum"], MAX_CLOCK_DAY_OF_MONTH, "{set}");
+            let minute_of_day = &monthly["properties"]["minute_of_day"];
+            assert_eq!(minute_of_day["minimum"], 0, "{set}");
+            assert_eq!(minute_of_day["maximum"], 1439, "{set}");
             for variant in [1, 2] {
                 let properties = &common["$defs"]["clockSource"]["oneOf"][variant]["properties"];
                 assert_eq!(

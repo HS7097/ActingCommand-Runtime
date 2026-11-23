@@ -8483,7 +8483,8 @@ fn past_occurrences(
         ClockSchedule::Interval { clock_source, .. }
         | ClockSchedule::At { clock_source, .. }
         | ClockSchedule::Daily { clock_source, .. }
-        | ClockSchedule::Weekly { clock_source, .. } => clock_source,
+        | ClockSchedule::Weekly { clock_source, .. }
+        | ClockSchedule::Monthly { clock_source, .. } => clock_source,
     };
     let clock = ClockCoordinate::new(source, time)?;
     let mut found = Vec::new();
@@ -8521,7 +8522,8 @@ fn schedule_occurrences(
         ClockSchedule::Interval { clock_source, .. }
         | ClockSchedule::At { clock_source, .. }
         | ClockSchedule::Daily { clock_source, .. }
-        | ClockSchedule::Weekly { clock_source, .. } => clock_source,
+        | ClockSchedule::Weekly { clock_source, .. }
+        | ClockSchedule::Monthly { clock_source, .. } => clock_source,
     };
     let clock = ClockCoordinate::new(source, time)?;
     schedule_occurrences_on_clock(schedule, &clock)
@@ -8565,6 +8567,16 @@ fn schedule_occurrences_on_clock(
             *minute_of_day,
             clock.now_ms,
         ),
+        ClockSchedule::Monthly {
+            day_of_month,
+            minute_of_day,
+            ..
+        } => monthly_occurrences(
+            clock.utc_offset_minutes,
+            *day_of_month,
+            *minute_of_day,
+            clock.now_ms,
+        ),
     };
     Ok((
         occurrences
@@ -8591,7 +8603,8 @@ fn invalidation_occurrences(
         ClockSchedule::Interval { clock_source, .. }
         | ClockSchedule::At { clock_source, .. }
         | ClockSchedule::Daily { clock_source, .. }
-        | ClockSchedule::Weekly { clock_source, .. } => clock_source,
+        | ClockSchedule::Weekly { clock_source, .. }
+        | ClockSchedule::Monthly { clock_source, .. } => clock_source,
     };
     let clock = ClockCoordinate::new(source, time)?;
     let at = |unix_ms: u64| -> PolicyEvaluationResult<(Option<u64>, Option<u64>)> {
@@ -8767,6 +8780,60 @@ fn weekly_occurrences(
         local_to_unix(latest_local, offset_ms),
         local_to_unix(next_local, offset_ms),
     )
+}
+
+/// #477 CK-1 (register §1.510): the latest occurrence at or before `now` and the next one after it
+/// of minute `minute_of_day` of day `day_of_month` (1 to 28) of every month, on the local time
+/// `offset_minutes` ahead of the coordinate, as [`weekly_occurrences`] reaches its local time.
+fn monthly_occurrences(
+    offset_minutes: i16,
+    day_of_month: u8,
+    minute_of_day: u16,
+    now: u64,
+) -> (Option<u64>, Option<u64>) {
+    const DAY_MS: i128 = 86_400_000;
+    let offset_ms = i128::from(offset_minutes) * 60_000;
+    let local_now = i128::from(now) + offset_ms;
+    let month = month_of_day(local_now.div_euclid(DAY_MS));
+    let at_month = |index: i128| {
+        day_of_month_in(index, i128::from(day_of_month)) * DAY_MS
+            + i128::from(minute_of_day) * 60_000
+    };
+    let this_month = at_month(month);
+    let (latest_local, next_local) = if this_month <= local_now {
+        (this_month, at_month(month + 1))
+    } else {
+        (at_month(month - 1), this_month)
+    };
+    (
+        local_to_unix(latest_local, offset_ms),
+        local_to_unix(next_local, offset_ms),
+    )
+}
+
+/// #477 CK-1: the month of the Gregorian calendar the day `day` (days since 1970-01-01) lies in,
+/// counted as `year * 12 + month - 1` (month 1 to 12): a year counted from 1 March, so February
+/// is its last month, in eras of 400 years (146 097 days).
+fn month_of_day(day: i128) -> i128 {
+    let shifted = day + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    (era * 400 + year_of_era) * 12 + month_from_march + 2
+}
+
+/// #477 CK-1: the day (days since 1970-01-01) of day `day` (1 to 28) of the month `month`, counted
+/// as [`month_of_day`] counts it, whose inverse it is.
+fn day_of_month_in(month: i128, day: i128) -> i128 {
+    let month_from_march = (month + 10).rem_euclid(12);
+    let year = (month - month_from_march - 2).div_euclid(12);
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let day_of_year = (153 * month_from_march + 2) / 5 + day - 1;
+    era * 146_097 + year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year - 719_468
 }
 
 fn local_to_unix(local_ms: i128, offset_ms: i128) -> Option<u64> {

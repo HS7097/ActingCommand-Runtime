@@ -243,6 +243,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #477 CK-1 (register §1.510): this build reads a clock of the kind `monthly` (a minute of
+        // a day of every calendar month); a `schedule.json` whose rule's clock or timeline event
+        // writes one requires it, so an older Runtime refuses the file instead of meeting a kind
+        // its compiler does not know.
+        subsystem(
+            actingcommand_policy::CLOCK_MONTHLY_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCHED-C1f1 (register §1.303): this build reads a `consumes` entry's `amount` written as
         // a fact with a fallback (one run's amount read from the instance's fact at each
         // evaluation); a `schedule.json` whose rule writes one requires it, so an older Runtime

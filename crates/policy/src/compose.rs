@@ -1707,6 +1707,24 @@ fn read_game(
             ),
         ));
     }
+    // #477 CK-1 (register §1.510): likewise a clock of the kind `monthly`, a rule's or a timeline
+    // event's, the first in file order. No Runtime of 0.12.82 names the subsystem, so every such
+    // Runtime refuses the file at `requires` before its compiler would meet a kind it cannot read.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::CLOCK_MONTHLY_SUBSYSTEM)
+        && let Some(pointer) = first_monthly_clock(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a clock of the kind {} needs requires to name {}",
+                crate::CLOCK_MONTHLY_KIND,
+                crate::CLOCK_MONTHLY_SUBSYSTEM
+            ),
+        ));
+    }
     // UPD-1 fix round 5 (`standard-pack-schedule.md`, "The store update rule"): no timeline event
     // invalidates the Runtime's application update fact. A reset that cleared it would leave the
     // store update rule's trigger reading the key missing (Unknown), so the rule would never run,
@@ -2114,6 +2132,61 @@ fn first_reset_exclusion(schedule: &StandardPackSchedule) -> Option<String> {
         .iter()
         .position(|event| event.body.contains_key(EXCLUDES_FACT_PREFIXES))
         .map(|index| format!("/timeline/{index}/{EXCLUDES_FACT_PREFIXES}"))
+}
+
+/// #477 CK-1 (register §1.510): whether a clock predicate's or a timeline event's `schedule`, as
+/// written, is of the kind `monthly` ([`crate::CLOCK_MONTHLY_KIND`]), which a `schedule.json`
+/// names [`crate::CLOCK_MONTHLY_SUBSYSTEM`] for. The compiler checks the rest.
+pub fn is_monthly_clock_schedule(schedule: Option<&Value>) -> bool {
+    schedule
+        .and_then(|schedule| schedule.get("kind"))
+        .and_then(Value::as_str)
+        == Some(crate::CLOCK_MONTHLY_KIND)
+}
+
+/// #477 CK-1: the pointer of the first `schedule` of the kind `monthly`, in the order rules (their
+/// `trigger`, then `feedback_stop`, through `all`, `any` and `not`) then timeline events. `None`
+/// when the file writes none.
+fn first_monthly_clock(schedule: &StandardPackSchedule) -> Option<String> {
+    let in_rules = schedule.rules.iter().enumerate().find_map(|(index, rule)| {
+        ["trigger", "feedback_stop"].into_iter().find_map(|member| {
+            rule.body
+                .get(member)
+                .and_then(|node| monthly_clock_in(node, &format!("/rules/{index}/{member}")))
+        })
+    });
+    in_rules.or_else(|| {
+        schedule
+            .timeline
+            .iter()
+            .position(|event| is_monthly_clock_schedule(event.body.get("schedule")))
+            .map(|index| format!("/timeline/{index}/schedule"))
+    })
+}
+
+/// #477 CK-1: the pointer of the first monthly clock's `schedule` at or below the predicate node
+/// `node` at `pointer`, through the children of `all`, `any` (`predicates`) and `not`
+/// (`predicate`).
+fn monthly_clock_in(node: &Value, pointer: &str) -> Option<String> {
+    let Value::Object(members) = node else {
+        return None;
+    };
+    if members.get("kind").and_then(Value::as_str) == Some("clock")
+        && is_monthly_clock_schedule(members.get("schedule"))
+    {
+        return Some(format!("{pointer}/schedule"));
+    }
+    let in_children = match members.get("predicates") {
+        Some(Value::Array(children)) => children.iter().enumerate().find_map(|(index, child)| {
+            monthly_clock_in(child, &format!("{pointer}/predicates/{index}"))
+        }),
+        _ => None,
+    };
+    in_children.or_else(|| {
+        members
+            .get("predicate")
+            .and_then(|child| monthly_clock_in(child, &format!("{pointer}/predicate")))
+    })
 }
 
 /// The timeline event member whose prefixes an occurrence invalidates.

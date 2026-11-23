@@ -114,6 +114,10 @@ mod gate_455_p1;
 // `schedule.json` that requires it with the root's `pack-catalog.json`.
 #[cfg(test)]
 mod gate_477_cv2;
+// Test-only: #477 CK-1, this build names `clock_monthly`, so it composes a `schedule.json` whose
+// rule's clock is monthly.
+#[cfg(test)]
+mod gate_477_ck1;
 
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
