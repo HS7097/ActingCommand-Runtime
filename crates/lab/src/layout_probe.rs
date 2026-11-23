@@ -43,7 +43,7 @@ use crate::readonly::{load_evaluator, load_page_detector, recognition_scene};
 use crate::{Lab, LabPorts, ReadonlyRecognitionInput, package_base};
 use actingcommand_contract::{CaptureExtent, DisplayArea, DisplayScaleBy, LabError, LabResult};
 use actingcommand_display_adapter::{
-    DisplayMap, DisplayObservation, DisplayProblem, DisplayRule, Orientation,
+    DisplayMap, DisplayMapError, DisplayObservation, DisplayProblem, DisplayRule, Orientation,
 };
 use actingcommand_page_detector::{PageDefinition, PageDetector};
 use actingcommand_recognition::resample::{SCALE_IDENTITY_MILLI, resample_pixels};
@@ -438,8 +438,8 @@ impl ScaleFrame {
                 base.0, base.1, given.0, given.1
             )));
         };
-        if let Some(problem) = refused(base_extent, frame_extent) {
-            return Err(scene_size_unsupported(
+        let refusal = |problem: DisplayProblem| {
+            scene_size_unsupported(
                 problem,
                 given,
                 base,
@@ -449,9 +449,15 @@ impl ScaleFrame {
                      over its height is not below the base's; nothing was searched",
                     given.0, given.1, base.0, base.1
                 ),
-            ));
+            )
+        };
+        // A saved frame has no rotation, and the adapter answers a frame of the base's other
+        // orientation without one as a rotation unknown: the probe says the orientation itself.
+        if !Orientation::of(frame_extent).agrees_with(Orientation::of(base_extent)) {
+            return Err(refusal(DisplayProblem::OrientationMismatch));
         }
-        let map = DisplayMap::build(
+        // A frame lower than the base: the adapter's own refusal, `scale_below_base`.
+        let built = DisplayMap::build(
             base_extent,
             DisplayObservation {
                 frame: frame_extent,
@@ -461,14 +467,25 @@ impl ScaleFrame {
                 insets: None,
             },
             Some(BY_HEIGHT),
-        )
-        .map_err(|error| {
-            LabError::device(format!(
-                "the display adapter did not bring the {}x{} frame to the {}x{} base by its \
-                 height: {error:?}",
-                given.0, given.1, base.0, base.1
-            ))
-        })?;
+        );
+        let map = match built {
+            Ok(map) => map,
+            Err(DisplayMapError::Unresolved(unresolved)) => {
+                return Err(refusal(unresolved.problem));
+            }
+            Err(error) => {
+                return Err(LabError::device(format!(
+                    "the display adapter did not bring the {}x{} frame to the {}x{} base by its \
+                     height: {error:?}",
+                    given.0, given.1, base.0, base.1
+                )));
+            }
+        };
+        // A frame narrower than the base's ratio, which the adapter brings to the base's height
+        // all the same: the probe's own word, `ratio_below_base`.
+        if u64::from(given.0) * u64::from(base.1) < u64::from(base.0) * u64::from(given.1) {
+            return Err(refusal(DisplayProblem::RatioBelowBase));
+        }
         let target = map.scale_frame_extent();
         let size = (target.width(), target.height());
         let room = size.0.checked_sub(base.0).ok_or_else(|| {
@@ -502,21 +519,6 @@ impl ScaleFrame {
             room,
         })
     }
-}
-
-/// The word of a frame the probe does not take for the base `base`, in this order: the base's
-/// other orientation, lower than the base, narrower than the base's ratio; `None` for a frame it
-/// takes.
-fn refused(base: CaptureExtent, frame: CaptureExtent) -> Option<DisplayProblem> {
-    if !Orientation::of(frame).agrees_with(Orientation::of(base)) {
-        return Some(DisplayProblem::OrientationMismatch);
-    }
-    if frame.height() < base.height() {
-        return Some(DisplayProblem::ScaleBelowBase);
-    }
-    let across = u64::from(frame.width()) * u64::from(base.height());
-    let base_across = u64::from(base.width()) * u64::from(frame.height());
-    (across < base_across).then_some(DisplayProblem::RatioBelowBase)
 }
 
 /// The places a found mark is classed by (see the module header), in scale-frame pixels.
