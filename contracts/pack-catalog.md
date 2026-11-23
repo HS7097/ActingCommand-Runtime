@@ -168,7 +168,11 @@ marks:   limited: true, realization: true (absent: no mark)
   "The fixed value", "The limited mark", "The realization mark"). What the compiler refuses beside
   a rule's fixed value (`fixed_value_conflict`) the reader refuses beside a part's:
   `catalog_value_conflict` at `value`, beside the realization mark and beside a production of a
-  pool whose `valuation` `schedule.json` declares or leaves pending.
+  pool whose `valuation` `schedule.json` declares or leaves pending. Beside a production of a pool
+  without a valuation a value is accepted: such a pool counts in the rule's benefit only through a
+  goal that covers it (#455 B1, since 0.12.82; [scheduling/README.md](scheduling/README.md), "Fixed
+  values written in the pack", "A goal on what it produces"), so the rule never has two values;
+  what is accepted or refused, and the catalog's hash, are unchanged.
 - **The entry's own part** is present when the entry writes one of its members, and then writes
   `consumes` and `produces`; an entry may write none (a package whose rules differ, below).
 - **Per-rule parts** (`rules`, the coordinator's ruling 7 of 11-22): each keyed by the `rule_id` of

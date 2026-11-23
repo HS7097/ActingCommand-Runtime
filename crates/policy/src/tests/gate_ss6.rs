@@ -495,7 +495,9 @@ fn ss6_t7_a_task_that_declares_none_of_these_keeps_its_dispatch_chain() {
 // Work order test 8: incomplete declarations give no `run_cap`, and overflow-sized inputs neither
 // panic nor wrap.
 // - A goal-driven produced pool declared by `expected_amount_milli` (no integer per-run amount)
-//   with an open gap: allowance and gap are handed, `run_cap` is not.
+//   with an open gap: allowance and gap are handed. #455 B1 ruling 10 (register §1.518) changed
+//   this case: a goal never takes `run_cap` away, so `run_cap` is the least of the reserve's
+//   ⌊900 / 30⌋ = 30 runs and the goal's ⌈60·1000 / 5000⌉ = 12 (before: none).
 // - A reserved pool whose projection is unknown: no allowance and no `run_cap`.
 // - A projection of u64::MAX with a reserve of 0 and a consumption of 1: the allowance is
 //   u64::MAX and is recorded as the key table's largest integer, i64::MAX; the cap of u64::MAX
@@ -520,7 +522,7 @@ fn ss6_t8_incomplete_declarations_give_no_run_cap_and_overflow_neither_panics_no
     );
     assert_eq!(spend.spend_allowances, [(0, 900)], "{spend:?}");
     assert_eq!(spend.gaps_remaining, [(0, 60)], "{spend:?}");
-    assert_eq!(spend.run_cap, None, "{spend:?}");
+    assert_eq!(spend.run_cap, Some(12), "{spend:?}");
 
     let unknown = [view(POOL_A, 100, 30, None)];
     let spend = spend_values(&milli, Some(unknown.as_slice()), |_| 0, &[], |_| None);
