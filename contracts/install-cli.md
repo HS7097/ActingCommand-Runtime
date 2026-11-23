@@ -552,7 +552,19 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   not answer refuses `runtime_not_running`.
 - **The close**: `request-shutdown` and its wait (the owner record closed and the process
   gone) within `install.stop.shutdown_wait_ms`; nothing is killed (a wait that passes refuses
-  `runtime_stop_failed`). Just before `request-shutdown` S0's run-time instructions and the
+  `runtime_stop_failed`). Workflow #503 SD-1 (0.12.83, `contracts/v012-register.md` §1.525): a
+  refused `request-shutdown` whose outcome says when to ask again (`retry_after_ms`, which the
+  Runtime's `runtime_shutdown_settling` carries: lifecycle work still in flight, its settling
+  window open; [runtime-interface.md](runtime-interface.md), "A shutdown request that finds work
+  in flight") is asked again after that long, as long as the next ask comes before
+  `install.stop.shutdown_wait_ms` from the first has passed; the wait for the stop after an
+  accepted ask has its whole `install.stop.shutdown_wait_ms` from that ask (fix round 1), so a
+  shutdown accepted on a later ask, however late, is an ordinary close. Any other refusal,
+  and a settling answer whose retry would pass that time, fails the step at once
+  (`runtime_stop_failed` caused by the last answer, every earlier answer a `related` link of the
+  operation's result). The close step's evidence lists every ask and its answer (`asks`: each
+  refused one `{accepted: false, refusal, retry_after_ms}`, then `{accepted: true}`). Just
+  before `request-shutdown` S0's run-time instructions and the
   other parties' pauses are read again and journalled (what another session set or lifted
   during the drains is what the start restores), and (Workflow #454, 0.12.59) whether that
   Runtime is in its root's first epoch, from its program fact `config.start`, read with the

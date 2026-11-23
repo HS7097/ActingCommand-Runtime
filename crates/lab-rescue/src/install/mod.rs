@@ -211,6 +211,10 @@ mod gate_453_s5b;
 // schedules a start of it would read require.
 #[cfg(test)]
 mod gate_429_rb1;
+// Test-only: Workflow #503 SD-1, the close step asks again after a settling answer, within its
+// wait, and fails at once on any other refusal.
+#[cfg(test)]
+mod gate_503_sd1;
 
 pub(crate) use host::{Host, SystemHost};
 // Workflow #421 INST-1, watchdog row 7a″: what the watchdog and `actingctl start` read.

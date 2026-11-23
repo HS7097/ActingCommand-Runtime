@@ -942,4 +942,7 @@ outcome_keys! {
     // (`instance_entry_blocked_recovery_failed`); kept in codes mode. ----
     entry_recovery_end: vocab(entry_recovery_end),
     trigger_rule: name,
+    // ---- Workflow #503 SD-1 (register §1.525): what refused a shutdown request as busy
+    // (`runtime_shutdown_denied` with `runtime_code` `runtime_busy`); kept in codes mode. ----
+    shutdown_obstacle: vocab(shutdown_obstacle),
 }

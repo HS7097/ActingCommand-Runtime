@@ -263,9 +263,12 @@ pub(crate) trait RuntimeLink {
         owner_epoch: &str,
         revision: u64,
     ) -> Result<(), Outcome>;
-    /// The formal close (`request-shutdown`), then the wait until the owner record closed and
-    /// the process exited, at most `wait_ms`; nothing is killed. The terminal outcome is read
-    /// from the logs of `root`.
+    /// The formal close (`request-shutdown`), asked once, then the wait until the owner record
+    /// closed and the process exited, at most `wait_ms`; nothing is killed. The terminal outcome
+    /// is read from the logs of `root`. A refused request is the Runtime's refusal as its receipt's
+    /// outcome; Workflow #503 SD-1: one that carries `retry_after_ms` (`runtime_shutdown_settling`)
+    /// is asked again by the close step ([`super::hold::run_close`]), never here, each ask with
+    /// the whole `wait_ms` for the stop after it.
     fn shutdown(&self, root: &Path, state_root: &Path, wait_ms: u64) -> Result<Closed, Outcome>;
     /// The Runtime's report of its own start; `None` from a build that does not know the read.
     fn start_report(&self, state_root: &Path) -> Result<Option<Value>, Outcome>;
