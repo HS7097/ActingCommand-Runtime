@@ -257,8 +257,8 @@ reason set is unchanged.
 | --- | --- | --- |
 | `instance`, `valid_until_unix_ms`, `targets` (`0..=16`, `[]` withdraws), `id`, `condition` | as v1 | as v1 |
 | `resource` | the v1 pool checks; at most one target per resource in the document | as v1; `duplicate_id` @ `/targets/j/resource` |
-| `scale` | optional, `1..=2^53-1`: the gap step `S`; absent takes the pool's `valuation.scale`, so it is required when the pool declares no valuation | `out_of_range` / `missing_field` @ `/targets/i/scale` |
-| `importance_milli` | optional, `1..=1_000_000`: `I`; absent takes the pool's `valuation.gap.weight_milli`, so it is required when the pool declares no `gap` | `out_of_range` / `missing_field` @ `/targets/i/importance_milli` |
+| `scale` | optional, `1..=2^53-1`: the gap step `S`; absent takes the pool's `valuation.scale`, else (#455 B3-P, since 0.12.82) its `target_defaults.scale`, so it is required when the pool declares neither ("Who gives a goal its step and importance") | `out_of_range` / `missing_field` @ `/targets/i/scale` |
+| `importance_milli` | optional, `1..=1_000_000`: `I`; absent takes the pool's `valuation.gap.weight_milli`, else (#455 B3-P) its `target_defaults.importance_milli`, so it is required when the pool declares neither a `gap` nor `target_defaults` | `out_of_range` / `missing_field` @ `/targets/i/importance_milli` |
 | `rule` | optional, `shortfall_linear` only; absent takes the pool's `valuation.gap.rule`, and `shortfall_linear` without a gap block | `invalid_type` |
 | `apply.mode`, `apply.weight` | as v1 | as v1 |
 | `apply.manual_offset` | optional, `keep` or `supersede`, only in `override` mode; absent is `keep` | `invalid_value` @ `/targets/i/apply/manual_offset` in `adjust` mode; `invalid_type` for another value |
@@ -640,8 +640,10 @@ another request wrote with who set them:
   included), so no stored value is left that nobody can remove.
 - **A resource entry** of `goals.json` (`set` with `{at_least}`) and **an other target** (a name
   no entry has, `set` with `{resource, at_least}`): one target row, mode `adjust`, weight
-  `score_stage`, its step and importance the pool's valuation's (a pool whose valuation lacks
-  either is refused `pool_unvalued`), no tasks and no lifetime; it replaces the target on that pool
+  `score_stage`, its step and importance the pool's valuation's, or (#455 B3-P, since 0.12.82) its
+  `target_defaults` on a pool without a valuation, read at each evaluation and never written in the
+  row (a pool that gives neither is refused `pool_unvalued`; "Who gives a goal its step and
+  importance"), no tasks and no lifetime; it replaces the target on that pool
   whatever its id (the answer's `replaced_target_id`) and a target of the same id on another pool.
   `clear` removes the target and its task rows.
 - **Over a v2 policy** its targets become v3 targets with the policy's lifetime and no setter, as
@@ -803,11 +805,13 @@ each with the v2 document's lifetime as its own, weighs byte for byte as that v2
 identity aside. Entry rows are read by nothing yet.
 
 **Per evaluation.** Each target is resolved once for the instance against the active catalog:
-its pool (as v1), then `S = scale ?? valuation.scale` and `I = importance_milli ??
-valuation.gap.weight_milli` (the rule is `shortfall_linear`, the only one), then its named
-tasks (as v1), then its inventory in the time-validity projected facts (as v1). A left-out term
-whose pool no longer declares it (a catalog update removed `valuation` or `gap`) makes the
-target *unresolved*: it contributes no shortfall weight and says so, never silently zero.
+its pool (as v1), then `S = scale ?? valuation.scale ?? target_defaults.scale` and
+`I = importance_milli ?? valuation.gap.weight_milli ?? target_defaults.importance_milli` (#455
+B3-P, since 0.12.82: the third source; "Who gives a goal its step and importance"; the rule is
+`shortfall_linear`, the only one), then its named tasks (as v1), then its inventory in the
+time-validity projected facts (as v1). A left-out term whose pool no longer declares it (a catalog
+update removed `valuation` or `gap`, and wrote no `target_defaults`) makes the target
+*unresolved*: it contributes no shortfall weight and says so, never silently zero.
 
 A target without `tasks` *lapses* when the active catalog no longer supports it on the
 instance: its pool no longer resolves (`unknown_resource`, `resource_not_observable`,
@@ -835,7 +839,7 @@ target t (at most one per pool) of pool p:
       Γ_t = min(floor(I * g / S), 1_000_000)          ("capped" at the bound)
   otherwise (satisfied, pending, unresolved): Γ_t = 0
 W(k,p) = B_p + (k in scope(t) ? Γ_t : 0)             effective resource weight, <= 2_000_000
-Q_p    = p.valuation.scale, else t.scale
+Q_p    = p.valuation.scale, else t.scale, else p.target_defaults.scale (#455 B3-P)
 T(k,p) = floor(r(k,p) * W(k,p) / Q_p)
 F(k,p) = fractional remainder of r(k,p) * W(k,p) / Q_p for pools with an explicit expected effect; 0 otherwise
 R(k)   = min(sum of T(k,p) + floor(sum of F(k,p)), 1_000_000) ("capped" at the bound)
@@ -934,7 +938,9 @@ the coordinator's rulings of 11-23, not the owner's words). A task whose benefit
 [scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"), so this section
 weighs such a pool for it only through a target that covers it: `B_p` 0, `W(k,p) = Γ` and
 `Q_p = t.scale`, the target's own `scale` and `importance_milli`, which the entry requires for a
-pool without a valuation. Each such pool whose `W(k,p)` is above 0 (a known gap `g ≥ 1`) adds its
+pool without a valuation, or (#455 B3-P, since 0.12.82) the pool's `target_defaults` where the
+target carries none, from the same resolution ("Who gives a goal its step and importance").
+Each such pool whose `W(k,p)` is above 0 (a known gap `g ≥ 1`) adds its
 production term `r(k,p)·W(k,p)/Q_p` to the task's net benefit `V − cost`, with its share of the
 rounding bound; a satisfied, pending or unresolved target (`Γ = 0`) adds nothing, and no other
 pool it produces is read. So a goal on a pool without a valuation now moves the fixed-value
@@ -958,6 +964,38 @@ pool takes part, one's reading or line is unknown, a consumed amount per run tha
 An integer yield is bounded as before, and a task with no goal on what it produces is handed the
 `run_cap` of before. A target needs nothing new: its pool is observed by a fact under `inventory.`
 or `resource.` (or rows of a list), as every target's.
+
+## Who gives a goal its step and importance
+
+#455 B3-P (since 0.12.82; register §1.522; the coordinator's rulings of 11-23, not the owner's
+words). A v2 or v3 target's gap step `S` and importance `I` come from three sources, in this order,
+each number on its own:
+
+1. **the target's own** `scale` and `importance_milli`;
+2. **the pool's valuation**: `valuation.scale` and `valuation.gap.weight_milli`;
+3. **the pool's `target_defaults`**: `target_defaults.scale` and `target_defaults.importance_milli`
+   ([scheduling/README.md](scheduling/README.md), "A goal's step and importance on a pool without a
+   valuation"), which only a pool that writes no `valuation` (neither a block nor the pending
+   marker) may declare, so the second and the third never meet on one pool.
+
+The pool's part (the second and the third) is read in one place of the policy crate
+(`pool_target_terms`), from the catalogue in force at each check and each evaluation, and by every
+reader of a target's terms: the entry's check of a target (`target_terms`, for v2 and v3 documents
+and the goal page's edits), the evaluation's `Γ` (`target_terms`) and its `Q_p` (`weigh_production`:
+the pool's valuation, else the covering target's own `scale`, else the pool's defaults), so B1's goal
+term of a fixed-value task ("A goal on what a task with a fixed value produces") takes the same
+`S` and `I`; and `ResourceTargetView`'s `default_scale` / `default_importance_milli` (with
+`scale_required` / `importance_required` false). Nothing of it is copied into a stored goal: a goal
+set by name, or a target without the two numbers, keeps none in its row, so when a later catalogue
+changes a pool's `target_defaults` every goal already set weighs by the new numbers at the next
+evaluation, with nothing set again. Where none of the three gives a number the target is refused
+`missing_field` at its `scale` or `importance_milli` (the entry), the goal page answers
+`pool_unvalued` and the Lab's check of `goals.json` `goal_pool_unvalued`, as before.
+
+`target_defaults` makes nothing else of the pool valued: its base weight `B_p` stays 0, a fixed
+value beside its production is taken, a judged task that consumes it or produces it without a fixed
+value still has an unknown benefit (`valuation_missing`), its lines take no part, and a pool without
+the member reads, hashes and decides exactly as before.
 
 ## Choosing scale and importance
 
@@ -1081,8 +1119,9 @@ between the phases is named by `checked_catalog_hash`.
   `inventory.` fact and is in the instance's scope (else `resource_not_observable` or
   `resource_out_of_scope`), and some task of the instance produces at least one unit per run
   (else `unmapped_task`). `default_scale` / `default_importance_milli` are the pool valuation's
-  `scale` / `gap.weight_milli`; `scale_required` / `importance_required` say a target must
-  state its own. `observation` reads the inventory through the time-validity projection
+  `scale` / `gap.weight_milli`, else (#455 B3-P, since 0.12.82) its `target_defaults`' `scale` /
+  `importance_milli` ("Who gives a goal its step and importance"); `scale_required` /
+  `importance_required` say a target must state its own. `observation` reads the inventory through the time-validity projection
   exactly as a target condition does: `current` and `observed_at_unix_ms`, or `pending` with
   its reason. Without an active catalog both lists are empty and `catalog_hash` is absent.
   #455 P2 (since 0.12.79): a pool read from rows of a list is targetable under its list's key,

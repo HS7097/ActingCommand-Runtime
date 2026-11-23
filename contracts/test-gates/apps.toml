@@ -3030,3 +3030,11 @@ tests = [
     "actingcommand-actinglab-mcp::bin:actinglab-mcp::gate_392_dal0::dal0_t8_the_layout_probe_is_offered_as_ac_layout_probe",
 ]
 incident = ["#392 DA-L0"]
+
+# #455 B3-P fix round 1 (0.12.82; register §1.522; brief rd-1123/brief-455-b3p-fix1.md, item 3; contracts/actingd-check-config.md, the row pool_target_defaults): this build's assembled configuration manifest names pool_target_defaults, enabled, beside standard_pack_schedule, and the composer given those subsystems composes a schedule.json whose pool writes target_defaults (10 and 1000) and lists the subsystem in requires, the composed catalog's pool holding the two numbers
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_b3p::b3p_this_runtime_names_pool_target_defaults_and_composes_a_file_that_requires_it",
+]
+incident = ["#455 B3-P"]

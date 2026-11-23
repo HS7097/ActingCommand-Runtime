@@ -1130,6 +1130,27 @@ pub struct PoolSpec {
     /// which a capped episode begins. Absent, it is the capacity and the catalog keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_line: Option<PoolLine>,
+    /// #455 B3-P (register §1.522; V2 only): the step and the importance a resource target on the
+    /// pool takes when it carries none of its own ([`PoolTargetDefaults`]), written only on a pool
+    /// that writes no `valuation`. It makes nothing else of the pool valued. Absent, the catalog
+    /// keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_defaults: Option<PoolTargetDefaults>,
+}
+
+/// #455 B3-P (register §1.522; `contracts/scheduling/README.md`, "A goal's step and importance on
+/// a pool without a valuation"): a pool's `target_defaults`, the gap step `S` and the importance `I`
+/// a resource target on the pool takes when it carries none of its own, after the target's own and
+/// a valuation's (the pool writes none), at every evaluation from the catalog in force. Both are
+/// required, within the goal document's bounds of a target's own: `scale` in `1..=2^53 − 1`,
+/// `importance_milli` in `1..=1 000 000`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolTargetDefaults {
+    /// `S`, the gap step.
+    pub scale: u64,
+    /// `I`, extra milli per produced step for each missing step `S`.
+    pub importance_milli: u64,
 }
 
 impl PoolSpec {
@@ -1358,6 +1379,13 @@ pub const MAX_POOL_LIST_ROW_FACTOR: u64 = 1_000_000;
 /// `requires`. No Runtime of 0.12.78 names it, so every Runtime of that version refuses such a
 /// file (`schedule_requires_missing`) and keeps the game's last good rules.
 pub const POOL_LIST_ROWS_SUBSYSTEM: &str = "pool_list_rows";
+
+/// #455 B3-P (register §1.522; `contracts/standard-pack-schedule.md`, "`requires`"): the
+/// configuration-manifest subsystem of a Runtime that reads a pool's `target_defaults`; a
+/// `schedule.json` whose pool writes it names it in `requires`. No Runtime of 0.12.81 names it, so
+/// every Runtime of that version refuses such a file (`schedule_requires_missing`) and keeps the
+/// game's last good rules.
+pub const POOL_TARGET_DEFAULTS_SUBSYSTEM: &str = "pool_target_defaults";
 
 /// Workflow #477 CV-2 (register §1.508; `contracts/standard-pack-schedule.md`, "`requires`"): the
 /// configuration-manifest subsystem of a Runtime whose composer takes a game root's business part
