@@ -3772,10 +3772,15 @@ fn timed_replay(suspended: bool) -> Replay {
 }
 
 /// #486 ASLEEP-4: a person's self-check of the replay instance (`actingctl selfcheck`; a
-/// placement's runs the same request): its `failure_code`.
-fn self_check_failure(host: &RuntimeHost) -> Option<String> {
+/// placement's runs the same request) at `unix_ms`, the Runtime clock moved there first (as
+/// [`Sleepy::self_check`]): its `failure_code`. Fix round 1: a check that withdraws the instance's
+/// availability publishes `session.instance.available` at the clock's time, which must be later than
+/// the start's publication of it, as every later check is in production.
+fn self_check_failure(replay: &Replay, unix_ms: u64) -> Option<String> {
+    replay.set_time(unix_ms);
     let ids = IdentifierIssuer::new().expect("identifier issuer");
-    let receipt = host
+    let receipt = replay
+        .host
         .process_request_for_test(
             &runtime_request(
                 &ids,
@@ -4062,7 +4067,7 @@ fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
     // says it).
     replay.state.emulator.script_read(stopped_state());
     assert_eq!(
-        self_check_failure(&replay.host).as_deref(),
+        self_check_failure(&replay, at(1, 6, 20)).as_deref(),
         Some(HostCode::InstanceNotRunning.as_str()),
         "the self-check answers the stopped emulator"
     );
@@ -4077,7 +4082,7 @@ fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
     let replay = replay.restart(at(1, 7, 1));
     replay.state.emulator.script_read(stopped_state());
     assert_eq!(
-        self_check_failure(&replay.host).as_deref(),
+        self_check_failure(&replay, at(1, 7, 5)).as_deref(),
         Some(HostCode::InstanceNotRunning.as_str()),
         "the self-check after the start answers the stopped emulator"
     );
@@ -4089,12 +4094,16 @@ fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
 
     // An instance whose emulator is stopped for another reason (its idle action took nothing): the
     // self-check records the step's `runtime.failed` and the preparation's
-    // `instance_preparation_finished` with `instance_not_running`, as before.
+    // `instance_preparation_finished` with `instance_not_running`, as before. Fix round 1: ten
+    // minutes after its start, so the check's withdrawal of the availability the start published is
+    // later than that publication (at the start's own millisecond it was refused
+    // `fact_observation_not_newer`, which the check's preparation does not survive: the request
+    // latched the Runtime).
     let awake = Replay::start(at(1, 6, 0));
     let from = head(&awake.host);
     awake.state.emulator.script_read(stopped_state());
     assert_eq!(
-        self_check_failure(&awake.host).as_deref(),
+        self_check_failure(&awake, at(1, 6, 10)).as_deref(),
         Some(HostCode::InstanceNotRunning.as_str()),
         "the self-check answers the stopped emulator"
     );
