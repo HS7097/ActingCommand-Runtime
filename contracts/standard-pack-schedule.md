@@ -211,6 +211,22 @@ target build's enabled subsystems, names one by one, so it covers `rule_variable
 a rollback or an update to a build that does not name it is refused while a game's `schedule.json`
 or a fragment of the active generation lists it.
 
+#477 CK-1 (register §1.510, since 0.12.83). A rule whose `trigger` or `feedback_stop` holds a
+`clock` of the kind `monthly`, or a timeline event whose `schedule` is one (minute M of day D of
+every calendar month, [scheduling/README.md](scheduling/README.md), "Clock Sources"), requires
+`clock_monthly`, alike: the composer refuses a file that writes one while `requires` does not name
+it, Runtime and resource tools alike, `schedule_invalid` at the first such `schedule` in the order
+rules (their `trigger`, then `feedback_stop`, through `all`, `any` and `not`) then timeline events
+(for example `/rules/0/trigger/predicates/1/schedule`, `/timeline/0/schedule`). A Runtime names
+`clock_monthly` in `config.subsystems`, always on, from 0.12.83; given subsystems that do not name
+it (a Runtime of 0.12.82 or older) the composer refuses the file at `requires`,
+`schedule_requires_missing` at that entry, before its compiler would meet the kind it does not know,
+and the workbench keeps the game's last good rules as for any refused file. The installer's plan of
+Workflow #429 RB-1 covers `clock_monthly` with no change: a rollback or an update to a build that
+does not name it is refused while a game's `schedule.json` or a fragment of the active generation
+lists it. `standard-pack adopt` adds it to `requires` when the rule it writes holds such a clock.
+A clock of another kind needs no subsystem, as before.
+
 SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
@@ -711,7 +727,8 @@ pure: its caller reads the packages.
    `target_defaults`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
    writes `max_queue_wait_ms`, Workflow #500 SV-2 (0.12.81): `rule_variables` when a rule carries
-   `variables`,
+   `variables`, #477 CK-1 (0.12.83): `clock_monthly` when a rule's clock or a timeline event's
+   schedule is of the kind `monthly`,
    `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event

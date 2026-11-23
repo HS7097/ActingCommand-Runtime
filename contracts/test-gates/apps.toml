@@ -3030,3 +3030,12 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_b3p::b3p_this_runtime_names_pool_target_defaults_and_composes_a_file_that_requires_it",
 ]
 incident = ["#455 B3-P"]
+
+# #477 CK-1 (0.12.83; register §1.510; brief rd-1123/brief-477-ck1.md, its ruling 4 and its test 5; contracts/standard-pack-schedule.md, "`requires`"; contracts/actingd-check-config.md, config_manifest), actingd's half: this build's configuration manifest names clock_monthly among its enabled subsystems, and the composer given those subsystems composes a schedule.json that lists it and whose rule's clock is monthly (day 1 at 04:00, nine hours ahead of UTC), the composed task holding the monthly clock; fix round 1 (brief rd-1123/brief-477-ck1-fix1.md, item 2b; contracts/standard-pack-authoring.md): standard-pack adopt's first adoption with a decision whose trigger is that monthly clock writes the rule with it and answers requires_added benefit_fixed_value then clock_monthly
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_477_ck1::ck1_this_runtime_names_clock_monthly_and_composes_a_file_that_requires_it",
+    "actingcommand-resource-tooling::lib::gate_464_p1::ck1_an_adopted_rule_on_a_monthly_clock_adds_clock_monthly_to_requires",
+]
+incident = ["#477 CK-1"]
