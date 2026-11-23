@@ -36,7 +36,7 @@ use actingcommand_contract::{
     RuntimeErrorCode,
 };
 use actingcommand_policy::{
-    CandidateEligibility, DecisionReason, DispatchIntent, EligibilityState, EvaluationFacts,
+    CandidateEligibility, DecisionReason, EligibilityState, EvaluationFacts,
     FactScalar as PolicyFactScalar, FactValue as PolicyFactValue, InstanceSnapshot,
     SchedulingDecisionState, SchedulingRulePolicyCode, ScopeSelector, TaskDecision,
 };
@@ -576,17 +576,20 @@ impl CycleSchedule {
         }
     }
 
-    /// Position 5: the deferral of `intent` when the instance's pack schedule closes the package
-    /// its task runs, `pack_schedule_closed` with the package and, when the covering row ends,
-    /// that end as `next_eligible_unix_ms` and the candidate's wake; `None` when it is
-    /// schedulable. A fact refresh's deferral names the code as its gate.
+    /// Position 5: the deferral of the candidate `task_id` on `instance_id` when the instance's
+    /// pack schedule closes the package its task runs, `pack_schedule_closed` with the package
+    /// and, when the covering row ends, that end as `next_eligible_unix_ms` and the candidate's
+    /// wake; `None` when it is schedulable. A fact refresh's deferral names the code as its gate.
+    /// #486 ASLEEP-4: read for the pair, so the idle plan's look ahead before a candidate's time
+    /// asks it as the evaluation does.
     pub(crate) fn deferral(
         &self,
-        intent: &DispatchIntent,
+        task_id: &str,
+        instance_id: &str,
         refresh: bool,
     ) -> Option<CandidateEligibility> {
-        let layers = self.layers.get(&intent.instance_id)?;
-        let package_id = self.task_packages.get(&intent.task_id)?;
+        let layers = self.layers.get(instance_id)?;
+        let package_id = self.task_packages.get(task_id)?;
         let decision = resolve(layers, package_id, self.at_unix_ms);
         if decision.schedulable {
             return None;

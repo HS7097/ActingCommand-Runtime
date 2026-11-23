@@ -18,7 +18,8 @@
 //!    (Workflow #411 P19) and `fact_unknown_probe` when a rule's `fact` predicate writes
 //!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
 //!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `pool_list_rows` when a
-//!    pool's `observation` is of the kind `list_rows` (#455 P1), `queue_wait` when a rule
+//!    pool's `observation` is of the kind `list_rows` (#455 P1), `pool_target_defaults` when a pool
+//!    writes `target_defaults` (#455 B3-P), `queue_wait` when a rule
 //!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -260,6 +261,11 @@ pub const BENEFIT_FIXED_VALUE_MEMBER: &str = "benefit_fixed_value_milli";
 /// SCHED-C1c (register §1.299): the pool member of the trigger line, which the composer copies as
 /// written, as the two lines, and which requires [`crate::POOL_TRIGGER_LINE_SUBSYSTEM`].
 pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
+
+/// #455 B3-P (register §1.522): the pool member of the step and importance a goal on a pool without
+/// a valuation takes ([`crate::PoolTargetDefaults`]), which the composer copies as written and which
+/// requires [`crate::POOL_TARGET_DEFAULTS_SUBSYSTEM`].
+pub const POOL_TARGET_DEFAULTS_MEMBER: &str = "target_defaults";
 
 /// Workflow #437 ORD-1a (register §1.352): the V2 task member of a task's longest queue wait,
 /// which a rule writes as any V2 member and the composer passes through, and which requires
@@ -1645,6 +1651,29 @@ fn read_game(
                 "a pool's {} observation needs requires to name {}",
                 crate::POOL_LIST_ROWS_KIND,
                 crate::POOL_LIST_ROWS_SUBSYSTEM
+            ),
+        ));
+    }
+    // #455 B3-P (register §1.522): likewise a pool that writes `target_defaults`, at the first such
+    // pool's member. No Runtime of 0.12.81 names the subsystem, so every such Runtime refuses the
+    // file at `requires` instead of reading the pool without the step and importance it gives.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::POOL_TARGET_DEFAULTS_SUBSYSTEM)
+        && let Some(index) = schedule
+            .pools
+            .iter()
+            .position(|pool| pool.body.contains_key(POOL_TARGET_DEFAULTS_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/pools/{index}/{POOL_TARGET_DEFAULTS_MEMBER}"),
+            ),
+            format!(
+                "a pool's {POOL_TARGET_DEFAULTS_MEMBER} needs requires to name {}",
+                crate::POOL_TARGET_DEFAULTS_SUBSYSTEM
             ),
         ));
     }

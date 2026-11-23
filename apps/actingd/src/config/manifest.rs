@@ -224,6 +224,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #455 B3-P (register §1.522): this build reads a pool's `target_defaults`, the step and
+        // the importance a goal on a pool without a valuation takes when it carries none of its
+        // own; a `schedule.json` whose pool writes it requires it, so an older Runtime refuses the
+        // file instead of leaving every goal on the pool without a step.
+        subsystem(
+            actingcommand_policy::POOL_TARGET_DEFAULTS_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #477 CV-2 (register §1.508): this build's composer takes a game root's business
         // part from its version 2 `pack-catalog.json`; a `schedule.json` that names it writes none
         // of its rules' business members, so an older Runtime refuses the file instead of

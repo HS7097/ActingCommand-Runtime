@@ -199,6 +199,36 @@ model's export, is marked by the `schedule.json` pool member `valuation_origin` 
 reports tell the two apart ([../standard-pack-schedule.md](../standard-pack-schedule.md),
 "Provenance").
 
+### A goal's step and importance on a pool without a valuation
+
+#455 B3-P (since 0.12.82; register §1.522; the coordinator's rulings of 11-23, not the owner's
+words). In a V2 catalog a pool that writes **no `valuation`** (neither a block nor the pending
+marker) may write `target_defaults`, the gap step and the importance a resource target on the pool
+takes when it carries none of its own:
+
+```json
+"target_defaults": { "scale": 10, "importance_milli": 1000 }
+```
+
+| Field | Bound | Meaning | Diagnostic |
+| --- | --- | --- | --- |
+| `scale` (S) | required, 1..=9,007,199,254,740,991, a target's own `scale`'s bound | the gap at which the target weight equals the importance | `limit_exceeded` at it; missing: `missing_required_field` |
+| `importance_milli` (I) | required, 1..=1,000,000, a target's own `importance_milli`'s bound | extra milli per produced step for each missing step `S` | as `scale` |
+
+A resource target takes its own numbers, else the pool's valuation's (`scale`, `gap.weight_milli`),
+else these ([../resource-targets.md](../resource-targets.md), "Who gives a goal its step and
+importance"), read from the catalog in force at every check and evaluation and copied into no
+stored goal. Refused, each at its pointer: beside a `valuation` block or the pending marker,
+`type_mismatch` at `/pools/<i>/target_defaults` (one source per pool for a goal's step and
+importance); in a V1 document, `unknown_field` there; another member, `unknown_field`. The member
+makes nothing else of the pool valued: no base weight, no part of the net benefit of a judged task
+that touches it (a judged task without a fixed value that touches it stays `benefit_unknown`,
+`valuation_missing`), no part in its lines, and a fixed value beside its production is taken, as
+beside any pool without a valuation ("Fixed values written in the pack"). A `schedule.json` whose
+pool writes it names `pool_target_defaults` in `requires`
+([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
+serializes, hashes and decides exactly as before.
+
 ## Expected quantities (v2)
 
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory
@@ -3356,6 +3386,36 @@ then held back; the idle check stopped it again, with no end.
   closed pack schedule, after a start) and kept an awake one from its action. When the gate opens
   the evaluation selects the task, or on an asleep instance names it the task the instance is
   woken for. An entry block's candidates (position 4b) still count due.
+  - **The candidate before its time** (#486 ASLEEP-4, since 0.12.82; register §1.520, the
+    coordinator's rulings 1 to 3 of 11-23). On the same instances, a decision whose own wake is a
+    time that has not come (its trigger's next time, a cooldown's end, the release of a time-bound
+    position such as a blackout) names no wake in the idle plan when one of the positions above
+    would hold the candidate back once that time has come: the idle plan asks them for the
+    candidate as if its earlier position had let it through, each through the reader the
+    evaluation itself asks for an eligible candidate, read only, and judges each answer as above
+    (`PolicyHost::evaluate`, `names_no_time` and `hold_back_with_no_time`; no second list). It asks
+    every such position, not only the first, since one that names no time holds the candidate
+    whatever a time-bound one does before it: the package's suspension (without its lift check, as
+    #484's look ahead), the pack schedule's row, the value set on the application or the rule's
+    value the package refuses, an owed rerun's pacing and a remedy round. It reads nothing the time
+    that has not come decides: no availability (the budgets, the activity window and interval, a
+    backoff and a task's pause are judged on the dispatch the evaluation builds for an eligible
+    candidate, and there is none), no benefit gate, no pool line, no no-progress guard. Where it
+    cannot tell (the task is not in the catalog, a reader fails) the candidate keeps its wake: one
+    wake for nothing is the lesser harm than sleeping through a task; a failure is said in the
+    daemon's log as the look ahead behind a hold says its own. A decision already counted (behind
+    a hold, or held back at an untimed position while eligible) is left as it is. The decision,
+    its reason, its own wake (so the evaluation's next wake and the driver's timer) and the
+    not-run explanation are as before. Production 0.12.81 on 11-23: an instance under
+    `stop_emulator` asleep since 00:07 was woken at 03:34:40 for a reading task whose trigger
+    turned true at 03:39:40; its pack schedule, closed with no end, then held the task back,
+    nothing was admitted, and the emulator was stopped again at 03:49:50. When the holding position
+    opens nothing here changes: a pack schedule's edit and a value set or cleared are facts, which
+    wake the policy driver (`FactsChanged`); that evaluation's look ahead no longer holds the
+    candidate, so its time is the wake again (before it), or the evaluation names it the task the
+    instance is woken for (after it). A package repaired raises no wake; its suspension is lifted
+    by the lift check at position 3 when the candidate reaches it, in the evaluation at the
+    candidate's own time, which wakes the instance then, its lead lost.
 - **At a start** (#486 ASLEEP-3, ruling 3): a wake the start owes waits for the start's first
   plan and comes as a sleeping instance's, never for a reading alone
   ([runtime-config.md](../runtime-config.md), "At a start", with its known limit), and the wake a

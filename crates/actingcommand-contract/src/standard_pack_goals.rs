@@ -422,7 +422,8 @@ pub struct GoalVariable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalReferences {
     /// The pools of the composed schedule by id, each `true` when its `valuation` holds both
-    /// `scale` and `gap`; none without `schedule.json`.
+    /// `scale` and `gap`, or (#455 B3-P) when it writes no `valuation` and its `target_defaults`
+    /// holds both `scale` and `importance_milli`; none without `schedule.json`.
     pub pools: BTreeMap<String, bool>,
     /// The rules of `schedule.json` by id; none without `schedule.json`.
     pub rules: BTreeMap<String, GoalRule>,
@@ -654,7 +655,9 @@ pub fn parse_standard_pack_goals(
 /// checks", the references' rows), entry by entry in file order:
 ///
 /// - `goal_pool_unknown`: a `resource` entry's pool is not a pool of the composed schedule;
-/// - `goal_pool_unvalued`: its pool's `valuation` lacks `scale` or `gap`;
+/// - `goal_pool_unvalued`: its pool gives a goal no step and importance: its `valuation` lacks
+///   `scale` or `gap`, and (#455 B3-P) it writes no `target_defaults` in their place
+///   ([`GoalReferences::pools`]);
 /// - `goal_package_unknown`: (fix round 1) the package a governed rule runs, or (Workflow #463 V1)
 ///   a package that declares a placed variable, is not a package of `bundle.json`;
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;

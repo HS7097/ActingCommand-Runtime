@@ -4810,3 +4810,23 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_477_ck2::ck2_h5_an_owed_occurrence_ends_with_its_activity_day_and_a_daily_limit_of_one_never_shifts",
 ]
 incident = ["#477 CK-2"]
+
+# #486 ASLEEP-4 (0.12.82; register §1.520; brief rd-1123/brief-486-asleep4.md; contracts/scheduling/README.md, "A later position that names no time", "The candidate before its time"; contracts/runtime-config.md, "What wakes an idle instance", "At a start"; contracts/emulator-control.md, "An instance asleep by its idle action"), the host half, on ASLEEP-3's replay instance (stop_emulator, its configured emulator start, a startup package) with a task whose UTC clock at turns true at 06:30, twenty minutes after the first cycle, no clock read: its pack schedule closed with no end, the decision blocked trigger_false with its wake 06:30 as before, the plan not due and no wake, the awake instance's own check stops the emulator with no wake planned, and asleep nothing wakes it at 06:25, 06:30 (deferred pack_schedule_closed, no wake) or 06:40 (r11, tests 1 and 5); the schedule reopened while asleep before 06:30: the plan's wake is 06:30 again, one wake planned_time_reached at 06:25, the emulator started and the startup package run, the task dispatched at 06:30 (r12, tests 1 and 3); the package suspended by the admission after start instead: no wake, the stop, deferred pack_admission_suspended at 06:30 with no wake, nothing woken (r13, test 2); the look ahead failing (LOOK_AHEAD_FAILS_FOR_TEST): the candidate keeps its wake and no idle action is asked for, the next cycle stops the emulator (r14, test 4); a self-check of the sleeping instance, before and after a seeding and a loading start, answers instance_not_running and records neither runtime.failed nor instance_preparation_finished of that code; one of an instance whose idle action took nothing records both (r15, test 6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep4_r11_a_closed_pack_schedule_ahead_of_the_trigger_wakes_nothing_and_holds_no_action_back",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep4_r12_a_schedule_reopened_while_asleep_brings_the_wake_back_and_the_task_runs",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep4_r13_a_suspended_package_ahead_of_the_trigger_wakes_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep4_r14_a_look_ahead_that_fails_keeps_the_candidates_wake",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error",
+]
+incident = ["#486", "ASLEEP-4"]
+
+# #455 B3-P (0.12.82; register §1.522; brief rd-1123/brief-455-b3p.md; contracts/resource-targets.md, "One value by name"), the host half, on the goal page's pure check over the targetable list the policy crate gives for a catalogue of one task producing a pool with target_defaults 10 and 1000, a valued pool (step 5, gap weight 700) and a pool with neither, no clock read: the list offers the first with its defaults and no number required, the valued one with its valuation's, the third with both required; {at_least: 40} on the resource entry of the first is SetTarget with no number and writes the target row the same request writes for the valued pool's entry, its id and pool aside, without scale or importance_milli; a target by pool id under a name no entry has is the same edit and row under its name; the pool with neither is still pool_unvalued with its pool; clearing the entry removes the target and leaves no record (test 5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_b3p::b3p_host_a_goal_on_a_pool_with_target_defaults_is_set_by_at_least_alone_and_cleared",
+]
+incident = ["#455 B3-P"]

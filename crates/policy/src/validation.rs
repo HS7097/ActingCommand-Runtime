@@ -2579,6 +2579,67 @@ fn validate_pools(
             descriptor,
             diagnostics,
         );
+        // #455 B3-P (register §1.522): so is the step and importance a goal on the pool takes.
+        validate_target_defaults(pool, &path, map, descriptor, diagnostics);
+    }
+}
+
+/// #455 B3-P (register §1.522; `contracts/scheduling/README.md`, "A goal's step and importance on
+/// a pool without a valuation"): a pool's `target_defaults` at `<path>/target_defaults`. It is a V2
+/// member: a V1 document is refused as `unknown_field` at it, and nothing else is checked. Then,
+/// each at its pointer:
+/// - beside a `valuation`, a block or the pending marker, `type_mismatch` at the member: one source
+///   per pool for a goal's step and importance;
+/// - its `scale` outside `1..=2^53 − 1` and its `importance_milli` outside `1..=1 000 000`, the goal
+///   document's bounds of a target's own, `limit_exceeded` at each.
+///
+/// A missing member is the reader's `missing_required_field`, an unknown one its `unknown_field`.
+fn validate_target_defaults(
+    pool: &PoolSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(defaults) = &pool.target_defaults else {
+        return;
+    };
+    let member = format!("{path}/target_defaults");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "a pool's target_defaults requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if pool.valuation.is_some() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            member.clone(),
+            "a pool writes target_defaults only without a valuation: one source per pool for a \
+             goal's step and importance",
+            descriptor,
+        ));
+    }
+    let amount_bound = crate::resource_targets::MAX_RESOURCE_TARGET_AMOUNT;
+    if !(1..=amount_bound).contains(&defaults.scale) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{member}/scale"),
+            format!("a pool's target_defaults scale must be within 1..={amount_bound}"),
+            descriptor,
+        ));
+    }
+    let milli_bound = crate::MAX_RESOURCE_TARGET_MILLI;
+    if !(1..=milli_bound).contains(&defaults.importance_milli) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::LimitExceeded,
+            format!("{member}/importance_milli"),
+            format!("a pool's target_defaults importance_milli must be within 1..={milli_bound}"),
+            descriptor,
+        ));
     }
 }
 

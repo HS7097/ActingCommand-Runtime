@@ -114,6 +114,11 @@ mod gate_455_p1;
 // `schedule.json` that requires it with the root's `pack-catalog.json`.
 #[cfg(test)]
 mod gate_477_cv2;
+// Test-only: #455 B3-P, this build names `pool_target_defaults`, so it composes a `schedule.json`
+// that requires it.
+#[cfg(test)]
+mod gate_455_b3p;
+
 // Test-only: #477 CK-1, this build names `clock_monthly`, so it composes a `schedule.json` whose
 // rule's clock is monthly.
 #[cfg(test)]

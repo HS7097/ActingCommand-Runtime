@@ -47856,6 +47856,307 @@ for that pool's trigger line, its capacity without one (ruling 9). A task with a
 produces by `expected_amount_milli` is handed a `run_cap` where it had none (ruling 10). An older
 build reads the same root and ignores these productions as before.
 
+### 1.520 Slice #486 ASLEEP-4 (0.12.82): the idle plan takes no wake from a candidate that a position with no time will hold when its time comes; a sleeping instance is no error (board #486; the rules below are the coordinator's rulings 1 to 6 of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-486-asleep4.md`; on main `bcd660bd`, v0.12.81 with slice B1 of #455)
+
+This section takes 1.520 (1.519 belongs to another slice of 0.12.82, the goal declaration's reader
+and checks). It ships in 0.12.82. [scheduling/README.md](scheduling/README.md) ("An asleep
+instance", the bullet "A later position that names no time" and its new sub-bullet "The candidate
+before its time"), [runtime-config.md](runtime-config.md) ("What wakes an idle instance": the new
+paragraph after "A later position that names no time"; "At a start": its last sentences) and
+[emulator-control.md](emulator-control.md) ("Cold start": the new paragraph "An instance asleep by
+its idle action"; [runtime-fact-store.md](runtime-fact-store.md), "Emulator status first", points to
+it) are the contract.
+
+**What happened** (production 0.12.81, 11-23, read from the ledger by the coordinator; the instance
+of the trial of board #486, whose idle action is `stop_emulator`). It slept from 00:07 with a
+planned wake at 03:34:40 for a next occurrence at 03:39:40. It woke on time (`queue_idle_wake`,
+`idle_wake_cause` `planned_time_reached`), its emulator was up in 18 seconds and the reading run
+after the start succeeded. At 03:39:40 nothing was dispatched: the candidate whose time that was, a
+reading task, had become eligible and was deferred `pack_schedule_closed` by its pack schedule's
+row with no end. At 03:39:44 the check recorded `instance_idle_stop_withheld` (ASLEEP-3's hold of
+ten minutes), nothing was admitted in it, and at 03:49:50 the emulator was stopped again: fifteen
+minutes awake for nothing. Two more reading tasks of that instance have closed pack schedules and
+would have woken it the same way. And at the Runtime's start after a deployment (01:36:20) and at a
+placement's self-check (14:21:44) the sleeping instance got an error-severity
+`runtime.lifecycle_observed` record `instance_not_running`.
+
+**The reading, checked in the code.**
+- *Why the time was taken.* ASLEEP-3's `hold_back_untimed` runs inside the evaluation's closure,
+  which the evaluator asks only for a candidate past its trigger (and its cooldown). Before 03:39:40
+  the decision was blocked `trigger_false` with its trigger's next time as its wake, the closure was
+  never asked, nothing was put in `IdleHeldAhead`, and `IdleDraft::add` took that wake.
+- *Asking the closure's judgement before the time* needs no second evaluation and no change of what
+  the evaluator returns (the work order's first stop condition is not met): the readers of
+  ASLEEP-3's positions need only the pair, and position 3 the task's procedure, which the catalog's
+  task gives (`CompiledCatalog::dispatch_task`, as the evaluator builds the intent from it). Their
+  readers took a `DispatchIntent` while reading only those, so they now take the pair
+  (`CycleSchedule::deferral`, `rule_value_deferral`, `RerunPlan::deferral`) or the procedure
+  (`PackAdmission::suspends`); the closure and #484's look ahead pass the intent's. Position 8, the
+  availability, is judged by the admission preview on the dispatch the evaluator builds (its
+  decision id seeds the activity interval; its profile, duration and limits are the candidate's),
+  which a candidate before its time has none of, and its budgets, activity window and interval and
+  backoff depend on the time that has not come: the look ahead does not read it (ruling 2).
+- *No sleep through a task* (the second stop condition is not met): the decision keeps its own wake,
+  so the evaluation's next wake, which the daemon's policy driver sleeps until, is unchanged; the
+  evaluation at that time judges the candidate eligible and, if nothing holds it any more, counts it
+  due on the asleep instance (`instance_asleep_wake_due`), which wakes it then. A position read now
+  that opens before the time without a fact (a repaired package) costs the instance its lead, never
+  the task.
+- *The error record.* Both records come from the self-check's emulator status read (#411 A48):
+  `read_emulator_status_first` writes the step's connection-preparation `runtime.failed` and the
+  preparation `instance_preparation_finished`, each with outcome `instance_not_running`, whose
+  severity is the outcome's category, `error` (ledger revision 3). The start's own preparation
+  prepares no instance whose emulator its restored idle action holds stopped (ASLEEP-1 fix round 1)
+  and reads no status, so the code shows no other path at a start that writes the code: the record of
+  01:36:20 reads as a self-check run after the start (the deploy's), which the coordinator did not
+  name; this was not checked against the ledger.
+
+**The rule.**
+- *The candidate before its time* (rulings 1 and 2; `crates/runtime-host/src/policy_host.rs`,
+  `evaluate`, after the evaluation and #484's fix round 2 loop). For each decision of a task, not
+  the fact refresh's, not selected, whose own wake is later than the evaluation, on an instance
+  asleep or one whose idle action can put it to sleep (`sleeps_for_idle`), not yet in
+  `IdleHeldAhead`: the look ahead (`untimed_ahead`) asks position 3 read only
+  (`PackAdmission::suspends`, no lift check, as #484's look ahead), position 5's row, position 5a's
+  two (`rule_value_deferral`), position 6's pacing and position 8a's remedy round, each through the
+  reader the closure asks, and judges each answer with `names_no_time`, the predicate
+  `hold_back_untimed` now uses too; any one that names no time puts the candidate in `IdleHeldAhead`
+  with no time through `hold_back_with_no_time`, the insertion `hold_back_untimed` now uses too. No
+  second list: the judgement is ASLEEP-3's, split into those two functions; the positions are
+  read through their own readers. All of them are asked, not the first alone, since one that names
+  no time holds the candidate whatever a time-bound one does before it. `IdleDraft::add` then takes
+  no wake from the decision (its existing branch for a candidate not due whose later position names
+  no time).
+- *What it reads* (ruling 2): the package's suspension as it stands, the pack schedule's rows as
+  this evaluation's facts hold them (a row with no end covers every later time; rows of one package
+  never overlap), the instance's pacing stage and remedy round, a set value; no benefit gate, no
+  pool line, no no-progress guard, no availability. Where it cannot tell (no task of the catalog, a
+  reader that fails, including the test switch `LOOK_AHEAD_FAILS_FOR_TEST`) the candidate keeps its
+  wake; a failure that stops the Runtime ends the cycle, any other is kept in
+  `idle_look_ahead_failures`, which the cycle writes to the daemon's log (#484 fix round 1).
+- *When the holding position opens* (ruling 3, confirmed with no change). A pack schedule's edit
+  and a value set or cleared are fact records, which raise `FactsChanged` for the daemon's policy
+  driver (`policy_wake.rs`); that evaluation's look ahead no longer holds the candidate, so before
+  its time the plan's wake is its time again (the check wakes the sleeping instance at that time
+  less the lead, `planned_time_reached`), and from its time on the evaluation defers it
+  `instance_asleep_wake_due` and the check wakes the instance for it (`task_due`), as ASLEEP-3
+  says. A repaired package raises nothing; its suspension is lifted by position 3's lift check when
+  the candidate reaches it, in the evaluation at the candidate's own time (the decision's wake),
+  which wakes the instance then.
+- *An awake instance* (test 5): a candidate before its time that such a position holds gives the
+  plan no wake, so its time, even within `idle.min_gap_ms`, no longer keeps the idle action from
+  the instance.
+- *A sleeping instance is no error* (ruling 4; `crates/runtime-host/src/host/selfcheck_emulator.rs`,
+  `StatusEnd`; `resource_close.rs`, `prepare_connection_attempt`). Of the two choices the smaller is
+  taken: the records are not written. When the status read finds no emulator process on an
+  instance whose idle action holds its emulator stopped (`idle_holds_emulator_stopped`), the read
+  ends the check with `StatusEnd { code: instance_not_running, asleep: true }` and writes no
+  `runtime.failed`; the preparation then writes no `instance_preparation_finished` (no ladder is
+  admitted, as for any status read failure; no fence is lifted; `PreparationAttempt::event` is none,
+  as for a preparation whose lease was refused). The idle action's own `instance_idle_action` record
+  of the stop already says the emulator is stopped. Info severity was not open: a record's severity
+  is its outcome's category, so it would need a new code or another category for
+  `instance_not_running`, which every other emitter shares. The self-check's answer, the instance's
+  unavailability and every other step are as before; what a client reads as a failure
+  (`failure_code` `instance_not_running`) is unchanged. An instance not running for any other
+  reason (a person's stop, a stop outside the Runtime, a failed status read on a pending binding, an
+  instance whose idle action closed only its application, whose emulator runs) keeps both records.
+  The decision reads a typed member the read sets, not a code.
+- *Neutral* (ruling 6): no game, package or alias is named in code.
+
+**A worked timeline** (the incident's times; lead 5 minutes, minimum gap 30 minutes).
+
+| Time | Before (0.12.81) | After (0.12.82) |
+|---|---|---|
+| 00:07 | asleep; the reading task waits `trigger_false`, its wake 03:39:40; the plan's wake 03:39:40, the planner's 03:34:40 | the same decision; the look ahead finds its pack schedule's row closed with no end: no wake in the plan; asleep with no wake planned |
+| 03:34:40 | `queue_idle_wake` `planned_time_reached`; the emulator started, the startup package and the reading run | nothing |
+| 03:39:40 | the task eligible, deferred `pack_schedule_closed`, no wake (ASLEEP-3): not due | the evaluation runs (the decision's wake): the same deferral; not due, no wake |
+| 03:39:44 | `instance_idle_stop_withheld` (hold 10 minutes) | nothing |
+| 03:49:50 | `instance_idle_action` `run_idle_action`: the emulator stopped again | still asleep |
+| later | the instance's two other readers behind closed schedules wake it the same way | none wakes it; the schedule opened (a fact) brings their wakes back |
+
+**What does not change** (ruling 5). ASLEEP-3's hold and its lengths; what wakes an instance for a
+candidate that is due; the `task_due` wake for a regenerating pool's projection (ASLEEP-2's ruling
+7); every decision, its reason, its own wake (so the evaluation's next wake and the driver's timer)
+and the not-run explanation; an instance whose idle action is `none` (in no sleeper set); a
+candidate behind a hold of positions 1 or 2 (#484's look ahead, first) and one held back at an
+untimed position while eligible (ASLEEP-3, already counted); the fact refresh. No new member, no
+configuration key, no declared interface range, no code; no severity of an existing record moved
+(ruling 4 took "not written").
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The look ahead before a candidate's time | `crates/runtime-host/src/policy_host.rs` (`evaluate`: `untimed_ahead` and its loop; `names_no_time`, `sleeps_for_idle`, `hold_back_with_no_time`, `hold_back_untimed`; `rule_value_deferral` by the pair) |
+| The readers by the pair | `crates/runtime-host/src/pack_schedule.rs` (`CycleSchedule::deferral`), `crates/runtime-host/src/policy_host/rerun.rs` (`RerunPlan::deferral`), `crates/runtime-host/src/pack_admission.rs` (`PackAdmission::suspends`) |
+| The idle plan | `crates/runtime-host/src/schedule_explanation.rs` (`IdleHeldAhead`'s text; `IdleDraft::add` unchanged) |
+| No error record for a sleeping instance | `crates/runtime-host/src/host/selfcheck_emulator.rs` (`StatusEnd`, `read_emulator_status_first`, `end_selfcheck`, `recognize_running_emulator`), `crates/runtime-host/src/host/resource_close.rs` (`prepare_connection_attempt`) |
+
+**Tests** (incident `#486 ASLEEP-4`: `crates/runtime-host/src/tests/gate_486_asleep.rs`, host gate
+map; on the incident's replay instance of ASLEEP-3, `stop_emulator`, its configured emulator start
+and a startup package, a reading task whose UTC clock `at` turns true at 06:30, twenty minutes after
+the first cycle; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `asleep4_r11_a_closed_pack_schedule_ahead_of_the_trigger_wakes_nothing_and_holds_no_action_back` (1, 5) | Its pack schedule closed with no end, the instance awake: the decision blocked `trigger_false` with its wake 06:30 as before, the plan not due and no wake, no task named; the host's own check stops the emulator (before, the wake twenty minutes ahead kept it awake), kept stopped with no wake; at 06:25 still waiting and no wake, at 06:30 and 06:40 deferred `pack_schedule_closed` with no wake; one stop, no wake record, no emulator start |
+| `asleep4_r12_a_schedule_reopened_while_asleep_brings_the_wake_back_and_the_task_runs` (1, 3) | The same stop; the schedule reopened at 06:15 while asleep: at 06:20 the plan's wake is 06:30, as with an open schedule, no wake yet; at 06:25 one wake `planned_time_reached`, the configured start starts the emulator and the startup package runs; at 06:30 the task is dispatched |
+| `asleep4_r13_a_suspended_package_ahead_of_the_trigger_wakes_nothing` (2) | The task's package suspended by the admission after start (`gate_386_sr3`'s refused package): no wake, the stop with no wake planned; at 06:30 deferred `pack_admission_suspended` with no wake; one stop, no wake, no emulator start |
+| `asleep4_r14_a_look_ahead_that_fails_keeps_the_candidates_wake` (4) | The look ahead failing (`LOOK_AHEAD_FAILS_FOR_TEST`): the plan keeps the wake 06:30, no idle action is asked for, the cycle goes on; the next cycle names no wake and the stop is taken |
+| `asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error` (6) | Asleep after the stop, a self-check answers `instance_not_running` and no `runtime.failed` or `instance_preparation_finished` of that code is recorded; the same after a seeding and a loading start in the sleep; on an instance whose idle action took nothing and whose emulator reads stopped, the self-check records both, as before |
+
+Test 2's other position, a value set on the application that excludes the rule: not built. Its
+reader is the same `rule_value_deferral` the closure asks; SV-2's fixture is a composer-mode host
+whose instance no idle action puts to sleep, and building one with both was judged beyond the
+fixtures at hand. Test 7: the existing gate tests of ASLEEP-1 to ASLEEP-3 are unchanged; the helper
+`open_incident_host` (ASLEEP-3) now calls `open_incident_host_held` with no hold, which builds the
+same host, so r8 and r10 build theirs as before. No test leaves the gate map; no golden is
+re-recorded.
+
+**At deploy.** Nothing to configure. An instance that sleeps is no longer woken for a task its
+closed pack schedule holds (nor a suspended package, a value set on the application that excludes
+the rule, an owed rerun's pacing, a remedy round): it sleeps through that task's time, and an awake
+one is no longer kept from its idle action by such a time. When the resource side opens the
+schedule, the next evaluation brings the wake back. A self-check of a sleeping instance (a
+placement's, a person's) no longer leaves an error record; its answer is as before. A rollback to
+0.12.81 meets nothing kept on disk. In the release notes' language:
+能闲置的实例上（醒着或睡着），还没到触发时刻、但到时会被没有时刻的门（任务包排程关闭且没有结束时间、包被暂停、应用上设的值排除这条规则、补跑节奏、补救轮次）挡住的任务，不再给闲置计划提供唤醒时刻：睡着的实例不会为它被叫醒，醒着的也不会因为它而不进入闲置；门一打开（排程重新开放、设定值清掉），下一次评估就把唤醒时刻带回来。由闲置动作停掉模拟器而睡着的实例，自检时不再写 `instance_not_running` 的错误记录，自检的回答照旧。
+
+### 1.522 Slice #455 B3-P (0.12.82): a pool that declares no valuation may declare the step and the importance a goal on it takes (`target_defaults`) (board #455, the main line's third step; the rulings 1 to 10 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b3p.md`; on main `bcd660bd`, v0.12.81 with B1 of #455)
+
+This section takes 1.522 (1.510, 1.520 and 1.521 belong to slices in flight). It ships in 0.12.82.
+[scheduling/README.md](scheduling/README.md) ("Pool Valuation", the new "A goal's step and
+importance on a pool without a valuation"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+the V2 `pools.schema.json`, [resource-targets.md](resource-targets.md) (the new "Who gives a goal its
+step and importance"; the v2 table's `scale` and `importance_milli`; "Per evaluation"; `Q_p`; "A goal
+on what a task with a fixed value produces"; "One value by name"; `ResourceTargetView`),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`"; "Pools a goal asks for", the
+resource side's recipe; "Composition", step 2), [standard-pack-goals.md](standard-pack-goals.md)
+(the row of `goal_pool_unvalued`) and [actingd-check-config.md](actingd-check-config.md) (the row
+`pool_target_defaults`) are the contract. No `package` revision moves, no declared interface range,
+no configuration key, no code or word; one catalog member and one `requires` name are new.
+
+**Why.** The resource side declares, for one game, the pools its rules produce (materials,
+currencies) without a `valuation`: every producing rule keeps its fixed value, and a fixed value
+beside a production of a priced or pending pool is refused. B1 (§1.518) makes a goal on such a pool
+raise the benefit of the rules that produce it, but a goal needs a step and an importance, and they
+came only from the goal itself or the pool's valuation: on such a pool the goal page refused a goal
+by `{at_least}` (`pool_unvalued`) and the Lab's check a `resource` entry (`goal_pool_unvalued`). A
+first form of this slice (pull request #1885, abandoned) put the two numbers in the `goals.json`
+entry and copied them into the stored goal; its review showed the copy goes stale when the research
+tables change the numbers. The numbers are a declaration of the game's economy, as a valuation is;
+they now stand on the pool, in the catalogue, where every evaluation reads the current ones and
+nothing is copied.
+
+**The rule** (rulings 1, 2, 3 and 6).
+- *The member* (ruling 1). `PoolSpec::target_defaults`, `{"scale": S, "importance_milli": I}`
+  (`PoolTargetDefaults`), both required, V2 only (the catalogue a standard pack's `schedule.json`
+  writes): `scale` within `1..=2^53 − 1` and `importance_milli` within `1..=1 000 000`, the goal
+  document's bounds of a target's own (the constants `MAX_RESOURCE_TARGET_AMOUNT` and
+  `MAX_RESOURCE_TARGET_MILLI`), `limit_exceeded` at the number; missing, the reader's
+  `missing_required_field`; in a V1 document `unknown_field` at the member.
+- *One source per pool* (ruling 2). Beside a `valuation` block or the pending marker the pool is
+  refused `type_mismatch` at `/pools/<i>/target_defaults`, the compiler's existing word for two
+  members that may not stand together (as a `list_rows` observation's two equal columns).
+- *Resolution* (ruling 3). A target's step and importance: its own, else the pool valuation's
+  (`scale`, `gap.weight_milli`), else the pool's `target_defaults`, each number on its own. The pool's
+  part is read in one function of the policy crate, `pool_target_terms`, at every check and every
+  evaluation from the catalogue in force; nothing is copied into a stored goal.
+- *`requires`* (ruling 6). A `schedule.json` whose pool writes the member names
+  `pool_target_defaults` in `requires` (`POOL_TARGET_DEFAULTS_SUBSYSTEM`; the composer refuses one
+  that does not, `schedule_invalid` at the first such pool's member), by the pattern of
+  `pool_trigger_line`, `pool_lines` and `pool_list_rows`; this build's configuration manifest names
+  it, always on; a Runtime of 0.12.81 refuses such a file `schedule_requires_missing`, and the
+  installer's plan (§1.514) refuses a rollback below this build while an installed or kept schedule
+  requires it (no new code: the plan reads the target's own manifest).
+
+**Where a target's step and importance are resolved** (ruling 3, every place found).
+
+| Place | Where | Now |
+|---|---|---|
+| A target's `S` and `I`, for the entry's check of a v2 or v3 target (`check_target_v2`, the goal page's edits included) and for the evaluation's status and `Γ` (`resolve_v2`) | `crates/policy/src/resource_targets.rs`, `target_terms` | own, else `pool_target_terms` |
+| The targetable list (`default_scale`, `default_importance_milli`, `scale_required`, `importance_required`), which `ResourceTargetView` answers and the goal page's `pool_unvalued` reads | the same file, `targetable_resources_with_readings` | `pool_target_terms` |
+| The step `Q_p` of a produced pool's term (`WeightItem::step`, `PoolWeight::step`) | the same file, `weigh_production` | the pool's valuation, else the covering target's resolved step (`ResolvedTargetV2::step`: own, else `pool_target_terms`) |
+| B1's goal term of a fixed-value task (§1.518) | `crates/policy/src/evaluator/benefit.rs`, `judge` | unchanged: it reads `W` and `Q` from the term above (`PoolWeight`) and `Γ` from `target_terms`, so the same resolution; no second one |
+| The Lab's check of a `resource` entry of `goals.json` (`goal_pool_unvalued`) | `crates/resource-tooling/src/standard_pack_goals.rs`, `goal_issues` | a pool counts as giving a goal its terms when its valuation holds `scale` and `gap`, or when it writes no `valuation` and `target_defaults` holds both numbers |
+| The goal page's check (`pool_unvalued`) | `crates/runtime-host/src/goals.rs`, `check_target` | unchanged: it reads the targetable list's `scale_required` / `importance_required` |
+
+A v1 target always carries both numbers; nothing there reads the pool.
+
+**A worked example.** A pool without a valuation writes `target_defaults` `{scale 10,
+importance_milli 1000}`; a person asks for at least 40 on the goal page (`{at_least: 40}`, the row
+holds no number), and the pool reads 10: the gap is 30, `Γ = min(⌊1000·30/10⌋, 1 000 000) = 3000`,
+`W = 0 + 3000`, and a rule with the fixed value `V` 40 000 that consumes 30 of a pool valued 1000
+milli a unit (`Q` 1) and produces 2 of the lacking pool a run gets B1's term
+`2000·3000/(10·1000) = 600`: `B = 40 000 + 600 − 30 000 = 10 600`, against 10 000 for a stage of the
+same value that does not produce it. The next catalogue changes the defaults to `{scale 20,
+importance_milli 500}`; the same stored goal, set again by nobody, weighs at the next evaluation
+`Γ = ⌊500·30/20⌋ = 750`, the term `2000·750/(20·1000) = 75`, `B = 10 075`.
+
+**Tests** (incident `#455 B3-P`: `crates/policy/src/tests/gate_455_b3p.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_455_b3p.rs`, host gate map; one test appended to
+`crates/resource-tooling/src/gate_455_gr1.rs`, exec gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `b3p_t1_the_reader_takes_both_numbers_and_refuses_each_fault_at_its_pointer` (1) | On the neutral example's pool: both numbers compile, round-trip and recompile to the same identity, the largest bounds taken; V1 `unknown_field`; one number missing `missing_required_field` naming it; scale 0 and 2^53, importance 0 and 1 000 001 `limit_exceeded` at the number; beside a valuation block and beside the pending marker `type_mismatch` at the member |
+| `b3p_t1_the_composer_requires_pool_target_defaults_and_an_older_runtime_refuses_the_file` (1) | With `pool_target_defaults` in `requires` the member is composed and compiled; without, `schedule_invalid` at `/pools/0/target_defaults`; on a Runtime that does not name it, `schedule_requires_missing` at `/requires/0` |
+| `b3p_t1_the_v2_pools_schema_lists_the_member_with_the_compiler_s_bounds` (ruling 8) | The V2 pools schema's `targetDefaults` (both required, the compiler's bounds) and its `dependentSchemas` (not beside `valuation`); the V1 schema lists no member |
+| `b3p_t2_a_target_takes_its_own_numbers_else_the_valuation_s_else_the_pool_s_defaults` (2) | The targetable list: the pool's defaults, nothing required; a valued pool's valuation; a pool with neither, both required. The entry: a target without numbers and one with its own taken, one without numbers on a pool with neither `missing_field` at `/targets/0/scale`. The evaluation: `step=10 importance=1000 gap_weight=3000` without numbers, `step=5 importance=2000 gap_weight=12000` with its own, the valued pool's `step=5 importance=700 gap_weight=4200` |
+| `b3p_t3_a_goal_without_numbers_decides_byte_for_byte_as_one_carrying_them` (3) | B1's two stages: the goal without numbers decides byte for byte as the goal carrying 10 and 1000, every `sha256:` masked (the two records differ by the two numbers, so their identity does); the goal carrying them decides byte for byte the same on main's catalogue without the member; the producer selected with 10 600 |
+| `b3p_t4_a_rule_without_a_fixed_value_is_weighed_at_the_pool_s_default_step` (4) | A judged rule without a fixed value: `resource_weights` `pool.lacking:r=2,per=10,base=0,gap=3000,effective=3000,term=600`; its benefit `benefit_unknown` `valuation_missing` on the pool (ruling 5) |
+| `b3p_host_a_goal_on_a_pool_with_target_defaults_is_set_by_at_least_alone_and_cleared` (5) | Over the policy crate's targetable list: the pool offered with its defaults and nothing required; `{at_least: 40}` on its entry is `SetTarget` with no number and writes the row the same request writes for a valued pool's entry (no `scale`, no `importance_milli`); a target by pool id the same; a pool with neither `pool_unvalued`; clearing removes it, no record left |
+| `b3p_t6_a_goal_set_once_weighs_by_the_defaults_of_the_catalogue_in_force` (6) | One stored goal, the defaults 10/1000 then 20/500: `B` 10 600 then 10 075, the items `step=10 … gap_weight=3000` then `step=20 importance=500 gap_weight=750` |
+| `b3p_a_resource_entry_on_a_pool_with_target_defaults_is_accepted` (7) | `standard-pack check`: a version 2 `goals.json` whose `resource` entry governs the pool with `target_defaults` gives no warning; one governing a pool with neither, or a valued pool without a gap weight, `goal_pool_unvalued` at the entry's pool |
+| `b3p_t8_a_catalogue_without_the_member_keeps_its_golden_identity` (8) | The neutral example catalog's V1 and V2 golden identities |
+
+Test 9: every existing test passes as it is; none is changed, renamed or retired, and no golden is
+re-recorded. `PoolSpec` has no struct literal in the workspace (every pool is read from JSON), so no
+literal was touched.
+
+**What is not changed** (rulings 5, 7, 9 and 10). In every other respect the pool is a pool without a
+valuation: its base weight is 0, a fixed value beside its production is taken, a judged rule that
+consumes it, or produces it without a fixed value, is `benefit_unknown` (`valuation_missing`) as
+before, its lines take no part, and B1's rules apply to it as to any pool without a valuation. A
+catalogue without the member: its bytes, hash, decisions, records and the goal page's answers.
+`goals.json` stays at version 2; the host's goal code and the goal page's types are unchanged; no
+record, request or ledger member is new. No game, package or alias is named in code.
+
+**Fix round 1** (the independent review of #1888, "may merge"; the coordinator took four of its
+optional items, work order `rd-1123/brief-455-b3p-fix1.md`).
+- *One reading of "the pool writes no valuation"* (item 1). The Lab's goal check
+  (`standard_pack_goals.rs`, `goal_issues`) read it as the member being absent, so a pool writing
+  `"valuation": null` beside `target_defaults` was valued for the check and unvalued for the
+  compiler. It now reads the member as the compiler does and as `CatalogScheduleFacts` does: absent
+  or `null` is no valuation. The five forms, the check and the compiler alike: absent and `null`
+  (with `target_defaults`) give a goal its terms, or the check's `goal_pool_unvalued` and the
+  goal page's `pool_unvalued` without it; the pending marker, a block without `gap` and a block with
+  `scale` and `gap` are valuations, beside which `target_defaults` is refused `type_mismatch`, the
+  last alone giving a goal its terms.
+- *The two words' texts* (item 2). The outcome catalogue's `goal_pool_unvalued` and `pool_unvalued`
+  name the cause as the code gives it (neither a valuation with `scale` and `gap` nor, on a pool
+  without a valuation, `target_defaults`) and the remedy for a pool whose producing rules keep fixed
+  values (`target_defaults`, a valuation there being refused); the index is regenerated; the two
+  words' doc comments say the same.
+- *The offered list* (item 3) and two comments (item 4): a test that this build's manifest names
+  `pool_target_defaults`; the comments of `check_target_v2` and the host's `check_target` (comment
+  only).
+
+| Test | What it shows |
+|---|---|
+| `b3p_fix1_a_null_valuation_beside_target_defaults_is_no_valuation_for_the_goal_check` (item 1; exec gate map) | On G-R1's root a pool writing `"valuation": null` and `target_defaults`: the valid version 2 file whose `resource` entry governs it gives no warning |
+| `b3p_this_runtime_names_pool_target_defaults_and_composes_a_file_that_requires_it` (item 3; apps gate map, `apps/actingd/src/config/gate_455_b3p.rs`) | The assembled manifest names `pool_target_defaults`, enabled; given those subsystems the composer composes a file whose pool writes the member and lists it in `requires`, the compiled pool holding 10 and 1000 |
+
+No existing test is changed.
+
+**At deploy.** Nothing to configure. No installed root writes the member, so nothing changes until
+a resource repository declares a pool with `target_defaults` (and `pool_target_defaults` in its
+`schedule.json`'s `requires`); a root that does needs this build, and a rollback below it is
+refused by the installer's plan while that root, or a generation composed from it, is installed or
+kept. In the release notes' language:
+没有估值的池子现在可以在 `schedule.json` 里写 `target_defaults`（步长 `scale` 和重要度 `importance_milli`），给落在它上面的目标用；写了它的文件要在 `requires` 里写 `pool_target_defaults`。目标页上对这样的池子只填 `{at_least}` 就能设目标，`goals.json` 里的 `resource` 条目也能指向它；这两个数随调度目录走，下次目录改了数，已经设好的目标在下一次评估就按新数算，不用重设。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
+
 ### 1.510 Slice #477 CK-1 (0.12.83): a clock that occurs once a month (board #477, the tail of the main line's second step; the rulings 1 to 8 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-477-ck1.md` after the read-only study `rd-1122/study-477-step2.md`, its section 7 and the coordinator's disposition at its end; on main `bcd660bd`)
 
 This section takes 1.510, the number reserved for it on 11-22; the register is ordered by landing,

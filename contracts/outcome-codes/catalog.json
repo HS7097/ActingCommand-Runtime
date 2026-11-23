@@ -7867,7 +7867,7 @@
           "description": "A resource entry of goals.json governs a pool that is not a pool of the composed schedule (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_pool_unvalued": {
-          "description": "A resource entry of goals.json governs a pool whose valuation has no scale and gap (Workflow #455 G-R1, since 0.12.60)."
+          "description": "A resource entry of goals.json governs a pool that gives a goal no step and importance: neither a valuation with scale and gap nor, on a pool that writes no valuation, target_defaults with scale and importance_milli (Workflow #455 G-R1, since 0.12.60; target_defaults #455 B3-P, since 0.12.82). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
         },
         "goal_package_unknown": {
           "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60): since Workflow #463 V1 the package a tier entry's rule runs, or one that declares a placed variable."
@@ -10475,7 +10475,7 @@
           "description": "The pool of a resource value is no pool the application can target (pool_id)."
         },
         "pool_unvalued": {
-          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: its valuation lacks scale or gap (pool_id)."
+          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: it has neither a valuation with scale and gap nor, as a pool without a valuation, target_defaults (#455 B3-P, since 0.12.82) (pool_id). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
         },
         "deadline_unsupported": {
           "description": "A resource value carries by_unix_ms: no reader of this build reads a deadline (Workflow #455 G-R4 builds it), so none is stored."

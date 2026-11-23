@@ -73,7 +73,8 @@ crate::outcome_vocabulary! {
         /// The pool of a resource value is no pool the application can target (`pool_id`).
         PoolNotTargetable => "pool_not_targetable",
         /// The pool of a resource value is targetable only with its own step or importance, which
-        /// a goal by name does not carry: its valuation lacks `scale` or `gap` (`pool_id`).
+        /// a goal by name does not carry: it has neither a valuation with `scale` and `gap` nor,
+        /// as a pool without a valuation, `target_defaults` (#455 B3-P) (`pool_id`).
         PoolUnvalued => "pool_unvalued",
         /// A resource value carries `by_unix_ms`: no reader of this build reads a deadline
         /// (Workflow #455 G-R4 builds it), so none is stored.

@@ -4462,3 +4462,19 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_477_lr1::lr1_a_press_count_of_a_linear_steps_pack_needs_revision_25_and_nothing_else_does",
 ]
 incident = ["#477 LR-1"]
+
+# #455 B3-P (0.12.82; register §1.522; brief rd-1123/brief-455-b3p.md, ruling 4 (c); contracts/standard-pack-goals.md, the row of goal_pool_unvalued): standard-pack check's goal check on G-R1's root with two more pools without a valuation, one writing target_defaults (schedule.json naming pool_target_defaults in requires) and one writing neither: the valid version 2 goals.json whose resource entry governs the first gives no warning; governing the second, or the pool whose valuation has no gap weight, is goal_pool_unvalued at /entries/2/governs/pool as before (test 7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_455_gr1::b3p_a_resource_entry_on_a_pool_with_target_defaults_is_accepted",
+]
+incident = ["#455 B3-P"]
+
+# #455 B3-P fix round 1 (0.12.82; register §1.522; brief rd-1123/brief-455-b3p-fix1.md, item 1): the goal check reads "the pool writes no valuation" as the compiler reads the member, absent or null; on G-R1's root a pool writing "valuation": null beside target_defaults (schedule.json naming pool_target_defaults) is governed by the valid version 2 goals.json's resource entry without a warning
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_455_gr1::b3p_fix1_a_null_valuation_beside_target_defaults_is_no_valuation_for_the_goal_check",
+]
+incident = ["#455 B3-P"]

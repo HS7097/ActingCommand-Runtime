@@ -268,18 +268,19 @@ impl PackAdmission {
         Ok(())
     }
 
-    /// #484 IDLE-W2 (register §1.488): whether position 3 holds `intent` as the suspensions stand,
-    /// read only: its procedure locates a suspended task package. No lift check runs and nothing is
-    /// copied or recorded, so it changes nothing [`Self::deferral`] later decides; the idle plan's
-    /// look ahead behind a hold of the instance reads it.
+    /// #484 IDLE-W2 (register §1.488): whether position 3 holds a candidate of the procedure
+    /// `procedure_ref` as the suspensions stand, read only: the procedure locates a suspended task
+    /// package. No lift check runs and nothing is copied or recorded, so it changes nothing
+    /// [`Self::deferral`] later decides; the idle plan's look ahead behind a hold of the instance
+    /// reads it, and (#486 ASLEEP-4) its look ahead before a candidate's time.
     pub(crate) fn suspends(
         &self,
         lift: &SuspensionLiftView<'_>,
-        intent: &DispatchIntent,
+        procedure_ref: &str,
     ) -> RuntimeHostResult<bool> {
         let Some(path) = lift
             .manifest
-            .binding(&intent.procedure_ref)
+            .binding(procedure_ref)
             .and_then(ProcedureBinding::package_path)
         else {
             return Ok(false);

@@ -206,6 +206,10 @@ mod tests {
     // pools it produces that declare no valuation.
     mod gate_455_b1;
 
+    // #455 B3-P (0.12.82; register §1.522): a pool that declares no valuation may declare the step
+    // and the importance a goal on it takes (`target_defaults`).
+    mod gate_455_b3p;
+
     // #477 CK-1 (0.12.83; register §1.510): a clock that occurs once a month.
     mod gate_477_ck1;
 
