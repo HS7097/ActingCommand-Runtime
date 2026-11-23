@@ -45,15 +45,43 @@ pub(crate) const SHUTDOWN_SETTLING_WINDOW_MS: u64 = 15_000;
 /// Workflow #503 SD-1: when a settling answer tells its client to ask again: one second, after
 /// which the next ask lets the work end within its own settle of two seconds more.
 pub(crate) const SHUTDOWN_SETTLING_RETRY_AFTER_MS: u64 = 1_000;
+/// Workflow #503 SD-1 fix round 1: the longest a settling window lasts from its first opening,
+/// however often it is opened again. It covers the installer's asks: they stop within
+/// `install.stop.shutdown_wait_ms` of the first (60 s as shipped), the last ask's settle inside it,
+/// with one window (15 s) of room; a client that never stops asking holds new cycles and ticks
+/// back no longer than this.
+pub(crate) const SHUTDOWN_SETTLING_LIMIT_MS: u64 = 75_000;
+
+/// Workflow #503 SD-1: the settling window, in memory only, on the Runtime clock's monotonic
+/// milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettlingWindow {
+    /// No window is open, and one may open.
+    Closed,
+    /// Open since `since_ms`, its first opening, until `until_ms`, which no answer moves past
+    /// `since_ms + SHUTDOWN_SETTLING_LIMIT_MS`.
+    Open { since_ms: u64, until_ms: u64 },
+    /// A window ended and no policy cycle has begun since: none may open until one has.
+    Ended,
+}
 
 pub(super) struct LifecycleAdmission {
     closed: bool,
     stopping: bool,
     preparing: bool,
     active: std::collections::HashMap<thread::ThreadId, usize>,
-    /// Workflow #503 SD-1: the end of the settling window a shutdown request opened, on the
-    /// Runtime clock's monotonic milliseconds; `None` when no window is open. Memory only.
-    settling_until_ms: Option<u64>,
+    /// Workflow #503 SD-1: the settling window a shutdown request opens. Memory only.
+    settling: SettlingWindow,
+}
+
+/// Workflow #503 SD-1: the work a settling window holds back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnsettledWork {
+    /// A new policy cycle (`RuntimeHost::begin_policy_work`); the first after a window ended lets
+    /// a window open again.
+    PolicyCycle,
+    /// A new tick of the performance thread.
+    PerformanceTick,
 }
 
 impl LifecycleAdmission {
@@ -64,21 +92,35 @@ impl LifecycleAdmission {
             stopping: false,
             preparing: true,
             active: std::collections::HashMap::new(),
-            settling_until_ms: None,
+            settling: SettlingWindow::Closed,
         }
     }
 
-    /// Workflow #503 SD-1: whether the settling window holds new work back at `now_ms`; a window
-    /// whose end `now_ms` reached is closed here, so that nothing it held back stays held.
-    fn settling_at(&mut self, now_ms: u64) -> bool {
-        match self.settling_until_ms {
-            Some(until_ms) if now_ms < until_ms => true,
-            Some(_) => {
-                self.settling_until_ms = None;
-                false
-            }
-            None => false,
+    /// Workflow #503 SD-1: an open window whose end `now_ms` reached has ended, so that nothing it
+    /// held back stays held.
+    fn settling_seen_at(&mut self, now_ms: u64) {
+        if let SettlingWindow::Open { until_ms, .. } = self.settling
+            && now_ms >= until_ms
+        {
+            self.settling = SettlingWindow::Ended;
         }
+    }
+
+    /// Workflow #503 SD-1: opens the settling window at `now_ms` for `SHUTDOWN_SETTLING_WINDOW_MS`,
+    /// or an open one again from `now_ms`, never past its first opening plus
+    /// `SHUTDOWN_SETTLING_LIMIT_MS`; `false`, opening nothing, when a window ended (at its own end
+    /// or at that bound) and no policy cycle has begun since.
+    fn open_settling_at(&mut self, now_ms: u64) -> RuntimeHostResult<bool> {
+        self.settling_seen_at(now_ms);
+        let since_ms = match self.settling {
+            SettlingWindow::Closed => now_ms,
+            SettlingWindow::Open { since_ms, .. } => since_ms,
+            SettlingWindow::Ended => return Ok(false),
+        };
+        let until_ms = deadline_after(now_ms, SHUTDOWN_SETTLING_WINDOW_MS)?
+            .min(deadline_after(since_ms, SHUTDOWN_SETTLING_LIMIT_MS)?);
+        self.settling = SettlingWindow::Open { since_ms, until_ms };
+        Ok(true)
     }
 }
 
@@ -90,8 +132,10 @@ pub(crate) enum ShutdownBusy {
     /// Something refuses it at once, the word naming what: `runtime_shutdown_denied` with
     /// `runtime_busy`, and no settling window opens.
     Refused(ShutdownObstacle),
-    /// Nothing refuses it but lifecycle work in flight on other threads, which the settle did not
-    /// see end: `runtime_shutdown_settling`, and the settling window opens.
+    /// Nothing refuses it but lifecycle work in flight on other threads, which the settle waits
+    /// for and did not see end: `runtime_shutdown_settling`, and the settling window opens; once
+    /// a window ended and no policy cycle has begun since, `runtime_shutdown_denied` with
+    /// `work_outlived_window` instead, which opens nothing.
     Settling,
 }
 
@@ -234,19 +278,29 @@ impl HostShared {
         Ok(Some(self.count_work(&mut admission)))
     }
 
-    /// Workflow #503 SD-1: the work a settling window holds back, a new policy cycle
-    /// (`RuntimeHost::begin_policy_work`) and a new tick of the performance thread: as
+    /// Workflow #503 SD-1: the work a settling window holds back, `work` (a new policy cycle,
+    /// `RuntimeHost::begin_policy_work`, or a new tick of the performance thread): as
     /// [`Self::begin_work`], and none while a settling window is open. The Runtime clock is read
-    /// only while a window is set; a window whose end has come is closed here.
-    pub(super) fn begin_unsettled_work(&self) -> RuntimeHostResult<Option<LifecycleWork<'_>>> {
+    /// only while a window is open; one whose end has come has ended here, and the first policy
+    /// cycle that begins after a window ended lets a window open again.
+    pub(super) fn begin_unsettled_work(
+        &self,
+        work: UnsettledWork,
+    ) -> RuntimeHostResult<Option<LifecycleWork<'_>>> {
         let mut admission = lock(&self.lifecycle_admission, HostLocation::AdmitRuntimeWork)?;
-        if admission.settling_until_ms.is_some() && admission.settling_at(self.monotonic_ms()?) {
-            return Ok(None);
+        if matches!(admission.settling, SettlingWindow::Open { .. }) {
+            admission.settling_seen_at(self.monotonic_ms()?);
+            if matches!(admission.settling, SettlingWindow::Open { .. }) {
+                return Ok(None);
+            }
         }
         if admission.stopping
             || (admission.closed && !admission.active.contains_key(&thread::current().id()))
         {
             return Ok(None);
+        }
+        if work == UnsettledWork::PolicyCycle && admission.settling == SettlingWindow::Ended {
+            admission.settling = SettlingWindow::Closed;
         }
         Ok(Some(self.count_work(&mut admission)))
     }
@@ -255,17 +309,20 @@ impl HostShared {
     /// stop checks (before each statement of a round, between the frames it acts on) and the
     /// listing's hand-over at a pass start: the Runtime's stop was requested, or a shutdown request
     /// opened a settling window. A round of a tick that began before the window opened then ends
-    /// there, its pass kept for a later round; no tick begins while the window is open. What the
-    /// cleaner examines and removes is unchanged. A poisoned admission lock is read as it is: every
-    /// later admission reports it as fatal.
+    /// there, its pass kept for a later round; a pass start that gives way while it hands over
+    /// its listing does not begin, and the next pass starts only after the cleaner's interval
+    /// (`SWEEP_INTERVAL_MS`, ten minutes), as a pass start the stop ended. No tick begins while the
+    /// window is open. What the cleaner examines and removes is unchanged. A poisoned admission
+    /// lock is read as it is: every later admission reports it as fatal.
     pub(super) fn retention_gives_way(&self) -> bool {
         self.fatal.is_shutdown_requested()
-            || self
-                .lifecycle_admission
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .settling_until_ms
-                .is_some()
+            || matches!(
+                self.lifecycle_admission
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .settling,
+                SettlingWindow::Open { .. }
+            )
     }
 
     /// Cleanup is part of admitted work even when shutdown has already closed the root gate.
@@ -423,7 +480,10 @@ impl HostShared {
     /// end, at most `SHUTDOWN_SETTLE_TIMEOUT`; it is then decided with the admission still
     /// held, so no new work starts in between. Work of the requesting thread itself cannot end
     /// while it waits, and every other refusal is answered at once. Workflow #503 SD-1: work that
-    /// did not end within it opens the settling window ([`Self::shutdown_under_gate`]).
+    /// did not end within it opens the settling window ([`Self::shutdown_under_gate`]). Fix round
+    /// 1: the settle waits exactly while the one order ([`Self::shutdown_decision`]) finds the
+    /// request kept busy by work in flight on other threads alone, and returns at every other
+    /// answer.
     fn settle_for_shutdown<'a>(
         &'a self,
         mut admission: MutexGuard<'a, LifecycleAdmission>,
@@ -431,14 +491,8 @@ impl HostShared {
     ) -> RuntimeHostResult<MutexGuard<'a, LifecycleAdmission>> {
         let deadline = Instant::now() + SHUTDOWN_SETTLE_TIMEOUT;
         loop {
-            if admission.active.is_empty()
-                || admission.active.contains_key(&thread::current().id())
-                || target != self.shutdown_target
-                || admission.stopping
-                || admission.preparing
-                || self.fatal.is_shutdown_requested()
-                || self.shutdown_obstacle()?.is_some()
-            {
+            let (_, busy) = self.shutdown_decision(&admission, target)?;
+            if busy != Some(ShutdownBusy::Settling) {
                 return Ok(admission);
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -466,12 +520,47 @@ impl HostShared {
         self.shutdown_under_gate(request, target, &mut admission)
     }
 
+    /// Workflow #503 SD-1 fix round 1: the decision of a shutdown request of `target` now, and
+    /// what keeps it busy, in the one order both the settle and the decision read: another owner's
+    /// target, a Runtime already stopping, then [`shutdown_busy`].
+    fn shutdown_decision(
+        &self,
+        admission: &LifecycleAdmission,
+        target: RuntimeShutdownTarget,
+    ) -> RuntimeHostResult<(RuntimeShutdownDecision, Option<ShutdownBusy>)> {
+        if target != self.shutdown_target {
+            return Ok((RuntimeShutdownDecision::OwnerMismatch, None));
+        }
+        if admission.stopping || self.fatal.is_shutdown_requested() {
+            return Ok((RuntimeShutdownDecision::AlreadyStopping, None));
+        }
+        let obstacle = if admission.preparing {
+            None
+        } else {
+            self.shutdown_obstacle()?
+        };
+        Ok(
+            match shutdown_busy(
+                admission.preparing,
+                obstacle,
+                admission.active.contains_key(&thread::current().id()),
+                !admission.active.is_empty(),
+            ) {
+                Some(busy) => (RuntimeShutdownDecision::Busy, Some(busy)),
+                None => (RuntimeShutdownDecision::Accepted, None),
+            },
+        )
+    }
+
     /// The decision of a shutdown request once its settle ended. Workflow #503 SD-1: a request of
     /// this Runtime's own target that only lifecycle work in flight on other threads keeps busy
     /// opens the settling window, to `SHUTDOWN_SETTLING_WINDOW_MS` from its answer (a request
-    /// answered so while a window is open opens it again from its own answer), and is answered
-    /// `runtime_shutdown_settling` with `retry_after_ms`; its record keeps the decision `busy`. An
-    /// accepted shutdown closes the window. Every other refusal opens none.
+    /// answered so while a window is open opens it again from its own answer, fix round 1: never
+    /// past `SHUTDOWN_SETTLING_LIMIT_MS` from its first opening), and is answered
+    /// `runtime_shutdown_settling` with `retry_after_ms`; its record keeps the decision `busy`.
+    /// Once a window ended (at its end or at that bound) and no policy cycle has begun since,
+    /// such a request is refused `runtime_shutdown_denied` with `work_outlived_window` and opens
+    /// nothing. An accepted shutdown closes the window. Every other refusal opens none.
     fn shutdown_under_gate(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -481,26 +570,7 @@ impl HostShared {
         if let Some(error) = self.fatal.answer()? {
             return Err(error.into());
         }
-        let (decision, busy) = if target != self.shutdown_target {
-            (RuntimeShutdownDecision::OwnerMismatch, None)
-        } else if admission.stopping || self.fatal.is_shutdown_requested() {
-            (RuntimeShutdownDecision::AlreadyStopping, None)
-        } else {
-            let obstacle = if admission.preparing {
-                None
-            } else {
-                self.shutdown_obstacle()?
-            };
-            match shutdown_busy(
-                admission.preparing,
-                obstacle,
-                admission.active.contains_key(&thread::current().id()),
-                !admission.active.is_empty(),
-            ) {
-                Some(busy) => (RuntimeShutdownDecision::Busy, Some(busy)),
-                None => (RuntimeShutdownDecision::Accepted, None),
-            }
-        };
+        let (decision, busy) = self.shutdown_decision(admission, target)?;
         let event = self.append_event(
             if decision == RuntimeShutdownDecision::Accepted {
                 EventSeverity::Info
@@ -520,7 +590,7 @@ impl HostShared {
         if decision == RuntimeShutdownDecision::Accepted {
             admission.closed = true;
             admission.stopping = true;
-            admission.settling_until_ms = None;
+            admission.settling = SettlingWindow::Closed;
             self.fatal.request_shutdown();
             return Ok(OperationSuccess {
                 state: RuntimeReceiptState::Admitted,
@@ -529,22 +599,24 @@ impl HostShared {
                 failure_outcome: None,
             });
         }
+        // Fix round 1: work in flight that outlived a window, while none may open, is refused.
+        let busy = if busy == Some(ShutdownBusy::Settling)
+            && !admission.open_settling_at(self.monotonic_ms()?)?
+        {
+            Some(ShutdownBusy::Refused(ShutdownObstacle::WorkOutlivedWindow))
+        } else {
+            busy
+        };
         let refusal = match busy {
-            Some(ShutdownBusy::Settling) => {
-                admission.settling_until_ms = Some(deadline_after(
-                    self.monotonic_ms()?,
-                    SHUTDOWN_SETTLING_WINDOW_MS,
-                )?);
-                RuntimeHostError::with_projection(
-                    HostCode::RuntimeShutdownSettling,
-                    ContractLocation::RequestRuntimeShutdown,
-                    RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeBusy, false)
-                        .with_retry_after(SHUTDOWN_SETTLING_RETRY_AFTER_MS),
-                )
-                .with_outcome_values(|outcome| {
-                    outcome.retry_after_ms(SHUTDOWN_SETTLING_RETRY_AFTER_MS)
-                })
-            }
+            Some(ShutdownBusy::Settling) => RuntimeHostError::with_projection(
+                HostCode::RuntimeShutdownSettling,
+                ContractLocation::RequestRuntimeShutdown,
+                RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeBusy, false)
+                    .with_retry_after(SHUTDOWN_SETTLING_RETRY_AFTER_MS),
+            )
+            .with_outcome_values(|outcome| {
+                outcome.retry_after_ms(SHUTDOWN_SETTLING_RETRY_AFTER_MS)
+            }),
             Some(ShutdownBusy::Refused(obstacle)) => RuntimeHostError::request(
                 HostCode::RuntimeShutdownDenied,
                 ContractLocation::RequestRuntimeShutdown,

@@ -2974,7 +2974,7 @@
     },
     "shutdown_obstacle": {
       "type": "vocab:shutdown_obstacle",
-      "description": "What refused a shutdown request of the Runtime's own target as busy, on runtime_shutdown_denied with runtime_code runtime_busy: a start that prepares, a lease held, a waiting entry no pause holds, a client's reset still owed, a policy run a worker holds, or lifecycle work of the requesting thread itself, the first that holds (Workflow #503 SD-1, contracts/runtime-interface.md \"A shutdown request that finds work in flight\", since 0.12.83)."
+      "description": "What refused a shutdown request of the Runtime's own target as busy, on runtime_shutdown_denied with runtime_code runtime_busy: a start that prepares, a lease held, a waiting entry no pause holds, a client's reset still owed, a policy run a worker holds, or lifecycle work of the requesting thread itself, the first that holds; or (fix round 1) lifecycle work in flight on other threads that outlived a settling window while none may open (Workflow #503 SD-1, contracts/runtime-interface.md \"A shutdown request that finds work in flight\", since 0.12.83)."
     }
   },
   "vocabularies": {
@@ -11116,6 +11116,9 @@
         },
         "requesting_thread_work": {
           "description": "Lifecycle work of the requesting thread itself, which cannot end while the request waits."
+        },
+        "work_outlived_window": {
+          "description": "Fix round 1: lifecycle work in flight on other threads alone outlived a settling window: the window reached its bound of 75 s from its first opening, or it ended, and no policy cycle has begun since; no window opens, and new policy cycles run."
         }
       }
     }

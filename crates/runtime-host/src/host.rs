@@ -213,7 +213,8 @@ mod installation;
 // settling window's bound and retry, which its gate reads.
 #[cfg(test)]
 pub(crate) use installation::{
-    SHUTDOWN_SETTLING_RETRY_AFTER_MS, SHUTDOWN_SETTLING_WINDOW_MS, ShutdownBusy, shutdown_busy,
+    SHUTDOWN_SETTLING_LIMIT_MS, SHUTDOWN_SETTLING_RETRY_AFTER_MS, SHUTDOWN_SETTLING_WINDOW_MS,
+    ShutdownBusy, shutdown_busy,
 };
 // Workflow #429 R-0b: what each instance does now (`RuntimeInstanceStatus.activity`, memory only).
 mod instance_activity;
@@ -3360,7 +3361,7 @@ impl RuntimeHost {
     pub fn begin_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
         Ok(self
             .shared_ref(HostLocation::BeginPolicyWork)?
-            .begin_unsettled_work()?
+            .begin_unsettled_work(installation::UnsettledWork::PolicyCycle)?
             .map(|guard| RuntimePolicyWork { _guard: guard }))
     }
 

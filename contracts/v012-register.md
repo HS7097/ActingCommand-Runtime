@@ -48610,7 +48610,7 @@ beforehand and waited.
 | Code or word | The one situation | Refuses or warns | Exit |
 |---|---|---|---|
 | `runtime_shutdown_settling` (new, Error) | lifecycle work in flight on other threads alone outlasted the settle; window open, ask again after `retry_after_ms` | refuses (`runtime_busy`) | 1, as the refusal it replaces |
-| `shutdown_obstacle` (new key and vocabulary, on `runtime_shutdown_denied`) | which of `start_preparing`, `lease`, `waiting_entry`, `client_reset`, `policy_run`, `requesting_thread_work` refused the request | refuses, as before | 1, as before |
+| `shutdown_obstacle` (new key and vocabulary, on `runtime_shutdown_denied`) | which of `start_preparing`, `lease`, `waiting_entry`, `client_reset`, `policy_run`, `requesting_thread_work` refused the request; fix round 1: `work_outlived_window`, work in flight on other threads alone while no window may open | refuses, as before | 1, as before |
 
 **Tests** (incident `#503 SD-1`: the host gate map's row, `crates/runtime-host/src/tests/gate_503_sd1.rs`,
 and the apps gate map's row, `crates/lab-rescue/src/install/gate_503_sd1.rs`; no clock read; the
@@ -48651,6 +48651,42 @@ next ones are accepted once the work in flight ended. An installer of this versi
 Runtime gets the old refusal, with no `retry_after_ms`, and fails at once as before; an older
 installer meeting this Runtime fails at once on the settling answer as before, and the window ends
 by itself.
+
+**Fix round 1** (pull request #1893; the coordinator's disposition of the independent review
+`rd-1123/review-1893.md`, which found the slice may merge, its items 1 to 3 raised to musts).
+- *The window has a bound* (rule 5). `LifecycleAdmission`'s window is now `SettlingWindow`:
+  `Closed`, `Open { since_ms, until_ms }` or `Ended`. An answer while it is open opens it again
+  from that answer but never past `since_ms`, its first opening, plus `SHUTDOWN_SETTLING_LIMIT_MS`,
+  75 000 ms: the installer's asks stop within `install.stop.shutdown_wait_ms` (60 s as shipped) of
+  the first, the last ask's settle inside it, with one window (15 s) of room; a client that never
+  stops asking holds new cycles and ticks back 75 s at most. At its end or its bound the window has
+  `Ended` (the first `begin_unsettled_work` or ask that sees it): cycles and ticks begin again, the
+  cleaner no longer gives way, and a request kept busy by work in flight on other threads alone is
+  refused at once, `runtime_shutdown_denied` with the new word `work_outlived_window`, opening
+  nothing, until a policy cycle has begun (`UnsettledWork::PolicyCycle`); then a window may open
+  again. A tick does not reopen it.
+- *A late acceptance is an ordinary stop.* The installer's asks keep their own bound (the next ask
+  only within `shutdown_wait_ms` of the first); the wait for the stop after an accepted ask has its
+  whole `shutdown_wait_ms` from that ask, as on main, so an ask accepted just inside the bound is
+  never cut short into `runtime_stop_failed`. Chosen over not asking when the rest cannot hold a
+  stop, which would need a guess of how long a stop takes; the step's worst case is two waits.
+- *One order, written once* (rule 4). `shutdown_decision` gives the decision and what keeps a
+  request busy (another owner, a Runtime stopping, then `shutdown_busy`); `settle_for_shutdown`
+  waits exactly while it answers the settling case and returns at every other answer, so an
+  obstacle added to the one order is never waited for.
+- The interface page's table and the comment of `retention_gives_way` say what §1.525 said of a
+  pass start that gives way: it does not begin, and the next starts after the cleaner's ten
+  minutes.
+- *Tests added.* `sd1_1_asks_that_keep_coming_hold_cycles_back_no_longer_than_the_bound` (host gate
+  row): asks every 14 s with a cycle held in flight, each `runtime_shutdown_settling` and each
+  opening the window again (between asks no cycle begins, past the 15 s of the one before); a
+  millisecond before 75 s no cycle begins; at 75 s the ask is `work_outlived_window` with no retry,
+  the cleaner's stop is lowered and a cycle begins; the next ask opens a new window.
+  `sd1_5_a_shutdown_accepted_late_waits_its_whole_time_and_ends_as_an_ordinary_stop` (apps gate
+  row): asks again of 29 s bring the accepted third ask to 58 s after the first; every ask, the
+  last included, has the whole 60 s for the stop after it, and the stop is done. No test of the
+  performance tick held back inside a window: the tick has no seam a test reads, and it begins
+  through the same `begin_unsettled_work` as the cycle, which the tests read.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

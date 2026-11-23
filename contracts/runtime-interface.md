@@ -223,7 +223,8 @@ under the lifecycle admission, in one order:
    (`start_preparing`); a lease is held (`lease`); an entry waits that no scheduling pause holds
    (`waiting_entry`); a client whose contained run ended cancelled has not reset its instance yet
    (`client_reset`); a policy run an instance worker holds (`policy_run`); lifecycle work of the
-   requesting thread itself (`requesting_thread_work`). None of them opens a settling window.
+   requesting thread itself (`requesting_thread_work`). None of them opens a settling window, nor
+   does `work_outlived_window` (below).
 3. Lifecycle work in flight on other threads alone (a policy cycle, a tick of the performance
    thread, the lease sweep, a reply still being written): the request lets it end, at most 2 s
    (its settle), with the admission still held between that end and the decision. Work that
@@ -234,20 +235,26 @@ under the lifecycle admission, in one order:
 
 The settling window is memory only and lasts 15 000 ms on the Runtime clock from the answer that
 opened it; an answer `runtime_shutdown_settling` given while it is open opens it again from that
-answer. While it is open:
+answer, never past 75 000 ms from the window's first opening (fix round 1: the installer's asks
+stop within `install.stop.shutdown_wait_ms`, 60 s as shipped, of the first, with one window of
+room). A request kept busy by work in flight on other threads alone after the window ended, at its
+own end or at that bound, and before a policy cycle has begun since, is refused at once,
+`runtime_shutdown_denied` with `runtime_busy` and `shutdown_obstacle` `work_outlived_window`, and
+opens nothing; once a policy cycle has begun, a window may open again. While it is open:
 
 | Held back | Admitted as before |
 |---|---|
 | A new policy cycle: `begin_policy_work` gives none, so a trigger the policy driver holds waits in `wait_policy_work` and runs once the window ended | A client's request, a lease's renewal and release, a contained run, an instance worker's run and its settlement, a host claim |
 | A new tick of the performance thread (its sample, its frame cleaner's round, the seal of the runtime facts) | Cleanup, a closed connection's and a refused run's |
-| The frame cleaner's round of a tick already running gives way at its next stop check, its pass kept for a later round; a statement in progress runs to its end | The lease sweep |
+| The frame cleaner's round of a tick already running gives way at its next stop check, its pass kept for a later round; a pass start that gives way while it hands over its listing does not begin, and the next pass starts only after the cleaner's interval (ten minutes), as one the stop ended; a statement in progress runs to its end | The lease sweep |
 | | A policy cycle or a tick already running ends as it would |
 
 A request admitted inside the window that takes a lease or starts a run makes the next shutdown
-request refused at once, as it would be without a window. The window ends by itself at its end
-(the first cycle or tick that may begin after it closes it), and at once when a shutdown is
-accepted: nothing it held back stays held, and a Runtime asked once and never again runs on as if
-it had not been asked. The window and its answer are the Runtime's own, set by nothing but a
+request refused at once, as it would be without a window. The window ends by itself at its end or
+at its bound (the first cycle or tick that may begin after it sees it ended), and at once when a
+shutdown is accepted: nothing it held back stays held, and a Runtime asked once and never again
+runs on as if it had not been asked. The settle and the decision read one order: the request
+waits its 2 s exactly while work in flight on other threads alone keeps it busy. The window and its answer are the Runtime's own, set by nothing but a
 shutdown request of its own target.
 
 A client reads `runtime_busy` as before: the receipt's Runtime error code is unchanged, and

@@ -557,8 +557,9 @@ does not read the journals of kind `stop` or `start` or with `rollback` (review 
   Runtime's `runtime_shutdown_settling` carries: lifecycle work still in flight, its settling
   window open; [runtime-interface.md](runtime-interface.md), "A shutdown request that finds work
   in flight") is asked again after that long, as long as the next ask comes before
-  `install.stop.shutdown_wait_ms` from the first has passed; the wait after an accepted ask takes
-  what is left of it. A shutdown accepted on a later ask is an ordinary close. Any other refusal,
+  `install.stop.shutdown_wait_ms` from the first has passed; the wait for the stop after an
+  accepted ask has its whole `install.stop.shutdown_wait_ms` from that ask (fix round 1), so a
+  shutdown accepted on a later ask, however late, is an ordinary close. Any other refusal,
   and a settling answer whose retry would pass that time, fails the step at once
   (`runtime_stop_failed` caused by the last answer, every earlier answer a `related` link of the
   operation's result). The close step's evidence lists every ask and its answer (`asks`: each

@@ -18,7 +18,8 @@
 use super::*;
 use crate::codes::{HostCode, ShutdownObstacle};
 use crate::host::{
-    SHUTDOWN_SETTLING_RETRY_AFTER_MS, SHUTDOWN_SETTLING_WINDOW_MS, ShutdownBusy, shutdown_busy,
+    SHUTDOWN_SETTLING_LIMIT_MS, SHUTDOWN_SETTLING_RETRY_AFTER_MS, SHUTDOWN_SETTLING_WINDOW_MS,
+    ShutdownBusy, shutdown_busy,
 };
 use actingcommand_contract::{RuntimeLifecyclePhase, RuntimePayload, RuntimeShutdownDecision};
 
@@ -203,6 +204,60 @@ fn sd1_1_a_cycle_in_flight_is_answered_settling_and_the_second_ask_is_accepted()
             RuntimeShutdownDecision::Accepted
         ]
     );
+    host.close().expect("close the host");
+}
+
+// Fix round 1 (the coordinator's item 1; rule 5): asks that keep coming while work stays in flight
+// open the window again each time (every 14 s here, inside one window's 15 s), never past
+// `SHUTDOWN_SETTLING_LIMIT_MS` from its first opening: a millisecond before that bound no cycle
+// begins, at it the ask is refused `work_outlived_window` and opens nothing, the cleaner no longer
+// gives way and cycles resume; once a cycle has begun a window may open again.
+#[test]
+fn sd1_1_asks_that_keep_coming_hold_cycles_back_no_longer_than_the_bound() {
+    const STEP_MS: u64 = SHUTDOWN_SETTLING_WINDOW_MS - 1_000;
+    let (_root, host, clock) = start();
+    let ids = IdentifierIssuer::new().expect("identifier issuer");
+    with_a_cycle_in_flight(&host, || {
+        let mut at_ms = 0;
+        let mut nth = 0;
+        loop {
+            nth += 1;
+            assert_settling(&ask(&host, &ids, nth));
+            assert!(!a_cycle_begins(&host), "held back at {at_ms} ms");
+            let next_ms = at_ms + STEP_MS;
+            if next_ms >= SHUTDOWN_SETTLING_LIMIT_MS {
+                break;
+            }
+            clock.advance(STEP_MS);
+            at_ms = next_ms;
+            assert!(
+                !a_cycle_begins(&host),
+                "at {at_ms} ms the window the ask before opened again still holds"
+            );
+        }
+        assert!(nth > 1, "the window was opened again");
+        clock.advance(SHUTDOWN_SETTLING_LIMIT_MS - 1 - at_ms);
+        assert!(
+            !a_cycle_begins(&host),
+            "a millisecond before the bound the window still holds"
+        );
+        clock.advance(1);
+        assert_refused_busy(
+            &ask(&host, &ids, nth + 1),
+            ShutdownObstacle::WorkOutlivedWindow,
+        );
+        assert!(
+            !host.retention_gives_way_for_test(),
+            "the window ended at its bound"
+        );
+        assert!(a_cycle_begins(&host), "cycles resume at the bound");
+        assert_settling(&ask(&host, &ids, nth + 2));
+        assert!(
+            !a_cycle_begins(&host),
+            "after a cycle began a new window holds again"
+        );
+    });
+    assert!(!host.is_shutdown_requested().expect("running"));
     host.close().expect("close the host");
 }
 

@@ -184,6 +184,50 @@ fn sd1_5_the_close_asks_again_after_each_settling_answer_and_its_evidence_lists_
     assert_eq!(close["evidence"]["wait"]["state"], "completed", "{close}");
 }
 
+// Fix round 1 (the coordinator's item 2): asks again of 29 s each bring the third ask to 58 s
+// after the first, just inside the 60 s of `install.stop.shutdown_wait_ms`; it is accepted, and the
+// wait for the stop after it has its whole 60 s, as every ask's has, so the step ends as an
+// ordinary stop.
+#[test]
+fn sd1_5_a_shutdown_accepted_late_waits_its_whole_time_and_ends_as_an_ordinary_stop() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = prepared(temp.path(), "accepted-late", &host);
+    host.runtime.boot(&["node.a"]);
+    host.runtime
+        .shutdown_refusals
+        .borrow_mut()
+        .extend([settling(29_000), settling(29_000)]);
+
+    let stopped = run(
+        &host,
+        &["stop", "--root", word(&root), "--hold", "deploy-sd1"],
+    );
+    assert_done(&stopped, "install_stop");
+    assert_eq!(
+        calls(&host),
+        [
+            "pause node.a deploy-sd1",
+            "shutdown",
+            "shutdown",
+            "shutdown"
+        ]
+    );
+    assert_eq!(
+        *host.runtime.shutdown_waits.borrow(),
+        [60_000, 60_000, 60_000],
+        "every ask has the whole wait for the stop after it"
+    );
+    assert!(!host.runtime.running.get(), "the Runtime closed");
+    let close = close_step(&journal_of(&root, &operation_id(&stopped)));
+    assert_eq!(close["state"], "done", "{close}");
+    assert_eq!(
+        close["evidence"]["asks"][2],
+        json!({"accepted": true}),
+        "{close}"
+    );
+}
+
 #[test]
 fn sd1_5_any_other_refusal_fails_the_close_at_once_and_the_journal_shows_every_answer() {
     // A refusal that names no retry: one ask, the step fails `runtime_stop_failed` with it.

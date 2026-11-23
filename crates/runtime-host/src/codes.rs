@@ -3901,6 +3901,10 @@ actingcommand_contract::outcome_vocabulary! {
         PolicyRun => "policy_run",
         /// Lifecycle work of the requesting thread itself, which cannot end while it waits.
         RequestingThreadWork => "requesting_thread_work",
+        /// Fix round 1: lifecycle work in flight on other threads alone outlived a settling
+        /// window: the window reached its bound from its first opening, or ended, and no policy
+        /// cycle has begun since, so none opens.
+        WorkOutlivedWindow => "work_outlived_window",
     }
 }
 // ---- Workflow #503 SD-1: end ----

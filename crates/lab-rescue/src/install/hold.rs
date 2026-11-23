@@ -674,11 +674,13 @@ fn ask_again_after(refusal: &Outcome) -> Option<u64> {
 /// `stop_terminal_unconfirmed` (the Runtime is gone all the same).
 ///
 /// Workflow #503 SD-1 (register §1.525): a refusal that says when to ask again
-/// ([`ask_again_after`]) is asked again after that long, as long as the asks and the wait stay
-/// within `wait_ms` from the first ask, the wait taking what is left; any other refusal fails the
-/// step at once, as before. The evidence lists every ask and its answer (`asks`: each refused one
-/// with its code and `retry_after_ms`, then the accepted one); a step that fails carries the last
-/// answer as its cause and every earlier one as a `related` link, in the operation's result.
+/// ([`ask_again_after`]) is asked again after that long, as long as the next ask comes within
+/// `wait_ms` of the first; any other refusal fails the step at once, as before. Fix round 1: the
+/// wait for the stop after an accepted ask has its whole `wait_ms` from that ask, as without asks
+/// again, so a shutdown accepted late is waited for as any other. The evidence lists every ask and
+/// its answer (`asks`: each refused one with its code and `retry_after_ms`, then the accepted
+/// one); a step that fails carries the last answer as its cause and every earlier one as a
+/// `related` link, in the operation's result.
 pub(crate) fn run_close(
     host: &dyn Host,
     root: &Path,
@@ -693,19 +695,18 @@ pub(crate) fn run_close(
     if running.is_none() {
         return Ok((json!({"already_stopped": true}), None));
     }
-    let deadline_ms = host.now_unix_ms().saturating_add(wait_ms);
+    let asks_end_ms = host.now_unix_ms().saturating_add(wait_ms);
     let mut asks = Vec::new();
     let mut earlier = Vec::new();
     let closed = loop {
-        let left_ms = deadline_ms.saturating_sub(host.now_unix_ms());
-        match runtime.shutdown(root, state_root, left_ms) {
+        match runtime.shutdown(root, state_root, wait_ms) {
             Ok(closed) => {
                 asks.push(json!({"accepted": true}));
                 break closed;
             }
             Err(refusal) => match ask_again_after(&refusal) {
                 Some(retry_after_ms)
-                    if host.now_unix_ms().saturating_add(retry_after_ms) < deadline_ms =>
+                    if host.now_unix_ms().saturating_add(retry_after_ms) < asks_end_ms =>
                 {
                     asks.push(json!({
                         "accepted": false,
