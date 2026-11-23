@@ -187,7 +187,7 @@ fn self_t11_fix_select_is_a_row_beside_package_edit_and_needs_no_runtime() {
     assert_eq!(lines.len(), 1, "one line: {served}");
     let envelope = serde_json::from_str::<Value>(lines[0])
         .unwrap_or_else(|error| panic!("one JSON line ({error}): {served}"));
-    assert_eq!(envelope["exit_code"], 3, "{envelope}");
+    assert_eq!(envelope["exit_code"], 1, "{envelope}");
     assert_eq!(
         envelope["line"]["outcome"], answered["outcome"],
         "{envelope}"
