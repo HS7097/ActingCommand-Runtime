@@ -4830,3 +4830,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_b3p::b3p_host_a_goal_on_a_pool_with_target_defaults_is_set_by_at_least_alone_and_cleared",
 ]
 incident = ["#455 B3-P"]
+
+# #486 ASLEEP-5 (0.12.83; register §1.524; brief rd-1123/brief-486-asleep5.md, tests 1 to 4 and 6; contracts/scheduling/README.md, "An asleep instance"; contracts/runtime-config.md, "What wakes an idle instance"), the host half, on ASLEEP-4's replay instance under stop_emulator (its task's pack schedule closed with no end, the host's own check stopping its emulator) and on the budget replay, no clock read: asleep, its task held back by the closed schedule at its time and ten minutes later, no decision of the instance names a time, the cycle's idle wake (PolicyCycle::idle_wake_unix_ms) is none and the cycle commits no record that wakes the driver outside the performance family, which the test leaves out (fix round 1: so it does not show that no record of a cycle wakes the next; a capacity summary at admission may, register §1.524); the schedule's reopening commits a fact, and the cycle after it names the task instance_asleep_wake_due with no wake and wakes the instance once for it (h1); the reopening past the task's time: the cycle starts the wake, names no time while it is under way, the wake's end commits a lease end and the evaluation after it selects the task (h2); a wake whose start fails ends with emulator_autostart_failed and a lease end, and the next cycle names nothing woken for and no idle wake (h3); a spent budget on the asleep instance: the idle wake is the budget's release, and IdlePlanner::look_again_unix_ms answers a time only for an instance owing its wake whose plan holds its tasks to a time not come (h4); of two instances the asleep one names no time and the working one is not asked (h6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep5_h1_a_task_held_with_no_time_causes_no_cycle_until_its_hold_is_lifted",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep5_h2_a_task_due_starts_the_wake_and_the_wakes_end_brings_the_cycle_that_selects_it",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep5_h3_a_wake_whose_start_fails_hands_the_key_back_and_leaves_the_instance_asleep_no_more",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep5_h4_a_time_bound_gate_on_the_asleep_instance_makes_its_release_the_hosts_time",
+    "actingcommand-runtime-host::lib::tests::gate_486_asleep::asleep5_h6_of_two_instances_the_asleep_one_names_no_time_and_the_working_one_is_not_asked",
+]
+incident = ["#486", "ASLEEP-5"]

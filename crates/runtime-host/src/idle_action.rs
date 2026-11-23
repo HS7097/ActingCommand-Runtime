@@ -1045,6 +1045,39 @@ impl IdlePlanner {
             .collect()
     }
 
+    /// #486 ASLEEP-5 (register §1.524): the instances whose idle action left them closed or
+    /// stopped, owing their wake (the idle phase: the action done, the wake not queued), by alias.
+    pub(crate) fn owing_wakes(&self) -> Vec<String> {
+        self.instances
+            .iter()
+            .filter(|(_, entry)| matches!(entry.phase, Phase::Idle { .. }))
+            .map(|(alias, _)| alias.clone())
+            .collect()
+    }
+
+    /// #486 ASLEEP-5 (register §1.524, ruling 2; `contracts/runtime-config.md`, "What wakes an
+    /// idle instance"): when the policy driver looks again for `alias` once an idle check read
+    /// `plan`, beside the evaluation's own wake. Only an instance its idle action leaves closed or
+    /// stopped, owing its wake ([`Self::owing_wakes`]), whose plan counts no task due, names a
+    /// time: the plan's own wake when it has not come (what lets a held task through, a task's own
+    /// time). Every other instance names none: one being woken, or whose action is under way, is
+    /// looked at again when its wake's or its action's claim ends, which hands its key back and so
+    /// raises the host's business notification; one whose plan counts a task due and that this
+    /// check still left owing its wake (its wake held by a pause, PAUSE-AUTO) is woken by a later
+    /// check on the same plan, the lease sweep's every second.
+    pub(crate) fn look_again_unix_ms(&self, alias: &str, plan: Option<IdlePlan>) -> Option<u64> {
+        let plan = plan.filter(|plan| !plan.due_now)?;
+        if !self
+            .instances
+            .get(alias)
+            .is_some_and(|entry| matches!(entry.phase, Phase::Idle { .. }))
+        {
+            return None;
+        }
+        plan.next_wake_unix_ms
+            .filter(|at| *at > plan.evaluated_at_unix_ms)
+    }
+
     /// #486 ASLEEP-1 (register §1.497, ruling 6): the one warning of the unanswered wake of `alias`
     /// once a check withheld the stop of its emulator; none otherwise, and none again for the same
     /// wake. #486 ASLEEP-2 (register §1.506, ruling 3): with the action the wake brought the

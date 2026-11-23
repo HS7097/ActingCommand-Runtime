@@ -1438,8 +1438,8 @@ action stops or holds its emulator stopped and nothing but that stop withdrew it
 withdrawal; no failed self-check or preparation step of its own), the evaluation judges it as if
 it were available and selects nothing on it ([scheduling/README.md](scheduling/README.md), "An
 asleep instance"): every candidate carries the decision of the gate that holds it, and the one the
-round would select there waits with `instance_asleep_wake_due` and the evaluation's time as its
-wake. The plan counts that one due and names it, so the wake comes at once for a task that would be
+round would select there waits with `instance_asleep_wake_due` and, since 0.12.83 (#486 ASLEEP-5),
+no wake of its own (before, the evaluation's time). The plan counts that one due and names it, so the wake comes at once for a task that would be
 dispatched (the emulator's start, then the startup package), and counts every other decision as on
 an available instance: a spent budget, a backoff or the activity interval wakes the instance at its
 release less the lead, and a candidate whose trigger has not come at its trigger's time less the
@@ -1455,8 +1455,8 @@ application closed (`close_app`, or `auto`'s `close_app` tier: asked for and not
 holding the key while the close runs, and done, its wake not come), its startup package configured,
 and nothing withdrew its availability (no fence; no failed self-check or preparation step of its
 own), the evaluation judges it as it is, an available instance, and selects nothing on it: the one
-candidate the round would select there waits with `instance_asleep_wake_due` and the evaluation's
-time as its wake, and the plan wakes the instance for it alone, by its startup package. No
+candidate the round would select there waits with `instance_asleep_wake_due` (since 0.12.83 with
+no wake of its own, #486 ASLEEP-5), and the plan wakes the instance for it alone, by its startup package. No
 candidate of such an instance is due through #484's look ahead (above): while a hold of positions 1
 or 2 holds it (the idle action's own claim while the close runs, a person's pause, a Lab run's
 claim), a candidate no later position of the order holds back, or one whose later positions cannot
@@ -1623,6 +1623,18 @@ eligible; nothing of that path changed. An awake instance with such a candidate 
 its action by that time. What wakes an instance for a task that is due, the hold of a withheld
 action and its lengths, a regenerating pool's `task_due` and an instance whose idle action is
 `none` are as before.
+
+When the policy driver looks again for an asleep instance (#486 ASLEEP-5, since 0.12.83,
+[v012-register.md](v012-register.md) §1.524; [scheduling/README.md](scheduling/README.md), "An
+asleep instance"): the task it is woken for names no wake in the evaluation, and after each
+evaluated cycle's idle check the host names, beside the evaluation's own wake, the earliest time
+the plan of an instance that check left closed or stopped, owing its wake, holds that instance's
+tasks back to, when its plan counts no task due and that time has not come; none otherwise. A
+wake queued, an action under way and a wake a pause holds name none: the end of each claim hands
+the key back and raises the host's business notification, and the lease sweep's check wakes a
+held wake once the pause no longer holds it. Before, the task's wake was the evaluation's time, so
+the driver evaluated again at once whenever the plan did not wake the instance. Nothing the idle
+plan decides changes, and no key is added.
 
 At a start (#486 ASLEEP-3, ruling 3), the wake of a restored instance obeys the same judgement as
 a wake from sleep. A wake the start owes (an instance restored woken whose startup package had not

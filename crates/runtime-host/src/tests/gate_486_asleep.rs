@@ -698,7 +698,8 @@ fn asleep_h7_a_task_due_while_asleep_starts_the_emulator_once_runs_and_sleeps_ag
     sleepy.sleep(stopped_at + 1_000);
 
     // The next day, past the release: the round's pick on the asleep instance is the task it is
-    // woken for, at the evaluation's time, with no intent.
+    // woken for, with no intent. #486 ASLEEP-5 (register §1.524, ruling 1; adapted): it names no
+    // wake of its own (until 0.12.83 the evaluation's time).
     let due_at = at(2, 6, 10);
     assert!(
         release <= due_at,
@@ -707,8 +708,8 @@ fn asleep_h7_a_task_due_while_asleep_starts_the_emulator_once_runs_and_sleeps_ag
     let cycle = sleepy.evaluate(due_at);
     assert_eq!(
         deferred_by(&cycle, TASK, PolicyCode::InstanceAsleepWakeDue.as_str()),
-        Some(due_at),
-        "its wake is the evaluation's time"
+        None,
+        "it names no wake"
     );
     assert_eq!(
         intents(&cycle),
@@ -2212,10 +2213,12 @@ fn asleep2_r4_a_task_that_would_be_selected_wakes_the_application_once_and_is_di
     let woken_at = head(&replay.host);
     let due_at = at(1, 6, 40);
     let cycle = replay.cycle(due_at);
+    // #486 ASLEEP-5 (ruling 1; adapted): with no wake of its own (until 0.12.83 the evaluation's
+    // time).
     assert_eq!(
         deferred_by(&cycle, TASK, PolicyCode::InstanceAsleepWakeDue.as_str()),
-        Some(due_at),
-        "the task it is woken for, its wake the evaluation's time"
+        None,
+        "the task it is woken for, with no wake"
     );
     assert_eq!(
         intents(&cycle),
@@ -2753,13 +2756,15 @@ fn asleep2_r7_a_pool_regenerating_below_its_trigger_lets_the_closed_instance_sle
     // and the task is dispatched.
     let woken_at = head(&replay.host);
     let reached = crossed + MINUTE_MS;
+    // #486 ASLEEP-5 (ruling 1; adapted): with no wake of its own (until 0.12.83 the evaluation's
+    // time).
     assert_eq!(
         deferred_by(
             &replay.cycle(reached),
             TASK,
             PolicyCode::InstanceAsleepWakeDue.as_str()
         ),
-        Some(reached),
+        None,
         "the task it is woken for"
     );
     assert_eq!(
@@ -3336,14 +3341,16 @@ fn asleep3_r10_an_awake_instance_whose_pack_schedule_is_closed_sleeps_and_wakes_
     replay.state.emulator.script_read(stopped_state());
     let woken_at = head(&replay.host);
     let due_at = at(1, 6, 30);
+    // #486 ASLEEP-5 (ruling 1; adapted): with no wake of its own (until 0.12.83 the evaluation's
+    // time).
     assert_eq!(
         deferred_by(
             &replay.cycle(due_at),
             TASK,
             PolicyCode::InstanceAsleepWakeDue.as_str()
         ),
-        Some(due_at),
-        "the task it is woken for, its wake the evaluation's time"
+        None,
+        "the task it is woken for, with no wake"
     );
     assert_eq!(
         replay.records(before),
@@ -4113,4 +4120,466 @@ fn asleep4_r15_a_self_check_of_the_sleeping_instance_records_no_error() {
         "the error records, as before"
     );
     awake.close();
+}
+
+// ---- #486 ASLEEP-5 (0.12.83; register §1.524, the coordinator's rulings 1 to 3 of 11-23): with
+// an instance asleep the policy driver no longer evaluates round after round. The task an asleep
+// instance is woken for names no wake in the evaluation (until 0.12.83 the evaluation's time, so
+// the evaluation's wake was now and a round whose idle plan did not wake the instance was followed
+// by the next at once); when the driver looks again for the instances a cycle's idle check left
+// asleep is the host's to say (`PolicyCycle::idle_wake_unix_ms`). The driver runs a cycle at a time
+// the evaluation or the host names, or when the host raises its business notification (a
+// committed record of a waking type, `policy_trigger_for_event`); so each test reads the times the
+// cycle names for the asleep instance and the waking records committed while the cycle ran, the
+// performance family left out (its sampler runs beside the cycle, and a cycle that admits a
+// dispatch may commit a capacity summary itself, register §1.524). Fix round 1: so these tests show
+// that the cycles they run commit no waking record outside that family; they do not show that a
+// cycle's own records never wake the next.
+// - h1 (the work order's test 1): asleep, its task held back by a closed pack schedule, a position
+//   that names no time: at the task's time and ten minutes later nothing of the instance names a
+//   time and the cycle commits no waking record outside the performance family; the schedule's
+//   reopening commits a fact, and the cycle after it starts the wake, for the task.
+// - h2 (test 2): asleep, its task due and nothing holding it: the cycle starts the wake and names
+//   no time while it is under way; the wake's end hands the key back (a waking lease end), and the
+//   cycle after it selects the task.
+// - h3 (test 3): a wake whose start fails: its end hands the key back too, and the instance is no
+//   longer asleep, so no cycle names the task it was woken for. The idle plan keeps no retry time
+//   of its own after a failed wake (the work order's "the plan's retry time"): what follows is the
+//   emulator watch's and the evaluation's, as before.
+// - h4 (test 4): a time-bound gate holds the asleep instance's task (a spent budget): the host's
+//   time is the gate's release, and that cycle commits no waking record outside the performance
+//   family; and the planner's answer for each phase and plan.
+// - h6 (test 6, the host's half): two instances, one asleep and one working: the asleep one's
+//   held task names no time, and the working one is never asked.
+
+/// #486 ASLEEP-5: the types of the records committed after `after` that wake the policy driver,
+/// the whole performance family left out (the monitor's sampler beside the cycle, and the capacity
+/// summary a cycle that admits a dispatch may commit itself).
+fn waking_after(replay: &Replay, after: u64) -> Vec<EventType> {
+    all_events(&replay.host)
+        .iter()
+        .filter(|event| event.sequence() > after)
+        .map(PersistedEvent::event_type)
+        .filter(|event_type| {
+            event_type.family() != actingcommand_contract::EventFamily::Performance
+                && policy_trigger_for_event(*event_type).is_some()
+        })
+        .collect()
+}
+
+/// #486 ASLEEP-5: one cycle at `unix_ms` as the driver asks for it ([`Replay::cycle`]), with the
+/// waking records committed while it ran, outside the performance family ([`waking_after`]).
+fn cycle_waking(replay: &Replay, unix_ms: u64) -> (PolicyCycle, Vec<EventType>) {
+    replay.set_time(unix_ms);
+    let before = head(&replay.host);
+    let cycle = replay
+        .host
+        .evaluate_policy_cycle(PolicyTrigger::Recovery)
+        .unwrap_or_else(|error| panic!("the cycle at {unix_ms}: {error}"));
+    assert!(
+        cycle.evaluation.is_some(),
+        "the cycle at {unix_ms} is evaluated: {:?}",
+        cycle.directive
+    );
+    (cycle, waking_after(replay, before))
+}
+
+/// #486 ASLEEP-5: the wakes the decisions of the replay instance name.
+fn instance_wakes(cycle: &PolicyCycle) -> Vec<u64> {
+    cycle
+        .evaluation
+        .as_ref()
+        .expect("an evaluated cycle")
+        .decisions
+        .iter()
+        .filter(|decision| decision.instance_id.as_deref() == Some(ALIAS))
+        .filter_map(|decision| decision.next_wake_unix_ms)
+        .collect()
+}
+
+/// #486 ASLEEP-5: whether a decision of the replay instance names it woken for its task.
+fn names_woken_for(cycle: &PolicyCycle) -> bool {
+    cycle
+        .evaluation
+        .as_ref()
+        .expect("an evaluated cycle")
+        .decisions
+        .iter()
+        .filter(|decision| decision.instance_id.as_deref() == Some(ALIAS))
+        .any(|decision| {
+            decision
+                .reasons
+                .last()
+                .is_some_and(|reason| reason.outcome.is(PolicyCode::InstanceAsleepWakeDue))
+        })
+}
+
+/// #486 ASLEEP-5: ASLEEP-4's replay (r12's start): the instance awake at 06:00 of day 1, its
+/// task's pack schedule closed with no end at 06:05, the host's own check stopping its emulator at
+/// 06:10 with no wake planned. The ledger's head before it all.
+fn asleep_behind_a_closed_pack() -> (Replay, u64) {
+    let replay = timed_replay(false);
+    let before = head(&replay.host);
+    replay.set_time(at(1, 6, 5));
+    replay.schedule_pack(at(1, 6, 0), false);
+    replay.cycle(at(1, 6, 10));
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    assert_eq!(
+        kept_rows(&replay.host),
+        Some(vec![stopped_row_without_wake()]),
+        "kept stopped, no wake planned"
+    );
+    (replay, before)
+}
+
+/// #486 ASLEEP-5: whether `event_type` ends a lease (it hands the instance's key back).
+fn ends_a_lease(event_type: &EventType) -> bool {
+    matches!(
+        event_type,
+        EventType::LeaseReleased | EventType::LeaseTransferred | EventType::LeaseExpired
+    )
+}
+
+#[test]
+fn asleep5_h1_a_task_held_with_no_time_causes_no_cycle_until_its_hold_is_lifted() {
+    let (replay, before) = asleep_behind_a_closed_pack();
+
+    // At the task's time and ten minutes later: held back with no wake; nothing of the instance
+    // names a time, the host names none, and the cycle commits no waking record outside the
+    // performance family (which `waking_after` leaves out).
+    for now in [TIMED_AT, TIMED_AT + 10 * MINUTE_MS] {
+        let (cycle, waking) = cycle_waking(&replay, now);
+        assert_eq!(
+            deferred_by(&cycle, TIMED, PACK_SCHEDULE_CLOSED),
+            None,
+            "held back with no wake at {now}"
+        );
+        assert!(!names_woken_for(&cycle), "nothing to wake it for at {now}");
+        assert_eq!(
+            instance_wakes(&cycle),
+            Vec::<u64>::new(),
+            "no time at {now}"
+        );
+        assert_eq!(
+            cycle.idle_wake_unix_ms, None,
+            "the host names none at {now}"
+        );
+        assert_eq!(
+            waking,
+            Vec::new(),
+            "no waking record outside the performance family at {now}"
+        );
+    }
+    assert_eq!(
+        replay.records(before),
+        [stop_record()],
+        "one stop and no wake"
+    );
+
+    // The schedule reopened: the edit commits a fact, which wakes the driver; that cycle names
+    // the task the instance is woken for, with no wake, and the host's own check wakes it once.
+    let reopened_at = TIMED_AT + 20 * MINUTE_MS;
+    replay.set_time(reopened_at);
+    let edited = head(&replay.host);
+    replay.schedule_pack(reopened_at, true);
+    assert!(
+        waking_after(&replay, edited)
+            .iter()
+            .any(|event_type| event_type.family() == actingcommand_contract::EventFamily::Fact),
+        "the edit committed a fact that wakes the driver"
+    );
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    let (cycle, _) = cycle_waking(&replay, reopened_at + 1_000);
+    assert_eq!(
+        deferred_by(&cycle, TIMED, PolicyCode::InstanceAsleepWakeDue.as_str()),
+        None,
+        "the task it is woken for, with no wake"
+    );
+    assert_eq!(
+        cycle.idle_wake_unix_ms, None,
+        "a wake under way names no time"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "one wake, for the task"
+    );
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    replay.await_free(woken_at);
+    replay.close();
+}
+
+#[test]
+fn asleep5_h2_a_task_due_starts_the_wake_and_the_wakes_end_brings_the_cycle_that_selects_it() {
+    let (replay, before) = asleep_behind_a_closed_pack();
+
+    // The schedule reopened past the task's time: due, and nothing holds it. The cycle starts the
+    // wake; the task names no wake, nothing of the instance names a time and the host names none
+    // while the emulator starts.
+    let reopened_at = TIMED_AT + 5 * MINUTE_MS;
+    replay.set_time(reopened_at);
+    replay.schedule_pack(reopened_at, true);
+    replay.state.emulator.script_read(stopped_state());
+    let woken_at = head(&replay.host);
+    let (cycle, _) = cycle_waking(&replay, reopened_at + 1_000);
+    assert_eq!(
+        deferred_by(&cycle, TIMED, PolicyCode::InstanceAsleepWakeDue.as_str()),
+        None,
+        "the task it is woken for, with no wake"
+    );
+    assert_eq!(
+        intents(&cycle),
+        0,
+        "nothing is dispatched on the asleep instance"
+    );
+    assert_eq!(
+        instance_wakes(&cycle),
+        Vec::<u64>::new(),
+        "no time while it starts"
+    );
+    assert_eq!(
+        cycle.idle_wake_unix_ms, None,
+        "a wake under way names no time"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "one wake, for the task"
+    );
+
+    // The wake's end: its configured start started the emulator, its startup package ran, and
+    // each claim handed the key back, a waking record.
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartStarted.as_str(),
+        "the wake's claim started the emulator"
+    );
+    replay.await_free(woken_at);
+    assert!(
+        waking_after(&replay, woken_at).iter().any(ends_a_lease),
+        "the wake's end hands the key back, which wakes the driver"
+    );
+
+    // The evaluation of the cycle that end brings selects the task.
+    let cycle = replay.evaluate(reopened_at + 5 * MINUTE_MS);
+    let evaluation = cycle.evaluation.as_ref().expect("an evaluated cycle");
+    assert!(
+        evaluation
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == TIMED),
+        "the task is selected: {evaluation:#?}"
+    );
+    replay.close();
+}
+
+#[test]
+fn asleep5_h3_a_wake_whose_start_fails_hands_the_key_back_and_leaves_the_instance_asleep_no_more() {
+    let (replay, before) = asleep_behind_a_closed_pack();
+    let reopened_at = TIMED_AT + 5 * MINUTE_MS;
+    replay.set_time(reopened_at);
+    replay.schedule_pack(reopened_at, true);
+    replay.state.emulator.script_read(stopped_state());
+    replay.state.emulator.script_control(
+        actingcommand_contract::EmulatorInstanceAction::Start,
+        super::emulator_controller::ScriptedControl::Failed {
+            stage: actingcommand_device::codes::DeviceStage::MumuManagerWaitTimeout.location(),
+            exit_code: Some(0),
+            last_state: Some(stopped_state()),
+            device_process_present: None,
+        },
+    );
+    let woken_at = head(&replay.host);
+    let (cycle, _) = cycle_waking(&replay, reopened_at + 1_000);
+    assert!(names_woken_for(&cycle), "the cycle starts the wake");
+    assert_eq!(
+        cycle.idle_wake_unix_ms, None,
+        "a wake under way names no time"
+    );
+    assert_eq!(
+        replay.records(before),
+        [stop_record(), task_wake_record()],
+        "one wake, for the task"
+    );
+
+    // The start fails; its claim's end hands the key back, a waking record.
+    assert_eq!(
+        replay.await_start_end(),
+        HostCode::EmulatorAutostartFailed.as_str(),
+        "the wake's start failed"
+    );
+    replay.await_free(woken_at);
+    assert!(
+        waking_after(&replay, woken_at).iter().any(ends_a_lease),
+        "the failed wake's end hands the key back, which wakes the driver"
+    );
+
+    // The cycle it brings: the instance is no longer asleep (its idle action no longer holds its
+    // emulator stopped), so no decision names the task it was woken for, and the host names no
+    // time for it.
+    let (cycle, _) = cycle_waking(&replay, reopened_at + 2 * MINUTE_MS);
+    assert!(!names_woken_for(&cycle), "asleep no more");
+    assert_eq!(cycle.idle_wake_unix_ms, None, "no time for it");
+    replay.close();
+}
+
+#[test]
+fn asleep5_h4_a_time_bound_gate_on_the_asleep_instance_makes_its_release_the_hosts_time() {
+    // The budget replay (r1's start): two runs spend the budget, the host's own check stops the
+    // emulator; asleep, the budget defers the task to its release, and the host's time for the
+    // instance is that release.
+    let mut replay = Replay::start(at(1, 6, 0));
+    replay.dispatch(at(1, 6, 10));
+    replay.dispatch(at(1, 6, 20));
+    let release = deferred_by(
+        &replay.cycle(at(1, 6, 30)),
+        TASK,
+        HostCode::PolicyBudgetExhausted.as_str(),
+    )
+    .expect("the budget names its release");
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the stop ended"
+    );
+    let (cycle, waking) = cycle_waking(&replay, at(1, 12, 0));
+    assert_eq!(
+        deferred_by(&cycle, TASK, HostCode::PolicyBudgetExhausted.as_str()),
+        Some(release),
+        "asleep, the budget defers the task to its release"
+    );
+    assert_eq!(
+        cycle.idle_wake_unix_ms,
+        Some(release),
+        "the host's time is the gate's release"
+    );
+    assert_eq!(
+        waking,
+        Vec::new(),
+        "no waking record outside the performance family"
+    );
+    replay.close();
+
+    // The planner's answer: an instance owing its wake whose plan holds its tasks back to a time
+    // not come names that time; one that has come, a plan with no time and a plan with a task due
+    // name none; an instance being woken or whose action is under way names none.
+    let held = |next_wake_unix_ms: Option<u64>, due_now: bool| IdlePlan {
+        evaluated_at_unix_ms: at(1, 12, 0),
+        due_now,
+        next_wake_unix_ms,
+        reading_due_unix_ms: None,
+    };
+    let mut planner = IdlePlanner::default();
+    planner.restore(
+        ALIAS,
+        KeptIdle {
+            action: IdleAction::StopEmulator,
+            wake_at_unix_ms: Some(release - LEAD_MS),
+            woken: false,
+        },
+    );
+    for (case, plan, expected) in [
+        (
+            "a time not come",
+            Some(held(Some(release), false)),
+            Some(release),
+        ),
+        ("a time come", Some(held(Some(at(1, 12, 0)), false)), None),
+        ("no time", Some(held(None, false)), None),
+        ("a task due", Some(held(Some(release), true)), None),
+        ("no plan", None, None),
+    ] {
+        assert_eq!(planner.look_again_unix_ms(ALIAS, plan), expected, "{case}");
+    }
+    assert_eq!(
+        planner.look_again_unix_ms("instance-unknown", Some(held(Some(release), false))),
+        None,
+        "an instance the planner does not hold"
+    );
+    assert_eq!(
+        planner.check(
+            ALIAS,
+            &STOP,
+            stopped(),
+            Some(held(None, true)),
+            at(1, 12, 0)
+        ),
+        Some(STOP_WAKE),
+        "woken for a task due"
+    );
+    assert_eq!(
+        planner.look_again_unix_ms(ALIAS, Some(held(Some(release), false))),
+        None,
+        "being woken"
+    );
+    let mut acting = IdlePlanner::default();
+    assert!(
+        matches!(
+            acting.check(ALIAS, &STOP, free(), Some(held(None, false)), at(1, 12, 0)),
+            Some(IdleStep::Act { .. })
+        ),
+        "the stop asked for"
+    );
+    assert_eq!(
+        acting.look_again_unix_ms(ALIAS, Some(held(Some(release), false))),
+        None,
+        "its action under way"
+    );
+}
+
+#[test]
+fn asleep5_h6_of_two_instances_the_asleep_one_names_no_time_and_the_working_one_is_not_asked() {
+    // The host's half of the work order's test 6, on the planner: the asleep instance, its task
+    // held back with no time, and the working instance, active, which the host never asks; the
+    // working one's wakes are its decisions' and its runs' ends, which this slice leaves as they
+    // were (the policy half shows its decisions unchanged).
+    let working = "instance-working";
+    let mut planner = IdlePlanner::default();
+    planner.restore(
+        ALIAS,
+        KeptIdle {
+            action: IdleAction::StopEmulator,
+            wake_at_unix_ms: None,
+            woken: false,
+        },
+    );
+    let untimed = IdlePlan {
+        evaluated_at_unix_ms: at(1, 12, 0),
+        due_now: false,
+        next_wake_unix_ms: None,
+        reading_due_unix_ms: None,
+    };
+    let busy = IdleView {
+        leased: true,
+        ..free()
+    };
+    assert_eq!(
+        planner.check(working, &STOP, busy, Some(untimed), at(1, 12, 0)),
+        None,
+        "the working instance is in use"
+    );
+    assert_eq!(
+        planner.owing_wakes(),
+        [ALIAS.to_owned()],
+        "only the asleep one owes its wake"
+    );
+    assert_eq!(
+        planner.look_again_unix_ms(ALIAS, Some(untimed)),
+        None,
+        "the asleep one names no time"
+    );
+    assert_eq!(
+        planner.look_again_unix_ms(working, Some(untimed)),
+        None,
+        "the working one is not one the host asks"
+    );
 }

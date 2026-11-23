@@ -29,8 +29,17 @@ use std::sync::PoisonError;
 /// each at most once. There is one consumer: the daemon's policy monitor.
 #[derive(Default)]
 pub(crate) struct PolicyWakeSignal {
-    pending: Mutex<Vec<PolicyTrigger>>,
+    pending: Mutex<RaisedWakes>,
     raised: Condvar,
+}
+
+/// The wakes raised and not taken yet: each trigger once, and (#486 ASLEEP-5, register §1.524) how
+/// many committed records of each type raised one, which the daemon's line of the cycle they
+/// cause names.
+#[derive(Default)]
+struct RaisedWakes {
+    triggers: Vec<PolicyTrigger>,
+    records: Vec<(EventType, u64)>,
 }
 
 impl PolicyWakeSignal {
@@ -40,28 +49,36 @@ impl PolicyWakeSignal {
             return;
         };
         let mut pending = self.pending();
-        if !pending.contains(&trigger) {
-            pending.push(trigger);
+        if !pending.triggers.contains(&trigger) {
+            pending.triggers.push(trigger);
+        }
+        match pending
+            .records
+            .iter_mut()
+            .find(|(raised_by, _)| *raised_by == event_type)
+        {
+            Some((_, count)) => *count = count.saturating_add(1),
+            None => pending.records.push((event_type, 1)),
         }
         self.raised.notify_all();
     }
 
-    fn take(&self, wait: Duration) -> Vec<PolicyTrigger> {
+    fn take(&self, wait: Duration) -> RaisedWakes {
         let pending = self.pending();
         let (mut pending, _) = self
             .raised
-            .wait_timeout_while(pending, wait, |pending| pending.is_empty())
+            .wait_timeout_while(pending, wait, |pending| pending.triggers.is_empty())
             .unwrap_or_else(PoisonError::into_inner);
         std::mem::take(&mut *pending)
     }
 
     fn clear(&self) {
-        self.pending().clear();
+        *self.pending() = RaisedWakes::default();
     }
 
-    /// The guarded sections only push to, take or clear the list and never panic, so a poisoned
-    /// lock still holds a consistent list.
-    fn pending(&self) -> MutexGuard<'_, Vec<PolicyTrigger>> {
+    /// The guarded sections only push to, take or clear the lists and never panic, so a poisoned
+    /// lock still holds consistent lists.
+    fn pending(&self) -> MutexGuard<'_, RaisedWakes> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -76,7 +93,15 @@ impl PolicyWakes {
     /// The wakes raised since the last take, each once; waits at most `wait` for the first.
     /// Empty when none was raised in time.
     pub fn take(&self, wait: Duration) -> Vec<PolicyTrigger> {
-        self.signal.take(wait)
+        self.signal.take(wait).triggers
+    }
+
+    /// #486 ASLEEP-5 (register §1.524, the coordinator's ruling 4): [`Self::take`], with how many
+    /// committed records of each type raised them since the last take, in the order each type
+    /// first raised one.
+    pub fn take_counted(&self, wait: Duration) -> (Vec<PolicyTrigger>, Vec<(EventType, u64)>) {
+        let raised = self.signal.take(wait);
+        (raised.triggers, raised.records)
     }
 }
 

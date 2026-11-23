@@ -253,6 +253,38 @@ pub struct PolicyEvaluationMeasurement {
     pub requested_recompute: PolicyRecomputeKind,
     pub execution: PolicyEvaluationExecution,
     pub cost: PolicyEvaluationCost,
+    /// #486 ASLEEP-5 (register §1.524, ruling 4): the cycle's number, as the fact refresh's
+    /// recorder counts evaluated cycles (`cycle_seq`); the host sets it once the recorder observed
+    /// the cycle.
+    pub cycle_seq: u64,
+    /// #486 ASLEEP-5: the projection of the cycle's inputs, the finished runs' outcomes among
+    /// them, in microseconds.
+    pub projection_micros: u64,
+    /// #486 ASLEEP-5: the clock slots' preview.
+    pub clock_slots: ClockSlotPreviewCost,
+    /// #486 ASLEEP-5: the observation of the holds for the held records (`held.observe`), in
+    /// microseconds.
+    pub held_observe_micros: u64,
+    /// #486 ASLEEP-5: from the start of the host's cycle to the end of its capped record, in
+    /// microseconds; the daemon's line counts what follows it up to the cycle's end.
+    pub until_capped_micros: u64,
+}
+
+/// #486 ASLEEP-5 (register §1.524, ruling 4): what one evaluation's clock slots' preview cost: its
+/// time in microseconds, the task pairs with a dispatch history it read for their lapsed
+/// occurrences, its calls of `clock_slot_live`, and its reads of the planning-signal store.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClockSlotPreviewCost {
+    pub micros: u64,
+    pub pairs: u64,
+    pub live_calls: u64,
+    pub store_reads: u64,
+}
+
+/// #486 ASLEEP-5: the microseconds since `started`, for the daemon's line of a cycle; a time too
+/// long for the type reads as its largest value.
+pub(crate) fn micros_since(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,6 +303,14 @@ pub struct PolicyCycle {
     /// cycle's yield point, in memory only: actingd writes them as daemon lines, and no
     /// decision reads them. Empty for a deferred cycle.
     pub fact_refresh_transitions: Vec<crate::FactRefreshTransition>,
+    /// #486 ASLEEP-5 (register §1.524, ruling 2; `contracts/scheduling/README.md`, "An asleep
+    /// instance"): when the policy driver looks again, beside the evaluation's own wake, for the
+    /// instances the cycle's idle check left asleep: the earliest time the idle plan of one of
+    /// them holds its tasks back to, when it woke none of them for a task due; none while every
+    /// such instance is being woken, its action is under way, or what holds it names no time.
+    /// The task an asleep instance is woken for names no wake in the evaluation. Set by the host
+    /// after the idle check of an evaluated cycle; none for any other cycle.
+    pub idle_wake_unix_ms: Option<u64>,
 }
 
 pub(crate) struct PolicyEvaluationContext<'a> {
@@ -4176,6 +4216,7 @@ impl PolicyHost {
                 task_held_signals: Vec::new(),
                 measurement: None,
                 fact_refresh_transitions: Vec::new(),
+                idle_wake_unix_ms: None,
             });
         }
         // UPD-1 (design §4.2, `scheduling-blackout.md` position 4a): the instances whose
@@ -4879,7 +4920,10 @@ impl PolicyHost {
                 )
             })
             .collect::<BTreeSet<_>>();
-        let clock_slot_signals = clock_slot::preview(
+        // #486 ASLEEP-5 (register §1.524, ruling 4): the preview timed and counted for the daemon's
+        // line of the cycle.
+        let clock_slots_started = Instant::now();
+        let (clock_slot_signals, mut clock_slots) = clock_slot::preview(
             &self.store,
             &active.compiled,
             facts,
@@ -4891,6 +4935,7 @@ impl PolicyHost {
             deferrals,
             time,
         )?;
+        clock_slots.micros = micros_since(clock_slots_started);
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
         // Workflow #437 ORD-1c: the queue waits of the members of a device of several, staged as
@@ -5136,6 +5181,8 @@ impl PolicyHost {
         // planning-signal projection first. Nothing above reads them, and nothing after does
         // either: the cycle's recorder only appends them.
         let projection = &self.store;
+        // #486 ASLEEP-5 (ruling 4): timed for the daemon's line of the cycle.
+        let held_started = Instant::now();
         let task_held_signals = self.held.observe(
             &self.explanation,
             &evaluation,
@@ -5146,6 +5193,7 @@ impl PolicyHost {
             },
             time.unix_ms,
         )?;
+        let held_observe_micros = micros_since(held_started);
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
         }
@@ -5168,9 +5216,18 @@ impl PolicyHost {
                 requested_recompute,
                 execution: PolicyEvaluationExecution::FullCatalogScan,
                 cost,
+                // #486 ASLEEP-5: the host sets the number, the projection's time and the time up
+                // to the capped record once it knows them (`evaluate_policy_cycle_authoritative`).
+                cycle_seq: 0,
+                projection_micros: 0,
+                clock_slots,
+                held_observe_micros,
+                until_capped_micros: 0,
             }),
             // The yield point adds the transitions (`evaluate_policy_cycle_authoritative`).
             fact_refresh_transitions: Vec::new(),
+            // The host sets it after the cycle's idle check (`HostShared::evaluate_policy_cycle`).
+            idle_wake_unix_ms: None,
         })
     }
 
