@@ -450,7 +450,17 @@ to recognition ([resource-readings.md](resource-readings.md), "Kernel reading");
 D2-S4 reads `fact_refresh.enabled`, `min_interval_ms`, `daily_limit`, `failure_backoff_ms` and
 `max_consecutive_failures` at every policy cycle, the pace of the scheduler's recognition
 maintenance package dispatches ([scheduling/README.md](scheduling/README.md), "Fact refresh"); a
-change takes effect from the next round. Workflow #384 D2-S5 reads `fact_refresh.overdue_ms`
+change takes effect from the next round. Workflow #490 FR-1 (since 0.12.81; no key, name or
+default changed): `failure_backoff_ms` is both the least time from a failed reading to the next
+dispatch and the unit of the rest once the failed readings in a row since the last success reach
+`max_consecutive_failures` (the latest in the current activity day): the rest lasts
+`failure_backoff_ms × 2^(k+1)`, `k` the failures beyond `max_consecutive_failures` (0 at it), at
+most two hours, from the latest failed dispatch and never past the activity window's end, so with
+the defaults 20, 40 and 80 minutes after the third, fourth and fifth failure in a row and two
+hours from the sixth on; a successful scheduled run of another task on the instance, dispatched
+after that failed dispatch, ends it at once. A `failure_backoff_ms` of 0 gives no backoff and no rest (the arithmetic saturates):
+`daily_limit` then bounds the readings.
+Workflow #384 D2-S5 reads `fact_refresh.overdue_ms`
 at every policy cycle: how long one instance's candidates may wait for one key before the
 transition recorder reports `fact_reader_overdue`; it has no default, so without it nothing is
 reported; an instruction can set it whether or not the configuration file names it (before

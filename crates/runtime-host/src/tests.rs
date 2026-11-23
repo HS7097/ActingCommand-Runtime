@@ -778,6 +778,9 @@ mod gate_489_avail1;
 // Workflow #490 ENTRY-A (0.12.77, register §1.494): a scheduled run that failed at its entry is a
 // condition of its instance, which it blocks until a recovery or a run succeeds.
 mod gate_490_entry_a;
+// Workflow #490 FR-1 (0.12.81, register §1.517): a fact refresh is never held by a pause, and its
+// severe failure counts once in its failures in a row.
+mod gate_490_fr1;
 // #411 P51: the next start closes no scope of an epoch's client actions (MCP's `client.action`
 // after each Lab observation), so its closes do not grow with them.
 mod gate_411_p51;
