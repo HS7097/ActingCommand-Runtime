@@ -3047,3 +3047,12 @@ tests = [
     "actingcommand-resource-tooling::lib::gate_464_p1::ck1_an_adopted_rule_on_a_monthly_clock_adds_clock_monthly_to_requires",
 ]
 incident = ["#477 CK-1"]
+
+# #486 ASLEEP-5 (0.12.83; register §1.524; brief rd-1123/brief-486-asleep5.md, ruling 4 and test 7), actingd's half, on the pure line keeper with given times, no clock read: an evaluated cycle's line at once with every member (fix round 1: wakes first, with each cause's number; then seq, first_seq, cycles, triggers with each kind's number, projection_ms, evaluation_ms, clock_slots_ms, clock_slot_pairs, clock_slot_live_calls, clock_slot_store_reads, held_ms, after_capped_ms, total_ms); two cycles less than a second after it make no line until the second has passed, then one line for both with their summed times and counts; a cycle with no wake noted names none; a cycle kept as the driver ends is written then, once (t7); fix round 1, ruling 2 on the driver: PolicyDriverSchedule::apply_cycle takes the earlier of the evaluation's wake and the host's idle_wake_unix_ms, either alone when the other names none, none when neither does (t2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_486_asleep5::asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at_most",
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_486_asleep5::asleep5_t2_the_drivers_next_wake_is_the_earlier_of_the_evaluations_and_the_hosts",
+]
+incident = ["#486", "ASLEEP-5"]

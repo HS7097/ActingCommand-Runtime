@@ -106,6 +106,12 @@ fn waited_for(evaluation: &PolicyEvaluation) -> BTreeMap<(String, String), &Outc
 }
 
 impl FactRefreshRecorder {
+    /// #486 ASLEEP-5 (register §1.524): the number of the latest evaluated cycle it observed
+    /// (`cycle_seq`), which the daemon's line of that cycle names.
+    pub(crate) const fn cycle_seq(&self) -> u64 {
+        self.cycle_seq
+    }
+
     /// Observes one evaluated cycle at `now_unix_ms` and returns its transitions, in (instance,
     /// key) order: for each key, its state change first, then its `fact_reader_overdue` when
     /// `overdue_ms` is set and its wait reached it now. `held` tells an instance the closure's
