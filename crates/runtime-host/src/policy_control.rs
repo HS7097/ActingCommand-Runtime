@@ -20,7 +20,7 @@ use actingcommand_contract::{
 };
 use actingcommand_policy::{
     ActivityProfile, CompiledCatalog, DispatchIntent, DispatchTerms, EvaluationFacts,
-    FailureAction, TaskSpec, activity_window_at, evaluated_dispatch_terms,
+    FACT_REFRESH_TASK_ID, FailureAction, TaskSpec, activity_window_at, evaluated_dispatch_terms,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -847,12 +847,18 @@ impl PolicyControlState {
     /// (`policy_settlement_interrupted`) is no failure of the task, so its suspension does not
     /// outlive the restart that recorded it. Review P5: only the first such interruption in a
     /// row; a second one in a row (a task that may itself end the daemon) keeps the pair paused
-    /// until its package changes, as before.
+    /// until its package changes, as before. Workflow #490 FR-1 (`contracts/policy-suspension.md`,
+    /// "Lifting (R19)"): a pair of the fact refresh is never held by a pause, whatever its
+    /// settlement recorded: its rest is the fact refresh's own gate. The settlement is unchanged,
+    /// so a ledger that holds such a pause replays as before and admits the pair at once.
     fn suspension_lifted(
         failure: &FailureStreak,
         intent: &DispatchIntent,
         lift: Option<&SuspensionLiftView<'_>>,
     ) -> RuntimeHostResult<(bool, Vec<Outcome>)> {
+        if intent.task_id == FACT_REFRESH_TASK_ID {
+            return Ok((true, Vec::new()));
+        }
         if interruption_lifted_by_restart(&failure.failure_code, failure.count) {
             return Ok((true, Vec::new()));
         }

@@ -813,9 +813,11 @@ read it, and the candidate waits.
   `feedback_stop_unknown`, as its last reason and with the hold's wake, and no
   fact refresh reason; its decision's detection suggestions name the keys it
   waits for. Nothing is read while the hold lasts; the first round after it
-  ends raises the demand as above. A reader the Runtime's admission holds (a
-  paused pair) is R_I's own limit below: the task names the key and the
-  package under `fact_refresh_exhausted`.
+  ends raises the demand as above. A reader the Runtime's admission holds is
+  R_I's own limit below: the task names the key and the package under
+  `fact_refresh_exhausted`. Workflow #490 FR-1 (since 0.12.81): the admission
+  never holds R_I's pair by a pause ([policy-suspension.md](../policy-suspension.md),
+  "Lifting (R19)"); its rest after failures is its own gate below.
 - **No reader.** A key no reader can serve gives `fact_refresh_unbound` with
   `reader_problem`: `disabled` (`scheduling.fact_refresh.enabled` is off),
   `package_unbound` (the instance has no kept recognition maintenance package),
@@ -834,13 +836,30 @@ read it, and the candidate waits.
   unlocks and competes with the instance's other candidates; one winner per
   instance and the shared run limits ("Shared Run Limits") apply as usual.
 - **Its own gates**, before the allocation: an instance without an activity
-  profile (a limit, `activity_profile_missing`); its failed runs in a row since
-  its last success reaching `max_consecutive_failures` with its latest run in
-  the current activity day, and its dispatches in the current activity day
-  reaching `daily_limit` (limits, waking when the activity day's window ends);
-  an unavailable instance, a host that cannot take its load (for now); and
-  `task_cooldown_active` until both `min_interval_ms` after its latest dispatch
-  and, after a failed run, `failure_backoff_ms` after that run's end (for now).
+  profile (a limit, `activity_profile_missing`); the rest after failed runs in
+  a row (a limit, `failure_pause`; Workflow #490 FR-1, since 0.12.81): when its
+  latest run failed, its failed runs in a row since its last success reach
+  `max_consecutive_failures` and its latest dispatch lies in the current
+  activity day, R_I rests `failure_backoff_ms × 2^(k+1)`, `k` the failures in
+  the row beyond the threshold (0 at it), at most 7 200 000 ms (two hours),
+  counted from its latest failed dispatch (the admission instant of the pair's
+  latest dispatch, `last_dispatched_unix_ms` of its task snapshot) and never
+  past the end of the current activity window, waking at the rest's end: with
+  the shipped settings 20 minutes after the third failure in a row, 40 after
+  the fourth, 80 after the fifth and two hours from the sixth on. The rest ends
+  by itself at its end, and at once when a scheduled run of another task of
+  the catalogue on the same instance, dispatched after that latest failed
+  dispatch, succeeded (the instance's task snapshots: each pair's latest
+  admitted dispatch of the scheduler, no direct run, recovery ladder rung or
+  return-home run). A failure of an earlier activity day rests nothing. The
+  arithmetic saturates, and a `failure_backoff_ms` of 0 gives no rest: the
+  daily limit then bounds R_I, as it does below the threshold. Then its
+  dispatches in the current activity day reaching `daily_limit` (a limit,
+  waking when the activity day's window ends); an unavailable instance, a host
+  that cannot take its load (for now); and `task_cooldown_active` until both
+  `min_interval_ms` after its latest dispatch and, after a failed run,
+  `failure_backoff_ms` after that run's end (for now), which is what holds R_I
+  after its rest ends early.
   Past these, #405 IDLE-1P: on an instance the Runtime's idle action closed as
   the cycle starts, R_I waits, with no wake, for the instance's next natural
   wake unless a candidate it reads for is due (its trigger true): its decision
@@ -854,7 +873,8 @@ read it, and the candidate waits.
   `next_eligible_unix_ms`.
   In the allocation the Runtime's admission defers it like any candidate; a
   closed activity window or a spent activity budget, a spent task budget and a
-  paused pair are limits, everything else is for now.
+  paused pair are limits, everything else is for now (since 0.12.81 the
+  admission never defers R_I as a paused pair, Workflow #490 FR-1).
 - **Each affected candidate's reason**, per key R_I reads, by the first row that
   matches; the candidate is deferred, never failed, and the round always
   succeeds:
