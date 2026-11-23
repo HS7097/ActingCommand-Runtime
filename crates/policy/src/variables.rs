@@ -26,8 +26,10 @@
 //!   outside. Nothing here computes or rewrites a value. Workflow #500 SV-2 (register §1.511): a
 //!   third source, `rule`: a variable the pair's task carries a value for (its `variables`, a
 //!   `schedule.json` rule's) is handed that value; a pair whose task carries a value the
-//!   application holds another value for is held back by the host ([`VariablePlan::excluded_by`]).
-//!   A variable the task carries no value for resolves as before.
+//!   application holds another value for is held back by the host ([`VariablePlan::excluded_by`]),
+//!   and (fix round 1) so is one whose value the package's declaration in force no longer takes
+//!   ([`VariablePlan::rule_value_refused`]). A variable the task carries no value for resolves as
+//!   before.
 //! - **The record** ([`RemedyPlan::with_variable_values`]): the pair's
 //!   `policy_dispatch_parameters` gains `variable_values`, one record per variable of the
 //!   package, which the evaluator attaches to a selected dispatch only. A pair whose package
@@ -477,6 +479,24 @@ struct PairVariables {
     /// Workflow #500 SV-2: the first variable, in declaration order, the pair's task carries a
     /// value for while the application holds another value for it.
     excluded_by: Option<String>,
+    /// Workflow #500 SV-2 fix round 1: the first variable, in declaration order, the pair's task
+    /// carries a value for that the package's declaration in force does not take.
+    refused: Option<RefusedRuleValue>,
+}
+
+/// Workflow #500 SV-2 fix round 1 (register §1.511; `contracts/package-variables.md`, "Carried by
+/// the rule"): a value a task carries for a variable of its package that the package's
+/// declaration in force (the table's) does not take, by the composer's own judgement
+/// ([`judge_rule_variable_value`]): a package replaced since the generation in force was
+/// composed. The task's candidate is held back; nothing is handed to a run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusedRuleValue {
+    pub package_id: String,
+    pub variable_name: String,
+    /// The judgement's word; `None` when the declaration takes the value and only the goal store
+    /// would not keep its text, which no compiled task carries (the compiler holds a task's value
+    /// to 1024 bytes).
+    pub problem: Option<VariableProblem>,
 }
 
 /// The variable values of one evaluation, per (task, instance) pair whose package declares
@@ -523,6 +543,20 @@ impl VariablePlan {
             .and_then(|pair| pair.excluded_by.as_deref())
     }
 
+    /// Workflow #500 SV-2 fix round 1 (`contracts/package-variables.md`, "Carried by the rule"):
+    /// the first variable, in declaration order, that the task `task_id` carries a value for which
+    /// its package's declaration in force does not take: the task's candidate on `instance_id` is
+    /// held back. `None` when every value it carries is taken.
+    pub fn rule_value_refused(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<&RefusedRuleValue> {
+        self.pairs
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .and_then(|pair| pair.refused.as_ref())
+    }
+
     /// Workflow #500 SV-2: the names of the variables that a task of a pair of `instance_id`
     /// carries a value for.
     pub fn carried(&self, instance_id: &str) -> BTreeSet<&str> {
@@ -560,7 +594,10 @@ impl VariablePlan {
 /// `rule`, with who set the application's value when it holds one and no word, and is no value not
 /// applied; when the application holds a value for it that is not the task's, the pair is held
 /// back by that variable ([`VariablePlan::excluded_by`]), the first in declaration order. A name
-/// the task carries that its package does not declare is not read.
+/// the task carries that its package does not declare is not read. Fix round 1: each value the
+/// task carries is judged by the composer's judgement ([`judge_rule_variable_value`]) under the
+/// declaration the table holds now; the first one it refuses holds the pair back
+/// ([`VariablePlan::rule_value_refused`]).
 pub fn plan_variable_values(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -606,6 +643,7 @@ pub(crate) fn plan_with_entries(
                 not_applied: Vec::new(),
                 carried: BTreeSet::new(),
                 excluded_by: None,
+                refused: None,
             };
             for declared_variable in &declared.variables {
                 let variable = &declared_variable.variable;
@@ -623,6 +661,18 @@ pub(crate) fn plan_with_entries(
                             && entry.is_some_and(|held| held.value != *rule_value)
                         {
                             variables.excluded_by = Some(variable.name.clone());
+                        }
+                        // Fix round 1: judged against the declaration in force, as the composer
+                        // judged it against the one it read: a package replaced since keeps its
+                        // rule from running rather than its run reading the default unsaid.
+                        if variables.refused.is_none()
+                            && let Err(problem) = judge_rule_variable_value(variable, rule_value)
+                        {
+                            variables.refused = Some(RefusedRuleValue {
+                                package_id: declared.package_id.clone(),
+                                variable_name: variable.name.clone(),
+                                problem,
+                            });
                         }
                         variables.carried.insert(variable.name.clone());
                         variables.values.push(ResolvedVariable {
@@ -724,25 +774,29 @@ pub fn resolve_variable(
 /// Workflow #500 SV-2 (register §1.511; `contracts/standard-pack-schedule.md`, "A rule's variable
 /// values"): whether `variable`'s declaration takes `value`, a value a rule of `schedule.json`
 /// carries for it, by the check a value set on the application passes (`EditGoal`'s, and a direct
-/// run's values'): the goal store keeps its text ([`goal_entry_value_fits`], `value_too_large`),
-/// and the judgement [`resolve_variable`] gives a stored entry whose setter is known, with no word
-/// of the root, takes it whole (the contract crate's one judgement, `PackageVariable::judge`; an
-/// `ordered` value it would take only in part is `keys_left_out`). `Ok` when it is taken; `Err`
-/// with `None` when the store would not keep its text, else with the judgement's word.
+/// run's values'): the judgement [`resolve_variable`] gives a stored entry whose setter is known,
+/// with no word of the root, takes it whole (the contract crate's one judgement,
+/// `PackageVariable::judge`; an `ordered` value it would take only in part is `keys_left_out`),
+/// and the goal store keeps its text ([`goal_entry_value_fits`], `value_too_large`). `Ok` when it
+/// is taken; `Err` with the judgement's word, else (fix round 1: the judgement first, so every
+/// value the declaration refuses has its word) with `None` when only the store would not keep its
+/// text. The composer calls it, and (fix round 1) so does a dispatch, under the declaration in
+/// force ([`VariablePlan::rule_value_refused`]).
 pub fn judge_rule_variable_value(
     variable: &PackageVariable,
     value: &serde_json::Value,
 ) -> Result<(), Option<VariableProblem>> {
+    match variable.judge(value) {
+        Ok(read) if variable.leaves_keys_out(value, &read) => {
+            return Err(Some(VariableProblem::KeysLeftOut));
+        }
+        Ok(_) => {}
+        Err(problem) => return Err(Some(problem)),
+    }
     if goal_entry_value_fits(value).is_err() {
         return Err(None);
     }
-    match variable.judge(value) {
-        Ok(read) if variable.leaves_keys_out(value, &read) => {
-            Err(Some(VariableProblem::KeysLeftOut))
-        }
-        Ok(_) => Ok(()),
-        Err(problem) => Err(Some(problem)),
-    }
+    Ok(())
 }
 
 /// The `variable_values` record of one value: its name, its source, `value_json` when its text

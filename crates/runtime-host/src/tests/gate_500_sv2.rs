@@ -26,12 +26,18 @@
 // - `sv2_h3_a_direct_run_reads_its_request_s_values_and_no_rule_s`: on a physical instance whose
 //   display is observed, as `gate_463_s38` runs one, a direct run given `item_a` reads it and one
 //   given none reads the default `item_c`, no rule's value (test 7).
+// - `sv2_h4_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back` (fix round 1, the
+//   review's required fix): with `item_b` set, the package is replaced in place by one that no
+//   longer offers `item_b` while the generation in force stays; the first rule waits
+//   `goal_value_rule_refused` with no wake and nothing is dispatched; the package repaired, the
+//   first rule is dispatched again and its run reads `item_b`.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
     GAME_A, POOL_A, SERVER_A, bundle, pool, profiles, resources, rule, write_json,
 };
 use super::*;
+use actingcommand_contract::outcome::Category;
 use actingcommand_contract::{
     DeclaredInitiator, FactContent, FactValue, GoalEdit, GoalEntryState, GoalValueSource, GoalView,
     GoalViewEntry, Initiator, InstanceFactContext, InstanceFactSnapshot, RuntimeChannel,
@@ -53,7 +59,10 @@ const RESULT: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 0, 0];
 const PARAMETERS: &str = "policy_dispatch_parameters";
 const EXCLUDES: &str = "goal_value_excludes_rule";
+const REFUSED: &str = "goal_value_rule_refused";
 const PICK_KEY: &str = "session.dispatch.parameter.pick";
+/// The default `standard_packs.check_interval_ms`: a check reads the roots again after it.
+const CHECK_INTERVAL_MS: u64 = 60_000;
 
 // ---- The game root.
 
@@ -113,6 +122,24 @@ fn place_game_root(packs: &Path) {
         serde_json::from_slice(&fs::read(&control_path).expect("the control declaration"))
             .expect("control JSON");
     control["variables"] = variables();
+    write_json(&control_path, &control);
+}
+
+// Fix round 1: rewrites the package's control declaration below `packs` in place, `pick` as
+// [`variables`] declares it, less the option `item_b` when `offers_item_b` is false.
+fn declare(packs: &Path, offers_item_b: bool) {
+    let control_path = packs.join(GAME_A).join(PACKAGE).join("control.json");
+    let mut control: Value =
+        serde_json::from_slice(&fs::read(&control_path).expect("the control declaration"))
+            .expect("control JSON");
+    let mut declared = variables();
+    if !offers_item_b {
+        declared[0]["options"]
+            .as_array_mut()
+            .expect("the options")
+            .retain(|option| option["value"] != "item_b");
+    }
+    control["variables"] = declared;
     write_json(&control_path, &control);
 }
 
@@ -691,5 +718,87 @@ fn sv2_h3_a_direct_run_reads_its_request_s_values_and_no_rule_s() {
         text("item_c"),
         "the default, no rule's value"
     );
+    scene.close();
+}
+
+// Fix round 1 (the review's required fix; package-variables.md, "Carried by the rule"): after the
+// first rule's run, `item_b` is set, and the package's declaration is replaced in place by one
+// that no longer offers `item_b`; the check that reads it keeps the generation in force (the gate
+// tests' seam `REFUSALS_NAME_UNCOMPOSED_FOR_TEST`, for this test's own root, takes the composer's
+// refusal of the file for one no round composed). The first rule's candidate, whose rule carries
+// `item_b`, waits `goal_value_rule_refused`, a warning naming the instance, its task, the package,
+// `pick` and `not_an_option`, deferred with no wake of its own; the second waits for the set value
+// as before; neither is dispatched. The package repaired, the first rule is
+// dispatched again at the next check (the second still waits for the set value) and its run reads
+// `item_b`, source `rule`, with who set the application's value.
+#[test]
+fn sv2_h4_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back() {
+    let scene = Scene::new();
+    let root = scene.packs.path().to_path_buf();
+    let seam = || {
+        crate::host::REFUSALS_NAME_UNCOMPOSED_FOR_TEST
+            .lock()
+            .expect("the refusal seam")
+    };
+    let first = scene.evaluate(POLICY_NOW_UNIX_MS, 6);
+    let (_, context) = scene.run(&first, RULE_B);
+    let set_at = next_eligible(&context);
+    scene.edit(set_pick("item_b"), set_at);
+
+    declare(scene.packs.path(), false);
+    seam().insert(root.clone());
+    let refused_at = set_at + CHECK_INTERVAL_MS;
+    let refused = scene.evaluate(refused_at, 7);
+    seam().remove(&root);
+    let held = decision(&refused, RULE_B);
+    assert_eq!(held.state, SchedulingDecisionState::Deferred, "{held:#?}");
+    assert_eq!(held.next_wake_unix_ms, None, "no wake of its own");
+    let warning = held
+        .reasons
+        .iter()
+        .find(|reason| reason.outcome.code().as_str() == REFUSED)
+        .unwrap_or_else(|| panic!("the warning: {held:#?}"));
+    assert_eq!(warning.outcome.category(), Category::Warning);
+    for (key, expected) in [
+        ("instance_id", INSTANCE),
+        ("task_id", RULE_B),
+        ("package_id", PACKAGE),
+        ("variable_name", "pick"),
+        ("variable_problem", "not_an_option"),
+    ] {
+        assert_eq!(
+            warning.outcome.value(key).and_then(Value::as_str),
+            Some(expected),
+            "{key}: {}",
+            warning.outcome
+        );
+    }
+    let waits = decision(&refused, RULE_A);
+    assert_eq!(waits.state, SchedulingDecisionState::Deferred, "{waits:#?}");
+    assert!(excluded(&refused, RULE_A), "{waits:#?}");
+    assert!(
+        !dispatched(&refused, RULE_B) && !dispatched(&refused, RULE_A),
+        "neither rule is dispatched: {:#?}",
+        refused.dispatch_intents
+    );
+
+    declare(scene.packs.path(), true);
+    let repaired = scene.evaluate(refused_at + CHECK_INTERVAL_MS, 8);
+    assert!(
+        decision(&repaired, RULE_B)
+            .reasons
+            .iter()
+            .all(|reason| reason.outcome.code().as_str() != REFUSED),
+        "{:#?}",
+        decision(&repaired, RULE_B)
+    );
+    assert!(excluded(&repaired, RULE_A));
+    let (chain, context) = scene.run(&repaired, RULE_B);
+    assert_eq!(
+        variable_values(&chain),
+        json!([{"variable_name": "pick", "variable_source": "rule",
+                "value_json": "\"item_b\"", "set_unix_ms": set_at, "set_channel": "lab"}])
+    );
+    assert_eq!(run_values(&context), [("pick".to_owned(), json!("item_b"))]);
     scene.close();
 }

@@ -3661,6 +3661,14 @@ actingcommand_contract::outcome_codes! {
         /// the deferrals, with no wake of its own: clearing or changing the set value, a change of
         /// facts, ends it. Nothing fails and no budget is taken.
         ExcludesRule => "goal_value_excludes_rule": info / none,
+        /// Warning (Workflow #500 SV-2 fix round 1, since 0.12.81). The candidate of the task
+        /// (`task_id`) on the application (`instance_id`) is held back: the declaration in force
+        /// of its package (`package_id`) does not take the value the task's rule carries for the
+        /// variable (`variable_name`), for the reason `variable_problem` names (absent only when
+        /// the goal store would not keep the value's text, which no compiled task carries): the
+        /// package was replaced since the generation in force was composed. A decision's reason
+        /// at position 5a, with no wake of its own; nothing is dispatched, nothing fails.
+        RuleRefused => "goal_value_rule_refused": warning / none,
     }
 }
 

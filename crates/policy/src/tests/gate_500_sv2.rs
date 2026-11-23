@@ -13,7 +13,9 @@
 //   the four kinds, and an empty member, are refused `schedule_invalid` at the member (test 5);
 // - the member without `rule_variables` in `requires` is refused at the member; with it and given
 //   subsystems that do not name it, `schedule_requires_missing` at that entry (test 6);
-// - a root none of whose rules carries the member composes to its golden bytes (test 9).
+// - a root none of whose rules carries the member composes to its golden bytes (test 9);
+// - fix round 1: a value a task carries that the declaration in force no longer takes holds the
+//   task's pair back by that variable, with the judgement's word.
 // A made-up game; every package, variable and value is a placeholder. No clock is read.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,13 +23,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use actingcommand_contract::{
     DeclaredCapabilities, IrreversiblePackages, PackageVariable, RuntimeChannel,
     STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRootBytes, StandardPackRootIssue,
-    parse_package_variables, read_standard_pack_root,
+    VariableProblem, parse_package_variables, read_standard_pack_root,
 };
 use serde_json::{Map, Value, json};
 
 use crate::resource_targets::StoredEntry;
 use crate::{
-    EvaluationFacts, InstanceSnapshot, RULE_VARIABLES_SUBSYSTEM, RemedyPlan,
+    EvaluationFacts, InstanceSnapshot, RULE_VARIABLES_SUBSYSTEM, RefusedRuleValue, RemedyPlan,
     STANDARD_PACK_OPERATION_ID, StandardPackBinding, StandardPackComposeFailure,
     StandardPackComposeInput, StandardPackComposition, StandardPackGameFiles, VariablePackage,
     VariablePlan, VariableSetBy, VariableTable, VariableTableTask, compose_standard_pack_rules,
@@ -513,8 +515,9 @@ fn sv2_t6_the_member_needs_rule_variables_in_requires() {
 
 /// Test 9 (ruling 8, must not change): the neutral example catalog `catalog-a`'s task as the rule
 /// of a root none of whose rules carries `variables` composes to its golden tasks document, each
-/// member in its place, as on main; its compiled task carries no `variables`, and the record a
-/// dispatch of it would carry for a package without variables is none.
+/// member in its place, as on main; its compiled task carries no `variables`, and (fix round 1:
+/// now asserted, as the review asked) a dispatch of it, its package declaring no variable, has no
+/// pair in the plan and carries no `policy_dispatch_parameters` record.
 #[test]
 fn sv2_t9_a_root_without_the_member_keeps_its_golden_bytes() {
     let parse = |text: &str| -> Value { serde_json::from_str(text).expect("example JSON") };
@@ -626,4 +629,72 @@ fn sv2_t9_a_root_without_the_member_keeps_its_golden_bytes() {
         serialized.get("variables").is_none(),
         "no member is added: {serialized}"
     );
+    let without = VariableTable::build(&[VariableTableTask {
+        task_id: "fixture.observe".to_owned(),
+        games: BTreeSet::from([GAME.to_owned()]),
+        package: Some(VariablePackage {
+            package_id: "fixture.observe".to_owned(),
+            variables: Vec::new(),
+            cap_fact_keys: Vec::new(),
+        }),
+    }]);
+    let planned =
+        crate::variables::plan_with_entries(composed.compiled(), &facts(), &without, |_| {
+            BTreeMap::new()
+        });
+    assert!(planned.is_empty(), "{planned:?}");
+    assert!(
+        RemedyPlan::default()
+            .with_variable_values(&planned)
+            .dispatch_parameters("fixture.observe", INSTANCE)
+            .is_none(),
+        "no record"
+    );
+}
+
+/// Fix round 1 (the review's required fix; package-variables.md, "Carried by the rule"): the plan
+/// judges each value a task carries under the declaration in force (the table's), by the
+/// composer's own judgement. The two rules composed under [`declaration`], the package is replaced
+/// by one whose `pick` no longer offers `item_b`: the pair of the rule that carries `item_b` is
+/// held back by `pick` with `not_an_option`, the one that carries `item_a` is not. Under the
+/// declaration as composed, neither is.
+#[test]
+fn sv2_t10_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back() {
+    let composition =
+        compose(&two_rules()).unwrap_or_else(|failure| panic!("the rules compose: {failure}"));
+    let mut replaced = declaration();
+    replaced[0]["options"] = options(&["item_a", "item_c"]);
+    let narrowed = parse_package_variables(&replaced, &[]).expect("the replaced variables");
+    let task = |task_id: &str| VariableTableTask {
+        task_id: task_id.to_owned(),
+        games: BTreeSet::from([GAME.to_owned()]),
+        package: Some(VariablePackage {
+            package_id: PACKAGE.to_owned(),
+            variables: narrowed.clone(),
+            cap_fact_keys: Vec::new(),
+        }),
+    };
+    let in_force = VariableTable::build(&[task(RULE_A), task(RULE_B)]);
+    let narrowed_plan =
+        crate::variables::plan_with_entries(composition.compiled(), &facts(), &in_force, |_| {
+            BTreeMap::new()
+        });
+    assert_eq!(
+        narrowed_plan.rule_value_refused(RULE_B, INSTANCE),
+        Some(&RefusedRuleValue {
+            package_id: PACKAGE.to_owned(),
+            variable_name: "pick".to_owned(),
+            problem: Some(VariableProblem::NotAnOption),
+        })
+    );
+    assert_eq!(narrowed_plan.rule_value_refused(RULE_A, INSTANCE), None);
+
+    let as_composed = plan(&[]);
+    for task_id in [RULE_A, RULE_B] {
+        assert_eq!(
+            as_composed.rule_value_refused(task_id, INSTANCE),
+            None,
+            "{task_id}"
+        );
+    }
 }

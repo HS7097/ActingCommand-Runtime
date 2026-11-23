@@ -398,7 +398,9 @@ The members of `report`:
       always on (`config_subsystem_always_on`). A dispatch of a rule hands its
       run the values the rule carries for its package's variables (its
       `variables`, source `rule`), and a rule whose value is not the one set on
-      the application waits (`goal_value_excludes_rule`)
+      the application waits (`goal_value_excludes_rule`), as does one whose
+      value its package's declaration in force no longer takes
+      (`goal_value_rule_refused`)
       ([standard-pack-schedule.md](standard-pack-schedule.md), "A rule's
       variable values"); a `schedule.json` any of whose rules carries the member
       requires it, so it is composed only by a Runtime that names this row. The

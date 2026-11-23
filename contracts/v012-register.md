@@ -47167,21 +47167,55 @@ own costs and yields, among which the scheduler picks by the account's gap.
   task's carried value first, else `resolve_variable`. A direct run is as before. The run's
   admission record lists a rule's value as any value handed from outside; the dispatch's reason
   names `rule` (`variable_source` gains the word).
+- *Judged at the dispatch* (fix round 1, the review's required fix). The composer judged a rule's
+  value against the declaration it read, but a package replaced in place since the generation in
+  force was composed is read again by the workbench's next check, which builds the table before
+  it composes and keeps the generation in force when the composition is refused as a whole or
+  makes no progress; until this round `plan_with_entries` then handed the run the value unjudged
+  and the run's admission read the default in its place, unsaid. Now the same loop judges each
+  value the task carries with `judge_rule_variable_value` under the table's declaration; the first
+  one refused, in declaration order, holds the pair back (`VariablePlan::rule_value_refused`,
+  `RefusedRuleValue`: the package, the variable and the judgement's word). The closure's
+  `rule_value_deferral` (`policy_host.rs`, the one function at position 5a, renamed from
+  `set_value_exclusion`) answers it first, before a set value's exclusion: deferred with the new
+  warning `goal_value_rule_refused` (`instance_id`, `task_id`, `package_id`, `variable_name`,
+  `variable_problem`), no wake of its own, no intent, no admission, no budget, and
+  `hold_back_untimed` for the idle plan, as ruling 5 places the exclusion. It ends when the
+  declaration in force takes the value again (the package repaired, read at the next check, or a
+  composed generation whose rule carries a value it takes). Why a new code: none existing fits.
+  `goal_value_not_applied` is a set value's warning record (`runtime.failed`) for a run that goes
+  on with the default, `run_variable_value_refused` a direct run's Denied error, and
+  `goal_value_excludes_rule` an info reason that a set value chose another rule; here no run
+  starts, nothing is denied to a caller, and the cause is the package, which a person must repair,
+  hence a warning.
 - *A set value decides which rules run* (ruling 4). While the application holds a value set for a
   variable (an entry row, whatever its judgement) and the task carries another (compared as JSON),
   the pair is held back (`VariablePlan::excluded_by`, the first such variable in declaration order).
   The host's eligibility closure defers it at position 5a, between the pack schedule (5) and the
   owed rerun's pacing (6), with the new info code `goal_value_excludes_rule` (`instance_id`,
   `task_id`, `variable_name`) and no wake (`crates/runtime-host/src/policy_host.rs`,
-  `set_value_exclusion`, in `evaluate`'s closure and its look ahead): no failure, no intent, no
+  `rule_value_deferral`, in `evaluate`'s closure and its look ahead): no failure, no intent, no
   admission, no budget; the decision and the not-run explanation carry it; clearing or changing the
   value is a change of facts. A task that carries the same value, or not the variable, is not held.
-  No member of the application's record is added. Placed away from the clock code: the code is no
-  host code the clock-slot records name, so a slot it holds writes no clock-slot record.
+  No member of the application's record is added. Placed away from the clock code: neither code is
+  a host code the clock-slot records name, so a slot it holds writes no clock-slot record. Fix
+  round 1 (the review's third point, no code): a set value the declaration takes but no rule
+  carries holds back every rule that carries the variable, each with `goal_value_excludes_rule`;
+  the goal view shows the set value, and none of those rules runs until the value is changed to
+  one a rule carries or cleared (package-variables.md, "A set value that no rule carries"). A set
+  value the judgement refuses still holds rules back, as built (the coordinator's ruling: the
+  safe side).
 - *The idle plan* (ruling 5). The closure calls `hold_back_untimed` for the deferral, as for a closed
   pack schedule's row with no end, and the look ahead behind a hold answers it with no time: the
   existing rule of §1.512 counts such a candidate held back with no time, not due and no wake;
-  `idle.rs`, `idle_action.rs` and the idle planner are not touched.
+  `idle.rs`, `idle_action.rs` and the idle planner are not touched. Fix round 1 (the review's second
+  point): no host test of it is written. The existing fixtures do not allow one without touching
+  the idle plan's files: an instance its idle action can put to sleep needs a physical instance
+  and an idle action through a configuration manifest with a startup package (as
+  `gate_484_idle_w2` builds it), and that manifest names no subsystems, so a root whose rules carry
+  values (which `requires` `rule_variables`) is refused `schedule_requires_missing` there; the
+  host's own idle check would also close or wake the application between the steps. The call is
+  the one a closed pack schedule's row with no end makes, which §1.512's tests cover.
 - *Two rules of one package* (ruling 6) are two tasks already; on a switched root each rule's
   business part comes from its package's entry of `pack-catalog.json`, its per-rule part where the
   entry holds one for the rule's id ([pack-catalog.md](pack-catalog.md), "Per-rule parts": in place of
@@ -47218,18 +47252,19 @@ cleared, with no value named.
 (as §1.508's `catalog_business`), and [component-interfaces.md](component-interfaces.md) says
 nothing of subsystem names (not changed). `package`: no pack format changes. `ledger`:
 `variable_values` and the admission record keep their shapes (a new word in a vocabulary value,
-read as a string). `runtime-outcomes` stays 1: a code and a word in the catalog only.
+read as a string). `runtime-outcomes` stays 1: codes and a word in the catalog only.
 `runtime-client`: `GoalView` leaves out two optional members it always answered, no shape changes.
 `actingd-config`: no key.
 
-**Codes.** One new code, one new word:
+**Codes.** Two new codes (the second, fix round 1), one new word:
 
 | Name | The one situation | Refuses or warns | Exit status |
 |---|---|---|---|
 | `goal_value_excludes_rule` (runtime-host, info, ladder `none`) | a candidate's task carries a value for a variable the application holds another value set for; its decision's reason at position 5a | neither: an info reason of a deferred decision | none (no command fails) |
+| `goal_value_rule_refused` (runtime-host, warning, ladder `none`; fix round 1) | the declaration in force of a candidate's package does not take a value its task carries (a package replaced since the generation in force was composed); its decision's reason at position 5a, first | warns: a warning reason of a deferred decision | none (no command fails) |
 | `rule` (vocabulary `variable_source`) | the value a dispatch hands its run is its task's rule's | neither: a value of a record | none |
 
-The outcome code index (`runtime-host.md`, `README.md`) gains the code's row and counts, written to
+The outcome code index (`runtime-host.md`, `README.md`) gains the codes' rows and counts, written to
 what `ci/outcome_codes_index.py` generates and confirmed by its `--check`.
 
 **Tests** (policy gate row "#500 SV-2", host gate row "#500", "SV-2").
@@ -47240,10 +47275,12 @@ what `ci/outcome_codes_index.py` generates and confirmed by its `--check`.
 | `sv2_t3_a_set_value_holds_back_the_rule_that_carries_another` | 3, 4 (plan) | A set value equal to one rule's holds the other back by the variable, the other way round for the other value, neither for another variable's value or once cleared; the page's resolution is the set value |
 | `sv2_t5_an_undeclared_name_or_a_refused_value_is_refused_at_the_member` | 5 | An undeclared name; a choice no option; an integer out of range, off its step; a switch no boolean; an ordered key not offered, too few keys; an empty member, no object: `schedule_invalid` at the member |
 | `sv2_t6_the_member_needs_rule_variables_in_requires` | 6 | Without the name: at the member; with it and subsystems lacking it: `schedule_requires_missing` at `/requires/0`; with it named: composed |
-| `sv2_t9_a_root_without_the_member_keeps_its_golden_bytes` | 9 | catalog-a's task composes to its golden tasks document; the compiled task carries no `variables` |
+| `sv2_t9_a_root_without_the_member_keeps_its_golden_bytes` | 9 | catalog-a's task composes to its golden tasks document; the compiled task carries no `variables`; (fix round 1, the review's first point: the description said so and nothing asserted it) a dispatch of it, its package declaring no variable, has no pair in the plan and no dispatch parameters record |
+| `sv2_t10_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back` | fix round 1 | The two rules composed, a table whose `pick` no longer offers `item_b` holds the pair carrying `item_b` back with `not_an_option`, not the other; the declaration as composed, neither |
 | `sv2_h1_each_rule_hands_its_run_its_value_and_a_set_value_holds_the_other_back` | 1, 3, 4 | Through the host: nothing set, the first rule runs its `item_b` (source `rule`); `item_c` set, both wait `goal_value_excludes_rule`, no wake, no dispatch; `item_a` set, the first waits and the second runs `item_a` with who set it; cleared, neither waits |
 | `sv2_h2_the_goal_view_names_a_set_value_and_leaves_the_rules_choice_unnamed` | 8 | `GoalView` names no value, source or display with nothing set; the set value with one set |
 | `sv2_h3_a_direct_run_reads_its_request_s_values_and_no_rule_s` | 7 | A direct run reads its request's value, or the default, never a rule's |
+| `sv2_h4_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back` | fix round 1 | `item_b` set, the package replaced in place without `item_b` while the generation in force stays (the gate tests' refusal seam): the first rule waits `goal_value_rule_refused` (warning; the instance, the task, the package, `pick`, `not_an_option`), no wake, and neither rule is dispatched; repaired, the first rule is dispatched again and its run reads `item_b`, source `rule` |
 
 Touched (test 10), each only for the new required member `DeclaredCapabilities::variables`
 (`Some(Vec::new())`, a package that declares none): the policy crate's `readable_root` (`lib.rs`) and
@@ -47265,7 +47302,7 @@ such a root with `schedule_requires_missing` at that entry and keeps the game's 
 §1.505's "At deploy" for `pool_list_rows`: none when the active generation was composed from the
 file), and the installer's plan of §1.514 refuses a rollback (or an update) to such a build while a
 game's `schedule.json` or a fragment of the active generation lists the name. In the release notes'
-language: 一个任务包可以在 `schedule.json` 里写成多条规则，每条规则用 `variables` 给包的变量带自己的值（比如一关一条规则、各自的消耗和产出），`requires` 要写 `rule_variables`；调度到哪条规则，运行就拿到哪条规则的值（记录里来源写 `rule`）。在应用上设了这个变量的值，就只跑带同一个值的规则，别的规则以 `goal_value_excludes_rule` 等着、不算失败也不占额度；清掉设的值，就由调度在这些规则里挑。目标页上设了值显示设的值，没设值时不再显示单一的生效值（由规则决定）。
+language: 一个任务包可以在 `schedule.json` 里写成多条规则，每条规则用 `variables` 给包的变量带自己的值（比如一关一条规则、各自的消耗和产出），`requires` 要写 `rule_variables`；调度到哪条规则，运行就拿到哪条规则的值（记录里来源写 `rule`）。在应用上设了这个变量的值，就只跑带同一个值的规则，别的规则以 `goal_value_excludes_rule` 等着、不算失败也不占额度；设的值没有哪条规则带，这些规则就都等着，直到改值或清掉；清掉设的值，就由调度在这些规则里挑。包被换过、不再接受某条规则带的值时，这条规则以警告 `goal_value_rule_refused` 等着、不派发，包修好后照常运行。目标页上设了值显示设的值，没设值时不再显示单一的生效值（由规则决定）。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

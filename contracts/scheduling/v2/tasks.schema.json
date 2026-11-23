@@ -193,7 +193,7 @@
           "type": "boolean"
         },
         "variables": {
-          "description": "Workflow #500 SV-2 (0.12.81): the values a dispatch of the task hands its run for its package's variables, by the variable's name; a dispatch hands each with the source rule, and while the application holds another value set for one of them the task's candidate there is held back (goal_value_excludes_rule). A schedule.json rule writes it as any V2 member and names rule_variables in requires; the standard-pack composer holds each name and value to the package's declaration. The compiler holds it to 1 to 16 names of a variable's form, each value of a variable's kind with a compact text of at most 1024 bytes.",
+          "description": "Workflow #500 SV-2 (0.12.81): the values a dispatch of the task hands its run for its package's variables, by the variable's name; a dispatch hands each with the source rule, and while the application holds another value set for one of them the task's candidate there is held back (goal_value_excludes_rule), as it is while its package's declaration in force no longer takes one of them (goal_value_rule_refused). A schedule.json rule writes it as any V2 member and names rule_variables in requires; the standard-pack composer holds each name and value to the package's declaration. The compiler holds it to 1 to 16 names of a variable's form, each value of a variable's kind with a compact text of at most 1024 bytes.",
           "type": "object",
           "minProperties": 1,
           "maxProperties": 16,

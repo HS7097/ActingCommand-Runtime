@@ -324,6 +324,12 @@ among any tasks:
 - **What a dispatch hands its run**: for a variable the rule carries, the rule's value, source
   `rule`; for any other, as before ([package-variables.md](package-variables.md), "Resolution, once
   per selected dispatch").
+- **Judged again at each evaluation** (fix round 1): a package replaced since the generation in
+  force was composed, while that generation stays in force, may no longer take a value a rule
+  carries; the same judgement (`judge_rule_variable_value`) under the declaration the workbench
+  read last holds such a rule's candidate back (`goal_value_rule_refused`, warning, no wake of its
+  own, position 5a before the set value's exclusion); nothing is dispatched until the package
+  takes the value again ([package-variables.md](package-variables.md), "Carried by the rule").
 - **A value set on the application decides which rules run**: while it holds a value for a
   variable and a rule carries another, the rule's candidate there waits
   (`goal_value_excludes_rule`, no wake of its own; [scheduling-blackout.md](scheduling-blackout.md),

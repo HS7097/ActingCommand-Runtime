@@ -369,7 +369,9 @@ Workflow #500 SV-2 (since 0.12.81; register §1.511;
 the task hands its run for it (`variable_values`, source `rule`); while the application holds
 another value set for one of them, the task's candidate there is held back
 (`goal_value_excludes_rule`, [../../scheduling-blackout.md](../../scheduling-blackout.md), "Order of
-the deferrals", position 5a). A `schedule.json` rule writes it as any V2 member and it passes
+the deferrals", position 5a), and (fix round 1) so is it while its package's declaration in force
+no longer takes one of them (`goal_value_rule_refused`, at the same position, first). A
+`schedule.json` rule writes it as any V2 member and it passes
 through to the composed task; the file then names `rule_variables` in `requires`, and the composer
 holds each name and value to the package's declaration
 ([../../standard-pack-schedule.md](../../standard-pack-schedule.md), "A rule's variable values").

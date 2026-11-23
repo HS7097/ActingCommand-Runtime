@@ -286,8 +286,29 @@ declaration order:
    value set for is not dispatched ("A value set on the application decides which rules run"
    below), so a rule's value is handed only where the application holds no value for the variable
    or holds that same one. The root's judgement ("A variable that does not apply") and a set
-   value's own judgement are not read for it: the composer judged it against the declaration, and
-   the run's admission judges it again under the package it prepares ("The overlay").
+   value's own judgement are not read for it. **Judged at the dispatch** (fix round 1): the
+   composer judged the value against the declaration it read, and the package may have been
+   replaced since the generation in force was composed: the workbench reads a package replaced in
+   place again at its next check and builds the table from what it read before it composes ("A
+   variable that does not apply"), and a check whose composition is refused as a whole, or makes
+   no progress, keeps the generation in force (when the other games compose, the game whose
+   `schedule.json` the composer now refuses goes by its own fallback instead: its last good
+   fragment, else no rules). So each evaluation judges every value a task carries again, by the
+   composer's own judgement (`judge_rule_variable_value`: `PackageVariable::judge` taking the
+   value whole, and the goal store keeping its text), under the declaration in force, the table
+   the dispatch reads. A value it refuses holds the task's
+   candidate on the application back at position 5a
+   ([scheduling-blackout.md](scheduling-blackout.md), "Order of the deferrals"), before a set
+   value's exclusion: its decision and its not-run explanation carry `goal_value_rule_refused`
+   (warning, ladder class `none`; `instance_id`, `task_id`, `package_id`, `variable_name`, the
+   first such variable in declaration order, and `variable_problem`, the judgement's word, absent
+   only when the store alone would not keep the text, which no compiled task carries); it has no
+   wake of its own, nothing is dispatched, nothing fails, no budget is taken and no run reads the
+   default in the rule's place; for the idle plan it is held back with no time, as the exclusion
+   below. It ends when the declaration in force takes the value again: the package repaired (read
+   again at the next check of the workbench), or a generation composed whose rule carries a value
+   it takes. The run's admission judges the value once more under the package it prepares ("The
+   overlay").
 1. **Set on the application**, for a variable the task carries no value for: the entry row of the
    variable's name in the application's `session.resource_targets` v3 record
    ([resource-targets.md](resource-targets.md), "Document `actingcommand.resource-targets.v3`"),
@@ -315,6 +336,15 @@ value every rule is a candidate and the evaluation picks among them as among any
 own costs, yields and order. So "designate this one" is setting the value and "let the scheduler
 choose" is clearing it; the application's record gains no member. For the idle plan such a
 candidate is held back with no time, as a closed pack schedule's row with no end holds one.
+
+**A set value that no rule carries** (fix round 1). A set value the declaration takes but that no
+rule of the generation in force carries (say `item_c`, while the rules carry `item_a` and `item_b`)
+holds back every rule that carries the variable: each of their candidates on the application waits
+with `goal_value_excludes_rule` (position 5a, no wake of its own), the goal view shows the set value
+as the application's value, and none of those rules runs until the value is changed to one a rule
+carries or cleared. Nothing else follows from it and no code of its own is written: it is the
+exclusion above, met by every carrying rule at once. A task that carries no value for the variable
+is not affected.
 
 **A set value that no longer fits its declaration** is judged when a run is to read it
 (`PackageVariable::judge`, the contract crate's one copy, which the kernel and the Lab read too);
@@ -767,7 +797,8 @@ bundle without them keeps its revision, and the Runtime declares [3, 14] ([3, 15
   the configuration manifest's subsystems), not by `package`; the composed task's new V2 member
   `variables` is read only by a build that names the subsystem, and a build that does not refuses
   the file at `requires` first; `variable_source` gains the word `rule` and the catalog the info
-  code `goal_value_excludes_rule` (`runtime-outcomes` stays 1: a word and a code in the catalog);
+  code `goal_value_excludes_rule` and (fix round 1) the warning code `goal_value_rule_refused`
+  (`runtime-outcomes` stays 1: a word and codes in the catalog);
   `variable_values` and `task.requested.variables` keep their shapes (`ledger` stays); `GoalView`
   leaves out two optional members it had always answered (`runtime-client` stays); no
   configuration key (`actingd-config` stays).
