@@ -54,7 +54,9 @@ use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerError, GlobalLedgerRangeRequest, GlobalLedgerSelection,
     GlobalLedgerSelectionExtras, LedgerArtifactReference, LedgerCode, PersistedEvent,
 };
-use actingcommand_policy::{CatalogSources, CompiledCatalog, PolicyCode, compile_catalog};
+use actingcommand_policy::{
+    CatalogSources, CompiledCatalog, FACT_REFRESH_TASK_ID, PolicyCode, compile_catalog,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::cell::{Cell, RefCell};
@@ -1007,7 +1009,12 @@ fn report(inputs: &ReportInputs<'_>) -> Result<Value, SuspensionReportError> {
         let failure_spelling = terminal
             .as_ref()
             .map_or(base.as_str(), |(spelling, _)| spelling.as_str());
-        if failure.disposition == PolicyFailureDisposition::PausedTask {
+        // Workflow #490 FR-1 (`contracts/policy-suspension.md`, "Lifting (R19)"): a pair of the
+        // fact refresh is never held by a pause, so its paused failure is judged as any other
+        // failure: never `suspended` nor `lifted`, `repeating` when it repeats.
+        if failure.disposition == PolicyFailureDisposition::PausedTask
+            && task_id != FACT_REFRESH_TASK_ID
+        {
             let procedure_ref = procedure_refs.get(task_id);
             if procedure_ref.is_none() {
                 warnings.push(format!("task_not_in_catalog:{pair}"));

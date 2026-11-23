@@ -17,9 +17,11 @@
 //!   candidates it unlocks (their catalog rank and manual offset) and competes with the other
 //!   candidates of its instance (§3.4).
 //! - Its gates: the minimum interval between two of its dispatches, the backoff after a failed
-//!   one, the pause for the rest of the day after `max_consecutive_failures` failures in a row,
-//!   its daily limit, placement, the host budget and the Runtime's admission preview (§3.4,
-//!   §3.9). Each affected candidate takes the first row of §3.7 that matches.
+//!   one, the rest after `max_consecutive_failures` failures in a row (Workflow #490 FR-1: a rest
+//!   that grows with the row, ends by itself and ends at once when another task's scheduled run
+//!   on the instance succeeds after the latest failure), its daily limit, placement, the host
+//!   budget and the Runtime's admission preview (§3.4, §3.9). Each affected candidate takes the
+//!   first row of §3.7 that matches.
 //! - IDLE-1P (#405): R_I on an instance the idle action closed waits for the instance's next
 //!   wake unless a candidate it unlocks is due ([`IdleClosed`]); its own gates' wakes stay on R_I
 //!   and never become its candidates' wakes there (review M-1).
@@ -32,9 +34,9 @@ use actingcommand_contract::outcome::{Code, Outcome};
 use actingcommand_selection_policy::UnknownReason;
 
 use super::{
-    DecisionReason, DetectionSuggestion, EligibilityState, EvaluationFacts, EvaluationTime,
-    HostView, InstanceSnapshot, LeftOutFacts, ObservedFact, PlacementCandidate,
-    PolicyEvaluationError, PolicyEvaluationResult, RankRecord, ResourceLoad,
+    ActivityWindowOccurrence, DecisionReason, DetectionSuggestion, EligibilityState,
+    EvaluationFacts, EvaluationTime, HostView, InstanceSnapshot, LeftOutFacts, ObservedFact,
+    PlacementCandidate, PolicyEvaluationError, PolicyEvaluationResult, RankRecord, ResourceLoad,
     SchedulingDecisionState, TaskRank, TaskRuntimeSnapshot, TaskWork, TieKey, UnknownReasonToken,
     activity_window_at, deterministic_tie_breaker, min_wake, reason, reason_with,
     select_activity_profile, snapshot_expected_runtime, unknown_token,
@@ -65,6 +67,9 @@ pub const FACT_REFRESH_EXPECTED_DURATION_MS: u64 = 60_000;
 /// The task runtime a fact refresh may reserve in one activity window: high enough never to bind,
 /// since the fact refresh settings, not the task's loop budget, limit how often R_I runs.
 const FACT_REFRESH_WINDOW_RUNTIME_MS: u64 = u32::MAX as u64;
+/// Workflow #490 FR-1 (the coordinator's ruling 1 on board #490): the longest rest after failed
+/// runs in a row, two hours, whatever `failure_backoff_ms` and the row's length give.
+const FAILURE_REST_MAX_MS: u64 = 7_200_000;
 
 /// The `scheduling.fact_refresh.*` settings an evaluation reads (D2 model §3.4), as in effect
 /// when the cycle starts: a change applies from the next round on.
@@ -76,9 +81,11 @@ pub struct FactRefreshSettings {
     pub min_interval_ms: u64,
     /// The most R_I dispatches on one instance in one activity day.
     pub daily_limit: u32,
-    /// The least time from a failed R_I run to the next R_I dispatch.
+    /// The least time from a failed R_I run to the next R_I dispatch; Workflow #490 FR-1: also
+    /// the unit of the rest after failed runs in a row (twice it at the threshold).
     pub failure_backoff_ms: u64,
-    /// The failed R_I runs in a row after which R_I rests for the rest of the activity day.
+    /// The failed R_I runs in a row from which R_I rests (Workflow #490 FR-1: a rest that grows
+    /// with the row and ends by itself, `failure_rest_until`).
     pub max_consecutive_failures: u32,
     /// SCH-M ED-2 (§3.4 D-12): the declared duration D of an R_I dispatch
     /// (`scheduling.fact_refresh.expected_duration_ms`); the snapshot's E replaces it.
@@ -143,7 +150,9 @@ pub struct FactRefreshInputs {
 /// every instance. Its loop budget never binds: the scheduler applies the fact refresh
 /// settings before admission (so a setting changed while the Runtime runs never makes a
 /// recorded admission disagree with the spec). Its failures never retry or pause: the
-/// scheduler backs off and rests R_I by the settings (D2 model §3.9 item 1).
+/// scheduler backs off and rests R_I by the settings (D2 model §3.9 item 1). Workflow #490 FR-1:
+/// a severe failure still settles as a pause, as any task's does, but the Runtime's admission
+/// never holds a pair of this task by it (`contracts/policy-suspension.md`, "Lifting (R19)").
 pub fn fact_refresh_task() -> &'static TaskSpec {
     static TASK: OnceLock<TaskSpec> = OnceLock::new();
     TASK.get_or_init(|| TaskSpec {
@@ -495,9 +504,10 @@ pub(super) fn plan(
 }
 
 /// R_I's own gates before the allocation (§3.4 step 3, §3.9 item 1), each with the reason its
-/// decision carries: placement without an activity profile, the failure pause and the daily
-/// limit (limits); an unavailable instance, a host that cannot take its load and the minimum
-/// interval or failure backoff (for now).
+/// decision carries: placement without an activity profile, the rest after failed runs in a row
+/// (Workflow #490 FR-1, [`failure_rest_until`]) and the daily limit (limits); an unavailable
+/// instance, a host that cannot take its load and the minimum interval or failure backoff (for
+/// now).
 fn own_gate(
     context: &PlanContext<'_>,
     instance: &InstanceSnapshot,
@@ -525,30 +535,17 @@ fn own_gate(
     // The activity day the Runtime counts the daily limit in; outside every window the
     // admission preview reports the closed window.
     if let Some(window) = activity_window_at(profile, now)? {
-        let paused = match state {
-            Some(state)
-                if state.terminal_state == Some(TaskTerminalState::Failed)
-                    && state.failure_streak.is_some_and(|streak| {
-                        u32::from(streak) >= settings.max_consecutive_failures
-                    }) =>
-            {
-                match state.last_dispatched_unix_ms {
-                    Some(at) => activity_window_at(profile, at)?
-                        .is_some_and(|run| run.local_day == window.local_day),
-                    None => false,
-                }
+        // Workflow #490 FR-1: the rest after failed runs in a row wakes at its own end; the daily
+        // limit at the window's end.
+        let limited = match failure_rest_until(context, profile, &window, instance, state)? {
+            Some(until) => Some((RefreshLimit::FailurePause, until)),
+            None if reader.dispatched_today >= settings.daily_limit => {
+                Some((RefreshLimit::DailyLimit, window.until_unix_ms))
             }
-            _ => false,
+            None => None,
         };
-        let limit = if paused {
-            Some(RefreshLimit::FailurePause)
-        } else if reader.dispatched_today >= settings.daily_limit {
-            Some(RefreshLimit::DailyLimit)
-        } else {
-            None
-        };
-        if let Some(limit) = limit {
-            let wake = Some(window.until_unix_ms);
+        if let Some((limit, until)) = limited {
+            let wake = Some(until);
             for key in keys {
                 entry.reasons.push(exhausted_reason(
                     &instance.instance_id,
@@ -684,6 +681,81 @@ fn next_eligible(
     Ok(match (interval, backoff) {
         (Some(left), Some(right)) => Some(left.max(right)),
         (one, other) => one.or(other),
+    })
+}
+
+/// Workflow #490 FR-1 (`contracts/scheduling/README.md`, "Fact refresh", "Its own gates"): the end
+/// of R_I's rest after failed runs in a row, while it lasts at the evaluation's instant. R_I rests
+/// when its latest run failed, its failed runs in a row since its last success reach
+/// `max_consecutive_failures` and its latest dispatch lies in the current activity day (`window`):
+/// a failure of an earlier activity day rests nothing. With `k` the failures beyond the threshold
+/// (0 at it), the rest lasts `failure_backoff_ms × 2^(k+1)`, at most [`FAILURE_REST_MAX_MS`],
+/// counted from that latest dispatch (the snapshot's `last_dispatched_unix_ms`, the admission
+/// instant of the pair's latest dispatch, the instant this gate reads for its latest run), and
+/// never past `window`'s end; the arithmetic saturates, and a `failure_backoff_ms` of 0 gives no
+/// rest. A scheduled run of another task on the instance dispatched after that latest dispatch that
+/// succeeded ends the rest at once ([`succeeded_since`]); what holds R_I then is its minimum
+/// interval and its failure backoff (`next_eligible`).
+fn failure_rest_until(
+    context: &PlanContext<'_>,
+    profile: &ActivityProfile,
+    window: &ActivityWindowOccurrence,
+    instance: &InstanceSnapshot,
+    state: Option<&TaskRuntimeSnapshot>,
+) -> PolicyEvaluationResult<Option<u64>> {
+    let settings = &context.inputs.settings;
+    let Some(state) = state else {
+        return Ok(None);
+    };
+    let (Some(TaskTerminalState::Failed), Some(streak), Some(failed_at)) = (
+        state.terminal_state,
+        state.failure_streak,
+        state.last_dispatched_unix_ms,
+    ) else {
+        return Ok(None);
+    };
+    let Some(beyond) = u32::from(streak).checked_sub(settings.max_consecutive_failures) else {
+        return Ok(None);
+    };
+    let same_day = activity_window_at(profile, failed_at)?
+        .is_some_and(|run| run.local_day == window.local_day);
+    if !same_day || succeeded_since(context.task_states, &instance.instance_id, failed_at) {
+        return Ok(None);
+    }
+    let length = rest_length(settings.failure_backoff_ms, beyond);
+    let until = failed_at.saturating_add(length).min(window.until_unix_ms);
+    Ok((length > 0 && context.time.unix_ms < until).then_some(until))
+}
+
+/// Workflow #490 FR-1: how long R_I rests after failed runs in a row, `beyond` of them past the
+/// threshold: `failure_backoff_ms × 2^(beyond+1)`, saturating, at most [`FAILURE_REST_MAX_MS`].
+fn rest_length(failure_backoff_ms: u64, beyond: u32) -> u64 {
+    let shift = beyond.saturating_add(1);
+    let factor = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+    failure_backoff_ms
+        .saturating_mul(factor)
+        .min(FAILURE_REST_MAX_MS)
+}
+
+/// Workflow #490 FR-1 (the coordinator's ruling 2 on board #490): whether a scheduled run of
+/// another task of the catalogue on `instance_id` was dispatched after `failed_at` and succeeded,
+/// as the evaluation's task snapshots show it: the latest admitted dispatch of a pair of the
+/// instance other than the fact refresh's own, later than `failed_at`, settled as a success. The
+/// Runtime projects into these snapshots its scheduled dispatches alone (a direct run, a recovery
+/// ladder's rung and its return-home run are none of them), each pair's latest; no other input is
+/// read.
+fn succeeded_since(
+    task_states: &BTreeMap<(&str, &str), &TaskRuntimeSnapshot>,
+    instance_id: &str,
+    failed_at: u64,
+) -> bool {
+    task_states.values().any(|state| {
+        state.instance_id == instance_id
+            && state.task_id != FACT_REFRESH_TASK_ID
+            && state.terminal_state == Some(TaskTerminalState::Succeeded)
+            && state
+                .last_dispatched_unix_ms
+                .is_some_and(|dispatched_at| dispatched_at > failed_at)
     })
 }
 
