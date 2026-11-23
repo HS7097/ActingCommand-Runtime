@@ -1950,7 +1950,7 @@ pub(crate) fn check_scan_select(
         .steps
         .first()
         .ok_or_else(|| invalid("validation_failed", "the probe package has no step"))?;
-    let pressed_document = (spec.pressed_name() != spec.wanted.default)
+    let pressed_document = (!spec.keeps_pressed_alone())
         .then(|| select_policy_document(&checked.plan, first, &spec, spec.pressed_name()));
     let executed = probe
         .step
@@ -2406,7 +2406,7 @@ pub(crate) fn scan_select_checks(
         page: step.page.clone(),
         ..Locus::on_step(step).with_frames(frames)
     };
-    let pressed_document = (spec.pressed_name() != spec.wanted.default)
+    let pressed_document = (!spec.keeps_pressed_alone())
         .then(|| select_policy_document(plan, step, spec, spec.pressed_name()));
     let executed = step
         .step
@@ -2557,15 +2557,17 @@ pub(crate) fn scan_select_checks(
         }
     }
     // #463 S2-9b: without an end mark a run with the package's default values finds its item only
-    // on the screens it reaches, which the demonstration must show.
-    if without_end(scan) && !shown.contains(spec.wanted.default.as_str()) {
+    // on the screens it reaches, which the demonstration must show. #463 SEL-F: of a fixed select,
+    // the first name it looks for, where its scan stops early.
+    let default = spec.wanted.first();
+    if without_end(scan) && !shown.contains(default) {
         failures.fail(
             on(ids.as_slice()),
             mismatch(
                 step,
                 first_id,
                 DEFAULT_NOT_SHOWN,
-                json!({"default": spec.wanted.default}),
+                json!({"default": default}),
             ),
         )?;
     }

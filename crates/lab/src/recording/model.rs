@@ -1442,7 +1442,9 @@ pub struct BoxSpec {
 /// identity feature `name` over `names`), an OCR target per slot, the select operation with its
 /// `on_empty` end, the package's `ordered` variable `wanted.name` whose default is `[default]`
 /// (#463 S2-6, fix round 1: of every select, marked as a choice or not), and the policy document
-/// whose one gate `wanted.<name>` reads it.
+/// whose one gate `wanted.<name>` reads it; #463 SEL-F: of a select whose `wanted.fixed` gives the
+/// item the package itself looks for, no variable, and a policy document that compares the name
+/// with those literals.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectSpec {
@@ -1466,9 +1468,11 @@ pub struct SelectSpec {
     /// How a read text is mapped to a name (`ocr_aliases`).
     #[serde(rename = "match")]
     pub matching: SelectMatchSpec,
-    /// The wanted value: its name (the parameter grammar) and its value, one of `names`.
+    /// The wanted value: its name (the parameter grammar) and its value, one of `names`; #463
+    /// SEL-F: or the names the package itself looks for, fixed.
     pub wanted: SelectWantedSpec,
-    /// The name the agent presses now, as a demonstration; absent means `wanted.default`.
+    /// The name the agent presses now, as a demonstration; absent means the first name the wanted
+    /// value looks for (`wanted.default`, or #463 SEL-F the first of `wanted.fixed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressed: Option<String>,
     /// The key of the run's normal end when the wanted name is on no slot; absent means
@@ -1482,9 +1486,20 @@ pub struct SelectSpec {
 }
 
 impl SelectSpec {
-    /// The name the demonstration presses: `pressed`, else the wanted value's default.
+    /// The name the demonstration presses: `pressed`, else the first name the wanted value looks
+    /// for (its default, or #463 SEL-F the first of `fixed`).
     pub fn pressed_name(&self) -> &str {
-        self.pressed.as_deref().unwrap_or(&self.wanted.default)
+        self.pressed
+            .as_deref()
+            .unwrap_or_else(|| self.wanted.first())
+    }
+
+    /// #463 SEL-F: whether the package's own policy document, read as a run handed no value reads
+    /// it, keeps the pressed name alone (the variable's default is the pressed name, or `fixed` is
+    /// that one name), so that the pressed name's decision is the default's. Otherwise the
+    /// self-test and the self-checks decide the pressed name with R1's document holding it alone.
+    pub(crate) fn keeps_pressed_alone(&self) -> bool {
+        self.wanted.looked_for() == [self.pressed_name()]
     }
 }
 
@@ -1593,12 +1608,45 @@ pub struct SelectMatchSpec {
 }
 
 /// #463 R1: the wanted value: its name and its default; #463 S2-6 fix round 1: in the package the
-/// `ordered` variable of that name, its default the one name `default`, on every select step.
+/// `ordered` variable of that name, its default the one name `default`. #463 SEL-F
+/// (`contracts/lab-recording.md`, "A select the package fixes"): exactly one of `default` and
+/// `fixed`; `fixed`, 1 to `min(32, names)` names each once in an order of preference, is the item
+/// the package itself looks for: no variable, the policy document comparing the name with those
+/// literals. A select without `fixed` is written byte for byte as before.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectWantedSpec {
     pub name: String,
-    pub default: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<Vec<String>>,
+}
+
+impl SelectWantedSpec {
+    /// #463 SEL-F: the names a run handed no value looks for, in their order: `fixed`, else the
+    /// default alone.
+    pub fn looked_for(&self) -> Vec<&str> {
+        match &self.fixed {
+            Some(fixed) => fixed.iter().map(String::as_str).collect(),
+            None => self.default.as_deref().into_iter().collect(),
+        }
+    }
+
+    /// #463 SEL-F: the first of [`Self::looked_for`]; empty only for a declaration the shape's
+    /// check refuses (neither `default` nor `fixed`, or an empty `fixed`).
+    pub fn first(&self) -> &str {
+        match &self.fixed {
+            Some(fixed) => fixed.first().map_or("", String::as_str),
+            None => self.default.as_deref().unwrap_or_default(),
+        }
+    }
+
+    /// #463 SEL-F: whether the package fixes the wanted item (`fixed`), so that it declares no
+    /// variable for it.
+    pub fn is_fixed(&self) -> bool {
+        self.fixed.is_some()
+    }
 }
 
 /// #463 R1: how a single-frame select over fixed slots confirms its choice (`track` needs a

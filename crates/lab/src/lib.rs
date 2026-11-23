@@ -178,6 +178,13 @@ mod gate_463_g2;
 #[cfg(test)]
 mod gate_463_priv_scan;
 
+// #463 SEL-F: a recording's select whose wanted item the package fixes declares no variable; a
+// package with such a variable is converted without recording again.
+#[cfg(test)]
+mod gate_463_self;
+#[cfg(test)]
+mod gate_463_self_scan;
+
 // Workflow #479 F-3b: a frame within a pixel of the base's shape is brought to the base by the
 // frame gate; a stored scene of it answers on the base; a recording on it is refused as before;
 // fix round 1: the two recording paths that ask the map count such a size as the map does.

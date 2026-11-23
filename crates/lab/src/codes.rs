@@ -264,7 +264,8 @@ actingcommand_contract::outcome_vocabulary! {
         WantedNameInvalid => "wanted_name_invalid",
         /// Two names of the select have one `id`.
         NameDuplicate => "name_duplicate",
-        /// The wanted value's `default` is no `id` of the select's names.
+        /// The wanted value's `default` is no `id` of the select's names; #463 SEL-F: or a name
+        /// of its `fixed`, the names the package itself looks for.
         DefaultNotInNames => "default_not_in_names",
         /// `pressed` is no `id` of the select's names.
         PressedNotInNames => "pressed_not_in_names",

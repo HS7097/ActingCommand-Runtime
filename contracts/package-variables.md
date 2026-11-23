@@ -92,14 +92,21 @@ root's accepted `goals.json` takes, which the Runtime's scheduler workbench read
   and the offline scan replay take values. actingctl's first-generation MCP server
   (`ac_run_pack`) gives none. No run's answer lists the values it was given; since Workflow #463
   CH-1 (0.12.71) its admission record does ("The run's admission record").
-- **A recording writes a variable for every select.** Since #463 S2-6 (0.12.68, register §1.442;
+- **A recording writes a variable for every select a person chooses with.** Since #463 S2-6 (0.12.68, register §1.442;
   fix round 1, the coordinator's ruling R1; [lab-recording.md](lab-recording.md), "Selecting in a
   list" and "The wanted value is a variable of the package") `record stop` declares one `ordered`
   variable per select step, marked first as holding a choice or given whole, its name the select's
   wanted name, its options the select's names and its default the select's default alone, the
   order the recording holds, and that step's policy reads it through `keyed_fact`; a run handed no
   value chooses what the constant of before chose. Editing the options and the texts after `record
-  stop` other than by declaring the select again is not built.
+  stop` other than by declaring the select again is not built. #463 SEL-F (since 0.12.83, register
+  §1.523): only for a select whose item a person chooses (`wanted.default`); a select that only
+  finds the package's own way gives `wanted.fixed`, the item the package itself looks for, and
+  `record stop` declares no variable for it ([lab-recording.md](lab-recording.md), "A select the
+  package fixes", which also says how a package made with such a variable is converted). Once no
+  package of the root declares a name, a value stored under it is one no entry shows (the goal
+  view's orphans, "Reading and setting a value by name"), and every check here takes the package as
+  one without that variable.
 - **No table-backed list** (`from_table`), no `table` type and no value-test operand that reads a
   variable: later slices, each with its own revision.
 

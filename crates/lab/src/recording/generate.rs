@@ -2638,7 +2638,7 @@ fn choice_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> 
         "value_column": ORDERED_VARIABLE_RANK_COLUMN,
         "absent": {"type": "integer", "value": 0}
     });
-    let mut document = select_policy_document(plan, step, select, &select.wanted.default);
+    let mut document = select_policy_document(plan, step, select, select.wanted.first());
     document["facts"] = json!([{
         "fact_key": fact_key,
         "max_age_ms": MAX_FACT_TTL_MS,
@@ -2698,8 +2698,55 @@ fn choice_variable_json(plan: &Plan, select: &SelectSpec) -> Value {
         "options": options,
         "min_count": 1,
         "max_count": max_count,
-        "default": [select.wanted.default]
+        "default": [select.wanted.first()]
     })
+}
+
+/// #463 SEL-F (`contracts/lab-recording.md`, "A select the package fixes"): the policy document of
+/// a select step whose wanted item the package fixes (`wanted.fixed`): R1's document
+/// ([`select_policy_document`]) whose one gate `wanted.<name>` keeps the fixed names (`string_in`
+/// over the field `name`, the literals; an unknown name dropped, as R1's), and the term
+/// `rank.<name>` (weight −1000) that scores each by its place in the order through a `lookup` of
+/// those literals, 1 for the first, so that the first the screen shows is chosen. It declares no
+/// fact: the package declares no variable for the step. With one fixed name it keeps what the
+/// variable form keeps with that default and no value handed.
+fn fixed_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
+    let wanted = &select.wanted.name;
+    let fixed = select.wanted.looked_for();
+    let entries = fixed
+        .iter()
+        .zip(1_i64..)
+        .map(|(name, rank)| json!({"key": {"type": "string", "value": name}, "value_milli": rank}))
+        .collect::<Vec<_>>();
+    let mut document = select_policy_document(plan, step, select, select.wanted.first());
+    document["gates"] = json!([{
+        "gate_id": format!("wanted.{wanted}"),
+        "predicate": {
+            "kind": "string_in",
+            "value": {"source": "field", "field": SELECT_FEATURE},
+            "allowed": fixed
+        },
+        "on_unknown": {"kind": "drop_candidate"}
+    }]);
+    document["scoring"] = json!([{
+        "term_id": format!("rank.{wanted}"),
+        "value": {"source": "field", "field": SELECT_FEATURE},
+        "transform": {"kind": "lookup", "entries": entries},
+        "weight_milli": -1000,
+        "on_unknown": {"kind": "drop_candidate"}
+    }]);
+    document
+}
+
+/// #463 SEL-F: the policy document of a select step's package: [`fixed_policy_document`] for a
+/// select whose wanted item the package fixes, else the variable form, [`choice_policy_document`]
+/// (#463 S2-6 fix round 1).
+fn package_policy_document(plan: &Plan, step: &PlanStep, select: &SelectSpec) -> Value {
+    if select.wanted.is_fixed() {
+        fixed_policy_document(plan, step, select)
+    } else {
+        choice_policy_document(plan, step, select)
+    }
 }
 
 /// #463 R1: the `select` of a select step's operation: its layout, its policy document, its
@@ -3303,10 +3350,13 @@ pub(crate) fn render(
     control.insert("step_timeout_ms".into(), json!(plan.step_timeout_ms));
     control.insert("max_steps".into(), json!(effect_steps));
     // #463 S2-6 fix round 1: one variable per select step, its wanted value, in path order, marked
-    // as a choice or not; the member is present only when the package has a select step.
+    // as a choice or not; the member is present only when the package has a select step. #463
+    // SEL-F: none for a select whose wanted item the package fixes, so a package whose every
+    // select is fixed declares no `variables`.
     let variables = plan
         .select_steps()
         .into_iter()
+        .filter(|(_, select)| !select.declaration.wanted.is_fixed())
         .map(|(_, select)| choice_variable_json(plan, &select.declaration))
         .collect::<Vec<_>>();
     if !variables.is_empty() {
@@ -3430,10 +3480,11 @@ pub(crate) fn render(
             None => select_layout_json(plan, step, &select.declaration)?,
         });
         // #463 S2-6 fix round 1: every select step reads its wanted value from the package's
-        // variable, one policy form whether the step is marked as a choice or not.
+        // variable, one policy form whether the step is marked as a choice or not. #463 SEL-F: a
+        // select whose wanted item the package fixes compares the name with the fixed literals.
         policies.push((
             plan.select_policy_path(step),
-            choice_policy_document(plan, step, &select.declaration),
+            package_policy_document(plan, step, &select.declaration),
         ));
     }
     // #463 R2: after the select steps' mappings, one per ending: its key on its page.

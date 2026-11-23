@@ -6,7 +6,10 @@
 //! S2-6 fix round 1: in the package an `ordered` variable of its name, its default `[default]`)
 //! and the name the agent presses now (`pressed`); the step's click is then the click box of the
 //! slot the decision selects for the pressed name on the primary frame (`source: "select"`), which
-//! `do --capture --record` presses as any recorded click.
+//! `do --capture --record` presses as any recorded click. #463 SEL-F (`contracts/lab-recording.md`,
+//! "A select the package fixes"): `wanted.fixed` in place of `wanted.default` gives the names the
+//! package itself looks for, in an order of preference, and the package declares no variable for
+//! the step.
 //!
 //! The mark-time self-test is the kernel's own dry run of the select step (`dry_run_select`),
 //! called on a probe package that holds the step as `record stop` generates it: on every live
@@ -49,7 +52,8 @@ use actingcommand_contract::candidate_projection::{
 };
 use actingcommand_contract::outcome::{Detail, Outcome};
 use actingcommand_contract::{
-    InstanceFactContext, InstanceFactSnapshot, LabError, LabResult, TaskSelectionOutcome,
+    InstanceFactContext, InstanceFactSnapshot, LabError, LabResult, MAX_GOAL_ORDERED_COUNT,
+    TaskSelectionOutcome,
 };
 use actingcommand_device::Frame;
 use actingcommand_execution_kernel::{PreparedContainedTask, dry_run_select};
@@ -346,13 +350,51 @@ fn validate_select_shape(step: Option<u32>, select: &SelectSpec) -> LabResult<()
             ),
         );
     }
-    if !ids.contains(select.wanted.default.as_str()) {
+    // #463 SEL-F: the wanted value is the default of the package's variable, or the names the
+    // package fixes, one of the two.
+    let wanted = &select.wanted;
+    let looked_for = match (&wanted.default, &wanted.fixed) {
+        (Some(_), None) => wanted.looked_for(),
+        (None, Some(fixed)) => {
+            // The count a value of the variable form holds: 1 to `min(32, names)`.
+            let most = u64::try_from(select.names.len())
+                .unwrap_or(MAX_GOAL_ORDERED_COUNT)
+                .min(MAX_GOAL_ORDERED_COUNT);
+            let count = u64::try_from(fixed.len()).unwrap_or(u64::MAX);
+            if !(1..=most).contains(&count) {
+                return Err(shape(format!(
+                    "wanted.fixed needs 1..={most} names (at most 32, and at most the names \
+                     declared), got {}",
+                    fixed.len()
+                )));
+            }
+            let mut once = BTreeSet::new();
+            if let Some(twice) = fixed.iter().find(|name| !once.insert(name.as_str())) {
+                return Err(shape(format!(
+                    "wanted.fixed gives the name '{twice}' twice; each name once, in an order of \
+                     preference"
+                )));
+            }
+            wanted.looked_for()
+        }
+        _ => {
+            return Err(shape(
+                "wanted needs exactly one of default (the default of the package's variable, a \
+                 choice a person makes) and fixed (the names the package itself looks for, in an \
+                 order of preference; no variable)"
+                    .to_string(),
+            ));
+        }
+    };
+    if let Some(absent) = looked_for.into_iter().find(|name| !ids.contains(name)) {
+        let what = if wanted.is_fixed() {
+            "a name of wanted.fixed"
+        } else {
+            "the wanted default"
+        };
         return refuse(
             SelectProblem::DefaultNotInNames,
-            format!(
-                "the wanted default '{}' is no id of the select's names",
-                select.wanted.default
-            ),
+            format!("{what} '{absent}' is no id of the select's names"),
         );
     }
     if let Some(pressed) = &select.pressed
@@ -825,7 +867,7 @@ pub(crate) fn check_step_select(
         refused
     })?;
     let operation = plan.operation_id(&plan.steps[0]);
-    let override_document = (spec.pressed_name() != spec.wanted.default)
+    let override_document = (!spec.keeps_pressed_alone())
         .then(|| select_policy_document(&plan, &plan.steps[0], spec, spec.pressed_name()));
 
     if ocr.ocr_provider().is_none() {
