@@ -55,8 +55,8 @@ use crate::{
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
 /// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
 /// as `resource verify` is. Workflow #463 S3-14: `standard-pack status`, against its list. #463
-/// RC-1: `resource regression` the same.
-pub(crate) const STRICT_ROWS: [&str; 36] = [
+/// RC-1: `resource regression` the same. #463 SEL-F: `package fix-select`, as `package edit`.
+pub(crate) const STRICT_ROWS: [&str; 37] = [
     "tap",
     "swipe",
     "long-tap",
@@ -78,6 +78,8 @@ pub(crate) const STRICT_ROWS: [&str; 36] = [
     "package loading",
     "package fmt",
     "package edit",
+    // #463 SEL-F.
+    "package fix-select",
     "resource catalog",
     "resource validate",
     "resource verify",
@@ -373,6 +375,10 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
             none,
         ),
         "package edit" => from_lists(package_tool::EDIT_FLAGS.iter().copied(), &[], none),
+        // #463 SEL-F.
+        "package fix-select" => {
+            from_lists(package_tool::FIX_SELECT_FLAGS.iter().copied(), &[], none)
+        }
         "resource catalog" => from_lists(
             resource_runtime_support::CATALOG_FLAGS,
             &[],
@@ -519,8 +525,9 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// typed words in their form) and answers a line it cannot read with no candidate, ignoring none.
 /// Workflow #464 P2: `standard-pack build`, against its strict list. Workflow #463 S3-14:
 /// `standard-pack status`, against its strict list. #463 RC-1: `resource regression` the same.
-/// Workflow #392 DA-L0: `layout probe`, by its read list.
-pub(crate) const REFUSING_COMMANDS: [&str; 70] = [
+/// Workflow #392 DA-L0: `layout probe`, by its read list. #463 SEL-F: `package fix-select`, against
+/// its strict list.
+pub(crate) const REFUSING_COMMANDS: [&str; 71] = [
     "schema",
     "touch-probe",
     "tap",
@@ -562,6 +569,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 70] = [
     "package edit",
     // Workflow #463 V3: refuses every flag but `--package` and any positional, as `check` does.
     "package variables",
+    // #463 SEL-F: refuses every flag off its strict list and any positional, as `edit` does.
+    "package fix-select",
     "operation validate",
     "operation inspect",
     "operation explain",

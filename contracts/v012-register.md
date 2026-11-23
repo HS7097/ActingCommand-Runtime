@@ -48895,6 +48895,246 @@ by itself.
   performance tick held back inside a window: the tick has no seam a test reads, and it begins
   through the same `begin_unsettled_work` as the cycle, which the tests read.
 
+### 1.523 Slice #463 SEL-F (0.12.83): a recording's select whose wanted item the package fixes declares no variable (board #463; the owner, on an application's goal page, found a choice among a package's own steps that is no choice and agreed to clearing such variables off the page, 11-23, the owner's words in the coordinator's record; the rulings 1 to 7 are the coordinator's of 11-23, not the owner's words; coordinator work order `rd-1123/brief-463-self.md` and its Addendum 1, `rd-1123/brief-463-self-fix1.md`, with the coordinator's ruling 8, and the review of the first commit, `rd-1123/review-1891.md`; on main `126c0928`, the v0.12.82 release, merged with main `9702175b`, CK-1 of #477, and `86cc7ee5`, DA-L0 of #392)
+
+This section takes 1.523; §1.510, §1.521 and §1.522, which landed first, stand before it. It ships
+in 0.12.83. [lab-recording.md](lab-recording.md) ("Selecting in a list": the members, the refusals'
+table, "What `record stop` generates", "The wanted value is a variable of the package", "Which to
+use" and "`package` revision"; the new "A select the package fixes" with "Converting a package",
+"Converting a package from its own files", "Converting through the recording" and "What a
+conversion leaves the root"; "A scrolling choice: straight to the wanted item", its self-checks;
+"What a public recording records of a select") and [package-variables.md](package-variables.md)
+("What is built now, and what is not", the bullet on what a recording writes) are the contract;
+the operation's page is [actinglab-capabilities.md](actinglab-capabilities.md), with its row in
+[actinglab-dry-run.md](actinglab-dry-run.md) and the MCP manual. No `package` revision moves, no
+declared interface range, no configuration key, no outcome code; one member of a recording's
+select declaration is new, `wanted.fixed`; the Lab's operation table gains one row, `package
+fix-select` (Addendum 1), and the vocabulary `select_problem` four words for its refusals.
+
+**What happened.** On the goal page of one application a person met a variable offering three
+items that are no choice: a package's step looks for the free one of three places by what each
+place shows (to start, to finish at once, to collect), and that step had been generated with a
+variable a person may set. Setting it to either other item makes the package fail at its next step,
+one of them on a dialog that spends something. Since S2-6 fix round 1 (§1.442) every select of a
+recording is generated with a package variable (`control.json` `variables`) naming the wanted item,
+and the goal page lists every variable that no `goals.json` entry places. The variable form is for
+a choice of taste a person really makes. A variable of the kind "which item to buy" is no such
+choice: it exists only in packages made before this rule, stays there until the model decides that
+value, and no new package adds one. A step that only finds the package's own way, whose item is
+part of the package as a click's target is, is a fixed step. Nineteen packages of two applications
+carry such a variable, eighteen of one and one of the other (the first count, fourteen, was short;
+the resource side counted again for Addendum 1). Eighteen of their recordings are stopped, not
+archived, and their instance's session header was replaced by a later `record start`: the route
+through the recording (ruling 4) cannot reach them, and recordings are session state of one
+machine, not in a repository and not promised to be kept. So Addendum 1 adds the package route.
+
+**The rule** (rulings 1, 2, 3 and 7).
+- *The member* (ruling 1). A select's `wanted` gives `fixed` in place of `default`: 1 to
+  `min(32, names)` names, each one of the names and each once, in an order of preference, the count
+  a value of the variable form holds. Both or neither of `default` and `fixed`, an empty or longer
+  list, a name given twice: `validation_failed` (exit 2), the select's shape; a name that is none of
+  the names: `record_select_invalid` with `default_not_in_names`, the word a default that is none
+  already has (no word is added). `pressed` absent is the first fixed name. `SelectWantedSpec`
+  holds `default` and `fixed`, both optional, neither written when absent; it has no struct literal
+  in the workspace (every select is read from JSON). A Lab before 0.12.83 refuses a recording
+  that declares `fixed` whole (its reading denies unknown members) and so misreads none; a
+  recording is session state of one machine, read by the Lab installed there, and no mark of the
+  form is added (the coordinator's disposition of the review).
+- *What is generated* (ruling 1). The package declares no variable for the step: `control.json`
+  gets no entry for it (`variables` is absent when every select fixes its item), so nothing lists
+  or sets it, and a direct run given a value of its name is refused as for any name the package
+  does not declare. The policy document is R1's (§1.381) with its one gate `wanted.<name>` keeping
+  the fixed names (`string_in` over the field `name`, the literals, an unknown name dropped as R1's
+  gate dropped it) and the term `rank.<name>`, a `lookup` of the same literals giving each its place
+  from 1, under the weight −1000; no fact. The layout, the targets, the operation with its
+  `on_empty` and `confirm`, a scan with or without its early stop, the mapping of the `on_empty` key,
+  the marks, the self-test and the self-checks are those of the same select with a default; the
+  mark-time self-test, the first decision and self-check item 8 decide the fixed choice with the
+  package's own document, and the pressed name, where the document does not keep it alone, with R1's
+  document of it (`SelectSpec::keeps_pressed_alone`, which with a default reads as the comparison of
+  the pressed name with the default it replaces). `lab.selects`, the provenance and the public
+  record (§1.492) carry `wanted` `{name, fixed}`, the public record of named members.
+- *No new member of a package* (ruling 3, verified in the grammar and the generator). `string_in`
+  and the `lookup` transform are members of `actingcommand.selection-policy.v1` since its first form;
+  a `fixed_slots` select with `on_empty` and a scan with `early_stop` admit a policy that reads the
+  identity field (`contracts/selection-graph.md`, "Select step"); the scan's upper bound takes a
+  `lookup` over an exact identity (`crates/selection-policy/src/bound.rs`). So no `package` revision,
+  no task member and no kernel change: a package whose every select fixes its item needs `package`
+  13 for its select steps, where the variable form needed 14.
+- *A select a person chooses with* (ruling 2) is generated byte for byte as before: the recording
+  writes no `fixed` member, and the control's `variables` and the policy document are today's.
+
+**The conversion: two routes.** Neither records again, and neither needs a device or a Runtime.
+The package route needs nothing but the package and converts every such package; the recording
+route is for a package whose recording can still be marked. Either leaves the same package.
+
+*The package route* (Addendum 1, ruling 8): `actinglab package fix-select --package <content
+directory> --variable <name> [--fixed <name,name,...>]`, MCP `ac_package_fix_select`, a new row of
+the operation table's authoring module beside `package edit` (`writes` true, `irreversible` false,
+`runtime` offline, entries `lab`; slice `463-SELF`), `--dry-run` its preview. The Lab's
+`fix_package_select` (`crates/lab/src/select_fix.rs`) reads back from the package what the fixed
+form needs, all of which `record stop` wrote there, so the stop condition of the addendum did not
+trigger: in `control.json` the declaration of the variable, `package_id` and `entry_task_id`; in
+the entry task its `locale`, the one select operation whose policy document reads the variable and
+that select's layout (the identity entries of its feature `name`: the names with their aliases, in
+order); the policy document's `facts`, `gates` and `scoring`. Slots or rows, `scan`, `on_empty`,
+`confirm`, read and match are the same in both forms and stay. It needs no new member of the policy
+document, of `control.json` or of the task: the note it writes is an entry of the task's
+`provenance`, of which admission asks only that it is an object. The names it fixes are `--fixed`
+(1 to `min(32, names)` of the select's names, each once, in an order of preference) or, without it,
+the variable's default. The members it compares and writes are the generator's own
+(`variable_policy_members`, `fixed_policy_members`, `variable_declaration`, `pretty`, which
+`choice_policy_document`, `fixed_policy_document` and `choice_variable_json` now call, byte for
+byte as before): `control.json` without the declaration (without `variables` when it was the last),
+the policy document's three members the fixed form's, and in the task one entry more of
+`provenance.select_fixes`, `{operation: "package fix-select", step_operation, variable, default,
+fixed}`, which tells a converted package from a recorded one. The converted package is admitted in
+memory as `actingd` admits a content directory before the files it changed are written as
+`package edit` writes them (`package_edit_write_failed` when one cannot be). `control.json` and the
+policy document are byte for byte what `record stop` generates for the same recording declared
+`fixed` with those names; every other file but the task is untouched; the task differs from that
+recording's package only in its provenance: the top-level `provenance` (`select_fixes`; in
+`steps[].select` the recorded declaration with `wanted` `{name, default}` and that recording's own
+times) and the select operation's `provenance.select.wanted`, which keeps `{name, default}`. The
+regression cases are not touched: a case holds pages and targets and sets no value in either form.
+Its answer: `package_id`, `operation`, `variable`, `default`, `fixed`, `files` (each file with the
+JSON pointers of the members it changed), `admission`, `written`, and `root`, the variable and
+`drop_in_the_same_change`, the two members of a game root the package does not see (below); nothing
+read from a frame. It refuses rather than guesses, `record_select_invalid` (exit 3) with its
+`select_problem`, in this order, and a refused conversion writes nothing:
+
+| `select_problem` | When |
+|---|---|
+| `variable_missing` (new) | `control.json` declares no variable of that name; a package converted already too |
+| `variable_read_elsewhere` (new) | anything but one select step's policy document reads it: another step, another policy document, any other JSON file of the package that names its key `session.dispatch.parameter.<name>` (`readers`); a name of a capability parameter cannot be a variable's (`variable_name_taken`), and a root's rule is the root's (below) |
+| `members_edited` (new) | what it rewrites or reads back is not as `record stop` writes it for a select with that variable: the policy's `facts`, `gates` or `scoring`, the select's layout, the task's `locale`, the declaration but its default (`file`, `member`) |
+| `default_not_names` (new) | the variable's default is no list of names, each once |
+| `default_not_in_names` | a name of the default, or a name given, is none of the select's names (`name`) |
+| `kernel_refused` | the converted package is not admitted (`loader_code`, `detail`) |
+
+Names given that are no list of 1 to `min(32, names)` names, each once, are `validation_failed`
+(exit 2). The four new words are tokens of the vocabulary `select_problem`; the code
+`record_select_invalid` and its first sentence are unchanged, so the outcome index is unchanged.
+
+*The recording route* (ruling 4), for a package whose recording can still be marked:
+1. a stopped recording its instance's session header names takes the select declared again ("Marking
+   after stop"); an archived one is made active first with `record reopen`, which takes no hold;
+2. `record mark --request` on the step with its select declared again whole as `recording.json`
+   holds it (`steps[].select.declaration`, which `record status` answers), its `wanted`
+   `{"name": n, "default": d}` written `{"name": n, "fixed": [d]}`; the recorded press stays the
+   select's click and the kept frames are self-tested again offline;
+3. `record stop`: `regenerated`, without the variable, its item fixed to the default it had, its
+   regression cases written again.
+
+A worked example: `wanted` `{"name": "list_item", "default": "item_b"}` gives `control.json`
+`variables` `[{"name": "list_item", "type": "ordered", …, "default": ["item_b"]}]` and a gate that reads
+`session.dispatch.parameter.list_item`. Declared again with `{"name": "list_item", "fixed":
+["item_b"]}`, the next `record stop` gives no `variables` and the gate `string_in` `["item_b"]`: on a
+list that shows item_b it presses item_b's slot, and on one that does not it ends with the `on_empty`
+key, as a run handed no value did before.
+
+What is left where it is (ruling 5): a value an application stored under the old name stays. No
+package declares the name any more, so the goal view shows it among the stored values no entry
+shows (its orphans, [package-variables.md](package-variables.md), "Reading and setting a value by
+name"), as any such value, and `goals clear` removes it; nothing here changes for it. A stopped
+recording its instance's session header no longer names (a later `record start` replaced the
+header) takes no `record mark`, and this slice adds no way to it (no `record reopen` for it,
+Addendum 1): such a package takes the package route.
+
+**What a conversion leaves the root** (Addendum 1 and the review; both routes alike). What a game
+root holds of the name is not in the package, and neither route sees it; the package route's answer
+names it (`root.drop_in_the_same_change`). The root that places the variable in `goals.json`, or
+names it in a rule of `schedule.json`, drops that in the same change as the converted package.
+Read in the code for this section:
+- *A `goals.json` entry that places the name* is `goal_variable_unknown` (the contract crate's goal
+  check), as a placement of any name no package declares. The file is then refused whole: none of
+  its entries applies for that game, the others too ([standard-pack-goals.md](standard-pack-goals.md),
+  "A refused file never fails its game root"). `standard-pack check` gives each problem as a
+  `standard_pack_root_invalid` warning and checks the root as without the file, so it **exits 0**
+  (`check_standard_pack_root` answers `checked`, test 7); the installer's `place`, whose
+  `post_check` reads only that exit (`crates/lab-rescue/src/install/place.rs`), passes. `package
+  bundle --goals`, and the `bundle` step of `resource verify` and `standard-pack build` for a
+  repository that holds the file, refuse it (`standard_pack_root_invalid`, no zip written).
+- *A rule of `schedule.json` that carries a value for the name* (`variables`, §1.511) is refused by
+  the composer as any value for a name its package does not declare (`refused_rule_variables`,
+  `crates/policy/src/compose.rs`; a package's declared variables are read as an empty list when it
+  declares none, so the converted package is judged): `schedule_invalid` at
+  `/rules/<i>/variables/<name>`, the whole composition refused. `standard-pack check` fails with
+  `standard_pack_root_invalid` of that problem (`report_schedule`'s refusal, class usage) and
+  **exits 2**; `place` then ends `post_check_failed` with the items placed (`undo` puts them back).
+- Whether any of the nineteen packages' rules carries the name was not read here (no resource
+  repository is open to this slice); the resource side reads it when it converts them.
+
+**The checks that count or require variables** (ruling 6, every place found): each reads the
+package's `control.json`, so a package without the member is a package without variables there.
+None is touched.
+
+| Check | Where | Now |
+|---|---|---|
+| `standard-pack check`'s root check of the variables and its listing `variable_provenance` | `crates/resource-tooling/src/standard_pack_goals.rs` (`variable_report`), the contract crate's `check_root_variables` | unchanged |
+| `standard-pack ready`'s `package_revision` (I2: a pack that declares `variables` asks 14) and the installer's `place` (`variable_undeclared`) | the contract crate's `control_declares_variables` | unchanged |
+| A `goals.json` placement of a variable (`goal_variable_unknown`) | the contract crate's goal check | unchanged |
+| `package variables`, `standard-pack trial`'s `plan.variables` and `--variable`, `run start --variable` | the Runtime's metadata reader, the kernel's `declared_variables` | unchanged |
+| The goal view and its orphans (`GoalView`) | the host | unchanged |
+| A rule's `variables` in `schedule.json` (§1.511) | the composer | unchanged |
+
+**The counting places** (Addendum 1: one row more, every place that counts or lists operations
+moved as DA-L0's row moved them). `contracts/lab-operations.json` (the row, after `package edit`);
+`ratchet/actinglab_commands.json` (`command_count` 111, the command listed); the two READMEs (110
+to 111 commands); `contracts/lab-two-entries.md` (169 tools offered on Windows, 76 served by
+children, 130 elsewhere, 54 and 76); in `apps/actinglab/src/`: `cli_module/engine.rs` (`COMMANDS`,
+76), `cli_module/own_flags.rs` (`STRICT_ROWS`, 37, its accepted flags; `REFUSING_COMMANDS`, 71),
+`cli_module/words.rs` (`BUILT_SLICES`, 20, `463-SELF`), `commands/capabilities.rs` (`offline`,
+`available`), `dry_run_gate.rs` (`preview`), `cli_information.rs` (its options),
+`lab_package_control.rs` (the word `fix-select`) and `package_tool.rs` (the command); in
+`apps/actinglab-mcp/src/tools.rs` `ACTINGLAB_SLICES` (20). Its outcome on a file that cannot be
+written is `package_edit_write_failed`, whose description names it now.
+
+**Tests** (incident `#463 SEL-F`: `crates/lab/src/gate_463_self.rs` and
+`crates/lab/src/gate_463_self_scan.rs`, exec gate map, recordings made as stage one makes them on
+S2-6's and S2-9's synthetic lists with a scripted name reader, no device, no clock read; Addendum
+1's: those two files on packages they generate, `apps/actinglab/src/tests/gate_463_self.rs`, exec
+gate map, and `apps/actinglab-mcp/src/gate_463_self.rs`, apps gate map, on neutral content
+directories and the embedded operation table, in an environment that reaches no Runtime).
+
+| Test | What it shows |
+|---|---|
+| `self_t1_a_fixed_select_declares_no_variable_and_its_policy_compares_with_the_literal` (1) | A select fixing item_b, the press on item_a: the self-test passed (pressed slot 0, fixed item slot 1), `record ready` ready, `record stop` generated with the first decision on slot 1 and `lab.selects` `{name, fixed}`; no `variables`; the policy document is the fixed form byte for byte; the admitted package declares no variable and takes no value of the name; every regression case passes from disk |
+| `self_t2_a_select_a_person_chooses_with_generates_what_main_generates` (2) | The variable form: the recording holds the declaration byte for byte as given, no `fixed`; the control's `variables` and the policy document are today's golden byte for byte; `lab.selects` `{name, default}` |
+| `self_t3_a_fixed_select_on_a_list_without_its_item_ends_on_the_on_empty_key` (3) | On a first screen without item_b, the fixed form and the variable form alike: the first decision `would_end_empty` with the `on_empty` key, its mapping on the step's page, the operation's `on_empty`, the kernel's dry run empty with that key |
+| `self_t4_a_fixed_select_presses_the_first_name_of_its_order_the_screen_shows` (4) | Fixed `[item_b, item_a]`: slot 1 (item_b) on the list although item_a stands in the lower candidate's slot, slot 0 where item_b is absent, the simulation's tap in slot 1, the document's lookup in that order; `[item_a, item_b]` chooses slot 0 on the same list |
+| `self_t5_a_fixed_select_over_a_scan_read_to_its_end_declares_no_variable` (5) | S2-9a's demonstration fixing `delta`: complete coverage, `delta` at position 3, `lima` empty; the scan with its end and no `early_stop`, the `on_empty` key; no `variables`, the fixed document |
+| `self_t5_a_fixed_select_over_a_scan_that_stops_early_declares_no_variable` (5) | S2-9b's demonstration fixing `india` without an end mark: coverage `early_stopped`, `india` at position 8; the scan with `early_stop: "upper_bound"`, no end, no `on_empty`; no `variables`, the fixed document |
+| `self_t6_a_package_with_a_variable_is_converted_without_recording_again` (6) | The route above on a stopped recording: `regenerated`, no `variables`, the fixed document of item_b, the first decision's status and slot as before, the same choice and key as the old package handed no value on three screens, the tap in slot 1, the same case ids, each passing from disk |
+| `self_t7_a_root_whose_package_lost_its_variable_is_checked_as_one_without_variables` (7) | `control_declares_variables` true for the old control, false for the converted one; `standard-pack check` of a root whose package declares the old variable and whose `goals.json` places it: no problem, the variable listed; with the converted control: checked (the command's exit 0), no listing and the placement `goal_variable_unknown`, as for a root whose packages declare none |
+| `self_review_each_wrong_fixed_declaration_is_refused_with_its_word` (the review) | A recording's `wanted` with both `default` and `fixed`, neither, an empty `fixed`, three names of two, a name twice: `validation_failed`; a name none of the names: `record_select_invalid` `default_not_in_names`; each leaves the recording's bytes |
+| `self_t8_a_package_converted_from_its_files_is_what_a_fixed_recording_generates` (8) | The variable form's package (default item_b) converted with no names: the operation, the variable, default and fixed `[item_b]`, the files and members (`control.json` `/variables`; the policy `/facts`, `/gates`, `/scoring`; the task `/provenance/select_fixes`); every file but the task byte for byte the package of the same recording declared `fixed: [item_b]`, the task the same but for its provenance and its operations', its one note the conversion's; no `variables`, admitted, the old package's regression cases passing on it from disk |
+| `self_t8_a_scrolling_select_converted_from_its_files_is_what_a_fixed_recording_generates` (8, scan) | The same on S2-9b's scrolling select (default `india`, no end mark): against the recording declared `fixed: [india]`; the fixed document, no `variables`, the scan's `early_stop` and no end as before; admitted |
+| `self_t9_names_given_in_order_convert_to_what_a_recording_fixing_them_generates` (9) | Names given `[item_a, item_b]` (default item_b): against the recording declared `fixed: [item_a, item_b]`, the lookup in that order; slot 0 on the list and where item_b alone shows |
+| `self_t9_a_scrolling_select_converted_to_names_given_is_what_a_recording_fixing_them_generates` (9, scan) | S2-9a's scrolling select (default `delta`, with its end) given `[delta, charlie]`: against the recording declared so; the gate in that order, the end kept; admitted |
+| `self_t10_each_refusal_of_the_conversion_has_its_word` (10) | `variable_missing` (another name); `variable_read_elsewhere` (another policy document; another step of the task; the readers listed); `members_edited` (the gate's threshold; the declaration's title; file and member); `default_not_names` (a text, a name twice, an empty list); `default_not_in_names` (a default's name; a name given); names given empty, repeated or three: `validation_failed` |
+| `self_t10_a_refused_conversion_writes_nothing` (10, command line) | On content directories without the variable, with it unread, and with a select's policy document not as `record stop` writes it, with and without `--dry-run`: `variable_missing`, `variable_read_elsewhere`, `members_edited`, exit 1 (the command line's own line), every file's bytes as they were |
+| `self_t11_fix_select_is_a_row_beside_package_edit_and_needs_no_runtime` (11) | The row has `package edit`'s module, entries and Runtime need (authoring, `lab`, offline), writes, is not irreversible, takes `package` and `variable` (required) and `fixed`; in an environment that reaches no Runtime the command line answers its own refusal (`variable_missing`, exit 1) and `serve --stdio --front mcp` the same outcome and message; no Runtime state root made |
+| `self_t11_package_fix_select_is_offered_where_package_edit_is` (11, MCP) | `ac_package_fix_select` offered, served by a child as `package edit` is, listed with the authoring module with `ac_package_edit`'s hints and with neither the core nor the debugging module; its schema names `package`, `variable`, `fixed`, the first two required |
+| `self_t12_a_package_converted_twice_refuses_the_second_time` (12) | Converted once, then again with and without names: `variable_missing`; the once-converted package still admitted, the fixed document, one note |
+
+Tests 1 and 6 lose the check that no regression case names the variable or its key (the review: a
+case holds pages and targets and sets no value in either form, so it showed nothing); their names
+are unchanged, and tests 8 to 12 do not repeat it. No other existing test is changed, renamed or
+retired, and no golden is re-recorded.
+
+**What is not changed.** The execution kernel, the policy crate and the host; the selection-policy
+document's grammar; `control.json`, the task document and every revision; a select that gives
+`default`, byte for byte; every code of the outcome catalogue (`select_problem` gains four words);
+the recording route. No game, package or alias is named in code; the fixtures are neutral.
+
+**At deploy.** An installed package changes only when the resource side converts it (by either
+route; the package route is the one for every such package) and places it, with its root's
+placement of the variable and every rule value of it dropped in the same change; a converted
+package uses only what every Runtime that runs a select step reads, so it needs no newer Runtime.
+`package fix-select` comes with the Lab of 0.12.83. In the release notes' language:
+录制里的选择步骤现在可以写 `wanted.fixed`（要找的那一项，或按先后顺序的几项），给只是找包自己那条路的步骤用：这样生成的包不再为这一步声明变量，目标页上也就不会出现它。原来按变量生成的包不用重录、也不碰设备：新命令 `actinglab package fix-select --package <内容目录> --variable <变量名>`（MCP 工具 `ac_package_fix_select`）只凭包里的文件就把这一步改成固定形式，默认固定成变量原来的默认值，也可以用 `--fixed` 按先后给几项；改不了的包会说明原因、一个文件也不写。录制还在、还能标注的包，也可以照旧在录制上把这一步再声明一次、改成 `fixed` 后 `record stop` 重新生成。转换时游戏根目录里 `goals.json` 对这个变量的摆放、`schedule.json` 规则里给它的值要在同一次改动里去掉，否则 `goals.json` 整份不生效、`schedule.json` 整份编排被拒。之前在那个变量名下存过的值留在原处，目标页把它列在没有条目显示的存值里，可以清掉。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

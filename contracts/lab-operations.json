@@ -2537,6 +2537,27 @@
       "status": "planned"
     },
     {
+      "name": "package fix-select",
+      "module": "authoring",
+      "params": [
+        {"name": "package", "form": "option", "type": "dir", "required": true, "note": "a package's content directory, read as package edit reads it"},
+        {"name": "variable", "form": "option", "type": "string", "required": true, "note": "the name of the variable one select step of the package reads"},
+        {"name": "fixed", "form": "option", "type": "string", "required": false, "note": "the names to fix the select to, separated by commas, in an order of preference; absent: the variable's default"}
+      ],
+      "help": "Converts the select of a package that reads a package variable into the fixed form, from the package's own files; the variable leaves control.json.",
+      "output": "mode package_fix_select, package, package_id, operation (the select step's), variable, default (the variable's), fixed, files[{file, members}], admission, written, root{variable, drop_in_the_same_change[{file, member, otherwise, check}]} (what a game root holding the package must drop in the same change); with --dry-run status validated, dry_run, persisted false",
+      "writes": true,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": ["actinglab package fix-select", "MCP ac_package_fix_select"],
+      "new": "#463",
+      "slice": "463-SELF",
+      "status": "planned",
+      "notes": "#463 SEL-F (0.12.83; contracts/lab-recording.md, Converting a package from its own files): offline, no recording, no device, no Runtime. The members it rewrites are compared with, and written by, record stop's own functions: control.json loses the variable's declaration (variables itself when it was the last), the select's policy document takes the fixed form's facts, gates and scoring, and the task's provenance gains one entry of select_fixes {operation, step_operation, variable, default, fixed}; the converted package is admitted in memory before anything is written, as package edit writes. Refused record_select_invalid (exit 3, nothing written) with select_problem variable_missing, variable_read_elsewhere, members_edited, default_not_names, default_not_in_names or kernel_refused; names given that are no list of 1 to min(32, names) names, each once, are validation_failed. A second conversion of the same variable is variable_missing."
+    },
+    {
       "name": "package variables",
       "module": "core",
       "params": [

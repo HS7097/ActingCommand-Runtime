@@ -85,6 +85,14 @@ as not probed. Every option is given once; the line is parsed by its read list. 
 orientation, lower than the base or narrower than its ratio is refused `lab_scene_size_unsupported`
 with `orientation_mismatch`, `scale_below_base` or `ratio_below_base`.
 
+#463 SEL-F (0.12.83; [lab-recording.md](lab-recording.md), "Converting a package from its own
+files"): `package fix-select --package <directory> --variable <name> [--fixed <name,name,...>]`
+(MCP `ac_package_fix_select`), a row of the authoring module beside `package edit`, needs
+`offline`, is `available` and declares `preview` (`dry_run`). It converts a package's select whose
+wanted item is a package variable into the fixed form from the package's own files, the converted
+package admitted in memory before the files it changed are written as `package edit` writes them;
+a refusal (`record_select_invalid` with its `select_problem`) writes nothing.
+
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with
 `dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires

@@ -237,6 +237,8 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
         "edit" => crate::package_tool::run_edit(global, &flags),
         // Workflow #463 V3: what one package's control declaration declares; a core row.
         "variables" => package_cli::run_variables(&flags),
+        // #463 SEL-F: a select of the package converted to the fixed form from its own files.
+        "fix-select" => crate::package_tool::run_fix_select(global, &flags),
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
 }

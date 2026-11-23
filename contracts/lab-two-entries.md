@@ -1171,16 +1171,16 @@ sentence fails that test.
     - *Which.* A row the server gives neither to `lab_ops::core_ops` nor to the rescue module, and
       that is not refused for a reason of its own (a rescue row where the module does not run,
       which is not offered), is served by a child: one rule (`tools::serving`, `Serving::Child`),
-      no list of row names. On Windows all 168 offered rows are served (54 by `core_ops`, the four
+      no list of row names. On Windows all 169 offered rows are served (54 by `core_ops`, the four
       `goals` rows among them since Workflow #463 V3, and 39 by the rescue module in the server's
-      process, `deploy` and `rollback` among them since LAB-6S0, 75 by children, `standard-pack
+      process, `deploy` and `rollback` among them since LAB-6S0, 76 by children, `standard-pack
       adopt` among them since Workflow #464 P1, `standard-pack build` since Workflow #464 P2,
       `standard-pack ready` since Workflow #464 P3, `package variables` since Workflow #463 V3,
       `standard-pack trial` since Workflow #463 S3-10, `record ready` since #463 S2-1, `record
       frames` since #463 S2-13, `standard-pack catalog` since Workflow #477 PC-1, `standard-pack
       status` since #463 S3-14, `record review` since #463 S2-2, `resource regression` since
-      #463 RC-1 and `layout probe` since Workflow #392 DA-L0); elsewhere all 129 are served (54
-      and 75).
+      #463 RC-1, `layout probe` since Workflow #392 DA-L0 and `package fix-select` since #463
+      SEL-F); elsewhere all 130 are served (54 and 76).
     - *The children.* `actinglab.exe` beside the server's own file, started as `actinglab.exe
       serve --stdio --front mcp` (section 8.2) with the environment today's server gives its Lab
       child: `ACTINGCOMMAND_RUNTIME_STATE_ROOT` set to the server's state root when it is known,

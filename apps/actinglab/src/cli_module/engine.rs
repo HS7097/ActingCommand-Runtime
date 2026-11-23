@@ -35,7 +35,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 75] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 76] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -125,6 +125,12 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 75] = [
     ("package loading", &["package", "loading"], Line::AsWritten),
     ("package fmt", &["package", "fmt"], Line::AsWritten),
     ("package edit", &["package", "edit"], Line::AsWritten),
+    // #463 SEL-F: a package's select converted to the fixed form from its own files; it writes.
+    (
+        "package fix-select",
+        &["package", "fix-select"],
+        Line::AsWritten,
+    ),
     // Workflow #463 V3: a core row, as `standard-pack check` is; it only reads.
     (
         "package variables",

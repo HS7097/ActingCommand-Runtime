@@ -5232,7 +5232,7 @@
       }
     },
     "select_problem": {
-      "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated.",
+      "description": "Why a Lab recording step's select, a choice in a list of fixed slots by the name read in each (#463 R1), cannot be declared or generated; #463 SEL-F: or why package fix-select does not convert a package's select from a variable to the fixed form.",
       "source": {
         "file": "crates/lab/src/codes.rs",
         "enum": "SelectProblem"
@@ -5342,6 +5342,18 @@
         },
         "scan_swipe_too_long": {
           "description": "The first forward swipe of the fold, the package's advance, moves the finger further along the list than the kernel's admission allows (the list's length less a row's, less one), which no given number changes; details displacement_px and most_px; the scroll is recorded again with shorter swipes, so that neighbouring screens share at least one row (#463 S2-9a fix round 1, since 0.12.70)."
+        },
+        "variable_missing": {
+          "description": "package fix-select: the package's control.json declares no variable of the name given; a package converted before declares it no more (#463 SEL-F, since 0.12.83)."
+        },
+        "variable_read_elsewhere": {
+          "description": "package fix-select: the variable is not read by exactly one select step's policy document of the package and by nothing else: another step, another policy document or another member of a package file names session.dispatch.parameter.<name> (#463 SEL-F, since 0.12.83)."
+        },
+        "default_not_names": {
+          "description": "package fix-select: the variable's default is not an ordered list of names, each once, so there is nothing to fix the select to (#463 SEL-F, since 0.12.83)."
+        },
+        "members_edited": {
+          "description": "package fix-select: a member the conversion rewrites is not as record stop writes it for a select with a variable: the variable's declaration but its default (made of the package's locale and the select's names), or the policy document's facts, gates and scoring; or the select's layout holds no names to read; so the package was edited by hand and is not converted (#463 SEL-F, since 0.12.83)."
         }
       }
     },

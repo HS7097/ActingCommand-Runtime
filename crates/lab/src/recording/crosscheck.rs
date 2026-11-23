@@ -13,7 +13,7 @@ use super::frames::LoadedFrame;
 use super::generate::{Plan, PlanEnding, PlanStep, follows_located_text, select_policy_document};
 use super::model::{
     ClickFollow, ClickGesture, MarkFamily, RecordRect, RecordedFrame, RecordedKey, SelectDecision,
-    SelectFrameDecision, SelectSelfTest, SelectSpec, StepSelect,
+    SelectFrameDecision, SelectSelfTest, SelectSpec, SelectWantedSpec, StepSelect,
 };
 use super::near::{NearThresholdAt, Nearest, TemplateNearThreshold, TemplateScore};
 use super::select::{
@@ -1048,7 +1048,7 @@ pub(crate) fn select_checks(
             selects.push(item);
             continue;
         }
-        let override_document = (spec.pressed_name() != spec.wanted.default)
+        let override_document = (!spec.keeps_pressed_alone())
             .then(|| select_policy_document(plan, step, spec, spec.pressed_name()));
         let executed = step
             .step
@@ -1185,7 +1185,8 @@ pub(crate) fn select_checks(
 /// the entry of the select step `step` (its declaration `spec`, its operation `operation`) that a
 /// public recording's provenance records: a new object of the named members only, built here and
 /// never from the answers' entry: the step and its serial number, its operation and layout, the
-/// wanted value (fix round 1: its `name` and `default`, each named), the pressed name, the
+/// wanted value (fix round 1: its `name` and `default`, each named; #463 SEL-F: of a fixed select
+/// its `name` and `fixed`, [`public_wanted`]), the pressed name, the
 /// `on_empty` key, `frames`, the decisions on its own live frames as [`public_frames`] gives them
 /// (or each frame undetermined), and, of a scrolling select, `scan`, what
 /// [`super::scan::ScanRecord`] keeps of it. A member the answers' entry has or gains is in it only
@@ -1201,7 +1202,7 @@ fn public_select_record(
         "record_index": step.step.index,
         "op": operation,
         "layout": plan.select_layout_id(step),
-        "wanted": {"name": spec.wanted.name, "default": spec.wanted.default},
+        "wanted": public_wanted(&spec.wanted),
         "pressed": spec.pressed_name(),
         "on_empty_key": empty_end_key(&plan.task_id, spec),
         "frames": frames
@@ -1210,6 +1211,16 @@ fn public_select_record(
         record["scan"] = scan;
     }
     record
+}
+
+/// #463 PRIV-SCAN fix round 1, #463 SEL-F: the wanted value as a public recording records it, of
+/// named members only: `{name, default}`, or of a select the package fixes `{name, fixed}`, the
+/// names the package declares.
+fn public_wanted(wanted: &SelectWantedSpec) -> Value {
+    match &wanted.fixed {
+        Some(fixed) => json!({"name": wanted.name, "fixed": fixed}),
+        None => json!({"name": wanted.name, "default": wanted.default}),
+    }
 }
 
 /// #463 PRIV-SCAN fix round 1 (`contracts/lab-recording.md`, "What a public recording records of a

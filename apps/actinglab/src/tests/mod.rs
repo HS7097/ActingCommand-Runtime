@@ -86,6 +86,10 @@ mod gate_392_da5cd;
 // of the base's ratio or wider; its CLI and MCP faces answer alike.
 #[path = "gate_392_dal0.rs"]
 mod gate_392_dal0;
+// #463 SEL-F, Addendum 1: `package fix-select` is a row beside `package edit`, offline, on the
+// command line and the MCP face, and a refused conversion writes nothing.
+#[path = "gate_463_self.rs"]
+mod gate_463_self;
 // Workflow #407 LOAD-2: `package check` answers a pack's loading set, and `resource validate`
 // reads `loading.json` and a pack's loading copy.
 #[path = "gate_load2.rs"]

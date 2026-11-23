@@ -24,7 +24,9 @@
 use super::codes::ActinglabCode;
 use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
 use actingcommand_contract::ContainedTaskRequest;
-use actingcommand_lab::{DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PreparedContainedTask};
+use actingcommand_lab::{
+    DEFAULT_MAX_BUFFERED_PAYLOAD_BYTES, PreparedContainedTask, SelectFixRequest, fix_package_select,
+};
 use actingcommand_pack_containment::Containment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -51,6 +53,9 @@ pub(crate) const EDIT_FLAGS: &[&str] = &[
     "--replace",
     "--value",
 ];
+/// #463 SEL-F: the flags of `package fix-select`: the content directory, the variable and,
+/// optionally, the names to fix its select to, separated by commas.
+pub(crate) const FIX_SELECT_FLAGS: &[&str] = &["--package", "--variable", "--fixed"];
 
 /// `package fmt --package <directory> [--check]`.
 pub(super) fn run_fmt(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
@@ -258,6 +263,75 @@ pub(super) fn run_edit(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<V
         "files": files,
         "admission": "passed",
         "written": !global.dry_run,
+    });
+    if global.dry_run {
+        data["status"] = json!("validated");
+        data["dry_run"] = json!(true);
+        data["persisted"] = json!(false);
+    }
+    Ok(data)
+}
+
+/// #463 SEL-F (`contracts/lab-recording.md`, "Converting a package from its own files"):
+/// `package fix-select --package <directory> --variable <name> [--fixed <name,name,…>]`. The
+/// directory is read once as admission reads it; the Lab converts the select that reads the
+/// variable into the fixed form (`actingcommand_lab::fix_package_select`: every check, the
+/// generator's own members, the converted package admitted in memory) and only then are the
+/// files it changed written, as `package edit` writes them. A refusal writes nothing; `--dry-run`
+/// writes nothing either. The answer names the files and the members it changed, the names it
+/// fixed, and what a game root holding the package must drop (`root`).
+pub(super) fn run_fix_select(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Value> {
+    only_flags(flags, "package fix-select", FIX_SELECT_FLAGS)?;
+    let root = content_directory(flags, "package fix-select")?;
+    let variable = flags.required("--variable")?;
+    let fixed = flags.optional("--fixed").map(|text| {
+        text.split(',')
+            .map(|name| name.trim().to_owned())
+            .collect::<Vec<_>>()
+    });
+    let entries = snapshot(&root)?;
+    let fix = fix_package_select(
+        &entries,
+        &SelectFixRequest { variable, fixed },
+        super::offline_ocr::lab_ocr(),
+    )?;
+    let changes = fix
+        .files
+        .iter()
+        .map(|file| (file.file.clone(), file.bytes.clone()))
+        .collect::<Vec<_>>();
+    if !global.dry_run {
+        write_files(&root, &changes, ActinglabCode::PackageEditWriteFailed)?;
+    }
+    let mut data = json!({
+        "mode": "package_fix_select",
+        "package": root.display().to_string(),
+        "package_id": fix.package_id,
+        "operation": fix.operation,
+        "variable": fix.variable,
+        "default": fix.default,
+        "fixed": fix.fixed,
+        "files": fix
+            .files
+            .iter()
+            .map(|file| json!({"file": file.file, "members": file.members}))
+            .collect::<Vec<_>>(),
+        "admission": "passed",
+        "written": !global.dry_run,
+        // What the package does not see: a game root that holds it must drop, in the same change,
+        // its placement of the variable and every rule value naming it.
+        "root": {
+            "variable": fix.variable,
+            "drop_in_the_same_change": [
+                {"file": "goals.json", "member": "the entry of type variable with this name",
+                 "otherwise": "goal_variable_unknown",
+                 "check": "a warning: the whole file applies no entry; standard-pack check exits 0"},
+                {"file": "schedule.json", "member": "this name in a rule's variables",
+                 "otherwise": "schedule_invalid",
+                 "check": "the composition is refused (standard_pack_root_invalid); \
+                           standard-pack check exits 2"}
+            ]
+        }
     });
     if global.dry_run {
         data["status"] = json!("validated");

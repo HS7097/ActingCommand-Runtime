@@ -756,6 +756,18 @@ naming this file.
   pixel and no text read from the frame. A scene of another orientation, lower than the base or
   narrower than its ratio is refused `lab_scene_size_unsupported` (`orientation_mismatch`,
   `scale_below_base`, `ratio_below_base`).
+- **A select the package fixes** (Workflow #463 SEL-F, 0.12.83; `contracts/lab-recording.md`,
+  "A select the package fixes" and "Converting a package from its own files"). A recording's
+  select step declares its wanted item either `wanted: {name, default}` (a package variable) or
+  `wanted: {name, fixed: [names]}` (the package fixes it: no variable, the names in order of
+  preference). `ac_package_fix_select` (`package`, `variable`, `fixed`, `dry_run`), through a child,
+  offline and needing no Runtime, converts a package's select from the variable to the fixed form
+  from the package's own files, the result byte for byte the fixed recording's but for the task's
+  provenance, which gains `select_fixes`; it answers the files and members it changed, the names
+  fixed and `root`, the drop of the variable a root that places it must make in the same change.
+  A refusal is `record_select_invalid` with its `select_problem` (`variable_missing`,
+  `variable_read_elsewhere`, `members_edited`, `default_not_names`, `default_not_in_names`,
+  `kernel_refused`) and writes nothing.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`, and, #463 AD-1, 0.12.72, `session_state_dir`
