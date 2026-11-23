@@ -9,7 +9,7 @@
 //   table's row `package fix-select` has the module, the entries and the Runtime need of `package
 //   edit` (authoring, the Lab's entry, offline), writes and is not irreversible; in an environment
 //   that can reach no Runtime its command line runs and answers its own refusal of a package that
-//   declares no variable (`record_select_invalid` with `variable_missing`, exit 3), and the MCP
+//   declares no variable (`record_select_invalid` with `variable_missing`, exit 1), and the MCP
 //   face (`serve --stdio --front mcp`) answers that line.
 // - `self_t10_a_refused_conversion_writes_nothing` (10): content directories that declare no such
 //   variable, declare it with nothing that reads it, and have it read by a select's policy document
@@ -154,7 +154,7 @@ fn self_t11_fix_select_is_a_row_beside_package_edit_and_needs_no_runtime() {
         .line
         .clone()
         .unwrap_or_else(|text| panic!("the command line printed no line: {text}"));
-    assert_eq!(exit.code, 3, "{answered}");
+    assert_eq!(exit.code, 1, "{answered}");
     assert_eq!(
         answered["outcome"]["code"], "record_select_invalid",
         "{answered}"
@@ -216,7 +216,7 @@ fn self_t10_a_refused_conversion_writes_nothing() {
                 .line
                 .clone()
                 .unwrap_or_else(|text| panic!("{name}: no line: {text}"));
-            assert_eq!(exit.code, 3, "{name}: {answered}");
+            assert_eq!(exit.code, 1, "{name}: {answered}");
             assert_eq!(
                 answered["outcome"]["code"], "record_select_invalid",
                 "{name}: {answered}"

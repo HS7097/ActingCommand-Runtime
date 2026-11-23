@@ -2544,7 +2544,7 @@
         {"name": "variable", "form": "option", "type": "string", "required": true, "note": "the name of the variable one select step of the package reads"},
         {"name": "fixed", "form": "option", "type": "string", "required": false, "note": "the names to fix the select to, separated by commas, in an order of preference; absent: the variable's default"}
       ],
-      "help": "Converts a package's select whose wanted item is a package variable into the fixed form, from the package's own files: the variable goes from control.json and the select's policy document compares the name with the fixed names.",
+      "help": "Converts the select of a package that reads a package variable into the fixed form, from the package's own files; the variable leaves control.json.",
       "output": "mode package_fix_select, package, package_id, operation (the select step's), variable, default (the variable's), fixed, files[{file, members}], admission, written, root{variable, drop_in_the_same_change[{file, member, otherwise, check}]} (what a game root holding the package must drop in the same change); with --dry-run status validated, dry_run, persisted false",
       "writes": true,
       "irreversible": false,
