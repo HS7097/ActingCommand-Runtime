@@ -52,13 +52,23 @@
 //! - **A fixed value** (SCHED-C1a, register §1.299; Alice's two kinds of scoring of 11-09 15:47
 //!   and 15:50; `contracts/scheduling/README.md`, "Fixed values written in the pack"). A task
 //!   that writes `benefit_fixed_value_milli` `V` is judged by
-//!   `B = V − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a consumption, its `produces`
-//!   unread. A consumed pool still needs its valuation and a regenerating one its reading, as
-//!   above; `ε` holds the consumption's terms only, a fixed value being exact. So below the cap a
-//!   consumer's `B` is `V − W·c`, and in a capped round its value without the pool's cost is `V`
-//!   less the other pools' cost ([`super::capped`] reads it from `S`). Static and dynamic
-//!   candidates rank on the one scale `B ÷ E`. Every decision whose `B` came from a fixed value
-//!   carries `benefit_fixed_value` before its other reasons.
+//!   `B = V + Σ_g produce(k,g)·W(k,g)/Q_g − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a
+//!   consumption and without a goal term. A consumed pool still needs its valuation and a
+//!   regenerating one its reading, as above; a fixed value is exact and adds nothing to `ε`. So
+//!   below the cap a consumer's `B` is `V − W·c` plus its goal terms, and in a capped round its
+//!   value without the pool's cost is `V` plus its goal terms less the other pools' cost
+//!   ([`super::capped`] reads it from `S`). Static and dynamic candidates rank on the one scale
+//!   `B ÷ E`. Every decision whose `B` came from a fixed value carries `benefit_fixed_value` before
+//!   its other reasons.
+//! - **A goal term of a fixed value** (#455 B1, register §1.518; the coordinator's rulings of
+//!   11-23; `contracts/resource-targets.md`, "Resource weights (v2)"). Each pool `g` the task
+//!   produces that the resource layer weighs above 0 for it adds `produce(k,g)·W(k,g)/Q_g`, its
+//!   production term as for a task without a fixed value, with its share of `ε` and its item: such
+//!   a pool declares no valuation (the compiler refuses a fixed value beside a priced product), so
+//!   it is weighed only by a goal in force that covers the task with an open gap, `W = Γ` and `Q`
+//!   the goal's `scale`. Any other pool it produces is not read: no goal, a pending goal (an
+//!   unknown reading, `Γ = 0`) and a met goal add nothing, so without such a goal `B`, `ε` and every
+//!   record are those of before, and a goal never lowers a `B`.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -75,6 +85,7 @@ use super::{
     project_pool_value, reason_with, resource_suggestion, scope_matches_instance, unknown_token,
 };
 use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
+use crate::resource_targets::PoolWeight;
 use crate::{
     ObservationRef, PoolProjection, PoolSpec, PredicateSpec, TaskSpec, TaskTerminalState,
     ValuationDeclaration,
@@ -373,25 +384,29 @@ fn valued_pool<'a>(
 }
 
 /// The candidate's net benefit (module doc). `weight` is the resource layer's effective weight
-/// `W(k,p)` of a pool the task produces, when its term holds one; otherwise the pool's base
-/// weight is `W`.
+/// `W(k,p)` of a pool the task produces, with its step, when its term holds one; otherwise the
+/// pool's base weight is `W`.
 ///
-/// SCHED-C1a (register §1.299): with the task's fixed value `V` the sum starts at `V`, its
-/// `produces` are not read (neither their pools' valuations nor `ε`'s production terms), and the
-/// consumption is judged as before: `B = V` without one, `V` less its cost otherwise.
+/// SCHED-C1a (register §1.299): with the task's fixed value `V` the sum starts at `V` and the
+/// consumption is judged as before: `B = V` without one, `V` less its cost otherwise. #455 B1
+/// (register §1.518): of its `produces` only the pools its term weighs above 0 are read, each a
+/// production term at its term's step `Q` (a goal's `scale`), with its share of `ε` and its item;
+/// no other produced pool is looked up, so neither its valuation nor an entry's pending amount
+/// makes `B` unknown.
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
     context: &PlacementContext<'_>,
     facts: &EvaluationFacts,
-    weight: impl Fn(&str) -> Option<u64>,
+    weight: impl Fn(&str) -> Option<PoolWeight>,
 ) -> PolicyEvaluationResult<Judgement> {
     let unknown = |gap| Judgement::Unknown {
         gap,
         suggestions: Vec::new(),
     };
     let fixed_value = task.benefit_fixed_value_milli;
-    let produces: &[crate::ResourceEffectSpec] = match fixed_value {
+    // The entries checked below: a fixed value's `produces` are not (module doc).
+    let checked: &[crate::ResourceEffectSpec] = match fixed_value {
         Some(_) => &[],
         None => &task.produces,
     };
@@ -399,7 +414,7 @@ fn judge(
         return Ok(unknown(Gap::NoEffects));
     }
     // Every entry and every pool it touches, in declaration order, produces first.
-    for effect in produces.iter().chain(&task.consumes) {
+    for effect in checked.iter().chain(&task.consumes) {
         if effect.is_pending() {
             return Ok(unknown(Gap::EntryPending(effect.pool_id.clone())));
         }
@@ -429,20 +444,37 @@ fn judge(
     let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
-    for effect in produces {
+    for effect in &task.produces {
         if seen.contains(&effect.pool_id.as_str()) {
             continue;
         }
         seen.push(effect.pool_id.as_str());
-        let (_, valuation) = valued_pool(&effect.pool_id, instance, context)
-            .map_err(|_| PolicyEvaluationError::invalid("a judged pool lost its valuation"))?;
+        // `W` and `Q`: the pool's valuation's, its term's weight where it holds one; #455 B1, with
+        // a fixed value, only a pool its term weighs above 0, at that term's step.
+        let (weight_milli, scale) = match fixed_value {
+            None => {
+                let (_, valuation) =
+                    valued_pool(&effect.pool_id, instance, context).map_err(|_| {
+                        PolicyEvaluationError::invalid("a judged pool lost its valuation")
+                    })?;
+                (
+                    weight(&effect.pool_id).map_or_else(
+                        || u64::from(valuation.base_weight_milli),
+                        |term| term.weight_milli,
+                    ),
+                    valuation.scale,
+                )
+            }
+            Some(_) => match weight(&effect.pool_id) {
+                Some(term) if term.weight_milli > 0 => (term.weight_milli, term.step),
+                _ => continue,
+            },
+        };
         let produced = crate::resource_targets::per_run_yield(&task.produces, &effect.pool_id);
-        let weight_milli =
-            weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
         downstream |= weight_milli > 0;
         let (numerator, denominator) = ratio(
             &[produced, u128::from(weight_milli)],
-            &[u128::from(valuation.scale), 1_000],
+            &[u128::from(scale), 1_000],
         )
         .ok_or_else(overflow)?;
         sum.add(numerator, denominator, false)
@@ -455,7 +487,7 @@ fn judge(
         )
         .ok_or_else(overflow)?;
         let (bound_numerator, bound_denominator) =
-            ratio(&[rounding], &[u128::from(valuation.scale), 4_000]).ok_or_else(overflow)?;
+            ratio(&[rounding], &[u128::from(scale), 4_000]).ok_or_else(overflow)?;
         tolerance
             .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
@@ -485,8 +517,10 @@ fn judge(
             &effect.pool_id,
             context.amounts.on(&instance.instance_id),
         )?;
-        let weight_milli =
-            weight(&effect.pool_id).unwrap_or_else(|| u64::from(valuation.base_weight_milli));
+        let weight_milli = weight(&effect.pool_id).map_or_else(
+            || u64::from(valuation.base_weight_milli),
+            |term| term.weight_milli,
+        );
         // SS-2h (register §1.289): a unit consumed costs its full weight `W` whatever the pool's
         // fill; SS-2b's linear discount is retired. A regenerating pool still needs its reading,
         // as before (unknown or expired, `B` is unknown), and wakes the evaluation at its next
@@ -596,8 +630,8 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// gate: an unjudged candidate passes untouched; a judged one passes with its known positive `B`
 /// and `E`, or is deferred with `policy_benefit_nonpositive` or `benefit_unknown` and takes no
 /// part in the allocation. `weights` holds, by work index, the effective weight of each pool
-/// the candidate's resource term weighs. With `refreshing`, a candidate whose only gap is an
-/// unknown reading asks the fact refresh for it through `affected`.
+/// the candidate's resource term weighs, with its step. With `refreshing`, a candidate whose only
+/// gap is an unknown reading asks the fact refresh for it through `affected`.
 ///
 /// SS-2d (register §1.235): three ways for a known `B`. Within its rounding error (`|S| ≤ ε`)
 /// it is `benefit_within_tolerance`: released (`zero_tier`, the allocation's last place in its
@@ -614,7 +648,7 @@ pub(super) fn gate(
     facts: &EvaluationFacts,
     ranked: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
-    weights: &BTreeMap<usize, BTreeMap<String, u64>>,
+    weights: &BTreeMap<usize, BTreeMap<String, PoolWeight>>,
     refreshing: bool,
     affected: &mut Vec<AffectedCandidate>,
     memory: &mut CappedMemory,

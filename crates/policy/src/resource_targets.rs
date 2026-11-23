@@ -2242,6 +2242,18 @@ pub(crate) struct ResourceTerm {
     lapsed_until_unix_ms: Option<u64>,
 }
 
+/// SS-2b: one pool of a candidate's resource term as its net benefit reads it
+/// ([`ResourceTerm::pool_weights`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PoolWeight {
+    /// `W = B + Γ`, the pool's effective weight for the candidate.
+    pub(crate) weight_milli: u64,
+    /// `Q`, the step its term divides by: the pool's `valuation.scale`, else the `scale` of the
+    /// goal that covers the candidate (#455 B1, register §1.518: the step of a fixed-value task's
+    /// goal term).
+    pub(crate) step: u64,
+}
+
 /// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WeightItem {
@@ -2260,12 +2272,21 @@ impl ResourceTerm {
         self.term_milli > 0 || self.override_target.is_some()
     }
 
-    /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, by pool id; the
-    /// net benefit reads the resource layer's own weights and writes none.
-    pub(crate) fn pool_weights(&self) -> BTreeMap<String, u64> {
+    /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, with the step `Q` its
+    /// term divides by, by pool id; the net benefit reads the resource layer's own weights and
+    /// writes none.
+    pub(crate) fn pool_weights(&self) -> BTreeMap<String, PoolWeight> {
         self.items
             .iter()
-            .map(|item| (item.pool.clone(), item.effective_milli))
+            .map(|item| {
+                (
+                    item.pool.clone(),
+                    PoolWeight {
+                        weight_milli: item.effective_milli,
+                        step: item.step,
+                    },
+                )
+            })
             .collect()
     }
 

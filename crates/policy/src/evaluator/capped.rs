@@ -1331,7 +1331,8 @@ fn start_round(
     // Listed: its value without the pool's cost is above that value's rounding bound; from the
     // second round, not limited. Never by its cost. SCHED-C1a (register §1.299): for a task with
     // a fixed value `V` the benefit gate's `S` starts at `V`, so this value is `V` less the cost
-    // of the other pools it consumes, and its bound their terms alone.
+    // of the other pools it consumes, and its bound their terms alone; #455 B1 (register §1.518):
+    // plus its goal terms, with their share of the bound.
     let mut listed = Vec::new();
     for (task_id, (_, known, term)) in candidates {
         if number > 1 && known.task.is_benefit_limited() {

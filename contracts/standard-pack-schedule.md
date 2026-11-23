@@ -535,6 +535,32 @@ its pools' valuations weigh in):
   no writer of `model` exists), and the provenance listing of `standard-pack check` shows which
   values are the pack's and which the model's.
 - The rule requires `benefit_fixed_value` ("`requires`" above).
+- A goal on what it produces (#455 B1, since 0.12.82; register §1.518): a pool the rule produces
+  that declares no valuation counts in its benefit once a goal in force covers it with an open gap,
+  `V` plus the goal term less the cost of what it consumes
+  ([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack", "A goal on
+  what it produces"); without such a goal the rule is judged as before. The coverage ("Judged
+  rules" above) still reads no `produces` of such a rule.
+
+**Pools a goal asks for** (#455 B1, since 0.12.82). So that a person can say what an account lacks
+and the scheduler picks the stages that yield it, a resource repository declares each material or
+currency a business rule yields as a pool of `schedule.json` **without a `valuation`** (neither a
+block nor the pending marker: either beside a fixed value is refused, `fixed_value_conflict`, and
+in `pack-catalog.json` `catalog_value_conflict`), with an `observation` of the kind `fact` whose key
+is under `inventory.` or `resource.` (a goal attaches to no other pool; a pool read from rows of a
+list also takes one), a `capacity` no less than the largest amount one effect writes, and
+`projection` `{"kind": "none"}` where it does not regenerate. The yield goes into the rule's
+`produces` on its business part (its entry, or its per-rule part, in a version 2
+`pack-catalog.json` of a switched root; the rule itself otherwise): an integer `amount`, or
+`expected_amount_milli` for an average. The rule keeps its `fixed_value_milli`. A judged rule never
+writes a `consumes` of such a pool: it would wait `benefit_unknown` (`valuation_missing`) and never
+run. Nothing changes until a goal is set on the pool (`session.resource_targets`, with its own
+`scale` and `importance_milli`, which a goal on a pool without a valuation must carry); from then on
+the rules that yield it are judged `V` plus their goal terms, and of two of one value and one cost
+the one that yields it goes first. While its gap is open such a rule is handed the gap as
+`gap_remaining`, and its `run_cap` counts the runs the gap still needs only when every entry of the
+pool declares an integer `amount`: a production by `expected_amount_milli` gives it no `run_cap`
+([remedies.md](remedies.md), section 4, "Spend values"; unchanged).
 
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
 can replace them one by one, the composer reports, per game, which judged rules run on a fixed

@@ -47651,6 +47651,127 @@ paused starts refreshing at the first evaluation after this version starts. A re
 a row is tried again after 20, 40 and 80 minutes and then every two hours, within its daily limit,
 and at once after another task's successful run on its instance.
 
+### 1.518 Slice #455 B1 (0.12.82): a rule with a fixed value counts a goal's gap on the pools it produces that declare no valuation (board #455, the main line's third step; the rulings 1 to 8 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b1.md` after the read-only study `rd-1123/study-step3-pools.md`, its questions 2 to 4 and the coordinator's disposition of it; on main `2c0f949d`)
+
+This section takes 1.518. It ships in 0.12.82.
+[scheduling/README.md](scheduling/README.md) ("Net benefit within a tier", its bullets "The net
+benefit" and "Unknown is never 0"; "Fixed values written in the pack", its bullets "Without a
+consumption", "With a consumption", "Its `produces`", "One scale" and the new "A goal on what it
+produces"; "Capped spending order", the bullet "A round") and
+[resource-targets.md](resource-targets.md) ("Resource weights (v2)", the new paragraph "A goal on
+what a task with a fixed value produces") are the contract;
+[standard-pack-schedule.md](standard-pack-schedule.md) ("The fixed value", its last bullet, and the
+new paragraph "Pools a goal asks for") and [pack-catalog.md](pack-catalog.md) (the bullet "The value
+and the marks") follow it. No `package` revision moves, no declared interface range, no
+configuration key, no code or word, no catalog member, no `requires` name: nothing is declared
+anew, and no catalog's bytes or hash move.
+
+**Why.** The aim of the third step: the person says what the account lacks and the scheduler picks
+the stages that yield it. A resource repository is about to declare, per game, what each business
+rule yields into pools that have no valuation (materials and currencies); every such rule carries a
+fixed value, and a fixed value beside a pool without a valuation is accepted (beside a priced or
+pending one it is refused). Until this slice the judgement took a fixed-value task's `produces` as
+empty (SCHED-C1a, §1.299), so a goal on such a pool changed neither the rule's benefit nor its
+order: it reached only the score stage's term `R`, which does not order the judged candidates of
+the business tier (they go by `B ÷ E`; the Runtime's catalog runs no selection document whose
+thresholds could promote one).
+
+**The rule** (rulings 1, 2, 3 and 5).
+- *The goal term.* For a task with a fixed value `V`, each pool it produces that declares no
+  valuation and that a goal in force covers with an open gap adds `r·W/(1000·Q)`: `r` its per-run
+  yield in thousandths (the resource layer's `per_run_yield`, an integer `amount` at its confidence
+  or an `expected_amount_milli`), `W = B_p + Γ` the weight the resource layer gives the pool for the
+  goal (`B_p` 0 without a valuation, `Γ = min(⌊I·g/S⌋, 1 000 000)`), `Q` the goal's own `scale`
+  `S` (the step the resource layer divided by; `I` the goal's `importance_milli`, both required on a
+  goal over a pool without a valuation). `B = V + Σ goal terms − cost`, summed exactly and floored
+  once, as before.
+- *Where the weight comes from.* The resource layer's own term of the candidate
+  (`ResourceTerm::pool_weights`, `weigh_production`), which already weighed such a pool by the
+  covering goal (`Q_p = valuation.scale, else t.scale`): it now hands the judgement the step `Q`
+  beside `W` (`PoolWeight`). No new input, no change of the goal document, nothing outside the
+  policy crate's evaluation; a pool observed by a fact needs only that fact (the goal's gap reads it
+  as before), so the host supplies nothing new.
+- *Nothing else is read* (ruling 2). A produced pool the term does not weigh above 0 is skipped
+  before it is looked up: no goal covers it, its reading is unknown (a pending goal, `Γ = 0`), the
+  goal is met, or its target is unresolved. An entry whose amount is the pending marker yields
+  nothing (`per_run_yield`) and never makes `B` unknown. A goal never lowers a `B`.
+- *Without such a goal* (ruling 3) the term is empty: `S`, `ε`, every item, record, decision and
+  identity are those of before.
+- *The rounding bound and the items* (ruling 5). A goal term adds
+  `[2r + n·(2W + 1)]/(4000·Q)` to `ε`, `n` its pool's `expected_amount_milli` entries, as a
+  production term of a task without a fixed value does; the judgement's items name it
+  `<pool>:+<⌊term⌋>`, before the consumption's.
+- *Decided here.* Since the compiler refuses a fixed value beside a priced or pending product, every
+  pool a fixed-value task produces declares no valuation, so the judgement reads the weight and the
+  step the term gives without looking the pool up. A pending amount on a goal-covered pool yields
+  nothing rather than making `B` unknown, so a goal cannot stop a stage that ran before.
+
+**The readers of a fixed value that rank or gate** (ruling 4). Each reads the judgement's `S` (or
+`⌊S⌋`), so each now takes the goal terms; none was changed besides the judgement.
+
+| Reader | Where | Now |
+|---|---|---|
+| The gate's sign and band (positive, `policy_benefit_nonpositive`, `benefit_within_tolerance`) | `evaluator/benefit.rs`, `gate` | `⌊S⌋` and `ε` with the terms |
+| The order within a tier, `B ÷ E` | `evaluator.rs`, `allocation_order`, `KnownBenefit::order` | the candidate's `KnownBenefit` is `⌊S⌋` |
+| The reserve gate's order | `evaluator.rs`, `apply_reserves` (the allocation order with tiers) | as the order within a tier |
+| A capped round's listing and frozen order, `V ÷ C` | `evaluator/capped.rs`, `start_round` (`S` plus the pool's cost, over its bound and over `C`) | with the terms and their bounds |
+| The capped block's head `B = V − W·(c − a)` and the block's place | `evaluator/capped.rs`, `RoundView::decide`; `evaluator.rs`, `OrderView` | `S` plus the refund |
+| The hard line's hold below the trigger line | `evaluator/capped.rs`, `plan` | reads no value; it holds a candidate that would pass, which a goal term can now make positive |
+| Records: `benefit_fixed_value` (`benefit_milli` `B`, `fixed_value_milli` `V`), `rank_breakdown` | `evaluator/benefit.rs`, `note_fixed_value`; `evaluator.rs`, `rank_breakdown_detail` | `B` with the terms, `V` itself |
+| Not readers of the value: the score stage's `R` (it weighed the goal before), the zero tier (refused beside `V`), the coverage and provenance of the composer, `goals.json`'s `goal_tier_without_fixed_value` (whether a rule writes one) | — | unchanged |
+
+With no goal on such a pool no term exists, so no order changes (stop condition 3 not met).
+
+**A worked example.** Two stages of one instance, `V` 40 000 each, each consuming 30 a run of a pool
+valued 1000 milli a unit (`Q` 1): cost 30 000, `B` 10 000 each, and the tie-break decides (the one
+declared first). Stage X yields 2 a run of a pool without a valuation, stage Y none. A goal asks for
+at least 40 of that pool, `scale` 10, `importance_milli` 1000; it is read at 10, so it lacks 30:
+`Γ = ⌊1000·30/10⌋ = 3000`, X's term `2000·3000/(10·1000) = 600`, `B(X) = 10 600`, `B(Y) = 10 000`, and
+X goes first. Read at 40 (met) or unknown: 10 000 each, as before. In a capped round (the pool read
+above its trigger line) of `V` 36 000 each, X is listed with 36 600 against 36 000 over 30 and is
+spent first. With an expected yield of 2.5 a run the term is 750 and its bound
+`[5000 + 6001]/40 000 = 11001/40000`.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The weight and step handed on | `crates/policy/src/resource_targets.rs` (`PoolWeight`, `ResourceTerm::pool_weights`) |
+| The goal terms | `crates/policy/src/evaluator/benefit.rs` (`judge`: the production loop reads, for a fixed value, only the pools its term weighs above 0, at the term's step) |
+| The map of weights | `crates/policy/src/evaluator.rs` (the score stage's `weights`, now of `PoolWeight`) |
+
+**Tests** (incident `#455 B1`: `crates/policy/src/tests/gate_455_b1.rs`, policy gate map; no clock
+read).
+
+| Test | What it shows |
+|---|---|
+| `b1_t1_a_goal_on_a_lacking_pool_adds_its_term_and_its_stage_goes_first` (1) | Read at 150, `V` 40 000, cost 30 000: the producer 10 600 and selected (its `rank_breakdown` B and V), the other 10 000 `instance_already_selected`; without the goal both 10 000 and the one declared first selected |
+| `b1_t2_a_met_goal_or_an_unknown_reading_leaves_both_stages_as_before` (2) | The goal met (read at 40) or pending (no reading): both 10 000, the first selected, the resource layer saying `satisfied` or `pending` |
+| `b1_t3_without_a_goal_every_decision_is_byte_for_byte_the_one_of_before` (3) | catalog-a's V1 and V2 golden identities; without a goal the decisions serialize to the bytes of the same stages declaring no production, the lacking pool read or not; same dispatch and wake |
+| `b1_t4_in_a_capped_round_the_stage_that_produces_the_lacking_pool_is_frozen_first` (4) | Read at 200, `V` 36 000: the producer frozen first, `capped_spend` rank 1, B 36 600; the other `capped_not_head` with 36 000; without the goal the other way round (task ids) |
+| `b1_t5_an_expected_yield_brings_its_rounding_bound_and_its_item_names_the_pool` (5) | 2.5 a run expected: `V` 29 250 gives S 0 within `ε = 611001/40000` (⌈ε⌉ 16), items `pool.lacking:+750,pool.neutral:-30000`; `V` 40 000 gives 10 750; without the goal −750, the consumption's item alone |
+| `b1_t7_the_goals_spend_values_are_those_of_before` (7) | `gap_remaining` and `run_cap` as SS-6 and LF-1 build them: 30 and 1 below the trigger line (the hard line binds), 2 and 1 on a capped round's head (the goal binds) |
+
+Test 6 is the existing refusals, unchanged: `sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer`
+(`fixed_value_conflict` beside a valued and a pending product) and
+`cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word` (`catalog_value_conflict`).
+Test 8: no existing test is changed; `sched_c1a_t1_a_fixed_value_without_effects_is_its_known_benefit`
+(a production of a pool without a valuation, no goal: `B = V`) passes as it is. No test leaves the
+gate map; no golden is re-recorded.
+
+**What is not changed.** A task without a fixed value; a fixed-value task with no goal over a pool
+it produces; the conflict rule between a fixed value and a valued or pending pool, and so what a
+catalogue accepts or refuses, its hash and the `requires` names (ruling 7); what a goal does to a
+pool with a valuation; the consumption's cost and its gates; the score stage's `R` and every
+resource-target reason; the goal's spend values, `gap_remaining` and its part in `run_cap` (ruling
+6); admission; every declared interface range. No game, package or alias is named in code (ruling
+8).
+
+**At deploy.** Nothing to configure. No installed root has a goal on a pool without a valuation, so
+nothing changes until a resource repository declares such pools on its rules ("Pools a goal asks
+for") and a goal is set on one; from then on the stages that yield it are judged `V` plus their goal
+terms. An older build reads the same root and ignores these productions as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

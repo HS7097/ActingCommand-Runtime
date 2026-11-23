@@ -928,6 +928,21 @@ that lifts the benefit above the bound makes it positive. Nothing here changes. 
 weights only; since G-R2x a goal lifts its benefit as any candidate's ("A task that can do
 something irreversible" above).
 
+**A goal on what a task with a fixed value produces** (#455 B1, since 0.12.82; register §1.518;
+the coordinator's rulings of 11-23, not the owner's words). A task whose benefit is a fixed value
+`V` produces only pools without a valuation (a priced or pending one beside `V` is refused,
+[scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"), so this section
+weighs such a pool for it only through a target that covers it: `B_p` 0, `W(k,p) = Γ` and
+`Q_p = t.scale`, the target's own `scale` and `importance_milli`, which the entry requires for a
+pool without a valuation. Each such pool whose `W(k,p)` is above 0 (a known gap `g ≥ 1`) adds its
+production term `r(k,p)·W(k,p)/Q_p` to the task's net benefit `V − cost`, with its share of the
+rounding bound; a satisfied, pending or unresolved target (`Γ = 0`) adds nothing, and no other
+pool it produces is read. So a goal on a pool without a valuation now moves the fixed-value
+stages that produce it within their tier and in a capped round; before, it reached only their
+score-stage term `R`. `R`, every reason above, `gap_remaining` and the goal's part in
+`run_cap` (SS-6) are unchanged; a target needs nothing new: its pool is observed by a fact under
+`inventory.` or `resource.` (or rows of a list), as every target's.
+
 ## Choosing scale and importance
 
 On one instance, let H be the candidate that ranks first without the target and T a named

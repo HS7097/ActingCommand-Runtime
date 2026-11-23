@@ -202,6 +202,10 @@ mod tests {
     // ran or its failure paused the pair.
     mod gate_477_ck2;
 
+    // #455 B1 (0.12.82; register §1.518): a task with a fixed value counts a goal's gap on the
+    // pools it produces that declare no valuation.
+    mod gate_455_b1;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

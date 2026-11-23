@@ -5233,8 +5233,9 @@ fn apply_priority_selection(
     let mut staged = Vec::with_capacity(candidates.len());
     let mut affected = Vec::new();
     // SS-2b: the effective weight of each pool a judged candidate's resource term weighs, by work
-    // index, for its net benefit.
-    let mut weights = BTreeMap::<usize, BTreeMap<String, u64>>::new();
+    // index, for its net benefit; #455 B1 (register §1.518): with the step its term divides by.
+    let mut weights =
+        BTreeMap::<usize, BTreeMap<String, crate::resource_targets::PoolWeight>>::new();
     for (mut candidate, score) in candidates.into_iter().zip(scores) {
         let (score_milli, unknown_rule, known_until_unix_ms) = match score {
             None => (None, None, None),
