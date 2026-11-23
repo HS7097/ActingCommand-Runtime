@@ -159,13 +159,15 @@ impl super::HostShared {
             let settings = self.frame_cleaner_settings()?;
             let fatal = self.fatal.clone();
             let stop: FrameQueryStop = Arc::new(move || fatal.is_shutdown_requested());
+            // Workflow #503 SD-1 (ruling 7): the round's stop checks also give way to a shutdown
+            // request's settling window; a statement in progress is interrupted only by the stop.
             let ended = retention.maintain(
                 &self.ledger,
                 self.artifacts.root(),
                 clock,
                 settings,
                 stop,
-                &|| self.fatal.is_shutdown_requested(),
+                &|| self.retention_gives_way(),
                 &mut |warning| self.record_frame_retention_warning(warning),
             )?;
             match ended {

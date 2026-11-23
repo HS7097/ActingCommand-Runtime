@@ -970,6 +970,13 @@ pub(super) struct FakeRuntime {
     pub(super) unsupported: RefCell<Vec<String>>,
     /// The close does not complete (its wait passes; nothing is killed).
     pub(super) refuse_shutdown: Cell<bool>,
+    /// Workflow #503 SD-1: the refusals the next `request-shutdown`s meet, one per request, in
+    /// order, as the Runtime's receipts carry them (a settling answer, another refusal); none by
+    /// default, so every request is accepted.
+    pub(super) shutdown_refusals: RefCell<VecDeque<Outcome>>,
+    /// Workflow #503 SD-1 fix round 1: the wait each `request-shutdown` was given for the stop
+    /// after it, in order.
+    pub(super) shutdown_waits: RefCell<Vec<u64>>,
     /// INST-2 fix round 1: by alias, the fake time until which the instance has a queued
     /// request (its status shows one, and its pause is refused); every batch of pauses asked
     /// at once; the next pauses that fail as the Runtime refusing them (by alias).
@@ -1041,6 +1048,8 @@ impl FakeRuntime {
             report_patch: RefCell::new(BTreeMap::new()),
             unsupported: RefCell::new(Vec::new()),
             refuse_shutdown: Cell::new(false),
+            shutdown_refusals: RefCell::new(VecDeque::new()),
+            shutdown_waits: RefCell::new(Vec::new()),
             queued_until: RefCell::new(BTreeMap::new()),
             batches: RefCell::new(Vec::new()),
             refuse_pause: RefCell::new(Vec::new()),
@@ -1446,8 +1455,13 @@ impl RuntimeLink for FakeRuntime {
         Ok(())
     }
 
-    fn shutdown(&self, _root: &Path, _state_root: &Path, _wait_ms: u64) -> Result<Closed, Outcome> {
+    fn shutdown(&self, _root: &Path, _state_root: &Path, wait_ms: u64) -> Result<Closed, Outcome> {
         self.calls.borrow_mut().push("shutdown".to_owned());
+        self.shutdown_waits.borrow_mut().push(wait_ms);
+        let refusal = self.shutdown_refusals.borrow_mut().pop_front();
+        if let Some(refusal) = refusal {
+            return Err(refusal);
+        }
         if self.refuse_shutdown.get() {
             return Err(refused());
         }

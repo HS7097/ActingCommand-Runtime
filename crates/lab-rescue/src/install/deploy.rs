@@ -525,13 +525,9 @@ fn close(
         reread_s0(operation, loaded)?
     };
     let host = operation.host();
-    let (evidence, caveat) = match hold::run_close(
-        host.runtime(),
-        &paths.root,
-        &loaded.state_root,
-        command,
-        wait_ms,
-    ) {
+    // Workflow #503 SD-1: the close step asks again on a settling answer, within `wait_ms`.
+    let answered = hold::run_close(host, &paths.root, &loaded.state_root, command, wait_ms);
+    let (evidence, caveat) = match answered {
         Ok(closed) => closed,
         Err(refusal) if rollback => {
             // The new Runtime does not stop: nothing is killed; the rollback ends here.

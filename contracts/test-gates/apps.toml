@@ -3064,3 +3064,14 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_486_asleep5::asleep5_t2_the_drivers_next_wake_is_the_earlier_of_the_evaluations_and_the_hosts",
 ]
 incident = ["#486", "ASLEEP-5"]
+
+# #503 SD-1 (0.12.83; register §1.525; brief rd-1123/brief-503-sd1.md, ruling 3 and test 5; contracts/install-cli.md, "The close"), the installer's half, on the fake host and its fake Runtime and clock, no device, no sleep: a stop whose request-shutdown meets two settling answers (runtime_shutdown_settling, retry_after_ms 1000) asks three times, each again after its retry_after_ms, and closes; the close step's evidence lists the two refused asks with their code and retry and the accepted one; a refusal that names no retry (runtime_shutdown_denied, lease) fails the step at once, runtime_stop_failed caused by it, one ask, no wait, the Runtime still running; a settling answer and then such a refusal: two asks, the result in the journal caused by the last and related to the first; a settling answer whose retry (120 s) would pass install.stop.shutdown_wait_ms (60 s) fails the step at once, caused by it; fix round 1: asks again of 29 s bring the accepted third ask to 58 s after the first, every ask has the whole 60 s for the stop after it, and the stop is done
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_503_sd1::sd1_5_the_close_asks_again_after_each_settling_answer_and_its_evidence_lists_the_asks",
+    "actingcommand-lab-rescue::lib::install::gate_503_sd1::sd1_5_a_shutdown_accepted_late_waits_its_whole_time_and_ends_as_an_ordinary_stop",
+    "actingcommand-lab-rescue::lib::install::gate_503_sd1::sd1_5_any_other_refusal_fails_the_close_at_once_and_the_journal_shows_every_answer",
+    "actingcommand-lab-rescue::lib::install::gate_503_sd1::sd1_5_a_settling_answer_whose_retry_passes_the_wait_fails_the_close_at_once",
+]
+incident = ["#503 SD-1"]

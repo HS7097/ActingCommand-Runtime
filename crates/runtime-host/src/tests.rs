@@ -267,6 +267,10 @@ mod gate_477_lf1;
 // dispatch's run, a value set on the application holds back the rules that carry another, and the
 // goal page names the set value or leaves the choice to the rules.
 mod gate_500_sv2;
+// #503 SD-1 (0.12.83; register §1.525): a shutdown request that finds only lifecycle work in flight
+// opens a settling window and is answered `runtime_shutdown_settling` with `retry_after_ms`;
+// every other refusal is answered at once and opens none.
+mod gate_503_sd1;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.
