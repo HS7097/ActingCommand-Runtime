@@ -206,6 +206,10 @@ mod tests {
     // pools it produces that declare no valuation.
     mod gate_455_b1;
 
+    // #455 B3-P (0.12.82; register §1.522): a pool that declares no valuation may declare the step
+    // and the importance a goal on it takes (`target_defaults`).
+    mod gate_455_b3p;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

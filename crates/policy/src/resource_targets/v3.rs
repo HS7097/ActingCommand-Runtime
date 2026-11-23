@@ -1399,9 +1399,10 @@ pub enum GoalRecordEdit {
     /// The entry row of `name` is removed.
     ClearEntry { name: String },
     /// The target `id` on the pool `resource`, at least `at_least`, mode `adjust`, its step,
-    /// importance and rule the pool's valuation, no tasks and no lifetime: it replaces the target
-    /// on that pool whatever its id (and a target of that id on another pool), else is added
-    /// after the others.
+    /// importance and rule the pool's valuation (#455 B3-P: else the pool's `target_defaults`),
+    /// resolved at each evaluation and never written in the row, no tasks and no lifetime: it
+    /// replaces the target on that pool whatever its id (and a target of that id on another pool),
+    /// else is added after the others.
     SetTarget {
         id: String,
         resource: String,

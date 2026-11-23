@@ -48023,6 +48023,140 @@ placement's, a person's) no longer leaves an error record; its answer is as befo
 0.12.81 meets nothing kept on disk. In the release notes' language:
 能闲置的实例上（醒着或睡着），还没到触发时刻、但到时会被没有时刻的门（任务包排程关闭且没有结束时间、包被暂停、应用上设的值排除这条规则、补跑节奏、补救轮次）挡住的任务，不再给闲置计划提供唤醒时刻：睡着的实例不会为它被叫醒，醒着的也不会因为它而不进入闲置；门一打开（排程重新开放、设定值清掉），下一次评估就把唤醒时刻带回来。由闲置动作停掉模拟器而睡着的实例，自检时不再写 `instance_not_running` 的错误记录，自检的回答照旧。
 
+### 1.522 Slice #455 B3-P (0.12.82): a pool that declares no valuation may declare the step and the importance a goal on it takes (`target_defaults`) (board #455, the main line's third step; the rulings 1 to 10 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b3p.md`; on main `bcd660bd`, v0.12.81 with B1 of #455)
+
+This section takes 1.522 (1.510, 1.520 and 1.521 belong to slices in flight). It ships in 0.12.82.
+[scheduling/README.md](scheduling/README.md) ("Pool Valuation", the new "A goal's step and
+importance on a pool without a valuation"), [scheduling/v2/README.md](scheduling/v2/README.md) and
+the V2 `pools.schema.json`, [resource-targets.md](resource-targets.md) (the new "Who gives a goal its
+step and importance"; the v2 table's `scale` and `importance_milli`; "Per evaluation"; `Q_p`; "A goal
+on what a task with a fixed value produces"; "One value by name"; `ResourceTargetView`),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`"; "Pools a goal asks for", the
+resource side's recipe; "Composition", step 2), [standard-pack-goals.md](standard-pack-goals.md)
+(the row of `goal_pool_unvalued`) and [actingd-check-config.md](actingd-check-config.md) (the row
+`pool_target_defaults`) are the contract. No `package` revision moves, no declared interface range,
+no configuration key, no code or word; one catalog member and one `requires` name are new.
+
+**Why.** The resource side declares, for one game, the pools its rules produce (materials,
+currencies) without a `valuation`: every producing rule keeps its fixed value, and a fixed value
+beside a production of a priced or pending pool is refused. B1 (§1.518) makes a goal on such a pool
+raise the benefit of the rules that produce it, but a goal needs a step and an importance, and they
+came only from the goal itself or the pool's valuation: on such a pool the goal page refused a goal
+by `{at_least}` (`pool_unvalued`) and the Lab's check a `resource` entry (`goal_pool_unvalued`). A
+first form of this slice (pull request #1885, abandoned) put the two numbers in the `goals.json`
+entry and copied them into the stored goal; its review showed the copy goes stale when the research
+tables change the numbers. The numbers are a declaration of the game's economy, as a valuation is;
+they now stand on the pool, in the catalogue, where every evaluation reads the current ones and
+nothing is copied.
+
+**The rule** (rulings 1, 2, 3 and 6).
+- *The member* (ruling 1). `PoolSpec::target_defaults`, `{"scale": S, "importance_milli": I}`
+  (`PoolTargetDefaults`), both required, V2 only (the catalogue a standard pack's `schedule.json`
+  writes): `scale` within `1..=2^53 − 1` and `importance_milli` within `1..=1 000 000`, the goal
+  document's bounds of a target's own (the constants `MAX_RESOURCE_TARGET_AMOUNT` and
+  `MAX_RESOURCE_TARGET_MILLI`), `limit_exceeded` at the number; missing, the reader's
+  `missing_required_field`; in a V1 document `unknown_field` at the member.
+- *One source per pool* (ruling 2). Beside a `valuation` block or the pending marker the pool is
+  refused `type_mismatch` at `/pools/<i>/target_defaults`, the compiler's existing word for two
+  members that may not stand together (as a `list_rows` observation's two equal columns).
+- *Resolution* (ruling 3). A target's step and importance: its own, else the pool valuation's
+  (`scale`, `gap.weight_milli`), else the pool's `target_defaults`, each number on its own. The pool's
+  part is read in one function of the policy crate, `pool_target_terms`, at every check and every
+  evaluation from the catalogue in force; nothing is copied into a stored goal.
+- *`requires`* (ruling 6). A `schedule.json` whose pool writes the member names
+  `pool_target_defaults` in `requires` (`POOL_TARGET_DEFAULTS_SUBSYSTEM`; the composer refuses one
+  that does not, `schedule_invalid` at the first such pool's member), by the pattern of
+  `pool_trigger_line`, `pool_lines` and `pool_list_rows`; this build's configuration manifest names
+  it, always on; a Runtime of 0.12.81 refuses such a file `schedule_requires_missing`, and the
+  installer's plan (§1.514) refuses a rollback below this build while an installed or kept schedule
+  requires it (no new code: the plan reads the target's own manifest).
+
+**Where a target's step and importance are resolved** (ruling 3, every place found).
+
+| Place | Where | Now |
+|---|---|---|
+| A target's `S` and `I`, for the entry's check of a v2 or v3 target (`check_target_v2`, the goal page's edits included) and for the evaluation's status and `Γ` (`resolve_v2`) | `crates/policy/src/resource_targets.rs`, `target_terms` | own, else `pool_target_terms` |
+| The targetable list (`default_scale`, `default_importance_milli`, `scale_required`, `importance_required`), which `ResourceTargetView` answers and the goal page's `pool_unvalued` reads | the same file, `targetable_resources_with_readings` | `pool_target_terms` |
+| The step `Q_p` of a produced pool's term (`WeightItem::step`, `PoolWeight::step`) | the same file, `weigh_production` | the pool's valuation, else the covering target's resolved step (`ResolvedTargetV2::step`: own, else `pool_target_terms`) |
+| B1's goal term of a fixed-value task (§1.518) | `crates/policy/src/evaluator/benefit.rs`, `judge` | unchanged: it reads `W` and `Q` from the term above (`PoolWeight`) and `Γ` from `target_terms`, so the same resolution; no second one |
+| The Lab's check of a `resource` entry of `goals.json` (`goal_pool_unvalued`) | `crates/resource-tooling/src/standard_pack_goals.rs`, `goal_issues` | a pool counts as giving a goal its terms when its valuation holds `scale` and `gap`, or when it writes no `valuation` and `target_defaults` holds both numbers |
+| The goal page's check (`pool_unvalued`) | `crates/runtime-host/src/goals.rs`, `check_target` | unchanged: it reads the targetable list's `scale_required` / `importance_required` |
+
+A v1 target always carries both numbers; nothing there reads the pool.
+
+**A worked example.** A pool without a valuation writes `target_defaults` `{scale 10,
+importance_milli 1000}`; a person asks for at least 40 on the goal page (`{at_least: 40}`, the row
+holds no number), and the pool reads 10: the gap is 30, `Γ = min(⌊1000·30/10⌋, 1 000 000) = 3000`,
+`W = 0 + 3000`, and a rule with the fixed value `V` 40 000 that consumes 30 of a pool valued 1000
+milli a unit (`Q` 1) and produces 2 of the lacking pool a run gets B1's term
+`2000·3000/(10·1000) = 600`: `B = 40 000 + 600 − 30 000 = 10 600`, against 10 000 for a stage of the
+same value that does not produce it. The next catalogue changes the defaults to `{scale 20,
+importance_milli 500}`; the same stored goal, set again by nobody, weighs at the next evaluation
+`Γ = ⌊500·30/20⌋ = 750`, the term `2000·750/(20·1000) = 75`, `B = 10 075`.
+
+**Tests** (incident `#455 B3-P`: `crates/policy/src/tests/gate_455_b3p.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_455_b3p.rs`, host gate map; one test appended to
+`crates/resource-tooling/src/gate_455_gr1.rs`, exec gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `b3p_t1_the_reader_takes_both_numbers_and_refuses_each_fault_at_its_pointer` (1) | On the neutral example's pool: both numbers compile, round-trip and recompile to the same identity, the largest bounds taken; V1 `unknown_field`; one number missing `missing_required_field` naming it; scale 0 and 2^53, importance 0 and 1 000 001 `limit_exceeded` at the number; beside a valuation block and beside the pending marker `type_mismatch` at the member |
+| `b3p_t1_the_composer_requires_pool_target_defaults_and_an_older_runtime_refuses_the_file` (1) | With `pool_target_defaults` in `requires` the member is composed and compiled; without, `schedule_invalid` at `/pools/0/target_defaults`; on a Runtime that does not name it, `schedule_requires_missing` at `/requires/0` |
+| `b3p_t1_the_v2_pools_schema_lists_the_member_with_the_compiler_s_bounds` (ruling 8) | The V2 pools schema's `targetDefaults` (both required, the compiler's bounds) and its `dependentSchemas` (not beside `valuation`); the V1 schema lists no member |
+| `b3p_t2_a_target_takes_its_own_numbers_else_the_valuation_s_else_the_pool_s_defaults` (2) | The targetable list: the pool's defaults, nothing required; a valued pool's valuation; a pool with neither, both required. The entry: a target without numbers and one with its own taken, one without numbers on a pool with neither `missing_field` at `/targets/0/scale`. The evaluation: `step=10 importance=1000 gap_weight=3000` without numbers, `step=5 importance=2000 gap_weight=12000` with its own, the valued pool's `step=5 importance=700 gap_weight=4200` |
+| `b3p_t3_a_goal_without_numbers_decides_byte_for_byte_as_one_carrying_them` (3) | B1's two stages: the goal without numbers decides byte for byte as the goal carrying 10 and 1000, every `sha256:` masked (the two records differ by the two numbers, so their identity does); the goal carrying them decides byte for byte the same on main's catalogue without the member; the producer selected with 10 600 |
+| `b3p_t4_a_rule_without_a_fixed_value_is_weighed_at_the_pool_s_default_step` (4) | A judged rule without a fixed value: `resource_weights` `pool.lacking:r=2,per=10,base=0,gap=3000,effective=3000,term=600`; its benefit `benefit_unknown` `valuation_missing` on the pool (ruling 5) |
+| `b3p_host_a_goal_on_a_pool_with_target_defaults_is_set_by_at_least_alone_and_cleared` (5) | Over the policy crate's targetable list: the pool offered with its defaults and nothing required; `{at_least: 40}` on its entry is `SetTarget` with no number and writes the row the same request writes for a valued pool's entry (no `scale`, no `importance_milli`); a target by pool id the same; a pool with neither `pool_unvalued`; clearing removes it, no record left |
+| `b3p_t6_a_goal_set_once_weighs_by_the_defaults_of_the_catalogue_in_force` (6) | One stored goal, the defaults 10/1000 then 20/500: `B` 10 600 then 10 075, the items `step=10 … gap_weight=3000` then `step=20 importance=500 gap_weight=750` |
+| `b3p_a_resource_entry_on_a_pool_with_target_defaults_is_accepted` (7) | `standard-pack check`: a version 2 `goals.json` whose `resource` entry governs the pool with `target_defaults` gives no warning; one governing a pool with neither, or a valued pool without a gap weight, `goal_pool_unvalued` at the entry's pool |
+| `b3p_t8_a_catalogue_without_the_member_keeps_its_golden_identity` (8) | The neutral example catalog's V1 and V2 golden identities |
+
+Test 9: every existing test passes as it is; none is changed, renamed or retired, and no golden is
+re-recorded. `PoolSpec` has no struct literal in the workspace (every pool is read from JSON), so no
+literal was touched.
+
+**What is not changed** (rulings 5, 7, 9 and 10). In every other respect the pool is a pool without a
+valuation: its base weight is 0, a fixed value beside its production is taken, a judged rule that
+consumes it, or produces it without a fixed value, is `benefit_unknown` (`valuation_missing`) as
+before, its lines take no part, and B1's rules apply to it as to any pool without a valuation. A
+catalogue without the member: its bytes, hash, decisions, records and the goal page's answers.
+`goals.json` stays at version 2; the host's goal code and the goal page's types are unchanged; no
+record, request or ledger member is new. No game, package or alias is named in code.
+
+**Fix round 1** (the independent review of #1888, "may merge"; the coordinator took four of its
+optional items, work order `rd-1123/brief-455-b3p-fix1.md`).
+- *One reading of "the pool writes no valuation"* (item 1). The Lab's goal check
+  (`standard_pack_goals.rs`, `goal_issues`) read it as the member being absent, so a pool writing
+  `"valuation": null` beside `target_defaults` was valued for the check and unvalued for the
+  compiler. It now reads the member as the compiler does and as `CatalogScheduleFacts` does: absent
+  or `null` is no valuation. The five forms, the check and the compiler alike: absent and `null`
+  (with `target_defaults`) give a goal its terms, or the check's `goal_pool_unvalued` and the
+  goal page's `pool_unvalued` without it; the pending marker, a block without `gap` and a block with
+  `scale` and `gap` are valuations, beside which `target_defaults` is refused `type_mismatch`, the
+  last alone giving a goal its terms.
+- *The two words' texts* (item 2). The outcome catalogue's `goal_pool_unvalued` and `pool_unvalued`
+  name the cause as the code gives it (neither a valuation with `scale` and `gap` nor, on a pool
+  without a valuation, `target_defaults`) and the remedy for a pool whose producing rules keep fixed
+  values (`target_defaults`, a valuation there being refused); the index is regenerated; the two
+  words' doc comments say the same.
+- *The offered list* (item 3) and two comments (item 4): a test that this build's manifest names
+  `pool_target_defaults`; the comments of `check_target_v2` and the host's `check_target` (comment
+  only).
+
+| Test | What it shows |
+|---|---|
+| `b3p_fix1_a_null_valuation_beside_target_defaults_is_no_valuation_for_the_goal_check` (item 1; exec gate map) | On G-R1's root a pool writing `"valuation": null` and `target_defaults`: the valid version 2 file whose `resource` entry governs it gives no warning |
+| `b3p_this_runtime_names_pool_target_defaults_and_composes_a_file_that_requires_it` (item 3; apps gate map, `apps/actingd/src/config/gate_455_b3p.rs`) | The assembled manifest names `pool_target_defaults`, enabled; given those subsystems the composer composes a file whose pool writes the member and lists it in `requires`, the compiled pool holding 10 and 1000 |
+
+No existing test is changed.
+
+**At deploy.** Nothing to configure. No installed root writes the member, so nothing changes until
+a resource repository declares a pool with `target_defaults` (and `pool_target_defaults` in its
+`schedule.json`'s `requires`); a root that does needs this build, and a rollback below it is
+refused by the installer's plan while that root, or a generation composed from it, is installed or
+kept. In the release notes' language:
+没有估值的池子现在可以在 `schedule.json` 里写 `target_defaults`（步长 `scale` 和重要度 `importance_milli`），给落在它上面的目标用；写了它的文件要在 `requires` 里写 `pool_target_defaults`。目标页上对这样的池子只填 `{at_least}` 就能设目标，`goals.json` 里的 `resource` 条目也能指向它；这两个数随调度目录走，下次目录改了数，已经设好的目标在下一次评估就按新数算，不用重设。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

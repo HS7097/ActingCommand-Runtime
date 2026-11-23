@@ -499,8 +499,9 @@ fn item_at(variable: &PackageVariable, value: &Value, word: GoalProblem) -> Opti
 /// `{resource, at_least}`. Every other member is `wrong_type` at it, but `by_unix_ms`, which is
 /// `deadline_unsupported`; `at_least` is a whole number (else `wrong_type`) from 1 to the safe
 /// integers and not above the pool's capacity when its capacity reads one (else `out_of_range`);
-/// the pool is one the application can target (else `pool_not_targetable`) whose valuation gives
-/// the step and the importance a goal by name does not carry (else `pool_unvalued`).
+/// the pool is one the application can target (else `pool_not_targetable`) that gives the step and
+/// the importance a goal by name does not carry, by its valuation or (#455 B3-P) its
+/// `target_defaults`, as the targetable list says (else `pool_unvalued`).
 pub(crate) fn check_target(
     page: &GoalPage,
     value: &Value,

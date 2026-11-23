@@ -199,6 +199,36 @@ model's export, is marked by the `schedule.json` pool member `valuation_origin` 
 reports tell the two apart ([../standard-pack-schedule.md](../standard-pack-schedule.md),
 "Provenance").
 
+### A goal's step and importance on a pool without a valuation
+
+#455 B3-P (since 0.12.82; register §1.522; the coordinator's rulings of 11-23, not the owner's
+words). In a V2 catalog a pool that writes **no `valuation`** (neither a block nor the pending
+marker) may write `target_defaults`, the gap step and the importance a resource target on the pool
+takes when it carries none of its own:
+
+```json
+"target_defaults": { "scale": 10, "importance_milli": 1000 }
+```
+
+| Field | Bound | Meaning | Diagnostic |
+| --- | --- | --- | --- |
+| `scale` (S) | required, 1..=9,007,199,254,740,991, a target's own `scale`'s bound | the gap at which the target weight equals the importance | `limit_exceeded` at it; missing: `missing_required_field` |
+| `importance_milli` (I) | required, 1..=1,000,000, a target's own `importance_milli`'s bound | extra milli per produced step for each missing step `S` | as `scale` |
+
+A resource target takes its own numbers, else the pool's valuation's (`scale`, `gap.weight_milli`),
+else these ([../resource-targets.md](../resource-targets.md), "Who gives a goal its step and
+importance"), read from the catalog in force at every check and evaluation and copied into no
+stored goal. Refused, each at its pointer: beside a `valuation` block or the pending marker,
+`type_mismatch` at `/pools/<i>/target_defaults` (one source per pool for a goal's step and
+importance); in a V1 document, `unknown_field` there; another member, `unknown_field`. The member
+makes nothing else of the pool valued: no base weight, no part of the net benefit of a judged task
+that touches it (a judged task without a fixed value that touches it stays `benefit_unknown`,
+`valuation_missing`), no part in its lines, and a fixed value beside its production is taken, as
+beside any pool without a valuation ("Fixed values written in the pack"). A `schedule.json` whose
+pool writes it names `pool_target_defaults` in `requires`
+([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
+serializes, hashes and decides exactly as before.
+
 ## Expected quantities (v2)
 
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory

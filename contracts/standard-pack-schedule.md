@@ -147,6 +147,19 @@ columns K and V: the check reads a package's reading marks only (`resource_readi
 readings. At evaluation a list not keyed by them (a row without a text under K, or no row with V)
 leaves the pool unknown, `type_mismatch` (#455 P2 fix round 1), never a known 0.
 
+#455 B3-P (register §1.522, since 0.12.82). A pool that writes `target_defaults`, the step and the
+importance a goal on a pool without a valuation takes ([scheduling/README.md](scheduling/README.md),
+"A goal's step and importance on a pool without a valuation"), requires `pool_target_defaults`,
+alike: the composer refuses a file that writes one while `requires` does not name it,
+`schedule_invalid` at the first such pool's member in file order (for example
+`/pools/0/target_defaults`). The member passes through as written, and the catalog compiler checks
+it, mapped back to the pool. A Runtime names `pool_target_defaults` in `config.subsystems`, always
+on, from 0.12.82. **No Runtime of 0.12.81 names it**: such a Runtime, and its check-config, refuse
+a file that lists it with `schedule_requires_missing` at that entry, and the installer's plan
+refuses a rollback to such a build while an installed or kept schedule lists it (#429 RB-1 above).
+The resource tools check no `requires`: `standard-pack check`, `compose` and `adopt` accept and
+carry the member.
+
 Workflow #477 CV-2 (register §1.508, since 0.12.80; the coordinator's rulings, the owner's words
 being only "one cut-over, no coexistence"). **`catalog_business` switches a root's business part to
 its `pack-catalog.json`** ([pack-catalog.md](pack-catalog.md), "Version 2"). A file whose
@@ -549,13 +562,19 @@ block nor the pending marker: either beside a fixed value is refused, `fixed_val
 in `pack-catalog.json` `catalog_value_conflict`), with an `observation` of the kind `fact` whose key
 is under `inventory.` or `resource.` (a goal attaches to no other pool; a pool read from rows of a
 list also takes one), a `capacity` no less than the largest amount one effect writes, and
-`projection` `{"kind": "none"}` where it does not regenerate. The yield goes into the rule's
-`produces` on its business part (its entry, or its per-rule part, in a version 2
-`pack-catalog.json` of a switched root; the rule itself otherwise): an integer `amount`, or
-`expected_amount_milli` for an average. The rule keeps its `fixed_value_milli`. A judged rule never
-writes a `consumes` of such a pool: it would wait `benefit_unknown` (`valuation_missing`) and never
-run. Nothing changes until a goal is set on the pool (`session.resource_targets`, with its own
-`scale` and `importance_milli`, which a goal on a pool without a valuation must carry); from then on
+`projection` `{"kind": "none"}` where it does not regenerate. #455 B3-P (since 0.12.82; register
+§1.522): **declare the pool without a valuation, with `target_defaults` from the research table**
+(`{"scale": S, "importance_milli": I}`, the step and the importance a goal on it takes; the file
+then names `pool_target_defaults` in `requires`, "`requires`" above), so that a person sets a goal
+on it by `{at_least}` alone, on the goal page or by a `resource` entry of `goals.json`, and a later
+table's numbers reach every goal already set at the next evaluation. **Add `produces` to the real
+run's rule**: the yield goes into the rule's `produces` on its business part (its entry, or its
+per-rule part, in a version 2 `pack-catalog.json` of a switched root; the rule itself otherwise): an
+integer `amount`, or `expected_amount_milli` for an average. **Keep the fixed value**: the rule
+keeps its `fixed_value_milli`. A judged rule never writes a `consumes` of such a pool: it would
+wait `benefit_unknown` (`valuation_missing`) and never run, `target_defaults` or not. Nothing
+changes until a goal is set on the pool (`session.resource_targets`; without `target_defaults` the
+goal must carry its own `scale` and `importance_milli`, as before); from then on
 the rules that yield it are judged `V` plus their goal terms, and of two of one value and one cost
 the one that yields it goes first. A goal chooses which rule spends a pool, the pool's lines choose
 when (ruling 9): a rule that consumes a regenerating pool (stamina, energy: its `projection` is not
@@ -688,7 +707,8 @@ pure: its caller reads the packages.
    `hard_line`, SCHED-C1c (0.12.53) and SCHED-C1a (0.12.52): `pool_trigger_line` when one writes
    `trigger_line` and `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool
    `valuation_origin`, #455 P1 (0.12.78): `pool_list_rows` when a pool's `observation` is of the
-   kind `list_rows`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
+   kind `list_rows`, #455 B3-P (0.12.82): `pool_target_defaults` when a pool writes
+   `target_defaults`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
    writes `max_queue_wait_ms`, Workflow #500 SV-2 (0.12.81): `rule_variables` when a rule carries
    `variables`,

@@ -440,3 +440,15 @@ kept and hashed in the order written. A `benefit_realization` task still needs a
 of each pool it consumes. A `schedule.json` whose pool writes the kind names `pool_list_rows` in
 `requires`, which a Runtime names from 0.12.79 on (#455 P2) and no Runtime of 0.12.78 names. A
 pool without it serializes, hashes and decides exactly as before.
+
+#455 B3-P (since 0.12.82; register §1.522; `../README.md`, "A goal's step and importance on a pool
+without a valuation"), V2 only: a pool that writes no `valuation` may write `target_defaults`,
+`{"scale": S, "importance_milli": I}`, both required, `S` in `1..=9007199254740991` and `I` in
+`1..=1000000`: the step and the importance a resource target on the pool takes when it carries none
+of its own. Refused, each at its pointer: in a V1 document `unknown_field` at the member; beside a
+`valuation` block or the pending marker `type_mismatch` at the member; a number out of its range
+`limit_exceeded` at it; a missing member `missing_required_field`, any other member
+`unknown_field`, a member of another type `type_mismatch` (the reader). It makes nothing else of the
+pool valued. A `schedule.json` whose pool writes it names `pool_target_defaults` in `requires`,
+which a Runtime names from 0.12.82 on. A pool without it serializes, hashes and decides exactly as
+before.

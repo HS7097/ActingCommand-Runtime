@@ -385,6 +385,15 @@ The members of `report`:
       ([scheduling/README.md](scheduling/README.md), "A pool read from rows of
       a list"); a `schedule.json` whose pool writes the kind requires it, so it
       is composed only by a Runtime that names this row.
+    - `pool_target_defaults` (#455 B3-P, since 0.12.82, register §1.522):
+      always on (`config_subsystem_always_on`). The Runtime reads a pool's
+      `target_defaults`, the step and the importance a goal on a pool without a
+      valuation takes when it carries none of its own
+      ([scheduling/README.md](scheduling/README.md), "A goal's step and
+      importance on a pool without a valuation"); a `schedule.json` whose pool
+      writes it requires it, so it is composed only by a Runtime that names
+      this row, and the installer's plan refuses a rollback below 0.12.82 while
+      an installed or kept schedule requires it.
     - `catalog_business` (#477 CV-2, since 0.12.80, register §1.508): always
       on (`config_subsystem_always_on`). The composer takes a game root's
       business part (each rule's effects, fixed value and marks) from its
