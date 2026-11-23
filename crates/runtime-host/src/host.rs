@@ -209,6 +209,12 @@ mod governance;
 mod host_claims;
 mod input;
 mod installation;
+// Workflow #503 SD-1 (register §1.525): the one order of what refuses a shutdown request and the
+// settling window's bound and retry, which its gate reads.
+#[cfg(test)]
+pub(crate) use installation::{
+    SHUTDOWN_SETTLING_RETRY_AFTER_MS, SHUTDOWN_SETTLING_WINDOW_MS, ShutdownBusy, shutdown_busy,
+};
 // Workflow #429 R-0b: what each instance does now (`RuntimeInstanceStatus.activity`, memory only).
 mod instance_activity;
 mod instance_discovery;
@@ -3349,15 +3355,28 @@ impl RuntimeHost {
     }
 
     /// Keeps a whole policy cycle inside the same admission boundary as IPC and native probes.
+    /// Workflow #503 SD-1: `None` while a shutdown request's settling window is open, as while the
+    /// host stops: no new cycle begins inside the window.
     pub fn begin_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
         Ok(self
             .shared_ref(HostLocation::BeginPolicyWork)?
-            .begin_work()?
+            .begin_unsettled_work()?
             .map(|guard| RuntimePolicyWork { _guard: guard }))
+    }
+
+    /// Workflow #503 SD-1, test only: whether the frame cleaner's round gives way now
+    /// (`HostShared::retention_gives_way`, the stop its round reads).
+    #[cfg(test)]
+    pub(crate) fn retention_gives_way_for_test(&self) -> bool {
+        self.shared
+            .as_deref()
+            .is_some_and(|shared| shared.retention_gives_way())
     }
 
     /// Keeps a pending policy trigger while installation has closed root admission.
     /// `None` means actual shutdown; a temporary drain is not a daemon close request.
+    /// Workflow #503 SD-1: a trigger that arrives while a settling window is open waits here and
+    /// runs once the window has ended by itself.
     pub fn wait_policy_work(&self) -> RuntimeHostResult<Option<RuntimePolicyWork<'_>>> {
         loop {
             if let Some(error) = self.fatal_error()? {

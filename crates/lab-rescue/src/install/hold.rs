@@ -660,27 +660,71 @@ pub(crate) fn runs_cut(drained: &BTreeMap<String, Drained>) -> u32 {
     drained.values().map(|drained| drained.cancelled).sum()
 }
 
+/// Workflow #503 SD-1: when a refused `request-shutdown` says to ask again, the `retry_after_ms`
+/// its outcome carries (`runtime_shutdown_settling` carries it; no other refusal of the request
+/// does); `None` for a refusal or failure to take as final.
+fn ask_again_after(refusal: &Outcome) -> Option<u64> {
+    refusal.value("retry_after_ms").and_then(Value::as_u64)
+}
+
 /// The close step: `request-shutdown` and its wait within `wait_ms`, nothing killed; done
 /// already when no Runtime answers. Its evidence is what the wait observed and the closed
 /// start's terminal outcome; a terminal outcome that is not a stop (its category neither `info`
 /// nor `success`, as the watchdog judges it), or none found, is the caveat
 /// `stop_terminal_unconfirmed` (the Runtime is gone all the same).
+///
+/// Workflow #503 SD-1 (register §1.525): a refusal that says when to ask again
+/// ([`ask_again_after`]) is asked again after that long, as long as the asks and the wait stay
+/// within `wait_ms` from the first ask, the wait taking what is left; any other refusal fails the
+/// step at once, as before. The evidence lists every ask and its answer (`asks`: each refused one
+/// with its code and `retry_after_ms`, then the accepted one); a step that fails carries the last
+/// answer as its cause and every earlier one as a `related` link, in the operation's result.
 pub(crate) fn run_close(
-    runtime: &dyn RuntimeLink,
+    host: &dyn Host,
     root: &Path,
     state_root: &Path,
     operation: InstallLocation,
     wait_ms: u64,
 ) -> Result<(Value, Option<Outcome>), Outcome> {
+    let runtime = host.runtime();
     let running = runtime
         .status(state_root)
         .map_err(|cause| stop_failed(operation, cause))?;
     if running.is_none() {
         return Ok((json!({"already_stopped": true}), None));
     }
-    let closed = runtime
-        .shutdown(root, state_root, wait_ms)
-        .map_err(|cause| stop_failed(operation, cause))?;
+    let deadline_ms = host.now_unix_ms().saturating_add(wait_ms);
+    let mut asks = Vec::new();
+    let mut earlier = Vec::new();
+    let closed = loop {
+        let left_ms = deadline_ms.saturating_sub(host.now_unix_ms());
+        match runtime.shutdown(root, state_root, left_ms) {
+            Ok(closed) => {
+                asks.push(json!({"accepted": true}));
+                break closed;
+            }
+            Err(refusal) => match ask_again_after(&refusal) {
+                Some(retry_after_ms)
+                    if host.now_unix_ms().saturating_add(retry_after_ms) < deadline_ms =>
+                {
+                    asks.push(json!({
+                        "accepted": false,
+                        "refusal": refusal.code().as_str(),
+                        "retry_after_ms": retry_after_ms,
+                    }));
+                    earlier.push(refusal);
+                    host.pause_ms(retry_after_ms);
+                }
+                _ => {
+                    return Err(earlier
+                        .into_iter()
+                        .fold(stop_failed(operation, refusal), |failed, answer| {
+                            failed.joined(CauseRelation::Related, answer)
+                        }));
+                }
+            },
+        }
+    };
     let caveat = match &closed.terminal {
         Some(_) if closed.stopped => None,
         Some((_, log)) => {
@@ -696,6 +740,7 @@ pub(crate) fn run_close(
             "wait": closed.wait,
             "terminal": closed.terminal.as_ref().map(|(code, _)| code),
             "log": closed.terminal.as_ref().map(|(_, log)| log),
+            "asks": asks,
         }),
         caveat,
     ))

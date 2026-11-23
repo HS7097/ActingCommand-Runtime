@@ -4830,3 +4830,17 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_b3p::b3p_host_a_goal_on_a_pool_with_target_defaults_is_set_by_at_least_alone_and_cleared",
 ]
 incident = ["#455 B3-P"]
+
+# #503 SD-1 (0.12.83; register §1.525; brief rd-1123/brief-503-sd1.md, rulings 1, 2, 4, 5 and 7, tests 1 to 4, 6 and 7; contracts/runtime-interface.md, "A shutdown request that finds work in flight"), the host's half, on one instance, a manual Runtime clock and a fake device, the policy cycle in flight a second thread holding begin_policy_work, no clock read: a cycle held past the request's settle: the first request is runtime_shutdown_settling with retry_after_ms 1000 and the Runtime error code runtime_busy, recorded busy; no new cycle begins inside the window, while the held one runs and after it ended; the second request is accepted (1); the one order: a start that prepares, a lease, a waiting entry, a client's reset, a policy run and the requesting thread's own work are refused at once whatever else is in flight, and only work in flight on other threads alone settles (2); with a cycle in flight a held lease is refused at once, runtime_shutdown_denied with shutdown_obstacle lease, another owner's target runtime_owner_mismatch, and neither opens a window (2); a window no ask follows: a trigger waiting in wait_policy_work a millisecond before the window's end still waits and no new cycle begins, at its end the trigger runs and cycles go on (3); a lease taken by a client inside the window makes the next ask refused at once, lease (4); the settling receipt as sent decodes, validates and reads runtime_busy, not fatal (6); the frame cleaner's stop is raised while a window is open, lowered once it ended by itself, raised by an accepted shutdown (7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_1_a_cycle_in_flight_is_answered_settling_and_the_second_ask_is_accepted",
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_2_each_refusal_is_decided_at_once_and_opens_no_window",
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_2_a_held_lease_and_another_owner_are_refused_at_once_with_no_window",
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_3_a_window_no_ask_follows_ends_by_itself_and_the_trigger_it_held_runs",
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_4_a_lease_taken_inside_the_window_makes_the_next_ask_refused_as_without_one",
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_6_a_settling_answer_reads_runtime_busy_to_a_client_that_knows_only_the_wire_code",
+    "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_7_a_retention_round_gives_way_while_a_window_is_open_and_not_after_it",
+]
+incident = ["#503 SD-1"]

@@ -787,7 +787,9 @@ pub(super) fn performance_monitor_loop(
         if shared.fatal.is_shutdown_requested() {
             break;
         }
-        let Some(_work) = shared.begin_work()? else {
+        // Workflow #503 SD-1: no tick takes lifecycle work while a shutdown request's settling
+        // window is open; the next tick after its end runs as any other.
+        let Some(_work) = shared.begin_unsettled_work()? else {
             continue;
         };
         let observed_at_unix_ms = unix_ms_now()?;

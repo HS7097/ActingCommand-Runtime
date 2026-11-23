@@ -1417,6 +1417,13 @@ actingcommand_contract::outcome_codes! {
         RuntimeProtocolInvalid => "runtime_protocol_invalid": error / none,
         RuntimeReferenceLeaked => "runtime_reference_leaked": error / none,
         RuntimeShutdownDenied => "runtime_shutdown_denied": error / none,
+        /// Error (Workflow #503 SD-1, since 0.12.83). A shutdown request of this Runtime's own
+        /// target found nothing that refuses it but lifecycle work in flight on other threads, and
+        /// that work did not end within the request's settle: the settling window opens (no new
+        /// policy cycle, no new performance tick, until it ends by itself or a shutdown is
+        /// accepted), and the request is refused with `retry_after_ms`, when to ask again. Its
+        /// Runtime error code is `runtime_busy`.
+        RuntimeShutdownSettling => "runtime_shutdown_settling": error / none,
         RuntimeSocketModeFailed => "runtime_socket_mode_failed": error / none,
         RuntimeStatePoisoned => "runtime_state_poisoned": error / none,
         RuntimeStatusProjectionInvalid => "runtime_status_projection_invalid": error / none,
@@ -3872,3 +3879,28 @@ actingcommand_contract::outcome_codes! {
     }
 }
 // ---- #498 FACT-CAP: end ----
+
+// ---- Workflow #503 SD-1 (register §1.525): begin ----
+actingcommand_contract::outcome_vocabulary! {
+    /// What refused a shutdown request of this Runtime's own target as busy (vocabulary
+    /// `shutdown_obstacle`, since 0.12.83): the value of `runtime_shutdown_denied` with
+    /// `runtime_code` `runtime_busy`, the first that holds in this order
+    /// (`host::installation::shutdown_busy`). Each is refused at once and opens no settling window;
+    /// lifecycle work in flight on other threads alone is `runtime_shutdown_settling` instead.
+    pub enum ShutdownObstacle: "shutdown_obstacle" {
+        /// The Runtime's start still prepares.
+        StartPreparing => "start_preparing",
+        /// A lease is held: a client's, a run's, a claim's.
+        Lease => "lease",
+        /// An entry waits in a queue that no scheduling pause holds.
+        WaitingEntry => "waiting_entry",
+        /// A client whose contained run ended cancelled has not reset its instance yet
+        /// (`SafeReset`, an install cleanup pending).
+        ClientReset => "client_reset",
+        /// A policy run an instance worker holds, from its hand-off to its settlement.
+        PolicyRun => "policy_run",
+        /// Lifecycle work of the requesting thread itself, which cannot end while it waits.
+        RequestingThreadWork => "requesting_thread_work",
+    }
+}
+// ---- Workflow #503 SD-1: end ----

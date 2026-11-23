@@ -210,6 +210,52 @@ Runtime that stops still takes the lifecycle control kinds that remain (`Health`
 `BindChannel`, `RequestShutdown`, and the reads `RuntimeFactSnapshot`, `QueryEvents` and
 `ReadMaterial`).
 
+### A shutdown request that finds work in flight
+
+Workflow #503 SD-1 (0.12.83; `contracts/v012-register.md` §1.525). `RequestShutdown` is decided
+under the lifecycle admission, in one order:
+
+1. A target that is not this Runtime's: `runtime_shutdown_denied`, Runtime error code
+   `runtime_owner_mismatch`. A Runtime that already stops: `runtime_shutdown_denied`,
+   `runtime_unavailable`.
+2. What refuses it at once, the first that holds, each `runtime_shutdown_denied` with
+   `runtime_busy` and the word `shutdown_obstacle`: the start still prepares
+   (`start_preparing`); a lease is held (`lease`); an entry waits that no scheduling pause holds
+   (`waiting_entry`); a client whose contained run ended cancelled has not reset its instance yet
+   (`client_reset`); a policy run an instance worker holds (`policy_run`); lifecycle work of the
+   requesting thread itself (`requesting_thread_work`). None of them opens a settling window.
+3. Lifecycle work in flight on other threads alone (a policy cycle, a tick of the performance
+   thread, the lease sweep, a reply still being written): the request lets it end, at most 2 s
+   (its settle), with the admission still held between that end and the decision. Work that
+   ended: the shutdown is accepted. Work still in flight: the Runtime opens a **settling window**
+   and answers `runtime_shutdown_settling` (Error) with `retry_after_ms` 1000, its Runtime error
+   code `runtime_busy`; the request's `runtime.lifecycle_observed` record keeps the decision
+   `busy`.
+
+The settling window is memory only and lasts 15 000 ms on the Runtime clock from the answer that
+opened it; an answer `runtime_shutdown_settling` given while it is open opens it again from that
+answer. While it is open:
+
+| Held back | Admitted as before |
+|---|---|
+| A new policy cycle: `begin_policy_work` gives none, so a trigger the policy driver holds waits in `wait_policy_work` and runs once the window ended | A client's request, a lease's renewal and release, a contained run, an instance worker's run and its settlement, a host claim |
+| A new tick of the performance thread (its sample, its frame cleaner's round, the seal of the runtime facts) | Cleanup, a closed connection's and a refused run's |
+| The frame cleaner's round of a tick already running gives way at its next stop check, its pass kept for a later round; a statement in progress runs to its end | The lease sweep |
+| | A policy cycle or a tick already running ends as it would |
+
+A request admitted inside the window that takes a lease or starts a run makes the next shutdown
+request refused at once, as it would be without a window. The window ends by itself at its end
+(the first cycle or tick that may begin after it closes it), and at once when a shutdown is
+accepted: nothing it held back stays held, and a Runtime asked once and never again runs on as if
+it had not been asked. The window and its answer are the Runtime's own, set by nothing but a
+shutdown request of its own target.
+
+A client reads `runtime_busy` as before: the receipt's Runtime error code is unchanged, and
+`retry_after_ms` is the error projection's existing member. The Lab's install close step asks
+again after `retry_after_ms` within its `install.stop.shutdown_wait_ms`
+([install-cli.md](install-cli.md), "The close"); every other client asks once, as before. No
+declared interface range moves.
+
 ## Blocks
 
 ### Criteria

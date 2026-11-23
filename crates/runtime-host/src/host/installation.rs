@@ -6,10 +6,19 @@
 //! #434 LAB-6S4a (0.12.63): the installer's transition (`InstallTransition`, `install-control`
 //! revision 1, and the upgrade state planned beside it) and actingd's held start are gone; every
 //! start is cold, and nothing of installation control is durable any more.
+//!
+//! Workflow #503 SD-1 (0.12.83, register §1.525): a shutdown request that finds nothing refusing
+//! it but lifecycle work in flight on other threads, still in flight when its settle ends, opens a
+//! settling window (memory only) and is answered `runtime_shutdown_settling` with `retry_after_ms`
+//! (the Runtime error code stays `runtime_busy`). While the window is open no new policy cycle
+//! begins and no new tick of the performance thread takes lifecycle work; it ends by itself after
+//! `SHUTDOWN_SETTLING_WINDOW_MS`, and at once when a shutdown is accepted. Every other refusal is
+//! answered at once, `runtime_shutdown_denied`, its busy cause named by `shutdown_obstacle`.
 
 use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
+use crate::codes::ShutdownObstacle;
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::outcome::Code;
 use actingcommand_contract::{RuntimeShutdownDecision, RuntimeShutdownTarget};
@@ -26,12 +35,25 @@ const PAUSES_KEY: &str = "host.install_transition.pauses";
 /// The longest a shutdown request waits for lifecycle work already in flight on other threads
 /// to end before it is decided (`settle_for_shutdown`); well inside a client's 5 s I/O budget.
 const SHUTDOWN_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Workflow #503 SD-1: how long a settling window lasts after the answer that opened it, on the
+/// Runtime clock's monotonic milliseconds. Long enough for the work it lets end: a policy cycle of
+/// today's length (4 to 5 s) and a retention step after it (up to 3.3 s), 8.3 s back to back, with
+/// room for the client's next ask (`SHUTDOWN_SETTLING_RETRY_AFTER_MS`) and that ask's own settle
+/// (`SHUTDOWN_SETTLE_TIMEOUT`); short enough that a window no ask follows holds new cycles and
+/// ticks back for 15 s at most, its triggers kept and run after it.
+pub(crate) const SHUTDOWN_SETTLING_WINDOW_MS: u64 = 15_000;
+/// Workflow #503 SD-1: when a settling answer tells its client to ask again: one second, after
+/// which the next ask lets the work end within its own settle of two seconds more.
+pub(crate) const SHUTDOWN_SETTLING_RETRY_AFTER_MS: u64 = 1_000;
 
 pub(super) struct LifecycleAdmission {
     closed: bool,
     stopping: bool,
     preparing: bool,
     active: std::collections::HashMap<thread::ThreadId, usize>,
+    /// Workflow #503 SD-1: the end of the settling window a shutdown request opened, on the
+    /// Runtime clock's monotonic milliseconds; `None` when no window is open. Memory only.
+    settling_until_ms: Option<u64>,
 }
 
 impl LifecycleAdmission {
@@ -42,8 +64,60 @@ impl LifecycleAdmission {
             stopping: false,
             preparing: true,
             active: std::collections::HashMap::new(),
+            settling_until_ms: None,
         }
     }
+
+    /// Workflow #503 SD-1: whether the settling window holds new work back at `now_ms`; a window
+    /// whose end `now_ms` reached is closed here, so that nothing it held back stays held.
+    fn settling_at(&mut self, now_ms: u64) -> bool {
+        match self.settling_until_ms {
+            Some(until_ms) if now_ms < until_ms => true,
+            Some(_) => {
+                self.settling_until_ms = None;
+                false
+            }
+            None => false,
+        }
+    }
+}
+
+/// What a shutdown request of this Runtime's own target meets once its settle ended, while the
+/// Runtime is not stopping (Workflow #503 SD-1). `None` from [`shutdown_busy`] is an accepted
+/// shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShutdownBusy {
+    /// Something refuses it at once, the word naming what: `runtime_shutdown_denied` with
+    /// `runtime_busy`, and no settling window opens.
+    Refused(ShutdownObstacle),
+    /// Nothing refuses it but lifecycle work in flight on other threads, which the settle did not
+    /// see end: `runtime_shutdown_settling`, and the settling window opens.
+    Settling,
+}
+
+/// Workflow #503 SD-1: the one order of what refuses a shutdown request of this Runtime's own
+/// target: a start that prepares, then what holds or waits (`obstacle`: a lease held, a waiting
+/// entry no pause holds, a client's reset still owed, a policy run a worker holds), then
+/// lifecycle work of the requesting thread itself (`own_work`), which cannot end while it waits;
+/// only lifecycle work in flight on other threads alone (`other_work`) settles.
+pub(crate) fn shutdown_busy(
+    preparing: bool,
+    obstacle: Option<ShutdownObstacle>,
+    own_work: bool,
+    other_work: bool,
+) -> Option<ShutdownBusy> {
+    if preparing {
+        return Some(ShutdownBusy::Refused(ShutdownObstacle::StartPreparing));
+    }
+    if let Some(obstacle) = obstacle {
+        return Some(ShutdownBusy::Refused(obstacle));
+    }
+    if own_work {
+        return Some(ShutdownBusy::Refused(
+            ShutdownObstacle::RequestingThreadWork,
+        ));
+    }
+    other_work.then_some(ShutdownBusy::Settling)
 }
 
 // Scoped work cannot move to another thread: nested work inherits only the same admitted
@@ -160,6 +234,40 @@ impl HostShared {
         Ok(Some(self.count_work(&mut admission)))
     }
 
+    /// Workflow #503 SD-1: the work a settling window holds back, a new policy cycle
+    /// (`RuntimeHost::begin_policy_work`) and a new tick of the performance thread: as
+    /// [`Self::begin_work`], and none while a settling window is open. The Runtime clock is read
+    /// only while a window is set; a window whose end has come is closed here.
+    pub(super) fn begin_unsettled_work(&self) -> RuntimeHostResult<Option<LifecycleWork<'_>>> {
+        let mut admission = lock(&self.lifecycle_admission, HostLocation::AdmitRuntimeWork)?;
+        if admission.settling_until_ms.is_some() && admission.settling_at(self.monotonic_ms()?) {
+            return Ok(None);
+        }
+        if admission.stopping
+            || (admission.closed && !admission.active.contains_key(&thread::current().id()))
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.count_work(&mut admission)))
+    }
+
+    /// Workflow #503 SD-1 (ruling 7): whether the frame cleaner's round gives way now, at its two
+    /// stop checks (before each statement of a round, between the frames it acts on) and the
+    /// listing's hand-over at a pass start: the Runtime's stop was requested, or a shutdown request
+    /// opened a settling window. A round of a tick that began before the window opened then ends
+    /// there, its pass kept for a later round; no tick begins while the window is open. What the
+    /// cleaner examines and removes is unchanged. A poisoned admission lock is read as it is: every
+    /// later admission reports it as fatal.
+    pub(super) fn retention_gives_way(&self) -> bool {
+        self.fatal.is_shutdown_requested()
+            || self
+                .lifecycle_admission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .settling_until_ms
+                .is_some()
+    }
+
     /// Cleanup is part of admitted work even when shutdown has already closed the root gate.
     pub(super) fn work_guard(&self) -> RuntimeHostResult<LifecycleWork<'_>> {
         let mut admission = lock(&self.lifecycle_admission, HostLocation::AdmitRuntimeCleanup)?;
@@ -225,20 +333,12 @@ impl HostShared {
         }
     }
 
-    /// Workflow #369 §3.5 (review2 L1): idle means no lifecycle work (`active`, which counts
-    /// every running instance worker), no holder and no waiting entry (the scheduler's own
-    /// read), and no install cleanup pending. Workflow #411 A3: an entry the pause gate holds is
-    /// no waiting entry (`nothing_held_or_waiting`). `request-shutdown` and `restart` decide by
-    /// this test.
-    fn installation_idle(&self, admission: &LifecycleAdmission) -> RuntimeHostResult<bool> {
-        if !admission.active.is_empty() {
-            return Ok(false);
-        }
-        self.nothing_held_or_waiting()
-    }
-
-    /// No holder and no waiting entry (the scheduler's own read), and no install cleanup
-    /// pending: the part of `installation_idle` that lifecycle work in flight does not decide.
+    /// What holds or waits so that a shutdown request is refused at once, the first in this
+    /// order: a holder (`lease`), a waiting entry (`waiting_entry`; the scheduler's own read), an
+    /// install cleanup pending (`client_reset`), a policy run a worker holds (`policy_run`);
+    /// `None` when nothing does. Workflow #369 §3.5 (review2 L1): with no lifecycle work in flight
+    /// (`active`, which counts every running instance worker) and no start preparing, `None` is
+    /// an idle Runtime, which `request-shutdown` accepts (Workflow #503 SD-1: [`shutdown_busy`]).
     ///
     /// Workflow #411 A3: a routine entry on an instance whose routine gate a scheduling pause
     /// holds (the global pause or the instance's own) is not a waiting entry: it does no work
@@ -248,7 +348,7 @@ impl HostShared {
     /// entry a fence holds still waits, since the fence lifts without a resume. The pauses are
     /// read first, then the scheduler, as `pump` reads the gate; a resume done before this read
     /// leaves its entries eligible or granted, so they count.
-    fn nothing_held_or_waiting(&self) -> RuntimeHostResult<bool> {
+    fn shutdown_obstacle(&self) -> RuntimeHostResult<Option<ShutdownObstacle>> {
         let registered = lock(
             &self.registered_instances,
             HostLocation::ReadInstanceRegistry,
@@ -281,23 +381,38 @@ impl HostShared {
                 self.silenced_gate(*instance_id, instance_alias, pause)?,
             );
         }
-        Ok({
+        let held_or_waiting = {
             let scheduler = lock(&self.scheduler, HostLocation::CheckInstallLeases)?;
-            scheduler.active_tokens().is_empty()
-                && scheduler.waiting_total_gated(|instance_id| {
-                    gates.get(&instance_id).copied().unwrap_or(
-                        if global_pause || paused_instances.contains(&instance_id) {
-                            ClaimGate::RoutineHeld
-                        } else {
-                            ClaimGate::Open
-                        },
-                    )
-                }) == 0
-        } && !lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
+            if !scheduler.active_tokens().is_empty() {
+                Some(ShutdownObstacle::Lease)
+            } else if scheduler.waiting_total_gated(|instance_id| {
+                gates.get(&instance_id).copied().unwrap_or(
+                    if global_pause || paused_instances.contains(&instance_id) {
+                        ClaimGate::RoutineHeld
+                    } else {
+                        ClaimGate::Open
+                    },
+                )
+            }) != 0
+            {
+                Some(ShutdownObstacle::WaitingEntry)
+            } else {
+                None
+            }
+        };
+        if held_or_waiting.is_some() {
+            return Ok(held_or_waiting);
+        }
+        if lock(&self.scheduling_pause, HostLocation::CheckInstallCleanup)?
             .install_cleanup_pending()
-            // Workflow #427-A (C2): a policy run an instance worker still holds, from its
-            // hand-off to its settlement, is in flight; a shutdown decision waits for it.
-            && !self.any_policy_run_working()?)
+        {
+            return Ok(Some(ShutdownObstacle::ClientReset));
+        }
+        // Workflow #427-A (C2): a policy run an instance worker still holds, from its hand-off to
+        // its settlement, is in flight; a shutdown decision waits for it.
+        Ok(self
+            .any_policy_run_working()?
+            .then_some(ShutdownObstacle::PolicyRun))
     }
 
     /// An idle Runtime has lifecycle work in flight now and then as well: the lease sweep every
@@ -307,7 +422,8 @@ impl HostShared {
     /// (an entry the pause gate holds is none, Workflow #411 A3) and no install cleanup, lets it
     /// end, at most `SHUTDOWN_SETTLE_TIMEOUT`; it is then decided with the admission still
     /// held, so no new work starts in between. Work of the requesting thread itself cannot end
-    /// while it waits, and every other refusal is answered at once.
+    /// while it waits, and every other refusal is answered at once. Workflow #503 SD-1: work that
+    /// did not end within it opens the settling window ([`Self::shutdown_under_gate`]).
     fn settle_for_shutdown<'a>(
         &'a self,
         mut admission: MutexGuard<'a, LifecycleAdmission>,
@@ -321,7 +437,7 @@ impl HostShared {
                 || admission.stopping
                 || admission.preparing
                 || self.fatal.is_shutdown_requested()
-                || !self.nothing_held_or_waiting()?
+                || self.shutdown_obstacle()?.is_some()
             {
                 return Ok(admission);
             }
@@ -350,6 +466,12 @@ impl HostShared {
         self.shutdown_under_gate(request, target, &mut admission)
     }
 
+    /// The decision of a shutdown request once its settle ended. Workflow #503 SD-1: a request of
+    /// this Runtime's own target that only lifecycle work in flight on other threads keeps busy
+    /// opens the settling window, to `SHUTDOWN_SETTLING_WINDOW_MS` from its answer (a request
+    /// answered so while a window is open opens it again from its own answer), and is answered
+    /// `runtime_shutdown_settling` with `retry_after_ms`; its record keeps the decision `busy`. An
+    /// accepted shutdown closes the window. Every other refusal opens none.
     fn shutdown_under_gate(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -359,14 +481,25 @@ impl HostShared {
         if let Some(error) = self.fatal.answer()? {
             return Err(error.into());
         }
-        let decision = if target != self.shutdown_target {
-            RuntimeShutdownDecision::OwnerMismatch
+        let (decision, busy) = if target != self.shutdown_target {
+            (RuntimeShutdownDecision::OwnerMismatch, None)
         } else if admission.stopping || self.fatal.is_shutdown_requested() {
-            RuntimeShutdownDecision::AlreadyStopping
-        } else if admission.preparing || !self.installation_idle(admission)? {
-            RuntimeShutdownDecision::Busy
+            (RuntimeShutdownDecision::AlreadyStopping, None)
         } else {
-            RuntimeShutdownDecision::Accepted
+            let obstacle = if admission.preparing {
+                None
+            } else {
+                self.shutdown_obstacle()?
+            };
+            match shutdown_busy(
+                admission.preparing,
+                obstacle,
+                admission.active.contains_key(&thread::current().id()),
+                !admission.active.is_empty(),
+            ) {
+                Some(busy) => (RuntimeShutdownDecision::Busy, Some(busy)),
+                None => (RuntimeShutdownDecision::Accepted, None),
+            }
         };
         let event = self.append_event(
             if decision == RuntimeShutdownDecision::Accepted {
@@ -387,30 +520,52 @@ impl HostShared {
         if decision == RuntimeShutdownDecision::Accepted {
             admission.closed = true;
             admission.stopping = true;
+            admission.settling_until_ms = None;
             self.fatal.request_shutdown();
-            Ok(OperationSuccess {
+            return Ok(OperationSuccess {
                 state: RuntimeReceiptState::Admitted,
                 terminal: Some(terminal(&event)),
                 result: RuntimeResult::ShutdownAccepted { target },
                 failure_outcome: None,
-            })
-        } else {
-            Err(RequestFailure::request(
-                RuntimeHostError::request(
-                    HostCode::RuntimeShutdownDenied,
-                    ContractLocation::RequestRuntimeShutdown,
-                    match decision {
-                        RuntimeShutdownDecision::Busy => RuntimeErrorCode::RuntimeBusy,
-                        RuntimeShutdownDecision::OwnerMismatch => {
-                            RuntimeErrorCode::RuntimeOwnerMismatch
-                        }
-                        _ => RuntimeErrorCode::RuntimeUnavailable,
-                    },
-                ),
-                RuntimeReceiptState::Denied,
-                Some(terminal(&event)),
-            ))
+            });
         }
+        let refusal = match busy {
+            Some(ShutdownBusy::Settling) => {
+                admission.settling_until_ms = Some(deadline_after(
+                    self.monotonic_ms()?,
+                    SHUTDOWN_SETTLING_WINDOW_MS,
+                )?);
+                RuntimeHostError::with_projection(
+                    HostCode::RuntimeShutdownSettling,
+                    ContractLocation::RequestRuntimeShutdown,
+                    RuntimeErrorProjection::new(RuntimeErrorCode::RuntimeBusy, false)
+                        .with_retry_after(SHUTDOWN_SETTLING_RETRY_AFTER_MS),
+                )
+                .with_outcome_values(|outcome| {
+                    outcome.retry_after_ms(SHUTDOWN_SETTLING_RETRY_AFTER_MS)
+                })
+            }
+            Some(ShutdownBusy::Refused(obstacle)) => RuntimeHostError::request(
+                HostCode::RuntimeShutdownDenied,
+                ContractLocation::RequestRuntimeShutdown,
+                RuntimeErrorCode::RuntimeBusy,
+            )
+            .with_outcome_values(|outcome| outcome.shutdown_obstacle(obstacle)),
+            None => RuntimeHostError::request(
+                HostCode::RuntimeShutdownDenied,
+                ContractLocation::RequestRuntimeShutdown,
+                if decision == RuntimeShutdownDecision::OwnerMismatch {
+                    RuntimeErrorCode::RuntimeOwnerMismatch
+                } else {
+                    RuntimeErrorCode::RuntimeUnavailable
+                },
+            ),
+        };
+        Err(RequestFailure::request(
+            refusal,
+            RuntimeReceiptState::Denied,
+            Some(terminal(&event)),
+        ))
     }
 
     /// The start's one conversion of what a ledger of 0.12.62 or earlier may hold of the

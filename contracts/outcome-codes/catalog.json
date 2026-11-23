@@ -2971,6 +2971,10 @@
     "trigger_rule": {
       "type": "name",
       "description": "The id of the recovery_ladder trigger item a ladder was admitted under, as its recovery_ladder_started names it as rule; absent for a ladder no trigger item admitted (Workflow #490 ENTRY-A, since 0.12.77)."
+    },
+    "shutdown_obstacle": {
+      "type": "vocab:shutdown_obstacle",
+      "description": "What refused a shutdown request of the Runtime's own target as busy, on runtime_shutdown_denied with runtime_code runtime_busy: a start that prepares, a lease held, a waiting entry no pause holds, a client's reset still owed, a policy run a worker holds, or lifecycle work of the requesting thread itself, the first that holds (Workflow #503 SD-1, contracts/runtime-interface.md \"A shutdown request that finds work in flight\", since 0.12.83)."
     }
   },
   "vocabularies": {
@@ -11084,6 +11088,34 @@
         },
         "worker_panicked": {
           "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic), and nothing climbs again in that block."
+        }
+      }
+    },
+    "shutdown_obstacle": {
+      "description": "What refused a shutdown request of the Runtime's own target as busy, the value shutdown_obstacle of runtime_shutdown_denied with runtime_code runtime_busy, the first that holds in the vocabulary's order; each is refused at once and opens no settling window (Workflow #503 SD-1, contracts/runtime-interface.md \"A shutdown request that finds work in flight\", since 0.12.83).",
+      "review": "pending",
+      "source": {
+        "file": "crates/runtime-host/src/codes.rs",
+        "enum": "ShutdownObstacle"
+      },
+      "tokens": {
+        "start_preparing": {
+          "description": "The Runtime's start still prepares."
+        },
+        "lease": {
+          "description": "A lease is held: a client's, a run's, a claim's."
+        },
+        "waiting_entry": {
+          "description": "An entry waits in a queue that no scheduling pause holds (an entry a pause holds does no work until a resume, and a shutdown disconnects it)."
+        },
+        "client_reset": {
+          "description": "A client whose contained run ended cancelled has not reset its instance yet (SafeReset): an install cleanup pending."
+        },
+        "policy_run": {
+          "description": "A policy run an instance worker holds, from its hand-off to its settlement."
+        },
+        "requesting_thread_work": {
+          "description": "Lifecycle work of the requesting thread itself, which cannot end while the request waits."
         }
       }
     }

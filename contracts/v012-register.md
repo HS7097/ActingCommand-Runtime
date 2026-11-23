@@ -48513,6 +48513,145 @@ step 2 checks. `adopt`'s branch gains its test, `ck1_an_adopted_rule_on_a_monthl
 adoption with the decision's trigger a monthly clock writes the rule with that trigger and answers
 `requires_added` `benefit_fixed_value` then `clock_monthly`.
 
+### 1.525 Slice #503 SD-1 (0.12.83): a shutdown request that finds only work in flight opens a settling window, and the installer asks again within its own wait (board #503; the rulings 1 to 8 are the coordinator's of 11-23, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-sd1.md` after the read-only study `rd-1123/study-503-cycle.md`, its part 乙 and the coordinator's disposition at its end; on main `86cc7ee5`)
+
+This section takes 1.525 (1.523 and 1.524 belong to two other slices of this version). It ships in
+0.12.83. [runtime-interface.md](runtime-interface.md) ("A shutdown request that finds work in
+flight") is the contract; [install-cli.md](install-cli.md) ("The close") follows it, and the
+catalog: the code `runtime_shutdown_settling`, the key and vocabulary `shutdown_obstacle` on
+`runtime_shutdown_denied`, and the regenerated index. No declared interface range moves, no
+configuration key, no record type or word.
+
+**The incident** (production, 11-23). A deploy stops the Runtime: the installer pauses every
+instance, then asks for a shutdown once. Three times in a row the answer was `runtime_busy` with
+every instance quiet (no lease, no queue, no policy run in flight), each time 2.1 to 2.4 s after the
+pauses were complete. The request had waited its whole settle of 2 s for lifecycle work on other
+threads, and that work did not end: one policy cycle takes 4 to 5 s and is lifecycle work for its
+whole length, the installer's own pause wakes one, and the request came a fraction of a second
+later; the performance thread's tick, which carries the frame cleaner's round, is a second source.
+A refused shutdown fails the whole deploy (`runtime_stop_failed`); the installer then lifts its
+pauses, new work is dispatched, and the next attempt's drain stopped a run at a checkpoint after it
+had spent resources. A fourth deploy passed only because a person had paused every instance
+beforehand and waited.
+
+**The rules as built.**
+- *Rule 1, the settling window* (`crates/runtime-host/src/host/installation.rs`,
+  `shutdown_under_gate`, `begin_unsettled_work`). A request of the Runtime's own target that finds
+  nothing refusing it but lifecycle work in flight on other threads, still in flight when the settle
+  it already had (`SHUTDOWN_SETTLE_TIMEOUT`, 2 s) ends, opens a window: `LifecycleAdmission`'s
+  `settling_until_ms`, memory only, 15 000 ms on the Runtime clock from the answer
+  (`SHUTDOWN_SETTLING_WINDOW_MS`). While it is open `begin_policy_work` gives no work, so no new
+  policy cycle begins and a trigger the driver holds waits in `wait_policy_work` (its 20 ms poll, as
+  for an install hold) and runs once the window ended; the performance thread's tick takes no
+  lifecycle work and is skipped. The policy crate, the evaluator and the driver's schedule are not
+  touched.
+- *Rule 2, the answer.* `runtime_shutdown_settling` (Error) with `retry_after_ms` 1000
+  (`SHUTDOWN_SETTLING_RETRY_AFTER_MS`), as its outcome's value and as the error projection's existing
+  member; the Runtime error code stays `runtime_busy`, so a client that reads only it sees what it
+  saw. An answer of the code while the window is open opens it again from that answer. The
+  request's `runtime.lifecycle_observed` record keeps the decision `busy`.
+- *Rule 3, the installer* (`crates/lab-rescue/src/install/hold.rs`, `run_close`). The close step
+  asks again after a refusal that says when (`retry_after_ms` on the refusal's outcome, read as a
+  value, no code named), as long as the next ask comes before `install.stop.shutdown_wait_ms` from
+  the first has passed; the wait after an accepted ask takes what is left. Any other refusal, and a
+  settling answer whose retry would pass that time, fails the step at once with
+  `runtime_stop_failed`. The step's evidence lists every ask (`asks`); a failed step's result
+  carries the last answer as its cause and every earlier one as a `related` link. The close is in
+  the Lab's rescue module and in `actingctl install` alike (one `run_close`); the client asks
+  through `RuntimeLink::shutdown`, one `request-shutdown` and, once accepted, its wait, whose
+  refusal is the receipt's outcome as the Runtime wrote it.
+- *Rule 4, what is refused at once* (`shutdown_busy`, the one order): a start that prepares
+  (`start_preparing`), a lease held (`lease`), a waiting entry no pause holds (`waiting_entry`), a
+  client's reset still owed (`client_reset`), a policy run a worker holds (`policy_run`), lifecycle
+  work of the requesting thread itself (`requesting_thread_work`): `runtime_shutdown_denied` with
+  `runtime_busy` and that word as `shutdown_obstacle`, the settle returning at its first check, no
+  window. Another owner's target is `runtime_owner_mismatch` and a Runtime already stopping
+  `runtime_unavailable`, as before. A request admitted inside the window that takes a lease or
+  starts a run makes the next ask refused as it would be without one.
+- *Rule 5, it ends by itself.* The first cycle or tick that may begin after the window's end closes
+  it, and an accepted shutdown closes it at once; nothing it held back stays held, and a Runtime
+  asked once and never again runs on as if never asked.
+- *Rule 6, one code, one cause.* `runtime_busy` answered six causes; `runtime_shutdown_settling`
+  takes the one whose next step differs (ask again), and the five that stay refusals of
+  `runtime_shutdown_denied` (with the requesting thread's own work, six words) are told apart by a
+  word of a closed vocabulary beside the code, `shutdown_obstacle`, which that existing refusal
+  carries whenever its Runtime error code is `runtime_busy` and never otherwise (the catalog lists
+  it optional, as the code also answers another owner and a Runtime already stopping); no interface
+  range moves.
+- *Rule 7, the frame cleaner* (`crates/runtime-host/src/host/frame_retention.rs`,
+  `maintain_frame_retention`). Its stop check (`stopping`), read before each statement of a round,
+  between the frames it acts on and between the chunks of a pass start's listing, is
+  `retention_gives_way`: the Runtime's stop or an open window. A round of a tick that began before
+  the window gives way there, its pass kept for a later round (a pass start stopped so begins after
+  the cleaner's interval, as one the stop ended); a statement in progress is interrupted by the stop
+  alone. What the cleaner examines and removes is unchanged.
+- *Rule 8.* No game, package, instance or alias is named in code or contract.
+
+**What a window admits and holds back.**
+
+| Held back while it is open | Admitted as before |
+|---|---|
+| A new policy cycle (`begin_policy_work` gives none; a trigger is kept in `wait_policy_work` and runs after it) | A client's request, a lease's renewal and release, a contained run |
+| A new tick of the performance thread (sample, frame cleaner's round, the seal of the runtime facts) | An instance worker's run and settlement, a host claim |
+| The frame cleaner's round of a tick already running, at its next stop check | Cleanup, the lease sweep |
+| | A policy cycle or a tick already running, to its end |
+
+**Decided here** (each the smallest choice the rulings leave).
+- 15 000 ms: a policy cycle of today's length and a retention step after it, 8.3 s back to back, with
+  room for the next ask and its own settle (1 s and 2 s); a window no ask follows holds new cycles
+  back 15 s at most. 1000 ms to ask again: the next ask then lets the work end within its own settle.
+  Both are constants of the host, as the settle is; no configuration key was asked for.
+- The window is read on the Runtime clock only while one is set; the cleaner's stop reads only
+  whether one is set, which no tick that began after the window's end can see.
+- The record's decision stays `busy`: a new decision word is a ledger record's new member.
+
+**Codes.**
+
+| Code or word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `runtime_shutdown_settling` (new, Error) | lifecycle work in flight on other threads alone outlasted the settle; window open, ask again after `retry_after_ms` | refuses (`runtime_busy`) | 1, as the refusal it replaces |
+| `shutdown_obstacle` (new key and vocabulary, on `runtime_shutdown_denied`) | which of `start_preparing`, `lease`, `waiting_entry`, `client_reset`, `policy_run`, `requesting_thread_work` refused the request | refuses, as before | 1, as before |
+
+**Tests** (incident `#503 SD-1`: the host gate map's row, `crates/runtime-host/src/tests/gate_503_sd1.rs`,
+and the apps gate map's row, `crates/lab-rescue/src/install/gate_503_sd1.rs`; no clock read; the
+cycle in flight is a second thread holding `begin_policy_work`, as the driver holds it).
+
+| Test | What it shows |
+|---|---|
+| `sd1_1_a_cycle_in_flight_is_answered_settling_and_the_second_ask_is_accepted` (1) | The first request `runtime_shutdown_settling`, `retry_after_ms` 1000, `runtime_busy`, recorded `busy`; no new cycle inside the window, while the held one runs and after it ended; the second request accepted, recorded `accepted` |
+| `sd1_2_each_refusal_is_decided_at_once_and_opens_no_window` (2) | The one order: each of the six words refuses whatever else is in flight; only work on other threads alone settles; nothing is accepted |
+| `sd1_2_a_held_lease_and_another_owner_are_refused_at_once_with_no_window` (2) | With a cycle in flight a held lease: `runtime_shutdown_denied`, `lease`, no retry; another owner's target `runtime_owner_mismatch`; a new cycle still begins after each |
+| `sd1_3_a_window_no_ask_follows_ends_by_itself_and_the_trigger_it_held_runs` (3) | A trigger waiting in `wait_policy_work`: a millisecond before the window's end it still waits and no cycle begins; at the end it runs, cycles go on, nothing stops |
+| `sd1_4_a_lease_taken_inside_the_window_makes_the_next_ask_refused_as_without_one` (4) | A client's lease granted inside the window; the next ask `runtime_shutdown_denied`, `lease` |
+| `sd1_5_the_close_asks_again_after_each_settling_answer_and_its_evidence_lists_the_asks` (5) | Two settling answers: three asks, each again after its retry, the close done; `asks` lists the two refusals and the acceptance |
+| `sd1_5_any_other_refusal_fails_the_close_at_once_and_the_journal_shows_every_answer` (5) | A refusal with no retry: one ask, `runtime_stop_failed` caused by it, no wait; a settling answer then such a refusal: two asks, caused by the last, related to the first |
+| `sd1_5_a_settling_answer_whose_retry_passes_the_wait_fails_the_close_at_once` (5) | A retry of 120 s past the 60 s wait: one ask, caused by the settling answer |
+| `sd1_6_a_settling_answer_reads_runtime_busy_to_a_client_that_knows_only_the_wire_code` (6) | The receipt as sent decodes, validates and reads `runtime_busy`, not fatal |
+| `sd1_7_a_retention_round_gives_way_while_a_window_is_open_and_not_after_it` (7) | The cleaner's stop raised while the window is open, lowered once it ended, raised by an accepted shutdown; the existing `ln7c_q_t_pace_the_stop_interrupts` shows a raised stop ends a round before any statement, its pass kept |
+
+No existing test changes. No test leaves a gate map; no golden is re-recorded.
+
+**What is not changed.** The settle and its 2 s; every refusal's Runtime error code; the records of
+a shutdown request; the policy crate, the evaluator and the driver's schedule (another slice of
+this version stops the driver from cycling without cause; this one holds without it); what the frame
+cleaner examines and removes; every other client of `RequestShutdown`, which asks once as before.
+
+**Owed.**
+- The lifecycle record does not tell a settling answer from another busy refusal (its decision is
+  `busy` for both); telling them apart there is a new decision word, a ledger revision.
+- The Lab's `shutdown` and `restart` and the console ask once; a person who meets the settling
+  answer asks again after `retry_after_ms`.
+
+**At deploy.** Nothing to configure. The first deploy of this version is carried out by the
+installer of the version before it, against the Runtime of the version before it: one ask, no
+window, so it may still be refused `runtime_busy` while a cycle runs, and a person may still have to
+pause every instance and wait, or run the deploy again. From the next deploy on, the installer and
+the Runtime of this version meet, and a deploy needs no person: the first ask opens the window, the
+next ones are accepted once the work in flight ended. An installer of this version meeting an older
+Runtime gets the old refusal, with no `retry_after_ms`, and fails at once as before; an older
+installer meeting this Runtime fails at once on the settling answer as before, and the window ends
+by itself.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
