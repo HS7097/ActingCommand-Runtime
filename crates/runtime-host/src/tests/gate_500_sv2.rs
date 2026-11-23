@@ -60,6 +60,8 @@ const HOME: [u8; 3] = [255, 0, 0];
 const PARAMETERS: &str = "policy_dispatch_parameters";
 const EXCLUDES: &str = "goal_value_excludes_rule";
 const REFUSED: &str = "goal_value_rule_refused";
+/// The evaluator's reason of a candidate behind its instance's selected one.
+const ALREADY_SELECTED: &str = "instance_already_selected";
 const PICK_KEY: &str = "session.dispatch.parameter.pick";
 /// The default `standard_packs.check_interval_ms`: a check reads the roots again after it.
 const CHECK_INTERVAL_MS: u64 = 60_000;
@@ -728,9 +730,10 @@ fn sv2_h3_a_direct_run_reads_its_request_s_values_and_no_rule_s() {
 // refusal of the file for one no round composed). The first rule's candidate, whose rule carries
 // `item_b`, waits `goal_value_rule_refused`, a warning naming the instance, its task, the package,
 // `pick` and `not_an_option`, deferred with no wake of its own; the second waits for the set value
-// as before; neither is dispatched. The package repaired, the first rule is
-// dispatched again at the next check (the second still waits for the set value) and its run reads
-// `item_b`, source `rule`, with who set the application's value.
+// as before; neither is dispatched. The package repaired, the first rule is dispatched again at
+// the next check (fix round 2: the second, ranked after it, waits behind it,
+// `instance_already_selected`, and is not dispatched) and its run reads `item_b`, source `rule`,
+// with who set the application's value.
 #[test]
 fn sv2_h4_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back() {
     let scene = Scene::new();
@@ -792,7 +795,23 @@ fn sv2_h4_a_rule_value_the_declaration_in_force_refuses_holds_its_rule_back() {
         "{:#?}",
         decision(&repaired, RULE_B)
     );
-    assert!(excluded(&repaired, RULE_A));
+    assert!(
+        dispatched(&repaired, RULE_B),
+        "the first rule is dispatched again: {:#?}",
+        repaired.dispatch_intents
+    );
+    // Fix round 2: the first rule, ranked first (as in `sv2_h1`), takes the instance, so the
+    // evaluator settles the second behind it (`instance_already_selected`) without asking the
+    // host's closure, whose position 5a would hold it back by the set value; it is not dispatched.
+    let behind = decision(&repaired, RULE_A);
+    assert!(!dispatched(&repaired, RULE_A), "{behind:#?}");
+    assert!(
+        behind
+            .reasons
+            .iter()
+            .any(|reason| reason.outcome.code().as_str() == ALREADY_SELECTED),
+        "{behind:#?}"
+    );
     let (chain, context) = scene.run(&repaired, RULE_B);
     assert_eq!(
         variable_values(&chain),
