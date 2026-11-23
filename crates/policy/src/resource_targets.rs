@@ -70,8 +70,9 @@ pub const MAX_TASKS_PER_RESOURCE_TARGET: usize = 32;
 pub const MAX_RESOURCE_TARGET_TASKS: usize = 128;
 /// Upper bound of `importance_milli`, of a target weight and of a task target score.
 pub const MAX_RESOURCE_TARGET_MILLI: u64 = 1_000_000;
-/// Upper bound of `condition.amount` and `scale`: the canonical safe integer.
-const MAX_RESOURCE_TARGET_AMOUNT: u64 = 9_007_199_254_740_991;
+/// Upper bound of `condition.amount` and `scale`: the canonical safe integer. #455 B3-P (register
+/// §1.522): also of a pool's `target_defaults.scale`, which the catalog compiler checks.
+pub(crate) const MAX_RESOURCE_TARGET_AMOUNT: u64 = 9_007_199_254_740_991;
 /// Longest policy lifetime: the fact TTL ceiling (one year).
 const MAX_RESOURCE_TARGETS_VALIDITY_MS: u64 = actingcommand_contract::MAX_FACT_TTL_MS;
 const MAX_REJECTION_FIELD_PATH_BYTES: usize = 4096;
@@ -170,7 +171,8 @@ pub struct ResourceTargetSpecV2 {
     /// A pool id of the active catalog, named by at most one target of the document.
     pub resource: String,
     pub condition: TargetCondition,
-    /// The gap step `S`; absent takes the pool's `valuation.scale`.
+    /// The gap step `S`; absent takes the pool's `valuation.scale`, else (#455 B3-P) its
+    /// `target_defaults.scale`.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -178,7 +180,7 @@ pub struct ResourceTargetSpecV2 {
     )]
     pub scale: Option<u64>,
     /// `I`, extra milli per produced step for each missing step `S`; absent takes the pool's
-    /// `valuation.gap.weight_milli`.
+    /// `valuation.gap.weight_milli`, else (#455 B3-P) its `target_defaults.importance_milli`.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -777,28 +779,43 @@ fn check_target_v2<'a>(
 /// A v2 target term that resolves to nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MissingTerm {
-    /// No `scale` on the target and no `valuation` on the pool.
+    /// No `scale` on the target, no `valuation` and no `target_defaults` on the pool.
     Scale,
-    /// No `importance_milli` on the target and no `valuation.gap` on the pool.
+    /// No `importance_milli` on the target, no `valuation.gap` and no `target_defaults` on the
+    /// pool.
     Importance,
 }
 
-/// A v2 target's gap step `S` and importance `I`: the target's own, else the pool valuation's
-/// `scale` and `gap.weight_milli`. The rule needs no resolution: `shortfall_linear`, the only
-/// one, is also what an absent rule and an absent gap block mean.
-fn target_terms(target: &ResourceTargetSpecV2, pool: &PoolSpec) -> Result<(u64, u64), MissingTerm> {
+/// #455 B3-P (register §1.522): the gap step `S` and the importance `I` the pool gives a target that
+/// carries none of its own, each `None` when the pool gives none: its valuation's `scale` and
+/// `gap.weight_milli`, else its `target_defaults` (which only a pool without a valuation writes).
+/// The one place the pool's part of a target's terms is read: [`target_terms`], the targetable
+/// list and the step [`weigh_production`] divides by all take it from here, at every evaluation
+/// from the catalog in force, so nothing of it is copied into a stored goal.
+fn pool_target_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
     let valuation = pool.declared_valuation();
-    let scale = target
-        .scale
-        .or_else(|| valuation.map(|valuation| valuation.scale))
-        .ok_or(MissingTerm::Scale)?;
+    let defaults = pool.target_defaults.as_ref();
+    (
+        valuation
+            .map(|valuation| valuation.scale)
+            .or_else(|| defaults.map(|defaults| defaults.scale)),
+        valuation
+            .and_then(|valuation| valuation.gap.as_ref())
+            .map(|gap| u64::from(gap.weight_milli))
+            .or_else(|| defaults.map(|defaults| defaults.importance_milli)),
+    )
+}
+
+/// A v2 target's gap step `S` and importance `I`: the target's own, else the pool valuation's
+/// `scale` and `gap.weight_milli`, else (#455 B3-P) the pool's `target_defaults`
+/// ([`pool_target_terms`]). The rule needs no resolution: `shortfall_linear`, the only one, is also
+/// what an absent rule and an absent gap block mean.
+fn target_terms(target: &ResourceTargetSpecV2, pool: &PoolSpec) -> Result<(u64, u64), MissingTerm> {
+    let (pool_scale, pool_importance) = pool_target_terms(pool);
+    let scale = target.scale.or(pool_scale).ok_or(MissingTerm::Scale)?;
     let importance = target
         .importance_milli
-        .or_else(|| {
-            valuation
-                .and_then(|valuation| valuation.gap.as_ref())
-                .map(|gap| u64::from(gap.weight_milli))
-        })
+        .or(pool_importance)
         .ok_or(MissingTerm::Importance)?;
     Ok((scale, importance))
 }
@@ -1863,8 +1880,9 @@ fn stored_policy_state_v2(
 /// no tasks (Workflow #338 R5): a pool that does not resolve, is not observable or is out of the
 /// instance's scope ([`resolve_target_pool`]), or that no task of the instance produces, is not
 /// targetable with that reason; every other pool is, with its producing tasks, the defaults its
-/// valuation supplies (as [`target_terms`] reads them) and its inventory as the time-validity
-/// projection of `facts` shows it ([`observe_target`]). Pure.
+/// valuation supplies, else (#455 B3-P) its `target_defaults` (as [`target_terms`] reads them,
+/// [`pool_target_terms`]), and its inventory as the time-validity projection of `facts` shows it
+/// ([`observe_target`]). Pure.
 pub fn targetable_resources(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -1924,11 +1942,8 @@ pub fn targetable_resources_with_readings(
             });
             continue;
         }
-        let valuation = pool.declared_valuation();
-        let default_scale = valuation.map(|valuation| valuation.scale);
-        let default_importance_milli = valuation
-            .and_then(|valuation| valuation.gap.as_ref())
-            .map(|gap| u64::from(gap.weight_milli));
+        // #455 B3-P (register §1.522): the pool's valuation's, else its `target_defaults`.
+        let (default_scale, default_importance_milli) = pool_target_terms(pool);
         let observation = match observe_target(&projected, &given, instance, pool, &fact_key, time)
         {
             TargetObservation::Known {
@@ -2250,7 +2265,7 @@ pub(crate) struct PoolWeight {
     pub(crate) weight_milli: u64,
     /// `Q`, the step its term divides by: the pool's `valuation.scale`, else the `scale` of the
     /// goal that covers the candidate (#455 B1, register §1.518: the step of a fixed-value task's
-    /// goal term).
+    /// goal term), its own, else (#455 B3-P, register §1.522) the pool's `target_defaults.scale`.
     pub(crate) step: u64,
 }
 
@@ -2628,6 +2643,12 @@ impl ResolvedTargetV2<'_> {
         }
     }
 
+    /// #455 B3-P (register §1.522): the gap step `S` the target resolves to on its pool, its own
+    /// `scale`, else the pool's ([`pool_target_terms`]); `None` when neither gives one.
+    fn step(&self) -> Option<u64> {
+        self.target.scale.or(pool_target_terms(self.pool).0)
+    }
+
     /// `Γ` of a covered candidate.
     fn gap_weight_milli(&self) -> u64 {
         match self.status {
@@ -2849,7 +2870,9 @@ struct Weighed {
 /// reverse). For one task that yields `produces` per run, every pool `p` of `pools` it produces
 /// weighs `T = ⌊r · W / Q⌋` with `W = B_p + Γ`: `B_p` is the pool's `valuation.base_weight_milli`
 /// and counts on every instance; `Γ` is the shortfall weight of the target among `targets` that
-/// covers the task for `p`, the only part a goal adds. `R = min(Σ T + ⌊Σ F⌋, 1_000_000)`.
+/// covers the task for `p`, the only part a goal adds. `R = min(Σ T + ⌊Σ F⌋, 1_000_000)`. `Q` is
+/// the pool's `valuation.scale`, else the step the covering target resolves to (its own `scale`,
+/// else, #455 B3-P, the pool's `target_defaults.scale`), and a pool with neither is not weighed.
 ///
 /// One-way guard: the inputs are the task's id (only to ask a target's coverage), its own yield
 /// declaration, the pools and the resolved targets. No task's enablement, instance override,
@@ -2873,9 +2896,11 @@ fn weigh_production(
             .iter()
             .find(|target| target.pool.id == pool.id && target.covers(task_id, per_run));
         let valuation = pool.declared_valuation();
+        // #455 B3-P (register §1.522): without a valuation, the step the covering target resolves
+        // to: its own, else the pool's `target_defaults`.
         let Some(step) = valuation
             .map(|valuation| valuation.scale)
-            .or_else(|| covering.and_then(|target| target.target.scale))
+            .or_else(|| covering.and_then(ResolvedTargetV2::step))
         else {
             continue;
         };

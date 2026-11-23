@@ -37,7 +37,7 @@ use actingcommand_contract::{
     take_catalog_business,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
-use actingcommand_policy::standard_pack_schedule_takes_catalog;
+use actingcommand_policy::{POOL_TARGET_DEFAULTS_MEMBER, standard_pack_schedule_takes_catalog};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -132,12 +132,18 @@ pub(crate) fn goal_issues(
                 .map_err(|issue| root_invalid(game, &issue_path(path, &issue), &issue))?;
         }
         for pool in &schedule.pools {
-            // A pool a goal may name has a valuation block with its step and its gap weight.
+            // A pool a goal may name has a valuation block with its step and its gap weight, or
+            // (#455 B3-P, register §1.522) writes no valuation and `target_defaults` with both.
             let valued = matches!(
                 pool.body.get("valuation"),
                 Some(Value::Object(valuation))
                     if valuation.contains_key("scale") && valuation.contains_key("gap")
-            );
+            ) || (!pool.body.contains_key("valuation")
+                && matches!(
+                    pool.body.get(POOL_TARGET_DEFAULTS_MEMBER),
+                    Some(Value::Object(defaults))
+                        if defaults.contains_key("scale") && defaults.contains_key("importance_milli")
+                ));
             references.pools.insert(pool.id.clone(), valued);
         }
         for rule in &schedule.rules {

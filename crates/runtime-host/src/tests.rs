@@ -271,6 +271,9 @@ mod gate_500_sv2;
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.
 mod gate_477_ck2;
+// #455 B3-P (0.12.82; register §1.522): the goal page sets a goal by `{at_least}` alone on a pool
+// that writes `target_defaults` instead of a valuation.
+mod gate_455_b3p;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

@@ -4810,3 +4810,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_477_ck2::ck2_h5_an_owed_occurrence_ends_with_its_activity_day_and_a_daily_limit_of_one_never_shifts",
 ]
 incident = ["#477 CK-2"]
+
+# #455 B3-P (0.12.82; register §1.522; brief rd-1123/brief-455-b3p.md; contracts/resource-targets.md, "One value by name"), the host half, on the goal page's pure check over the targetable list the policy crate gives for a catalogue of one task producing a pool with target_defaults 10 and 1000, a valued pool (step 5, gap weight 700) and a pool with neither, no clock read: the list offers the first with its defaults and no number required, the valued one with its valuation's, the third with both required; {at_least: 40} on the resource entry of the first is SetTarget with no number and writes the target row the same request writes for the valued pool's entry, its id and pool aside, without scale or importance_milli; a target by pool id under a name no entry has is the same edit and row under its name; the pool with neither is still pool_unvalued with its pool; clearing the entry removes the target and leaves no record (test 5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_b3p::b3p_host_a_goal_on_a_pool_with_target_defaults_is_set_by_at_least_alone_and_cleared",
+]
+incident = ["#455 B3-P"]

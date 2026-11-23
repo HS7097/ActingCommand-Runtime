@@ -140,12 +140,29 @@
         "trigger_line": {
           "description": "#428 SCHED-C1c: the pool's trigger line, written only beside stop_line and hard_line, at or above the stop line and at most the capacity: a capped episode begins at a reading at or above it. Without it the capacity. A schedule.json that writes it names pool_trigger_line in requires.",
           "$ref": "#/$defs/poolLine"
+        },
+        "target_defaults": {
+          "description": "#455 B3-P (since 0.12.82): the gap step and the importance a resource target on the pool takes when it carries none of its own, read at each evaluation from the catalog in force; written only on a pool that writes no valuation (beside a valuation block or the pending marker it is type_mismatch at the member). It makes nothing else of the pool valued. A schedule.json whose pool writes it names pool_target_defaults in requires.",
+          "$ref": "#/$defs/targetDefaults"
         }
       },
       "dependentRequired": {
         "stop_line": ["hard_line"],
         "hard_line": ["stop_line"],
         "trigger_line": ["stop_line", "hard_line"]
+      },
+      "dependentSchemas": {
+        "target_defaults": { "not": { "required": ["valuation"] } }
+      },
+      "additionalProperties": false
+    },
+    "targetDefaults": {
+      "description": "#455 B3-P: both members required, within the goal document's bounds of a target's own scale and importance_milli.",
+      "type": "object",
+      "required": ["scale", "importance_milli"],
+      "properties": {
+        "scale": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "importance_milli": { "type": "integer", "minimum": 1, "maximum": 1000000 }
       },
       "additionalProperties": false
     },
