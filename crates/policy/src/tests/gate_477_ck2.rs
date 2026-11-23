@@ -21,9 +21,9 @@ use super::gate_p2a::{
     resources, task,
 };
 use crate::{
-    ClockSlotView, CompiledCatalog, CompletedActivityWindow, PolicyCode, PolicyEvaluation,
-    SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2, TaskRuntimeSnapshot,
-    TaskTerminalState, clock_slot_lapses, clock_slot_view, evaluate,
+    ClockSlotLapse, ClockSlotLapseKind, ClockSlotView, CompiledCatalog, CompletedActivityWindow,
+    PolicyCode, PolicyEvaluation, SCHEDULING_SCHEMA_VERSION, SCHEDULING_SCHEMA_VERSION_V2,
+    TaskRuntimeSnapshot, TaskTerminalState, clock_slot_lapses, clock_slot_view, evaluate,
 };
 
 const MINUTE_MS: u64 = 60_000;
@@ -164,8 +164,9 @@ fn ck2_t1_an_occurrence_left_owed_is_due_until_a_dispatch_after_it_serves_it() {
 // Test 7 of Addendum 1: a later occurrence replaces an owed earlier one. Clocks at 07:00 and
 // 19:00; the 07:00 occurrence was answered at 07:01 and left owed. At 18:59 the due occurrence is
 // 07:00 (none as on main, without the member); at 20:00 it is 19:00, the next tomorrow's 07:00,
-// and the pair is dispatched once for it; the lapse pass reads as before, from the latest dispatch.
-// One dispatch at 20:00 that succeeds serves 19:00: at 21:00 nothing is due.
+// and the pair is dispatched once for it; the lapse pass reads 07:00, which the dispatch answered
+// and left owed, as superseded by 19:00 (nothing lapsed as on main). One dispatch at 20:00 that
+// succeeds serves 19:00: at 21:00 nothing is due.
 #[test]
 fn ck2_t2_a_later_occurrence_replaces_an_owed_earlier_one() {
     let catalog = catalog_with(SCHEDULING_SCHEMA_VERSION, daily(&[MORNING, EVENING], None));
@@ -196,7 +197,15 @@ fn ck2_t2_a_later_occurrence_replaces_an_owed_earlier_one() {
             next_occurrence: Some(MORNING + DAY_MS),
         })
     );
-    let lapses = clock_slot_lapses(spec, Some(&left), at(now)).expect("the lapses read");
+    assert_eq!(
+        clock_slot_lapses(spec, Some(&left), at(now)).expect("the lapses read"),
+        [ClockSlotLapse {
+            occurrence_unix_ms: MORNING,
+            next_occurrence_unix_ms: Some(EVENING),
+            kind: ClockSlotLapseKind::Superseded,
+        }]
+    );
+    let lapses = clock_slot_lapses(spec, Some(&served), at(now)).expect("the lapses read");
     assert!(lapses.is_empty(), "{lapses:?}");
 
     let evaluation = evaluate_at(&catalog, Some(left), now);
@@ -212,14 +221,17 @@ fn ck2_t2_a_later_occurrence_replaces_an_owed_earlier_one() {
 
 // Test 6 of Addendum 1: `missed` with `skip_after` (V2). The 07:00 occurrence, left owed by the
 // dispatch at 07:01, is due until its grace of two hours ends: at 08:59 the pair is dispatched,
-// at 09:00 the clock is false with `clock_occurrence_expired`, as for any unserved occurrence. As
-// on main (no member) the occurrence was served and nothing is due at 08:59.
+// at 09:00 the clock is false with `clock_occurrence_expired`, as for any unserved occurrence, and
+// the lapse pass reads its expiry (the skip recorded once, `clock_slot_expired`, as before; none
+// before the grace ends). As on main (no member) the occurrence was served and nothing is due at
+// 08:59.
 #[test]
 fn ck2_t3_missed_bounds_an_owed_occurrence_by_its_grace_as_before() {
     let catalog = catalog_with(
         SCHEDULING_SCHEMA_VERSION_V2,
         daily(&[MORNING], Some(GRACE_MS)),
     );
+    let spec = &catalog.catalog().tasks.tasks[0];
     let left = ran(ANSWERED, TaskTerminalState::Failed, true);
 
     assert!(selected(&evaluate_at(
@@ -227,6 +239,17 @@ fn ck2_t3_missed_bounds_an_owed_occurrence_by_its_grace_as_before() {
         Some(left.clone()),
         MORNING + GRACE_MS - MINUTE_MS
     )));
+    let inside = clock_slot_lapses(spec, Some(&left), at(MORNING + GRACE_MS - MINUTE_MS))
+        .expect("the lapses read");
+    assert!(inside.is_empty(), "{inside:?}");
+    assert_eq!(
+        clock_slot_lapses(spec, Some(&left), at(MORNING + GRACE_MS)).expect("the lapses read"),
+        [ClockSlotLapse {
+            occurrence_unix_ms: MORNING,
+            next_occurrence_unix_ms: Some(MORNING + DAY_MS),
+            kind: ClockSlotLapseKind::Expired { grace_ms: GRACE_MS },
+        }]
+    );
     let expired = evaluate_at(&catalog, Some(left), MORNING + GRACE_MS);
     assert!(!selected(&expired), "{expired:#?}");
     let decided = decision(&expired, FIRST, INSTANCE_A);

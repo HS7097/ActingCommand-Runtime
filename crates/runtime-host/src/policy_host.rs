@@ -3385,8 +3385,10 @@ impl PolicyHost {
                     )
                 })?;
                 // #477 CK-2 (register §1.516): whether the latest dispatch left the clock
-                // occurrence it answered owed; every other snapshot is as before.
-                let clock_owed = clock_owed_through(dispatch, ledger_position);
+                // occurrence it answered owed, until the activity day its admission was counted in
+                // ends; every other snapshot is as before.
+                let clock_owed = clock_owed_through(dispatch, ledger_position)
+                    && in_admission_day(&active.compiled, admission, eligibility_as_of_unix_ms)?;
                 let (terminal_state, completed_window) = if dispatch
                     .completed_sequence
                     .is_some_and(|sequence| sequence <= ledger_position)
@@ -8222,21 +8224,56 @@ fn snapshot_terminal(
 }
 
 /// #477 CK-2 (register §1.516; `contracts/scheduling/README.md`, "Clock Sources"): whether a
-/// settled dispatch's `outcome` left the clock occurrence it answered owed: the dispatch never ran
-/// (it settled as interrupted, [`settled_as_interrupted`]), or its failure paused the pair of a
-/// task that is not sensitive, whatever the failure's class (a severe failure such as a screen the
-/// package never recorded, a streak at `escalation_threshold`, retries used up under `on_failure`
-/// `pause`): a package update lifts such a pause, and the task then runs on that occurrence. Every
-/// other settlement served it, as before: a success, a stop, a run a condition ended, a failure
-/// scheduled for a retry or continued, and a sensitive task's failure.
+/// settled dispatch's `outcome` left the clock occurrence it answered owed. Only a failure of a
+/// task that is not sensitive does, and one whose run did not report its success
+/// (`reported_success`: a run over its runtime budget that did its work): its dispatch settled as
+/// interrupted, whether its run had started or not ([`settled_as_interrupted`]), or its failure
+/// paused the pair, whatever the failure's class (a screen the package never recorded, a streak
+/// at `escalation_threshold`, retries used up under `on_failure` `pause`): a package update lifts
+/// such a pause, and the task then runs on that occurrence. Every other settlement served it, as
+/// before: a success, a stop, a run a condition ended, a failure scheduled for a retry or
+/// continued, and a sensitive task's failure.
 fn leaves_clock_owed(outcome: &PolicyExecutionOutcome) -> bool {
-    settled_as_interrupted(outcome)
-        || matches!(
-            outcome,
-            PolicyExecutionOutcome::Failed { failure }
-                if failure.disposition == PolicyFailureDisposition::PausedTask
-                    && !failure.sensitive
+    matches!(
+        outcome,
+        PolicyExecutionOutcome::Failed { failure }
+            if !failure.sensitive
+                && !failure.reported_success
+                && (failure.disposition == PolicyFailureDisposition::PausedTask
+                    || settled_as_interrupted(outcome))
+    )
+}
+
+/// #477 CK-2 (the review's ruling; register §1.516): whether an evaluation at `as_of` is still in
+/// the activity day `admission` was counted in: the activity window of its profile open at
+/// `as_of` belongs to that local day, or none is open (the day's next window, or the next day's
+/// first, has not opened). Without an instant (a projection bound to a ledger position alone) it
+/// is, as a hidden condition terminal is ([`snapshot_terminal`]); a profile the active catalog no
+/// longer holds has no day, and an occurrence is then served as before.
+fn in_admission_day(
+    catalog: &CompiledCatalog,
+    admission: &PolicyAdmissionRecord,
+    as_of: Option<u64>,
+) -> RuntimeHostResult<bool> {
+    let Some(now) = as_of else {
+        return Ok(true);
+    };
+    let Some(profile) = catalog
+        .catalog()
+        .activity
+        .profiles
+        .iter()
+        .find(|profile| profile.id == admission.activity.profile_id)
+    else {
+        return Ok(false);
+    };
+    let window = activity_window_at(profile, now).map_err(|_| {
+        fatal(
+            HostCode::PolicyActivityDayOverflow,
+            HostLocation::ProjectPolicyTaskState,
         )
+    })?;
+    Ok(window.is_none_or(|open| open.local_day == admission.activity.local_day))
 }
 
 /// #477 CK-2: whether `dispatch` settled through `ledger_position` and its settlement left the

@@ -10,8 +10,9 @@
 // 06:00 to 23:30, four runs a day, no cooldown, an activity interval of 1 ms) and a manual Runtime
 // clock:
 // - a success, a continued failure, a retried failure (the immediate rerun runs as before), a
-//   sensitive task's failure, a stopped run and a run a condition ended project no member, as
-//   before, and the pair waits for its next occurrence or its own rerun (h1);
+//   sensitive task's failure or interrupted dispatch, a stopped run and a run a condition ended
+//   project no member, as before, and the pair waits for its next occurrence or its own rerun
+//   (h1);
 // - a failure that paused the pair leaves its occurrence owed: the pause holds the pair, its
 //   refused record is written once, the lift of a changed package dispatches it on the same
 //   occurrence, a new failure starts a new streak and is held again, and a run that succeeds after
@@ -21,7 +22,9 @@
 //   with its refused record written once (h3);
 // - a severe failure that pauses at its first occurrence (a screen the package never recorded)
 //   leaves its occurrence owed: held, written refused once, and after the repaired package lifts
-//   the pause the pair runs on the same occurrence, once (h4).
+//   the pause the pair runs on the same occurrence, once (h4);
+// - an owed occurrence ends with the activity day of its dispatch's admission: a task limited to
+//   one run a day neither runs the old occurrence on the next day's budget nor shifts (h5).
 // Every alias, id and package is neutral.
 
 use super::gate_372k2::{SLOT_TASK, at, slot_rows, slot_sources, slot_task};
@@ -41,6 +44,8 @@ const MINUTE_MS: u64 = 60_000;
 const SLOT_MINUTE: u16 = 7 * 60;
 /// The package id the failure identities of h2 name for the main package.
 const MAIN_ID: &str = "neutral.main";
+/// When every host of the gate starts: 06:00 of day 0, its monotonic time 0.
+const STARTED_AT: u64 = at(0, 6, 0);
 
 /// The fixture's own `on_failure`: continued after two retries with a backoff of 30 s, paused by
 /// three failures alike.
@@ -183,7 +188,7 @@ struct Pair {
 
 impl Pair {
     fn start(root: TempDir, sources: &CatalogSources, main: Option<&Path>) -> Self {
-        let clock = Arc::new(ManualRuntimeClock::new(at(0, 6, 0), 0));
+        let clock = Arc::new(ManualRuntimeClock::new(STARTED_AT, 0));
         let mut facts = policy_facts();
         facts.outcomes.clear();
         let mut host_config = config(&root)
@@ -211,10 +216,13 @@ impl Pair {
         }
     }
 
-    /// Moves the Runtime clock and samples the host's capacity at the new time, as
-    /// `gate_372k2`'s fixture does.
+    /// Moves the Runtime clock, its monotonic time with it (the lift checks measure a package at
+    /// most once per interval of the monotonic time), and samples the host's capacity at the new
+    /// time, as `gate_372k2`'s fixture does.
     fn set_time(&self, unix_ms: u64) {
         self.clock.set_unix_ms(unix_ms);
+        self.clock
+            .set_monotonic_ms(unix_ms.saturating_sub(STARTED_AT));
         let sample_capacity = self
             .host
             .capacity_sampler_for_test()
@@ -334,9 +342,10 @@ fn refused_by_the_pause() -> Vec<(String, Option<String>)> {
 // Tests 1, 4, 5 and 8 of Addendum 1 (A2). Day 0's 07:00 run succeeds; day 1's 07:00 run settles as
 // each case says. None projects `clock_owed`, and the snapshot serializes without it, as before:
 // - a success (the golden of a ledger with no failed run), a failure continued at once, a sensitive
-//   task's failure (paused as sensitive) and a stopped run: the occurrence is served, at 07:02 the
-//   trigger is false; after the continued failure the pair is due again at day 2's 07:00, not
-//   before;
+//   task's failure (paused as sensitive), a sensitive task's dispatch settled as interrupted (fix
+//   round 2: the first in a row holds nothing, and still the task does not come back) and a
+//   stopped run: the occurrence is served, at 07:02 the trigger is false; after the continued
+//   failure the pair is due again at day 2's 07:00, not before;
 // - a failure scheduled for a retry, with its failure identity: the immediate rerun runs at 07:02
 //   as before (`failure_retry_immediate`);
 // - a sampling timeout ended by a condition: its owed rerun runs at 07:02 as before
@@ -376,6 +385,14 @@ fn ck2_h1_a_settlement_that_serves_its_occurrence_projects_no_member_as_before()
             paused_at_once(),
             true,
             recoverable(),
+            Some(PolicyFailureDisposition::PausedTask),
+            None,
+        ),
+        (
+            "sensitive interrupted",
+            catalog_on_failure(),
+            true,
+            interrupted(),
             Some(PolicyFailureDisposition::PausedTask),
             None,
         ),
@@ -588,6 +605,57 @@ fn ck2_h4_a_first_occurrence_pause_lifted_by_a_repaired_package_runs_on_the_same
     assert!(
         selected(&pair.evaluate(at(2, 7, 0))),
         "the next occurrence is due as always"
+    );
+    pair.close();
+}
+
+// The review's ruling (fix round 2): an occurrence a dispatch left owed stays owed only while the
+// evaluation is in the activity day that dispatch's admission was counted in. One run a day (the
+// task's `daily_limit` 1). Day 0's 07:00 run succeeds; day 1's 07:00 dispatch settles as
+// interrupted, the first in a row, which holds nothing: the same day the occurrence is owed, and at
+// 07:01 the spent budget refuses the pair (`policy_budget_exhausted`). At day 2's 06:30, the next
+// activity day's window open before the next occurrence, the old occurrence is served: nothing is
+// dispatched (`trigger_false`; before this rule it would have run there on day 2's one run). At
+// day 2's 07:00 the next occurrence is due as on main and runs; nothing at 07:30, and day 3's 07:00
+// runs as always: the task neither shifts nor loses a day.
+#[test]
+fn ck2_h5_an_owed_occurrence_ends_with_its_activity_day_and_a_daily_limit_of_one_never_shifts() {
+    let mut pair = Pair::start(
+        TempDir::new().expect("tempdir"),
+        &slot_sources(1, &[slot_task(&[SLOT_MINUTE], 1)], None),
+        None,
+    );
+    let occurrence = at(1, 7, 0);
+    pair.dispatch(at(0, 7, 0), &PolicyExecutionInput::Succeeded);
+
+    let cut = failure_of(&pair.dispatch(occurrence, &interrupted()));
+    assert_eq!(cut.consecutive_same_error, 1);
+    assert!(
+        pair.snapshot(occurrence + MINUTE_MS).clock_owed,
+        "the same day"
+    );
+    let refused = pair.evaluate(occurrence + MINUTE_MS);
+    assert!(
+        !selected(&refused) && has_reason(&refused, "policy_budget_exhausted"),
+        "owed, the day's one run spent: {refused:#?}"
+    );
+
+    let next_day = at(2, 6, 30);
+    assert!(
+        !pair.snapshot(next_day).clock_owed,
+        "the next activity day: served"
+    );
+    let served = pair.evaluate(next_day);
+    assert!(
+        !selected(&served) && has_reason(&served, "trigger_false"),
+        "no dispatch on the old occurrence: {served:#?}"
+    );
+
+    pair.dispatch(at(2, 7, 0), &PolicyExecutionInput::Succeeded);
+    assert!(!selected(&pair.evaluate(at(2, 7, 30))));
+    assert!(
+        selected(&pair.evaluate(at(3, 7, 0))),
+        "day 3's occurrence runs on its own day"
     );
     pair.close();
 }
