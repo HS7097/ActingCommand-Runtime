@@ -35,7 +35,9 @@ package path and no approval:
 SCHED-C1a (register §1.299, since 0.12.52) adds to a rule an optional `"fixed_value_milli"` with an
 optional `"fixed_value_origin"` ("The fixed value" below), and to a pool an optional
 `"valuation_origin"` ("Provenance" below). SCHED-C1c (register §1.299, since 0.12.53): a pool's V2
-member `"trigger_line"` passes through as the other two lines do.
+member `"trigger_line"` passes through as the other two lines do. Workflow #500 SV-2 (register
+§1.511, since 0.12.81): a rule may carry `"variables"`, values for its package's variables, which
+pass through to its task as a V2 member ("A rule's variable values" below).
 
 Every member but `schema_version` may be absent, which means empty. The reader
 (`actingcommand_contract::parse_standard_pack_schedule`) refuses, each as
@@ -45,7 +47,7 @@ Every member but `schema_version` may be absent, which means empty. The reader
 |---|---|
 | UTF-8 JSON of at most 1 MiB, no duplicate key at any depth, no trailing data; an object | `schedule_invalid` (pointer empty) |
 | `schema_version` is `actingcommand.schedule.v1`; no member besides the seven above | `schedule_invalid` |
-| No member named `scope` at any depth of a rule, pool, profile or event (the item's own and those of predicate nodes such as `fact`, `record_deadline`, `fact_time_reached`) | `schedule_invalid` at the `scope` member |
+| No member named `scope` at any depth of a rule, pool, profile or event (the item's own and those of predicate nodes such as `fact`, `record_deadline`, `fact_time_reached`), a rule's `variables` left out (Workflow #500 SV-2: its members name variables, and a package may name one `scope`) | `schedule_invalid` at the `scope` member |
 | A rule has a string `package_id` (1–128 bytes, no control character), no `entrypoint` and no `procedure_ref`; its `instance_overrides` is absent or empty | `schedule_invalid` at the member |
 | A rule's `maintenance` (SS-2c, since 0.12.32; "Judged rules" below), when written, is `true` | `schedule_invalid` at `maintenance` |
 | A rule's `realization` (SS-2d, since 0.12.35; "The realization mark" below), when written, is `true`, and a rule that declares `"maintenance": true` does not write it | `schedule_invalid` at `realization` |
@@ -182,6 +184,20 @@ parts hold a fixed value still names `benefit_fixed_value`, one whose part reads
 a fact `consumption_fact`. The resource tools, which check no `requires`, compose a switched file
 with the `pack-catalog.json` beside it.
 
+Workflow #500 SV-2 (register §1.511, since 0.12.81). A file any of whose rules carries `variables`
+("A rule's variable values" below) requires `rule_variables`, alike: the composer refuses a file
+whose rule carries the member while `requires` does not name it, Runtime and resource tools alike,
+`schedule_invalid` at the first such rule's `variables` in file order (for example
+`/rules/0/variables`), whatever the member holds. A Runtime names `rule_variables` in
+`config.subsystems`, always on, from 0.12.81; given subsystems that do not name it (a Runtime of
+0.12.80 or older) the composer refuses the file at `requires`, `schedule_requires_missing` at that
+entry, before its compiler would meet the task member it cannot read (a task's `variables` is
+`unknown_field` to such a compiler), and the workbench keeps the game's last good rules as for any
+refused file. The installer's plan of Workflow #429 RB-1 reads `requires` by the one reader and the
+target build's enabled subsystems, names one by one, so it covers `rule_variables` with no change:
+a rollback or an update to a build that does not name it is refused while a game's `schedule.json`
+or a fragment of the active generation lists it.
+
 SCHED-C1f (register §1.303; SCHED-C1f1, since 0.12.54). A rule whose `consumes` entry writes its `amount` as a
 fact ("A run's consumption read from a fact" below) requires `consumption_fact`, alike: the composer
 refuses a file that writes one while `requires` does not name it, `schedule_invalid` at the first
@@ -281,6 +297,64 @@ as the fact it reads, with the amount a run is judged by until the fact exists:
   amount as a constant replaces it by the form with that constant as its fallback, which keeps a
   capped episode under way ([scheduling/README.md](scheduling/README.md), "An episode under way and
   a round's frozen order").
+
+### A rule's variable values
+
+Workflow #500 SV-2 (register §1.511, since 0.12.81; the coordinator's rulings 1 to 9 of 11-23 on
+board #500, after the owner's words of 11-22 that a package's stages are listed and the program
+goes by itself into the chosen or designated one; [package-variables.md](package-variables.md),
+"The run"). One package may run as several rules, each for one value of a variable of the package,
+each with its own costs, yields and order; the scheduler picks among them by the account's gap as
+among any tasks:
+
+```json
+{"id": "<rule>", "package_id": "<package>", "variables": {"<variable>": <value>}, ...}
+```
+
+- **The member.** An object from the name of a variable the rule's package declares to a value
+  that variable's declaration takes, one or more values (an empty object, or no object, is
+  refused: a rule that carries no value writes no member). Each value is judged by the check a
+  value set on the application passes (`EditGoal`'s and a direct run's): the goal store keeps its
+  text (at most 1024 bytes) and the declaration's one judgement takes it whole
+  (`PackageVariable::judge`; an `ordered` value it would take only in part is refused); the policy
+  crate's `judge_rule_variable_value`, no second copy.
+- **`requires`** names `rule_variables` ("`requires`" above).
+- **Where it is checked.** In the composer, wherever a root is composed (the Runtime's workbench,
+  check-config, `standard-pack check`, `package bundle --schedule`, `standard-pack compose`), after
+  the classification, rule by rule in file order, value by value in the member's order; the first
+  refusal refuses the file with the document's own word, `standard_pack_root_invalid`
+  `schedule_invalid`, at the member: `/rules/<i>/variables` for an empty object or no object,
+  `/rules/<i>/variables/<name>` for a name the package does not declare or a value its declaration
+  does not take; the developer text names the rule, the variable and the judgement's word. The
+  declarations are the ones the caller's reader read of every package of the root (the Runtime's
+  metadata reader, `read_remedy_declarations`, the composer's input `IrreversiblePackages`); a
+  package whose declaration could not be read (one `standard_pack_package_unreadable`) has its
+  rules' values judged by no declaration here, and the offline pack rows (`actingctl packs`) and
+  `standard-pack catalog --cut`, which read no variables, judge none either: the run's admission
+  judges every dispatched value again under the package it prepares.
+- **The composed task** carries the member as written (a V2 task member, `variables`;
+  [scheduling/v2/README.md](scheduling/v2/README.md)), which the compiler holds to its form. A rule
+  that carries no `variables` composes byte for byte as before: the same documents, compiled
+  catalog, catalog hash and rules digest.
+- **What a dispatch hands its run**: for a variable the rule carries, the rule's value, source
+  `rule`; for any other, as before ([package-variables.md](package-variables.md), "Resolution, once
+  per selected dispatch").
+- **Judged again at each evaluation** (fix round 1): a package replaced since the generation in
+  force was composed, while that generation stays in force, may no longer take a value a rule
+  carries; the same judgement (`judge_rule_variable_value`) under the declaration the workbench
+  read last holds such a rule's candidate back (`goal_value_rule_refused`, warning, no wake of its
+  own, position 5a before the set value's exclusion); nothing is dispatched until the package
+  takes the value again ([package-variables.md](package-variables.md), "Carried by the rule").
+- **A value set on the application decides which rules run**: while it holds a value for a
+  variable and a rule carries another, the rule's candidate there waits
+  (`goal_value_excludes_rule`, no wake of its own; [scheduling-blackout.md](scheduling-blackout.md),
+  "Order of the deferrals", position 5a). Set: only the rules that carry that value (and those that
+  do not carry the variable) run; cleared: the scheduler chooses among all of them.
+- **On a switched root** (`catalog_business`) each rule's business part comes from its package's
+  entry of `pack-catalog.json`, its per-rule part where the entry holds one for the rule's id
+  ([pack-catalog.md](pack-catalog.md), "Per-rule parts"), so two rules of one package carry their
+  own effects, values and marks there as in `schedule.json`. `variables` is no business member: it
+  stays on the rule.
 
 ## Classification
 
@@ -584,7 +658,8 @@ pure: its caller reads the packages.
    `valuation_origin`, #455 P1 (0.12.78): `pool_list_rows` when a pool's `observation` is of the
    kind `list_rows`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
-   writes `max_queue_wait_ms`,
+   writes `max_queue_wait_ms`, Workflow #500 SV-2 (0.12.81): `rule_variables` when a rule carries
+   `variables`,
    `reset_exclusions` when a timeline event writes
    `excludes_fact_prefixes`, `fact_unknown_probe` when a rule's `fact` predicate writes
    `on_unknown`, and the given subsystems name each entry), no timeline event
@@ -593,7 +668,8 @@ pure: its caller reads the packages.
    (0.12.80): a file whose `requires` names `catalog_business` (and the given subsystems too, when
    given) first has each rule's business part taken from the root's `pack-catalog.json`, which the
    caller reads beside `schedule.json` and gives with it (`StandardPackGameFiles::catalog`;
-   "`requires`").
+   "`requires`"). Workflow #500 SV-2 (0.12.81): after the classification, each rule's
+   `variables` held to its package's declaration ("A rule's variable values").
 3. **Instantiate**: for each bound instance `i` of game `g` on server `s`, every rule whose
    package belongs to `s` and is not held, and every pool, profile and event for every server or
    for `s`, each with every scope filled with `{kind: instance, instance_id: i}` (the item's own

@@ -3259,8 +3259,9 @@ then held back; the idle check stopped it again, with no end.
   coordinator's ruling 3 of 11-22 and its fix round 1). On an instance whose idle action can put
   it to sleep, asleep or awake, that no hold of positions 1 or 2 holds, a candidate a later
   position of the order of the deferrals defers with no time of its own (a suspended package, a
-  closed pack schedule's row with no end, an owed rerun's pacing, a remedy round, an availability
-  denial with no release) counts for the idle plan as held back with
+  closed pack schedule's row with no end, since 0.12.81 a value set on the application that
+  excludes the task's rule, Workflow #500 SV-2's position 5a, an owed rerun's pacing, a remedy
+  round, an availability denial with no release) counts for the idle plan as held back with
   no time, as behind a hold: not due, no wake of its own; "eligible with no wake is due" stays for
   a hold of the instance itself. Its decision, its reason and the not-run explanation are as
   before. Before 0.12.79 the plan counted such an eligible decision with no wake due: it woke an

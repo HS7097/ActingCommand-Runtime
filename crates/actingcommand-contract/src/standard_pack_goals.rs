@@ -49,6 +49,7 @@
 //! standard-pack check` reports a refused file without failing the root, and `package bundle
 //! --goals` refuses one.
 
+use crate::package_variables::PackageVariable;
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_catalog::{
     MAX_PACK_CATALOG_LOCALE_BYTES, MAX_PACK_CATALOG_LOCALES, MAX_PACK_CATALOG_SUMMARY_BYTES,
@@ -453,12 +454,18 @@ pub struct IrreversiblePackages {
     packages: BTreeMap<String, BTreeSet<String>>,
     /// The packages whose declaration could not be read, by id.
     unreadable: BTreeSet<String>,
+    /// Workflow #500 SV-2 (register §1.511): what each package whose declaration was read declares
+    /// of variables, by id, when its reader read them ([`DeclaredCapabilities::variables`]): the
+    /// standard-pack composer holds a rule's values to it ([`Self::package_variables`]).
+    variables: BTreeMap<String, Vec<PackageVariable>>,
 }
 
 /// Workflow #455 G-R2s fix round 3 (register §1.369; contracts/standard-pack-goals.md,
 /// "Irreversibility"): what a reader read of one package's declarations that the rule
 /// ([`IrreversiblePackages::new`]) judges. Both members are required, so no reader leaves the
-/// remedies out by omission; there is no default.
+/// remedies out by omission; there is no default. Workflow #500 SV-2 (register §1.511): and, a
+/// third required member, the variables its control declaration declares, which the standard-pack
+/// composer holds a rule's `variables` to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredCapabilities {
     /// The capabilities its control declaration provides (`provides[]`), every one `true` when
@@ -467,6 +474,13 @@ pub struct DeclaredCapabilities {
     /// Every capability a remedy declaration of its mappings lists (`remedy.capabilities`): every
     /// capability the mapping lists, its default or not, whatever an instance chooses.
     pub remedies: BTreeSet<String>,
+    /// Workflow #500 SV-2: the variables its control declaration declares (`variables`, empty when
+    /// it declares none), as the Runtime's metadata reader reads them; `None` where the reader
+    /// reads no variables (the offline pack rows and `standard-pack catalog --cut`, which compose
+    /// a root to show and to compare it): the composer then holds no rule's values of the package
+    /// to its declaration, and the Runtime's own composition, which reads them, is the one that
+    /// decides.
+    pub variables: Option<Vec<PackageVariable>>,
 }
 
 impl IrreversiblePackages {
@@ -487,6 +501,7 @@ impl IrreversiblePackages {
             .collect::<BTreeSet<_>>();
         let mut packages = BTreeMap::new();
         let mut unreadable = BTreeSet::new();
+        let mut variables = BTreeMap::new();
         for (package_id, declaration) in declared {
             match declaration {
                 Some(declaration) => {
@@ -497,6 +512,10 @@ impl IrreversiblePackages {
                         .filter(|capability| irreversible.contains(*capability))
                         .cloned()
                         .collect::<BTreeSet<_>>();
+                    // Workflow #500 SV-2: what it declares of variables, when its reader read it.
+                    if let Some(declared_variables) = declaration.variables {
+                        variables.insert(package_id.clone(), declared_variables);
+                    }
                     packages.insert(package_id, reached);
                 }
                 None => {
@@ -507,7 +526,16 @@ impl IrreversiblePackages {
         Self {
             packages,
             unreadable,
+            variables,
         }
+    }
+
+    /// Workflow #500 SV-2 (register §1.511; contracts/standard-pack-schedule.md, "A rule's
+    /// variable values"): the variables the package `package_id` declares, in declaration order;
+    /// `None` when it is no package of the root, its declaration could not be read, or its reader
+    /// read no variables ([`DeclaredCapabilities::variables`]).
+    pub fn package_variables(&self, package_id: &str) -> Option<&[PackageVariable]> {
+        self.variables.get(package_id).map(Vec::as_slice)
     }
 
     /// Whether the package `package_id`, whose declaration was read, can do something

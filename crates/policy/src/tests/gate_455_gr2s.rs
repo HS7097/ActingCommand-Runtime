@@ -659,6 +659,7 @@ fn root_of(packages: [Declared<'_>; 5], unread: Option<&str>) -> IrreversiblePac
                         .iter()
                         .map(|capability| (*capability).to_owned())
                         .collect(),
+                    variables: Some(Vec::new()),
                 };
                 let read = (Some(*package_id) != unread).then_some(declaration);
                 ((*package_id).to_owned(), read)

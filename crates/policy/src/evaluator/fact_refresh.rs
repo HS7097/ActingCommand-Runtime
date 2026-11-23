@@ -216,6 +216,8 @@ pub fn fact_refresh_task() -> &'static TaskSpec {
         // Workflow #455 G-R2s: the Runtime's own reading task runs no package of a game root's
         // bundle, so no composer marks it.
         irreversible_reach: None,
+        // Workflow #500 SV-2: nor does it carry a rule's variable values.
+        variables: None,
     })
 }
 

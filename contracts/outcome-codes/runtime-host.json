@@ -22124,6 +22124,54 @@
       "common_causes": "The package's control.json or its resources manifest cannot be read or is refused by the reader, or is being replaced; or the game root has failed every check since the start.",
       "handling": "Fix the package as its standard_pack_package_unreadable says (actinglab standard-pack check --root <game root>); the next check reads it again."
     },
+    "goal_value_excludes_rule": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.81",
+      "description": "Workflow #500 SV-2: the candidate of task_id on instance_id is held back because its rule carries a value for variable_name other than the value set there. Register section 1.511, contracts/package-variables.md (\"A value set on the application decides which rules run\") and contracts/scheduling-blackout.md (\"Order of the deferrals\", position 5a): a rule of the game root's schedule.json that carries variables is a candidate on an application only while the application holds no value set for each variable it carries, or holds that same value; a value a person or an agent set decides which rules run. The candidate's decision and its not-run explanation carry this reason, with no wake of its own: clearing or changing the set value, a change of facts, wakes the evaluation. Nothing fails, nothing is recorded as a failure, no budget is taken, and the idle plan counts the candidate held back with no time.",
+      "common_causes": "A value set on the application (goals set, or the console's goal page) designates another value of the variable than this rule carries.",
+      "handling": "Nothing, when the designation is meant. To let this rule run, set the value it carries, or clear the value (goals clear) so that the scheduler chooses among the rules again."
+    },
+    "goal_value_rule_refused": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "package_id": "required",
+        "variable_name": "required",
+        "variable_problem": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.81",
+      "description": "Workflow #500 SV-2 fix round 1: task_id's candidate on instance_id is held back as package_id no longer takes its rule's value of variable_name. Register section 1.511, contracts/package-variables.md (\"Carried by the rule\") and contracts/scheduling-blackout.md (\"Order of the deferrals\", position 5a): a dispatch judges each value a task's rule carries by the composer's own judgement under the package's declaration the scheduler workbench holds now; a package replaced since the generation in force was composed (the composition with it refused, the generation in force kept) may refuse one, and the rule then does not run rather than its run reading the package's default unsaid. variable_problem is the judgement's word (not_an_option, out_of_range, off_step, type_changed, key_repeated, count_out_of_range, keys_left_out); it is absent only when the declaration takes the value and the goal store would not keep its text, which no compiled task carries. The candidate's decision and its not-run explanation carry this reason, with no wake of its own; nothing is dispatched, nothing is recorded as a failure, no budget is taken, and the idle plan counts the candidate held back with no time.",
+      "common_causes": "The package was replaced by a version whose declaration of the variable no longer offers or allows the value the rule carries, while the composition with it is refused and the scheduler workbench keeps the generation in force.",
+      "handling": "Make the rule and the package agree: place the package version that takes the value, or change the rule's variables in schedule.json to a value the new declaration takes (actinglab standard-pack check --root <game root> names the rule and the variable)."
+    },
     "standard_pack_goals_not_applied": {
       "category": "warning",
       "ladder_class": "none",

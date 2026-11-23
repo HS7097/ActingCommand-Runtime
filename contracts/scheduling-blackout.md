@@ -348,6 +348,30 @@ that orders tasks changes;
    built by Workflow #429 R-8, since 0.12.55: every candidate of the closed package, an owed
    rerun, an immediate rerun and a chain's successor included, with the covering row's end as
    its wake, none for an open-ended row);
+
+**5a.** a value set on the application excludes the task's rule (`goal_value_excludes_rule`, info,
+values `instance_id`, `task_id` and `variable_name`; Workflow #500 SV-2, since 0.12.81, register
+§1.511; [package-variables.md](package-variables.md), "A value set on the application decides which
+rules run"): the candidate's task carries a value for a variable of its package (its rule's
+`variables`) while the application holds another value set for it, the first such variable in
+declaration order. Every candidate of the pair waits, an owed rerun, an immediate rerun, a remedy
+request or retry and a chain's successor included, with no wake of its own: clearing or changing
+the set value is a change of facts, which wakes the evaluation. Nothing fails and no budget is
+taken. The fact refresh's candidate carries no rule value and never waits here. The look ahead
+behind a hold reads it after position 5, and the idle plan counts such a candidate held back with
+no time (#486 ASLEEP-3, "A later position that names no time": `hold_back_untimed`), as it counts
+one a closed pack schedule's row with no end holds. A rule that carries the set value, or does not
+carry the variable, is not held. Fix round 1 (register §1.511; package-variables.md, "Carried by
+the rule"), first at this position: the declaration in force of the candidate's package no longer
+takes a value its task's rule carries (a package replaced since the generation in force was
+composed; the composer's judgement, `judge_rule_variable_value`, run again at each evaluation):
+`goal_value_rule_refused` (warning, values `instance_id`, `task_id`, `package_id`,
+`variable_name` and `variable_problem`, the first such variable in declaration order), held as
+above, every candidate of the pair, with no wake of its own and no time for the idle plan;
+nothing is dispatched; repairing the package (read again at the workbench's next check) ends it.
+Neither code is a gate the clock-slot planning records of Workflow #372 K2 name (below), so a due
+clock slot either holds writes no clock-slot record;
+
 6. performance pacing pauses the instance or its run interval has not passed
    (`perf_scheduling_paused`, `perf_pacing_gap`, Workflow #385), an owed rerun waits for the
    pacing stage (`policy_rerun_waiting`), or an entry-cost task waits for it

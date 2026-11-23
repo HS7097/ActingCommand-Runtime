@@ -194,6 +194,10 @@ mod tests {
     // #477 LF-1 (0.12.80; register §1.509): the turn cap a dispatch carries counts the lines of the
     // pools its task consumes.
     mod gate_477_lf1;
+    // #500 SV-2 (0.12.81; register §1.511): a rule of `schedule.json` carries values for its
+    // package's variables.
+    mod gate_500_sv2;
+
     // #477 CK-2 (0.12.81; register §1.516): a clock occurrence stays owed when its dispatch never
     // ran or its failure paused the pair.
     mod gate_477_ck2;
@@ -213,6 +217,7 @@ mod tests {
                         Some(actingcommand_contract::DeclaredCapabilities {
                             provides: std::collections::BTreeMap::new(),
                             remedies: std::collections::BTreeSet::new(),
+                            variables: Some(Vec::new()),
                         }),
                     )
                 })

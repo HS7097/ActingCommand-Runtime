@@ -145,15 +145,21 @@ impl HostShared {
                     instance_alias,
                 );
                 // The values the next dispatch of each bound package hands its run: the run's own
-                // resolution, over the same projection and the table a dispatch reads.
+                // resolution, over the same projection and the table a dispatch reads. Workflow
+                // #500 SV-2: of the value set on the application and the default alone, beside
+                // which variables a bound task's rule carries a value for.
                 let plan = plan_variable_values(
                     sources.catalog.compiled(),
                     &read.facts,
                     &sources.variables,
                 );
-                let variables = page_variables(&read.page, &|task_id: &str| {
-                    plan.values(task_id, instance_alias)
+                let mut variables = page_variables(&read.page, &|task_id: &str| {
+                    plan.resolutions(task_id, instance_alias)
                 });
+                let carried_names = plan.carried(instance_alias);
+                for row in &mut variables {
+                    row.carried = carried_names.contains(row.variable.name.as_str());
+                }
                 let conditions = read
                     .target_view
                     .active

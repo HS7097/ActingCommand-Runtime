@@ -263,6 +263,11 @@ mod gate_477_cv2;
 // #477 LF-1 (0.12.80; register §1.509): after a run handed a `run_cap` its pool is unknown to the
 // evaluation until it is read after that run's end, through the host and across a restart.
 mod gate_477_lf1;
+// #500 SV-2 (0.12.81; register §1.511): a rule's values for its package's variables reach its
+// dispatch's run, a value set on the application holds back the rules that carry another, and the
+// goal page names the set value or leaves the choice to the rules.
+mod gate_500_sv2;
+
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.
 mod gate_477_ck2;

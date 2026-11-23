@@ -185,7 +185,9 @@ impl RemedyDeclarations {
     /// mark"): what the rule of irreversibility judges of this package ([`DeclaredCapabilities`]):
     /// each capability it provides, `true` when an entry marks it `irreversible`, and every
     /// capability a remedy of its mappings lists, the default or not. The one reading the
-    /// Runtime's workbench, check-config and the resource tools give the rule.
+    /// Runtime's workbench, check-config and the resource tools give the rule. Workflow #500 SV-2
+    /// (register §1.511): with the variables it declares, which the standard-pack composer holds a
+    /// rule's values to.
     pub fn declared_capabilities(&self) -> DeclaredCapabilities {
         let mut provides = BTreeMap::new();
         for provided in &self.provides {
@@ -201,6 +203,7 @@ impl RemedyDeclarations {
                 .flat_map(|(_, remedy)| remedy.capabilities())
                 .cloned()
                 .collect(),
+            variables: Some(self.variables.clone()),
         }
     }
 }

@@ -94,6 +94,9 @@ crate::outcome_vocabulary! {
         Set => "set",
         /// The package's declared default.
         Default => "default",
+        /// Workflow #500 SV-2 (since 0.12.81): the value the dispatched task's rule of
+        /// `schedule.json` carries for the variable (its member `variables`).
+        Rule => "rule",
     }
 }
 

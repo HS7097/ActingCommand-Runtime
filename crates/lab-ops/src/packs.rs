@@ -1061,10 +1061,13 @@ impl Rows {
             });
             // G-R2s fix round 3: the remedies are declared in the package's operation, which
             // lab-ops does not read (the contract's limit: the offline rows can mark fewer tasks
-            // than the Runtime); its reading of `control.json` gives none.
+            // than the Runtime); its reading of `control.json` gives none. Workflow #500 SV-2
+            // (register §1.511): nor does it read the variables, so the rows' composition holds no
+            // rule's values to the package's declaration; the Runtime's own composition does.
             let declaration = capabilities.map(|provided| DeclaredCapabilities {
                 provides: provided,
                 remedies: BTreeSet::new(),
+                variables: None,
             });
             provides.insert(package_id.to_owned(), declaration);
         }

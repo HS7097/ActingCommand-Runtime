@@ -233,6 +233,16 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // Workflow #500 SV-2 (register §1.511): this build hands a dispatch of a rule the values
+        // the rule carries for its package's variables and holds back a rule whose value is not
+        // the one set on the application; a `schedule.json` whose rule carries `variables`
+        // requires it, so an older Runtime refuses the file instead of composing a task member it
+        // cannot read.
+        subsystem(
+            actingcommand_policy::RULE_VARIABLES_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // SCHED-C1f1 (register §1.303): this build reads a `consumes` entry's `amount` written as
         // a fact with a fallback (one run's amount read from the instance's fact at each
         // evaluation); a `schedule.json` whose rule writes one requires it, so an older Runtime

@@ -192,6 +192,21 @@
           "description": "Workflow #455 G-R2s, withdrawn by G-R2x (0.12.77): the irreversible mark the standard-pack composer of 0.12.60 to 0.12.76 wrote, true, on a task whose package could do something irreversible. Readable and without effect since 0.12.77: a catalog generation of those releases carries it and its catalog hash is computed over it; nothing reads its value, and a candidate of a task that carries it is weighed as every candidate. No composer writes it, and a schedule.json rule that writes it is refused.",
           "type": "boolean"
         },
+        "variables": {
+          "description": "Workflow #500 SV-2 (0.12.81): the values a dispatch of the task hands its run for its package's variables, by the variable's name; a dispatch hands each with the source rule, and while the application holds another value set for one of them the task's candidate there is held back (goal_value_excludes_rule), as it is while its package's declaration in force no longer takes one of them (goal_value_rule_refused). A schedule.json rule writes it as any V2 member and names rule_variables in requires; the standard-pack composer holds each name and value to the package's declaration. The compiler holds it to 1 to 16 names of a variable's form, each value of a variable's kind with a compact text of at most 1024 bytes.",
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 16,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+              { "type": "boolean" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          }
+        },
         "reserves": {
           "type": "array",
           "minItems": 1,
