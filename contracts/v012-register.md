@@ -47649,7 +47649,8 @@ object's schema) are not touched.
 **At deploy.** Nothing to configure. An installation whose fact refresh pair an old severe failure
 paused starts refreshing at the first evaluation after this version starts. A reader that fails in
 a row is tried again after 20, 40 and 80 minutes and then every two hours, within its daily limit,
-and at once after another task's successful run on its instance.
+and, after another task's successful run on its instance, as soon as its ordinary backoff and its
+minimum interval have passed.
 
 ### 1.518 Slice #455 B1 (0.12.82): a rule with a fixed value counts a goal's gap on the pools it produces that declare no valuation (board #455, the main line's third step; the rulings 1 to 9 are the coordinator's of 11-23 (9 after the implementer's first report), no words of the owner's behind them; coordinator work order `rd-1123/brief-455-b1.md` after the read-only study `rd-1123/study-step3-pools.md`, its questions 2 to 4 and the coordinator's disposition of it; on main `2c0f949d`)
 
