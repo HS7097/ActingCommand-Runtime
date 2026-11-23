@@ -255,10 +255,13 @@ thousandths over its `consumes` entries for the pool (a pending `amount` adds no
   Reserves"), the consumption a pool's reading does not show yet (the gate's step 3 and SS-6's
   allowance), SS-2's tie key ("Ties and chain heads") and the selection fields
   `task.consumes.<pool>`. The example above reads 3.
-- **SS-6.** A task that reserves a pool it consumes by expectation gets no `run_cap`, as a
-  goal-driven production declared by expectation gives none; its `spend_allowance` is unchanged
-  and is what stops the spend, since one run may spend more than the expectation
-  ([../remedies.md](../remedies.md), section 4, "Spend values").
+- **SS-6.** A task that reserves a pool it consumes by expectation gets no `run_cap`; its
+  `spend_allowance` is unchanged and is what stops the spend, since one run may spend more than
+  the expectation ([../remedies.md](../remedies.md), section 4, "Spend values"). Until #455 B1
+  (0.12.82) a goal-driven production declared by expectation gave none either; since ruling 10 a
+  goal never takes `run_cap` away: such a production bounds it by ⌈gap·1000 ÷ the expected yield
+  per run in thousandths⌉, at least 1 ([../resource-targets.md](../resource-targets.md), "A goal
+  on what a task with a fixed value produces").
 - **Forward projection** stops before applying it with `effect_evidence_insufficient`, as for an
   expected production.
 
@@ -1296,7 +1299,8 @@ task that writes it enters the score stage); the benefit gate never reads it.
   such a pool). So `B = V + Σ_g r(k,g)·Γ_g/(1000·S_g) − Σ_p C_p·W_p/(1000·Q_p)`. An expected yield
   brings its rounding bound to `ε` as a production term does ("Within tolerance"), and the
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) name each term as
-  `<pool>:+<term>`, before the consumption's. Nothing else of `produces` is read: a produced pool
+  `<pool>:+<term>`, before the consumption's (but not where they are not counted, the next
+  item). Nothing else of `produces` is read: a produced pool
   no goal covers is not looked up, one whose reading is unknown gives a pending goal (`Γ = 0`) and
   adds nothing, a met goal adds nothing, and an entry of a goal-covered pool whose amount is the
   pending marker counts as a yield of 0 (the coordinator's ruling of 11-23): it adds nothing and
@@ -1311,30 +1315,39 @@ task that writes it enters the score stage); the benefit gate never reads it.
   `importance_milli` 1000, read at 10: `g` 30, `Γ = ⌊1000·30/10⌋ = 3000`, its term
   `2000·3000/(10·1000) = 600`, so it is 10 600 and goes first. The goal's spend values
   (`gap_remaining` and its part in `run_cap`, [../remedies.md](../remedies.md), section 4) are as
-  before. Without such a goal every value, record, decision and identity is as before; what a
+  before, but that a goal never takes `run_cap` away (ruling 10): an expected yield bounds it by
+  ⌈gap·1000 ÷ the yield in thousandths⌉ runs, at least 1, where before it removed it ("Expected
+  quantities (v2)", SS-6). Without such a goal every value, record, decision and identity is as before; what a
   catalog accepts or refuses, its hash and the `requires` names are unchanged, and an older
   Runtime ignores these productions as before.
 - **A goal chooses which task spends a pool, the pool's lines choose when** (#455 B1 ruling 9,
-  since 0.12.82; the coordinator's ruling of 11-23, not the owner's words). Where such a task
-  consumes a pool that writes a `trigger_line` ("Pool lines") and the pool is below that line with
-  no capped episode under way, whether it may spend is judged by its benefit **without** its goal
-  terms (`S` and `ε` without them, which the judgement keeps beside the sums with them), exactly
-  as before them: a task positive without them spends as before (its hard line still holds it),
-  and its order then reads its `B` with them; a task positive only by a goal term waits, with the
-  reason it carries without the goal (`policy_benefit_nonpositive` with that `benefit_milli`, or
-  `benefit_within_tolerance` with that `S` and `ε`), its items still naming the goal terms, and its
-  `benefit_fixed_value` giving `B` with them, so a person sees both. At or above the trigger line,
-  and for an episode under way, the capped spending order reads `S` with the terms (its listing,
-  its frozen order, the head's `B`): when the pool reaches its line the task that produces the
-  lacking pool heads the round and sweeps down to the stop line, its `run_cap` the capped rule's
-  (LF-1, "What the head's run is handed"). A consumed pool without a `trigger_line` (with or
-  without the two other lines) is unchanged: the goal terms count everywhere, and the rule's own
-  cooldown paces it. A worked timeline: a pool of capacity 180, `trigger_line` 160, `stop_line` 140,
+  since 0.12.82; the coordinator's ruling of 11-23 as corrected after the review of #1884, not the
+  owner's words). Where such a task consumes a pool that regenerates (its `projection` is not
+  `none`) and the pool is below its trigger line ("Pool lines": the `trigger_line`, or the
+  capacity without one) with no capped episode under way, or its lines give no value then
+  (`capped_cap_unknown`, `lines_invalid`: counted as below), whether it may spend is judged by its
+  benefit **without** its goal terms (`S` and `ε` without them, which the judgement keeps beside
+  the sums with them), exactly as before them: a task positive without them spends as before (its
+  hard line still holds it), and its order then reads its `B` with them; a task positive only by a
+  goal term waits, with the reason it carries without the goal (`policy_benefit_nonpositive` with
+  that `benefit_milli`, or `benefit_within_tolerance` with that `S` and `ε`). Ruling 11: that
+  reason's items leave the goal terms out, its detail ends once with
+  ` goal_terms=not_counted_below_trigger_line`, and its `benefit_fixed_value` gives the `B` judged
+  (`fixed_value_milli` `V`); the goal itself shows in the candidate's `resource_targets` and
+  `resource_weights`. At or above the trigger line, and for an episode under way, the capped
+  spending order reads `S` with the terms (its listing, its frozen order, the head's `B`): when the
+  pool reaches its line the task that produces the lacking pool heads the round and sweeps down to
+  the stop line, its `run_cap` the capped rule's (LF-1, "What the head's run is handed"). A
+  consumed pool that does not regenerate (`projection` `none`: a ticket, a shop currency) has no
+  "when": the goal terms count there everywhere, so a rule that spends such a currency for a
+  lacking material runs when the goal makes it worth it, its own cooldown pacing it. A follower
+  of a chain is not judged and is due only after its head's run, so a head waiting below the line
+  holds its chain. A worked timeline: a pool of capacity 180, `trigger_line` 160, `stop_line` 140,
   `hard_line` 104, regenerating one unit in six minutes, valued 1000 milli a unit; a task of `V`
   9 500 consumes 10 a run (`B` −500 without the goal, `S − W·c`) and produces 2 a run of a pool a
   goal lacks 30 of (term 600, `B` 100 with it). From 110 the pool regenerates: from 114 on one run
   would fit above the hard line, but below 160 the task waits `policy_benefit_nonpositive` −500,
-  as without the goal. At 160 (five hours after 110) the episode begins, the task heads it and is
+  as without the goal (its detail ending ` goal_terms=not_counted_below_trigger_line`). At 160 (five hours after 110) the episode begins, the task heads it and is
   handed `run_cap` min(⌈(160 − 140) ÷ 10⌉, ⌊(160 − 104) ÷ 10⌋, ⌈30 ÷ 2⌉) = 2: one dispatch, two
   runs, to 140; the pool is read again after that run (LF-1), and the next sweep comes when it is
   back at 160, two hours later. Without ruling 9 it would have run once each hour from 114 on.
@@ -2639,9 +2652,10 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
   `pool_reading`, `pool_capacity`, `stop_line`, `hard_line`, `amount_after`), waking at a
   regenerating pool's next step as a not-positive candidate does. #455 B1 ruling 9 (since
-  0.12.82): below a `trigger_line` the pool writes, whether a candidate with a fixed value would
-  pass is judged without its goal terms ("Fixed values written in the pack", "A goal chooses
-  which task spends a pool, the pool's lines choose when").
+  0.12.82): below the trigger line of a pool that regenerates (the capacity without a written
+  `trigger_line`), and while its lines give no value with no episode under way, whether a
+  candidate with a fixed value would pass is judged without its goal terms ("Fixed values written
+  in the pack", "A goal chooses which task spends a pool, the pool's lines choose when").
 - **Unknown or invalid.** A pool that writes its lines and whose capacity, reading or a line's fact
   gives no value enters no capped state, and its judged candidates that would pass are deferred
   with `pool_line_held` `capped_cap_unknown` (`fact_key`, `unknown_reason` when a fact gives

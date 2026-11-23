@@ -558,12 +558,15 @@ run. Nothing changes until a goal is set on the pool (`session.resource_targets`
 `scale` and `importance_milli`, which a goal on a pool without a valuation must carry); from then on
 the rules that yield it are judged `V` plus their goal terms, and of two of one value and one cost
 the one that yields it goes first. A goal chooses which rule spends a pool, the pool's lines choose
-when (ruling 9): a rule that consumes a pool writing a `trigger_line` and is worth running only
-by its goal term waits for that line and then sweeps to the stop line; to pace such a rule on a
-pool without a trigger line, give the pool one (or the rule a cooldown). While its gap is open such a rule is handed the gap as
-`gap_remaining`, and its `run_cap` counts the runs the gap still needs only when every entry of the
-pool declares an integer `amount`: a production by `expected_amount_milli` gives it no `run_cap`
-([remedies.md](remedies.md), section 4, "Spend values"; unchanged).
+when (ruling 9): a rule that consumes a regenerating pool (stamina, energy: its `projection` is not
+`none`) and is worth running only by its goal term waits for that pool's trigger line (its
+`trigger_line`, or its capacity without one) and then sweeps to the stop line, so write the pool's
+lines where it should be spent earlier than at its cap; a rule that spends a pool that does not
+regenerate (a ticket, a shop currency) runs as soon as the goal makes it worth it, paced by its own
+cooldown. While its gap is open such a rule is handed the gap as `gap_remaining`, and its `run_cap`
+is at most the runs the gap still needs: ⌈gap ÷ the integer `amount`⌉, or for a production by
+`expected_amount_milli` ⌈gap·1000 ÷ that expectation⌉, at least 1 (ruling 10: a goal never takes
+`run_cap` away; [remedies.md](remedies.md), section 4, "Spend values").
 
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
 can replace them one by one, the composer reports, per game, which judged rules run on a fixed

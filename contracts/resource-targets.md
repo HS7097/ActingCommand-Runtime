@@ -940,11 +940,24 @@ rounding bound; a satisfied, pending or unresolved target (`Γ = 0`) adds nothin
 pool it produces is read. So a goal on a pool without a valuation now moves the fixed-value
 stages that produce it within their tier and in a capped round; before, it reached only their
 score-stage term `R`. Ruling 9 (a goal chooses which task spends a pool, the pool's lines choose
-when): below the `trigger_line` of a pool such a stage consumes, whether it may spend is judged
-without its goal terms, as before; at the line, in the capped spending order, they count
-([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"). `R`, every reason above, `gap_remaining` and the goal's part in
-`run_cap` (SS-6) are unchanged; a target needs nothing new: its pool is observed by a fact under
-`inventory.` or `resource.` (or rows of a list), as every target's.
+when): below the trigger line of a regenerating pool such a stage consumes (its capacity without a
+written `trigger_line`), whether it may spend is judged without its goal terms, as before; at the
+line, in the capped spending order, and for a pool that does not regenerate, they count
+([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"). `R` and every
+reason above are unchanged, and so is `gap_remaining`.
+
+**A goal never takes `run_cap` away** (#455 B1 ruling 10, since 0.12.82; register §1.518). The
+goal term of `run_cap` ([remedies.md](remedies.md), section 4, "Spend values") of a produced pool
+with an open gap `g` that some `produces` entry declares by `expected_amount_milli` is
+⌈g·1000 / `r(k,p)`⌉ runs, `r(k,p)` its expected yield per run in thousandths, at least 1; a pool
+that yields nothing per run (its amount pending) bounds nothing. Before, such a pool removed
+`run_cap` whole, the lines' and reserves' part included, so a sweep that reads it ran to its floor
+or ended unresolved. `run_cap` is the least of the bounds that exist (the lines' or reserves'
+runs, the goal's, 1 000) and is absent only where it was before for another reason (no consumed
+pool takes part, one's reading or line is unknown, a consumed amount per run that is no integer).
+An integer yield is bounded as before, and a task with no goal on what it produces is handed the
+`run_cap` of before. A target needs nothing new: its pool is observed by a fact under `inventory.`
+or `resource.` (or rows of a list), as every target's.
 
 ## Choosing scale and importance
 

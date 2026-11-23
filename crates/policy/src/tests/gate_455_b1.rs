@@ -59,6 +59,13 @@ const CAPACITY_KEY: &str = "resource.neutral.capacity";
 /// The lacking pool, without a valuation, read from `LACKING_KEY`.
 const LACKING: &str = "pool.lacking";
 const LACKING_KEY: &str = "resource.lacking";
+/// The key of a stop line no fact gives (test 12).
+const STOP_KEY: &str = "resource.neutral.stop";
+/// A second consumed pool, regenerating, read from `REGEN_KEY` (test 14).
+const REGEN: &str = "pool.regen";
+const REGEN_KEY: &str = "resource.regen";
+/// Ruling 11: how the detail of a reason judged without the goal terms ends.
+const UNCOUNTED: &str = " goal_terms=not_counted_below_trigger_line";
 /// The goal on the lacking pool: at least `AT_LEAST`, its own scale and importance.
 const AT_LEAST: i64 = 40;
 const GOAL_SCALE: u64 = 10;
@@ -300,22 +307,24 @@ fn b1_t7_the_goals_spend_values_are_those_of_before() {
     let mut below = World::new(stages(40_000), 150, Some(10)).with_goal();
     let evaluation = below.evaluate();
     assert_eq!(dispatched(&evaluation), ["task_b"], "{evaluation:#?}");
-    spend_values_are(&evaluation, "task_b", 30, 1);
+    spend_values_are(&evaluation, "task_b", Some(30), 1);
 
     let mut capped = World::new(stages(36_000), 200, Some(38)).with_goal();
     let evaluation = capped.evaluate();
     assert_eq!(dispatched(&evaluation), ["task_b"], "{evaluation:#?}");
     fixed_first(decision(&evaluation, "task_b"), 36_040, 36_000, E);
-    spend_values_are(&evaluation, "task_b", 2, 1);
+    spend_values_are(&evaluation, "task_b", Some(2), 1);
 }
 
-// Test 8, ruling 9 below the trigger line. The capped pool writes a trigger line 20 below its
-// capacity (160). Read at 150, `task_a` and `task_g` consume 10 a run at W = 1000 with `V` 9 500,
-// so each is `9 500 − 10 000 = −500`; `task_g` also produces 2 of the lacking pool a run, its goal
-// term 600, so with the goal it is 100. Below the line it may spend only by its benefit without
-// the term: neither is dispatched, and `task_g` waits `policy_benefit_nonpositive` with the values
-// it carries without the goal (`benefit_milli` −500), its items still naming the goal term, its
-// `benefit_fixed_value` the judgement's 100.
+// Test 8, ruling 9 below the trigger line. The capped pool regenerates (one unit in six minutes)
+// and writes a trigger line 20 below its capacity (160). Read at 150, `task_a` and `task_g` consume
+// 10 a run at W = 1000 with `V` 9 500, so each is `9 500 − 10 000 = −500`; `task_g` also produces 2
+// of the lacking pool a run, its goal term 600, so with the goal it is 100. Below the line it may
+// spend only by its benefit without the term: neither is dispatched, and `task_g` waits
+// `policy_benefit_nonpositive` with the outcome it has without the goal (`benefit_milli` −500).
+// Ruling 11: its items leave the uncounted goal term out and its detail says once that goal terms
+// are not counted below the trigger line; its `benefit_fixed_value` gives the −500 judged; the
+// goal itself shows in its `resource_weights`.
 #[test]
 fn b1_t8_below_a_trigger_line_a_stage_positive_only_by_its_goal_waits_as_before() {
     let mut goal = World::new(paced(9_500, triggered_pools()), 150, Some(10)).with_goal();
@@ -329,9 +338,16 @@ fn b1_t8_below_a_trigger_line_a_stage_positive_only_by_its_goal_waits_as_before(
     );
     assert_eq!(
         with_goal.detail,
-        "benefit_milli=-500 expected_duration_ms=60000 items=pool.lacking:+600,pool.neutral:-10000"
+        "benefit_milli=-500 expected_duration_ms=60000 items=pool.neutral:-10000 \
+         goal_terms=not_counted_below_trigger_line"
     );
-    fixed_first(waits, 100, 9_500, E);
+    fixed_first(waits, -500, 9_500, E);
+    let weights = reason(waits, PolicyCode::ResourceWeights);
+    assert!(
+        weights.detail.contains("pool.lacking:"),
+        "{}",
+        weights.detail
+    );
 
     let mut plain = World::new(paced(9_500, triggered_pools()), 150, Some(10));
     let evaluation = plain.evaluate();
@@ -363,7 +379,7 @@ fn b1_t9_at_the_trigger_line_that_stage_heads_the_capped_episode() {
     assert_eq!(head.value("capped_round"), Some(&json!(1)));
     assert_eq!(head.value("trigger_line"), Some(&json!(160)));
     fixed_first(decision(&evaluation, "task_g"), 10_100, 9_500, E);
-    spend_values_are(&evaluation, "task_g", 30, 2);
+    spend_values_are(&evaluation, "task_g", Some(30), 2);
     let waits = decision(&evaluation, "task_a");
     assert_eq!(
         hold(waits).as_deref(),
@@ -416,11 +432,28 @@ fn b1_t10_below_a_trigger_line_a_stage_positive_without_its_goal_spends_as_befor
     fixed_first(decision(&evaluation, "task_g"), 2_000, 12_000, E);
 }
 
-// Test 11, a consumed pool without lines. The stages of test 8 on a capped pool that writes no
-// lines, read at 150: the goal term counts below the cap, so `task_g` (100) is dispatched as in
-// test 1 and `task_a` (−500) waits `policy_benefit_nonpositive`. Without the goal neither runs.
+// Test 11, a consumed pool without a written line (ruling 9 as corrected). The stages of test 8 on
+// a capped pool that writes no lines, read at 150. When it regenerates its trigger line is its
+// capacity (180): below it `task_g` waits `policy_benefit_nonpositive` −500 with the ruling 11
+// detail, as without the goal. When it does not regenerate (a currency spent in a shop) it has no
+// "when": the goal term counts below the cap, `task_g` (100) is dispatched as in test 1 and
+// `task_a` (−500) waits `policy_benefit_nonpositive`; without the goal neither runs.
 #[test]
-fn b1_t11_a_consumed_pool_without_lines_lets_the_goal_count_below_its_cap() {
+fn b1_t11_without_a_written_line_a_regenerating_pool_waits_and_a_spent_currency_does_not() {
+    let mut regenerating_goal =
+        World::new(paced(9_500, regenerating(unlined_pools())), 150, Some(10)).with_goal();
+    let evaluation = regenerating_goal.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let waits = decision(&evaluation, "task_g");
+    let held = last(waits);
+    assert!(
+        held.outcome.is(PolicyCode::PolicyBenefitNonpositive),
+        "{waits:#?}"
+    );
+    assert_eq!(held.outcome.value("benefit_milli"), Some(&json!(-500)));
+    assert!(held.detail.ends_with(UNCOUNTED), "{}", held.detail);
+    fixed_first(waits, -500, 9_500, E);
+
     let mut goal = World::new(paced(9_500, unlined_pools()), 150, Some(10)).with_goal();
     let evaluation = goal.evaluate();
     assert_eq!(dispatched(&evaluation), ["task_g"], "{evaluation:#?}");
@@ -443,6 +476,158 @@ fn b1_t11_a_consumed_pool_without_lines_lets_the_goal_count_below_its_cap() {
     fixed_first(waits, -500, 9_500, E);
 }
 
+// Test 12, ruling 9 with no round in progress and a value unknown. (a) The regenerating pool of
+// test 8 not read, the stages due on their hourly clock: `task_g` is `benefit_unknown`
+// (`reading_unknown`, the pool) with and without the goal, the same outcome. (b) Its stop line read
+// from a fact that is missing: its lines give no value (`capped_cap_unknown` for a candidate that
+// would pass), which counts as below the line, so `task_g` waits `policy_benefit_nonpositive` −500
+// with the ruling 11 detail, the outcome it has without the goal, instead of being held there.
+#[test]
+fn b1_t12_an_unknown_reading_or_line_with_no_round_in_progress_counts_as_below_the_line() {
+    let hourly_stages = |pool_list: Value| {
+        let clocked = |id: &str, produces: Value| {
+            fixed(
+                with(
+                    with(judged(id, 10), "produces", produces),
+                    "trigger",
+                    hourly(),
+                ),
+                9_500,
+            )
+        };
+        catalog(
+            vec![
+                clocked("task_a", json!([])),
+                clocked("task_g", json!([produce(LACKING, 2)])),
+            ],
+            pool_list,
+        )
+    };
+    let unknown_of = |mut world: World| {
+        let evaluation = world.evaluate();
+        assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+        reason(decision(&evaluation, "task_g"), PolicyCode::BenefitUnknown)
+            .outcome
+            .clone()
+    };
+    let with_goal = unknown_of(
+        World::new(hourly_stages(triggered_pools()), 150, Some(10))
+            .unread()
+            .with_goal(),
+    );
+    assert_eq!(
+        with_goal.value("benefit_gap"),
+        Some(&json!("reading_unknown"))
+    );
+    assert_eq!(with_goal.value("pool_id"), Some(&json!(POOL)));
+    let without_goal =
+        unknown_of(World::new(hourly_stages(triggered_pools()), 150, Some(10)).unread());
+    assert_eq!(with_goal, without_goal);
+
+    let mut stop_unread = triggered_pools();
+    stop_unread[0]["stop_line"] = json!({"type": "fact", "fact_key": STOP_KEY, "offset": 0});
+    let mut goal = World::new(paced(9_500, stop_unread.clone()), 150, Some(10)).with_goal();
+    let evaluation = goal.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let waits = decision(&evaluation, "task_g");
+    let held = last(waits);
+    assert!(
+        held.outcome.is(PolicyCode::PolicyBenefitNonpositive),
+        "{waits:#?}"
+    );
+    assert!(held.detail.ends_with(UNCOUNTED), "{}", held.detail);
+    fixed_first(waits, -500, 9_500, E);
+    let mut plain = World::new(paced(9_500, stop_unread), 150, Some(10));
+    let evaluation = plain.evaluate();
+    assert_eq!(last(decision(&evaluation, "task_g")).outcome, held.outcome);
+}
+
+// Test 13, ruling 10: a goal never takes `run_cap` away. Below the cap (the pool of test 1 read at
+// 150), `task_e` consumes 2 a run and expects 2.5 of the lacking pool a run, `V` 40 000, so with
+// the goal (gap 30) B = 40 000 − 2 000 + 750 = 38 750 and it is dispatched, handed the gap 30 and
+// `run_cap` min(⌊(150 − 104) ÷ 2⌋ = 23, ⌈30·1000 ÷ 2500⌉ = 12) = 12 (before: none). Without the goal
+// it is handed the lines' 23 alone and no gap, as before.
+#[test]
+fn b1_t13_an_expected_yield_bounds_run_cap_by_the_gap_instead_of_removing_it() {
+    let stage = || {
+        catalog(
+            vec![fixed(
+                with(
+                    judged("task_e", 2),
+                    "produces",
+                    json!([produce_expected(LACKING, 2_500)]),
+                ),
+                40_000,
+            )],
+            pools(),
+        )
+    };
+    let mut goal = World::new(stage(), 150, Some(10)).with_goal();
+    let evaluation = goal.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_e"], "{evaluation:#?}");
+    fixed_first(decision(&evaluation, "task_e"), 38_750, 40_000, E);
+    spend_values_are(&evaluation, "task_e", Some(30), 12);
+
+    let mut plain = World::new(stage(), 150, Some(10));
+    let evaluation = plain.evaluate();
+    assert_eq!(dispatched(&evaluation), ["task_e"], "{evaluation:#?}");
+    spend_values_are(&evaluation, "task_e", None, 23);
+}
+
+// Test 14, ruling 9 over two consumed pools. `task_g` consumes 10 of the capped pool of test 1
+// (it does not regenerate) and 1 of `pool.regen` (regenerating, valued 1000 milli a unit,
+// capacity 240, no lines, read at 100), `V` 10 500: −500 without the goal, 100 with it. The
+// regenerating pool is below its trigger line (its capacity), so `task_g` waits
+// `policy_benefit_nonpositive` −500, its items the two consumptions' and its detail the ruling 11
+// note, the outcome it has without the goal.
+#[test]
+fn b1_t14_one_regenerating_pool_below_its_line_holds_a_task_that_consumes_two() {
+    let stage = || {
+        let mut pool_list = pools();
+        let mut regen = valued(REGEN, 1000, 240);
+        regen["projection"] = json!({"amount": 1, "per_ms": 6 * MINUTE_MS});
+        pool_list.as_array_mut().expect("the pools").push(regen);
+        catalog(
+            vec![fixed(
+                with(
+                    with(
+                        judged("task_g", 10),
+                        "consumes",
+                        json!([consume(POOL, 10), consume(REGEN, 1)]),
+                    ),
+                    "produces",
+                    json!([produce(LACKING, 2)]),
+                ),
+                10_500,
+            )],
+            pool_list,
+        )
+    };
+    let mut goal = World::new(stage(), 150, Some(10))
+        .with_regen(100)
+        .with_goal();
+    let evaluation = goal.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let waits = decision(&evaluation, "task_g");
+    let held = last(waits);
+    assert_eq!(
+        held.detail,
+        "benefit_milli=-500 expected_duration_ms=60000 items=pool.neutral:-10000,pool.regen:-1000 \
+         goal_terms=not_counted_below_trigger_line"
+    );
+    fixed_first(waits, -500, 10_500, E);
+
+    let mut plain = World::new(stage(), 150, Some(10)).with_regen(100);
+    let evaluation = plain.evaluate();
+    assert!(dispatched(&evaluation).is_empty(), "{evaluation:#?}");
+    let before = last(decision(&evaluation, "task_g"));
+    assert!(
+        before.outcome.is(PolicyCode::PolicyBenefitNonpositive),
+        "{before:#?}"
+    );
+    assert_eq!(held.outcome, before.outcome);
+}
+
 // ---- The world a test drives ----
 
 /// The catalog, the Runtime's memory of the capped episodes, the two pools' readings and the
@@ -450,10 +635,12 @@ fn b1_t11_a_consumed_pool_without_lines_lets_the_goal_count_below_its_cap() {
 struct World {
     catalog: CompiledCatalog,
     memory: CappedMemory,
-    /// The capped pool's reading.
-    reading: i64,
+    /// The capped pool's reading; `None` when it is not read.
+    reading: Option<i64>,
     /// The lacking pool's reading; `None` while it is unknown.
     lacking: Option<i64>,
+    /// `pool.regen`'s reading, for the catalogs that declare it.
+    regen: Option<i64>,
     /// The instance's `session.resource_targets` record; `None` without a goal.
     goal: Option<ObservedFact>,
 }
@@ -465,8 +652,9 @@ impl World {
         Self {
             catalog: compiled,
             memory: CappedMemory::default(),
-            reading,
+            reading: Some(reading),
             lacking,
+            regen: None,
             goal: None,
         }
     }
@@ -477,13 +665,28 @@ impl World {
         self
     }
 
+    /// The same world with the capped pool not read.
+    fn unread(mut self) -> Self {
+        self.reading = None;
+        self
+    }
+
+    /// The same world with `pool.regen` read at `reading` a minute before.
+    fn with_regen(mut self, reading: i64) -> Self {
+        self.regen = Some(reading);
+        self
+    }
+
     fn facts(&self) -> EvaluationFacts {
-        let mut observed = vec![
-            fact(A, READING_KEY, self.reading, NOW - MINUTE_MS, None),
-            fact(A, CAPACITY_KEY, 180, NOW - HOUR_MS, None),
-        ];
-        if let Some(lacking) = self.lacking {
-            observed.push(fact(A, LACKING_KEY, lacking, NOW - MINUTE_MS, None));
+        let mut observed = vec![fact(A, CAPACITY_KEY, 180, NOW - HOUR_MS, None)];
+        for (key, reading) in [
+            (READING_KEY, self.reading),
+            (LACKING_KEY, self.lacking),
+            (REGEN_KEY, self.regen),
+        ] {
+            if let Some(reading) = reading {
+                observed.push(fact(A, key, reading, NOW - MINUTE_MS, None));
+            }
         }
         observed.extend(self.goal.clone());
         EvaluationFacts {
@@ -712,9 +915,9 @@ fn spend<'a>(evaluation: &'a PolicyEvaluation, task_id: &str) -> &'a Outcome {
     &reason(decision(evaluation, task_id), PolicyCode::CappedSpend).outcome
 }
 
-/// `task_id`'s dispatch is handed `gap` at its production entry 0 and `run_cap`, as SS-6 builds
-/// them (`policy_dispatch_parameters`).
-fn spend_values_are(evaluation: &PolicyEvaluation, task_id: &str, gap: u64, run_cap: u64) {
+/// `task_id`'s dispatch is handed `gap` at its production entry 0 (none without one) and
+/// `run_cap`, as SS-6 builds them (`policy_dispatch_parameters`).
+fn spend_values_are(evaluation: &PolicyEvaluation, task_id: &str, gap: Option<u64>, run_cap: u64) {
     let given = &reason(
         decision(evaluation, task_id),
         PolicyCode::PolicyDispatchParameters,
@@ -722,7 +925,7 @@ fn spend_values_are(evaluation: &PolicyEvaluation, task_id: &str, gap: u64, run_
     .outcome;
     let built = SpendValues {
         spend_allowances: Vec::new(),
-        gaps_remaining: vec![(0, gap)],
+        gaps_remaining: gap.map(|open| (0, open)).into_iter().collect(),
         run_cap: Some(run_cap),
     }
     .add_to(Outcome::new(PolicyCode::PolicyDispatchParameters));
@@ -858,11 +1061,30 @@ fn paced(value: i64, pool_list: Value) -> CompiledCatalog {
     )
 }
 
-/// [`pools`] with the capped pool's trigger line 20 below its capacity (160).
+/// `pool_list` with its capped pool (the first) regenerating one unit in six minutes.
+fn regenerating(mut pool_list: Value) -> Value {
+    pool_list[0]["projection"] = json!({"amount": 1, "per_ms": 6 * MINUTE_MS});
+    pool_list
+}
+
+/// [`pools`] with the capped pool regenerating and its trigger line 20 below its capacity (160).
 fn triggered_pools() -> Value {
-    let mut list = pools();
+    let mut list = regenerating(pools());
     list[0]["trigger_line"] = line(-20);
     list
+}
+
+/// Due every hour (one minute past the hour at NOW).
+fn hourly() -> Value {
+    json!({
+        "kind": "clock",
+        "schedule": {
+            "kind": "interval",
+            "clock_source": {"kind": "local"},
+            "every_ms": HOUR_MS,
+            "anchor_ms": 0
+        }
+    })
 }
 
 /// [`pools`] with a capped pool that writes no lines.

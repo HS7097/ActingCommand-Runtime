@@ -69,11 +69,13 @@
 //!   the goal's `scale`. Any other pool it produces is not read: no goal, a pending goal (an
 //!   unknown reading, `Γ = 0`) and a met goal add nothing, so without such a goal `B`, `ε` and every
 //!   record are those of before, and a goal never lowers a `B`. Ruling 9 (a goal chooses which task
-//!   spends a pool, the pool's lines choose when): below the trigger line of a pool it consumes,
-//!   with no capped episode under way ([`super::capped`]), whether the task may spend is judged by
-//!   `S` and `ε` without its goal terms, as before them; its `benefit_fixed_value`, its items and
-//!   the order it takes once it passes read them with the terms. At or above the line, and for a
-//!   pool without a trigger line, the terms count everywhere.
+//!   spends a pool, the pool's lines choose when), as corrected: below the trigger line of a
+//!   regenerating pool it consumes (the capacity without a written one; a pool whose lines give no
+//!   value counts as below), with no capped episode under way ([`super::capped`]), whether the task
+//!   may spend is judged by `S` and `ε` without its goal terms, as before them; the order it takes
+//!   once it passes reads them with the terms. At or above the line, and for a pool that does not
+//!   regenerate, the terms count everywhere. Ruling 11: a reason judged without them lists no goal
+//!   term, says so once in its detail, and `benefit_fixed_value` gives the `B` judged.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -179,9 +181,9 @@ enum Judgement {
         /// SS-2h: the term of each pool it consumes, in declaration order (each pool once).
         consumed: Vec<ConsumedTerm>,
         /// #455 B1 ruling 9 (register §1.518): for a task with a fixed value and at least one
-        /// goal term, `S` and `ε` without its goal terms, which the pools' lines read below a
-        /// trigger line; `None` otherwise.
-        without_goals: Option<(ExactSum, ExactSum)>,
+        /// goal term, its judgement without them, which the gate reads below the trigger line of
+        /// a regenerating pool it consumes; `None` otherwise.
+        without_goals: Option<WithoutGoals>,
     },
     Unknown {
         gap: Gap,
@@ -189,6 +191,20 @@ enum Judgement {
         suggestions: Vec<DetectionSuggestion>,
     },
 }
+
+/// #455 B1 ruling 9 (register §1.518): a fixed value's judgement without its goal terms.
+struct WithoutGoals {
+    /// `S` without the goal terms.
+    sum: ExactSum,
+    /// `ε` without their bounds.
+    tolerance: ExactSum,
+    /// Ruling 11: how many of the judgement's items, at their head, are goal terms.
+    goal_items: usize,
+}
+
+/// #455 B1 ruling 11 (register §1.518): what the detail of a judged candidate's reason says once
+/// when the goal terms were not counted, below the trigger line of a pool it consumes.
+const GOAL_TERMS_UNCOUNTED: &str = " goal_terms=not_counted_below_trigger_line";
 
 /// SS-2h (register §1.289): one consumed pool's part of a judged candidate's `S` and `ε`, which
 /// the capped spending order takes out again: its value without the pool's cost is `S` plus
@@ -465,7 +481,7 @@ fn judge(
     // and joined to `S` and `ε` at the end, so the pools' lines can read the two without them.
     let mut goal_sum = ExactSum::new();
     let mut goal_bound = ExactSum::new();
-    let mut goal_terms = false;
+    let mut goal_items = 0_usize;
     let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
@@ -500,7 +516,7 @@ fn judge(
         let (terms, bounds) = match fixed_value {
             None => (&mut sum, &mut tolerance),
             Some(_) => {
-                goal_terms = true;
+                goal_items += 1;
                 (&mut goal_sum, &mut goal_bound)
             }
         };
@@ -635,8 +651,9 @@ fn judge(
                 .collect(),
         });
     }
-    // #455 B1: `S` and `ε` with the goal terms; ruling 9: without them beside, for the lines.
-    if !goal_terms {
+    // #455 B1: `S` and `ε` with the goal terms; ruling 9: without them beside, for the lines. The
+    // goal terms' items lead `items`: a fixed value's every production item is one.
+    if goal_items == 0 {
         return Ok(Judgement::Known {
             sum,
             tolerance,
@@ -654,7 +671,11 @@ fn judge(
         wake_unix_ms,
         downstream,
         consumed,
-        without_goals: Some((sum, tolerance)),
+        without_goals: Some(WithoutGoals {
+            sum,
+            tolerance,
+            goal_items,
+        }),
     })
 }
 
@@ -814,15 +835,18 @@ pub(super) fn gate(
                     } => (hold, below_trigger),
                 };
                 let benefit_milli = saturating_milli(sum.floor());
-                note_fixed_value(task_work, task, benefit_milli, expected);
-                // #455 B1 ruling 9 (register §1.518): below the trigger line of a pool it consumes,
-                // whether a task with a fixed value may spend is judged without its goal terms, as
-                // before them; once it passes, its order reads `B` with them.
-                let (gated_sum, gated_tolerance) = match &without_goals {
-                    Some((plain_sum, plain_tolerance)) if below_trigger => {
-                        (plain_sum, plain_tolerance)
-                    }
-                    _ => (&sum, &tolerance),
+                // #455 B1 ruling 9 (register §1.518): below the trigger line of a regenerating pool
+                // it consumes, whether a task with a fixed value may spend is judged without its
+                // goal terms, as before them; once it passes, its order reads `B` with them. Ruling
+                // 11: a reason judged without them lists no goal term and says so once.
+                let (gated_sum, gated_tolerance, gated_items, uncounted) = match &without_goals {
+                    Some(plain) if below_trigger => (
+                        &plain.sum,
+                        &plain.tolerance,
+                        &items[plain.goal_items..],
+                        GOAL_TERMS_UNCOUNTED,
+                    ),
+                    _ => (&sum, &tolerance, items.as_slice(), ""),
                 };
                 let gated_milli = saturating_milli(gated_sum.floor());
                 // SS-2d: within its rounding error the sign is not trusted (module doc).
@@ -832,6 +856,15 @@ pub(super) fn gate(
                         task.id, instance.instance_id
                     ))
                 })?;
+                // SCHED-C1a: the `B` the decision reads, with the goal terms once it passes, else the
+                // one judged (ruling 11).
+                let passes = !within && gated_milli > 0;
+                note_fixed_value(
+                    task_work,
+                    task,
+                    if passes { benefit_milli } else { gated_milli },
+                    expected,
+                );
                 if within {
                     let tier = if !task.is_benefit_realization() {
                         ZeroTier::Unmarked
@@ -844,12 +877,14 @@ pub(super) fn gate(
                     } else {
                         ZeroTier::Released
                     };
-                    task_work.reasons.push(tolerance_reason(
+                    let mut said = tolerance_reason(
                         (gated_milli, gated_sum),
                         (saturating_milli(gated_tolerance.ceil()), gated_tolerance),
                         tier,
-                        &items,
-                    ));
+                        gated_items,
+                    );
+                    said.detail.push_str(uncounted);
+                    task_work.reasons.push(said);
                     if matches!(tier, ZeroTier::Released) {
                         // SS-2h: a released one is held by a pool's lines as a positive one is.
                         if let Some(hold) = hold {
@@ -868,7 +903,7 @@ pub(super) fn gate(
                     }
                     continue;
                 }
-                if gated_milli > 0 {
+                if passes {
                     // SS-2h: positive, but a pool's lines hold it (its hard line, or a capped
                     // pool's order).
                     if let Some(hold) = hold {
@@ -888,9 +923,9 @@ pub(super) fn gate(
                     continue;
                 }
                 task_work.state = SchedulingDecisionState::Deferred;
-                task_work
-                    .reasons
-                    .push(nonpositive_reason(gated_milli, expected, &items));
+                let mut said = nonpositive_reason(gated_milli, expected, gated_items);
+                said.detail.push_str(uncounted);
+                task_work.reasons.push(said);
                 if let Some(wake) = wake_unix_ms.filter(|wake| *wake > context.time.unix_ms) {
                     task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
                 }
