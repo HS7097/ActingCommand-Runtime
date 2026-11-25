@@ -34,18 +34,18 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 ## 当前发布
 
-当前发布是 **v0.12.10**（预发布），在本仓 [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) 页。每个 Release 带两个 zip 与 `SHA256SUMS`；版本号只在 Release 的 tag 上，每个文件都由其 `BUILD-MANIFEST.json` 绑定到确切的源码提交。
+当前发布是 **v0.12.83**（0.12 系列仍在预览期，见[开发状态](#开发状态)），在本仓 [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) 页。每个 Release 带两个 zip 与 `SHA256SUMS`；版本号只在 Release 的 tag 上，每个文件都由其 `BUILD-MANIFEST.json` 绑定到确切的源码提交。
 
 | zip | 布局 | 内容 |
 | --- | --- | --- |
 | `actingcommand-runtime-<sha>.zip` | `distribution-v1` | `actingcommand-actingd.exe`、`actingctl.exe`、`actingd.config.example.json`、`actingd.config.first.json`（v0.12.60 起：首份配置的模板，Lab 的 `new` 填写它）、`actingd.defaults.json`（程序内嵌的默认值；配置里只写要改的键）、`INSTALL.md`、`RELEASE-NOTES.md` |
-| `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`、`actingledger.exe`、`actingcommand-vision-provider-check.exe`、看门狗 `actingwatch.exe`（v0.12.47 起自己跑看门狗的 tick），以及 `platform-tools/` 下 Google 官方 Android platform-tools 37.0.1（`adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`） |
+| `actingcommand-tools-<sha>.zip` | `platform-tools-v3` | `actinglab.exe`、Lab 的 MCP 服务 `actinglab-mcp.exe`、两代 MCP 入口 `actingcommand-mcp-entry.exe` 与 `actingcommand-mcp-entry-g2.exe`、`actingledger.exe`、`actingcommand-vision-provider-check.exe`、看门狗 `actingwatch.exe`（v0.12.47 起自己跑看门狗的 tick），以及 `platform-tools/` 下 Google 官方 Android platform-tools 37.0.1（`adb.exe`、`AdbWinApi.dll`、`AdbWinUsbApi.dll`、`NOTICE.txt`、`source.properties`） |
 
 视觉模型与 ONNX Runtime 从不随发布：OCR/NN 引擎链接进 `actingcommand-actingd.exe`，模型从 `<vision root>\models\<model_ref>\` 读取；没有模型时，需要 OCR 的识别目标会明确失败。`actingcommand-actingd.exe` 还带着官方 scrcpy server 5.0.1 与 OpenH264，供真机截图后端使用；它们的许可声明在 RELEASE-NOTES.md 里。
 
-v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]、`install-control` [0, 1]、`ledger` [3, 4]、`runtime-client` [2, 2]、`package` [3, 5]、`runtime-outcomes` [1, 1]。
+v0.12.83 声明的接口：`actingd-config` [5, 35]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 9]、`runtime-client` [12, 14]、`package` [3, 25]、`runtime-outcomes` [1, 1]。
 
-**0.12 系列带来的变化**（v0.12.0 到 v0.12.10；每个版本的具体改动见各自的 Release 页）
+**0.12 系列带来的变化**（下面列到 v0.12.10；v0.12.11 到 v0.12.83 的改动不在这里逐条列，见各版本的 Release 页与随包的 `RELEASE-NOTES.md`）
 
 - **新账本与结果码（v0.12.0）。** 账本是 SQLite 格式 2、事件 `actingcommand.event.v3`，每条带结果的记录都带一个登记过的结果码。0.12 的 Runtime 拒绝 0.11 的账本（`ledger_format_unsupported`），0.11 的程序也读不了 0.12 的账本，所以 0.12 的安装从空的状态根开始。v0.12.10 加了账本修订 4（只新增记录形状，见「升级」）。
 - **输出与退出码（v0.12.0）。** `actingctl` 每次退出打印一行 JSON，actingd 写 `OUTCOME actingd:` 行，看门狗的报告是 `actingcommand.watchdog.report.v2`，每个程序都按结果的类别以 0、1 或 2 退出，MCP 工具报错是 `{class, outcome}`（见[构建与运行](#构建与运行)）。
@@ -64,14 +64,12 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 - v0.12.10 是第一个账本修订 4 的版本。更早的 Runtime 拒绝修订 4 新增的记录，所以从 v0.12.10 退回 v0.12.9 或更早不受支持。
 - 配置里写了较新 `actingd-config` 修订的键时，较旧的 Runtime 会拒收这份配置；回退前先删掉这些键。
 
-**主线上已有、尚未发布：** 宿主可以替 Lab 运行包里声明的一个操作（`actinglab do --operation`、MCP `ac_lab_do` 带 `operation`）；OCR 数字可以按字典读取，并要求多帧一致。
-
 ## 安装
 
-- **手动安装（0.12 系列）。** 已发布的安装向导都装不了 0.12 的 Runtime（见「搭配」）。0.12 的 Runtime 在一个位置上一次铺开，用空的状态根：从本仓某个 Release 取 `actingcommand-runtime-<sha>.zip`、`actingcommand-tools-<sha>.zip` 与 `SHA256SUMS`，核对后把 Runtime zip 解到 `<root>\runtime\`，把 Tools zip 解到 `<root>\tools\`，再按模板写好私有配置 `<root>\actingd.config.json`。之后按 [INSTALL.md](distribution/windows/INSTALL.md) 操作：私有配置与 `check-config`、[自带 adb](distribution/windows/INSTALL.md#bundled-adb)（没写 `adb_path` 的实例用 `<root>\tools\platform-tools\adb.exe`）、启动 / 查看 / 关闭，以及[升级边界](distribution/windows/INSTALL.md#upgrade-boundary)。`actingctl start --root <root> --config <root>\actingd.config.json` 按看门狗的方式启动这样一个根的 Runtime。
+- **安装（0.12 系列）。** 0.12 的 Runtime 在一个位置上一次铺开，用空的状态根。可以用 UI 仓的安装向导 `acsetup`（UI v0.12.17 起随监控台发布，从一份安装集安装），可以用 Tools 里的 `actinglab new <新根> --build <发布目录>` 建一个全新的根，也可以手动：从本仓某个 Release 取 `actingcommand-runtime-<sha>.zip`、`actingcommand-tools-<sha>.zip` 与 `SHA256SUMS`，核对后把 Runtime zip 解到 `<root>\runtime\`，把 Tools zip 解到 `<root>\tools\`，再按模板写好私有配置 `<root>\actingd.config.json`。之后按 [INSTALL.md](distribution/windows/INSTALL.md) 操作：私有配置与 `check-config`、[自带 adb](distribution/windows/INSTALL.md#bundled-adb)（没写 `adb_path` 的实例用 `<root>\tools\platform-tools\adb.exe`）、启动 / 查看 / 关闭，以及[升级边界](distribution/windows/INSTALL.md#upgrade-boundary)。`actingctl start --root <root> --config <root>\actingd.config.json` 按看门狗的方式启动这样一个根的 Runtime。
 - **安装向导（0.11 系列）。** 伞仓的 [Releases](https://github.com/HS7097/ActingCommand/releases) 页带在线向导 `acsetup.exe`、离线向导 `acsetup-full-<tag>.exe`、一键脚本 `install.ps1` / `install.sh` 与各成员 zip。它的最新版本 v0.11.4 以 A/B 安装装上 Runtime v0.11.4：程序本体（`runtime\`、`ui\`）放进槽 `A\` 或 `B\`，`install\active.json` 选槽，安装根下的固定入口总是启动所选的槽；`tools\`、`vision\`、`packages\`、`state\` 留在安装根、两槽共用。
 - **看门狗。** 不会自动启用。在运行 Runtime 的那个用户的普通（非提权）PowerShell 里运行一次 `<install root>\runtime\actingctl.exe watchdog install --root <install root>`：它注册一个每分钟运行一次 `<install root>\tools\actingwatch.exe` 的计划任务。它看管 A/B 安装或单位置根（没有 `install\active.json`、`runtime\BUILD-MANIFEST.json` 是文件的根）；Runtime 没经正式关闭就不在了（崩溃、关窗、任务管理器结束、重启），或者上一次启动以错误结束时，看门狗把它拉起。它按该次启动的终态结果（启动日志里最后一行 `OUTCOME actingd:`）判断：正式关闭过的从不拉起，以致命结局收场的保持停机并报出，30 分钟内最多拉 3 次。记录写在 `<install root>\watchdog\watchdog.log`，不写账本；它的报告是带 `outcome` 的 `actingcommand.watchdog.report.v2`，`actingctl watchdog` 与 `actingwatch.exe` 按类别以 0、1 或 2 退出。`watchdog status` / `run-once` / `uninstall` 用同一个 `--root`；删除安装前先 `watchdog uninstall`（[详情](distribution/windows/INSTALL.md#runtime-watchdog)、`contracts/runtime-watchdog.md`）。
-- **搭配。** Runtime 0.12.x 与最新的 UI v0.11.4 搭配不上：UI 声明的是 `actingd-config` [1, 2]、`ledger` [1, 2]、`runtime-client` [1, 1] 与 `package` [1, 2]。所以它的安装向导会在改动任何东西之前以退出码 6 拒绝 0.12 的 Runtime，它的控制台既连不上 0.12 的 Runtime（请求 v1 到 v3 一律被拒），也读不了它的账本。0.11 的标准包在 0.12 里装载不了，0.12 的标准包未公开。
+- **搭配。** 最新的 UI v0.12.33 可与 v0.12.73 起的 Runtime 搭配，包括 v0.12.83：它声明 `actingd-config` [5, 32]、`ledger` [3, 9]、`runtime-client` [12, 14] 与 `runtime-outcomes` [1, 1]，都和本版声明的区间对得上。0.11 系列的 UI（v0.11.4 及更早）、它的安装向导和 0.11 的标准包都不能用于 0.12；0.12 的标准包未公开。
 
 ## 架构总览
 
@@ -224,6 +222,8 @@ v0.12.10 声明的接口：`actingd-config` [5, 9]、`install-selection` [1, 1]�
 包的坐标处在它声明的分辨率下（今天的标准包都用 1280×720）。每一帧都经过显示适配壳的收帧闸（`contracts/display-adapter.md`）：与包同尺寸的帧原样使用，同比例更大的帧缩到包的尺寸再识别，其余的帧以 `display_map_unresolved` 明确失败。显示能映射到包的基准尺寸时（纯缩放，比如 1280×720 的包遇上 1920×1080 或 3840×2160），Lab 在线的 `observe --capture` 和 `do --capture` 一律说基准坐标（v0.12.67，Workflow #392 DA-5）：回答里的帧、矩形和点都在基准里，`frame_coordinates` 写基准形（`space: base`、`base_pixels`、`reduced_from` 即设备尺寸），收下的点、矩形和滑动也都在基准里，按帧的映射换算后发给设备。设备上受限任务的第一帧会把实例的显示记为事实（`display.frame_extent`、`display.rotation`、`display.orientation`、`display.aspect`）；不会因为帧自身的宽高比拒绝任何帧，只在帧的宽高比与采集它的显示不一致时拒绝（`contained_task_geometry_frame_display_mismatch`）。Lab 的离线识别（`recognize`、`detect-page`、`current-page`、`is-visible`、`observe`，`do`、`ensure`、`tap-target`、`navigate` 的演练，以及 `wait`）收到别的尺寸的存图时，和 Lab 在线观察收到同样尺寸的一帧完全一样处理（v0.12.67，Workflow #392 DA-5）：与包同比例、不小于包、方向相同的存图，用收帧闸自己的缩放缩到包的基准尺寸再判，回答里的坐标都在基准里，并以基准形的 `frame_coordinates`（`space: base`、`base_pixels`、`reduced_from` 即原图尺寸）写明；其余尺寸以 `lab_scene_size_unsupported` 拒绝。Lab 录制一律在基准尺寸 1280×720 上做：Runtime 上次看到的实例显示是别的尺寸时 `record start` 拒绝；`record start` 把基准尺寸写进录制的头，录制的第一帧不是这个尺寸也拒绝，这两处的码都是 `record_display_not_base`；帧不是基准尺寸的录制 `record stop` 拒绝，码是 `record_size_not_base`；每条录制的路在发出或写下任何东西之前，都先核这份录制和它取到的那一帧。
 
 ## MCP 服务
+
+**现状：两代服务并存。** 第二代是 Tools 里的 `actinglab-mcp.exe`，当前的主入口：不分档，Lab 操作表（`contracts/lab-operations.json`）里的每个操作是一个工具，Windows 上 169 个；`actinglab mcp config --client <客户端>` 打印它的注册片段（见 `contracts/lab-two-entries.md`）。本节下面写的是第一代 `actingctl mcp-serve`，在移除前保持不变。
 
 `actingctl mcp-serve`（v0.11.0 起）是 stdio 上的本地 MCP 服务，供 Claude Code、Codex 等智能体客户端使用。它只有工具（tools-only），不提供 resources / prompts，支持两代协议：客户端要么先发 `initialize`（协议 2025-11-25、2025-06-18 或 2025-03-26），要么每次请求都带无状态 2026-07-28 的 `_meta`。它不判定任何业务规则：什么是一次运行、能否运行、是否完成，都原样来自 Runtime。
 
@@ -389,15 +389,15 @@ actingcommand-vision-provider-check --models-root <vision root>\models --hash
 
 - **调试阶段。** 主循环是：发现问题 → 修复 → 对照预期检查 → 再改。部署与易用性是次要的。
 - **全部是预发布。** 接口、配置与文件格式还会变。只支持最新版；旧系列（包括 0.11）不出修复。
-- **实机现状。** 在项目自己的机器上，0.12 系列的 Runtime 在五台 MuMu 实例上全天运行。三个标准包每天按目录跑例行批次；另有两台实例接入了第四个标准包，它正在制作，未公开。标准包的内容覆盖还不完整。
-- **UI。** 最新的 UI v0.11.4 只能用于 0.11 的 Runtime；0.12 系列没有对应的 UI 版本（见[安装](#安装)）。
+- **实机现状。** 在项目自己的机器上，0.12 系列的 Runtime 调度六台 MuMu 实例，四个标准包每天按目录跑例行批次；闲置的实例按配置停掉模拟器，有任务时再唤醒。标准包的内容覆盖还不完整，未公开。
+- **UI。** 监控台与安装向导在 UI 仓；最新的 UI v0.12.33 可与 v0.12.73 起的 Runtime 搭配（见[安装](#安装)）。
 
 ### 当前边界
 
 - 完成不变式的证据全部来自 CI 可跑的构造性测试，使用中立数据、假后端、加速时钟与真实子进程。真机验证、目标客户端验证、UI 验证与 48 小时墙钟验证都**不**在其主张范围内。
 - 账本：主机的生产写者只走 SQLite。段写入只留在账本 crate 自己的测试里；既有段目录是离线导入源，由 `ledger-maintenance` 冻结并导入。只读一侧仍保留段读取面：状态根里没有 SQLite 账本时，`open_evidence` 退回读段目录及其段字节快照。
 - 工件保留：保留类有 DebugFull / Adaptive / Light 三个取值，各工件种类默认 Adaptive。采集帧按类别到期：截图清理器跑在主机的性能监视循环上，至多每 10 分钟清扫一遍，每轮在 1 秒内至多处理 16 帧。除非配置把 `frame_retention_enabled` 设为 `false`，它就是开启的。近似重复帧在其运行结束后删除，资源读数帧在运行结束 7 天后、其他帧在运行结束 1 天后删除；每次错误前 30 秒的帧和 Lab 帧移入 `<state root>\kept\<日期>\<叶目录>\`，由人删除；清理不往账本写任何记录。读取方仍能按工件 ID 找到被移走的帧，被删的帧读作缺失，被占用的帧留到后面一遍再处理。`frame_retention_dedup_error`（默认开）和 `frame_retention_dedup_lab`（默认关）决定错误窗口内与 Lab 输出里的近似重复帧是否也删除。其他工件种类不会被自动回收。
-- UI 在独立仓：一个在线 / 离线安装向导，以及一个可启动守护进程的只读监控台。它只经运行时 API 或账本的官方读取面与运行时交互，不拥有运行时生命周期。
+- UI 在独立仓：安装向导（从安装集离线安装），以及监控台（可启动守护进程、查看账本、暂停与恢复调度、设定目标）。它只经运行时 API 或账本的官方读取面与运行时交互，不拥有运行时生命周期。
 - 资源：实例配置的 `resource_package` 会被校验（`check-config` 与启动时）并在运行时状态里显示，但调度仍运行 `actingd` 配置里钉住的包（`policy.procedure_manifest[]` 的 `scheduled_execution.package_path`）。资源自动更新尚未建成。
 - 代理面只建成了守护进程一侧：`runtime-host` 有 `AgentDispatcher`，把唤醒请求记进账本（`agent.wake_requested`，来自策略的时间线与漂移信号）并管理有界的代理会话，可由 `actingd` 配置的 `agent_dispatcher` 段启用；`actingctl agent-publish-facts` 是已有的 Agent/Adapter 来源入口。智能体经 MCP 服务接入；这条路不会启动外部会话，自主探索与完整的自维护回路尚未建成。另一条路（`contracts/agent-wake.md`，`agent_wake` 段）是 Runtime 自己给已登记的会话发一条短消息：配置了带规则的段之后，恢复阶梯用尽、实例隔离后等人处理、规则列出错误码的运行失败这三类记录会自动唤起规则指定的频道（同一实例的一阵记录合并成一条，另有冷却和按本机日计的每日上限），`daily_summary` 规则每天到点发一份汇总（正文带每个实例的 `RoutineSummary` 回答）；人手动的 `actingctl agent-wake-test` 走同一条路。发送通道有 Claude Code（会话已停时可以先经 Claude Desktop 把它唤起）、Codex 和 DSH，其他客户端的频道会等待并在期满时报失败。生产配置里还没有这一段，所以目前什么也不会被唤起。
 - 未建成：时段黑名单（`contracts/scheduling-blackout.md` 先于代码写成）；按通道或按 Lab 选项拒绝（两个选项 `lab_module_authoring` 与 `lab_module_debugging` 会被读取并报告，默认都是关，但不拒绝任何请求，所以 Tools 里仍带着 Lab）；升级态与包加载 / 卸载请求（回答 `not_implemented`）。
