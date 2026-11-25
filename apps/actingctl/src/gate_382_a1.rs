@@ -3,7 +3,7 @@
 // Workflow #382 A-1 (test plan v2.2 §3.7), in-process.
 // G10 (apps 13): the documented forms of pause / resume (contracts/scheduling-pause.md, "CLI"),
 // emulator (contracts/emulator-control.md: status/start/stop/restart with --instance, discover
-// without), selfcheck (README.md, "actingctl selfcheck <alias>") and the shape of the README's
+// without), selfcheck (REFERENCE.md, "actingctl selfcheck <alias>") and the shape of that file's
 // monitor-set example line, parse to their commands (Workflow #434 LAB-6S4a: install-transition's
 // forms went with the command). Their usage errors, reported before any connection, are
 // tests/gate/cli_grammar.rs.
@@ -88,7 +88,7 @@ fn parsed_as(invocation: Invocation, expected: &Parsed) -> bool {
     }
 }
 
-/// G10: each documented form, as its contract or the README writes it, parses to its command.
+/// G10: each documented form, as its contract or REFERENCE.md writes it, parses to its command.
 #[test]
 fn gate_the_documented_forms_parse_to_their_commands() {
     let at_instance = || SchedulingPauseScope::Instance {
@@ -183,7 +183,7 @@ fn gate_the_documented_forms_parse_to_their_commands() {
             words(&["selfcheck", ALIAS, "--state-root", "state"]),
             Parsed::SelfCheck(ALIAS),
         ),
-        // README.md, the monitor-set example line.
+        // REFERENCE.md, the monitor-set example line.
         (
             words(&[
                 "monitor-set",
