@@ -882,8 +882,15 @@ time L that D2 needs (D2 A-7) is the end of step 7.
       the remedy journal its latest runs. Each is read by point reads of its intent, admission and
       completion, and its execution among the executions between its admission and its
       completion (an open one's: through the records' position). They are applied in ledger
-      order with recovery's checks. Then only the dispatch records after the records' position
-      are read;
+      order with recovery's checks. Each admission (since 0.12.86, #503 CYC-3,
+      [v0.12.0 register](v012-register.md) §1.529, `ledger` revision 10) carries beside its
+      activity sample's `window_id` the end of that window, `window_until_unix_ms`, which is
+      the end the remedy journal gives its run: it is loaded with the record, so the start reads
+      no catalog generation for it. An admission written before carries none; the remedy journal
+      reads that run's end from the run's own generation once, the first time it holds the run,
+      and keeps it in memory. The public tiers of the projection (`ui`, `normal`) carry the
+      admission without the member, the full-record tiers (`lab`, `verbose`, `forensic`) with
+      it. Then only the dispatch records after the records' position are read;
     - **monitor registry**: the `monitor_import` record, then each `monitor/<alias>` change;
       the revision is the largest the records carry, and the journal file is compared with the
       import as before;

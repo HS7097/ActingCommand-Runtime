@@ -4887,3 +4887,13 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_cyc2::cyc2_h3_a_summary_or_stutter_that_changes_no_input_wakes_no_cycle_a_change_wakes_one",
 ]
 incident = ["#503 CYC-2"]
+
+# #503 CYC-3 (0.12.86; register §1.529; brief rd-1123/brief-503-cyc3.md, rulings 1 to 4, tests t1 to t3; contracts/scheduling/README.md, "The policy driver's clock and the line of a cycle"; contracts/remedies.md, 5.8), the host's half, on the remedy fixture of gate_411_b15h and the catalog generations, cycle and delays of gate_503_cyc2; no clock read, no sleep: a run's policy.dispatch_admitted records window_until_unix_ms, the end of the fixture's activity window, its policy.dispatch_completed repeats the admission and the run's context holds it, and the remedy journal's end of the run and the one its catalog generation gives are that end (t1); after a restart on the same state root with a memo of one generation and two later generations activated (the runs' generation in its files alone), the first evaluated cycle reads no generation from its files (the delay planned for a read stays untaken; until 0.12.86 this cycle read the run's generation), the journal remembers no end, reading the run's generation then takes the delay (the premise) and the journal's end of the run is the recorded one (t2); a run admitted with no window end, as 0.12.85 recorded every admission (a test hook of the admission), and a later one with it, side by side in one pair's journal: the earlier run's records carry none and the later run's carry it; a start opens that ledger; the first cycle after it reads the earlier run's generation and, once another generation took the memo, the next reads none; only the earlier run's end is remembered and each run's end is the window's (t3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_cyc3::cyc3_t1_an_admission_records_the_end_of_its_window_which_its_generation_gives",
+    "actingcommand-runtime-host::lib::tests::gate_503_cyc3::cyc3_t2_after_a_restart_the_first_cycle_reads_no_generation_for_a_recorded_window_end",
+    "actingcommand-runtime-host::lib::tests::gate_503_cyc3::cyc3_t3_a_run_admitted_without_a_window_end_is_read_once_beside_one_admitted_with_it",
+]
+incident = ["#503 CYC-3"]

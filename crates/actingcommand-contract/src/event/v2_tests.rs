@@ -155,6 +155,7 @@ fn all_payload_drafts(mut input: impl FnMut() -> AuditInput) -> Vec<EventPayload
             profile_id: "activity:fixture-a".to_owned(),
             local_day: 20_000,
             window_id: "activity:fixture-a:20000:0".to_owned(),
+            window_until_unix_ms: None,
             admitted_at_unix_ms: 1_752_147_200_000,
             seed: 7,
             interval_ms: 60_000,
@@ -4231,3 +4232,7 @@ mod gate_429_r6b1;
 // (register §1.486).
 #[path = "gate_479_f3a.rs"]
 mod gate_479_f3a;
+// #503 CYC-3 (0.12.86; register §1.529, ledger revision 10): the admission record's window end on
+// the wire, its check and its projection.
+#[path = "gate_503_cyc3.rs"]
+mod gate_503_cyc3;

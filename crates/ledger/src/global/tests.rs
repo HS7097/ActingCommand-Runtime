@@ -424,6 +424,7 @@ fn scheduled_recovery_drafts() -> ScheduledRecoveryDrafts {
             profile_id: "profile:recovery-fixture".to_owned(),
             local_day: 1,
             window_id: "window:recovery-fixture".to_owned(),
+            window_until_unix_ms: None,
             admitted_at_unix_ms: 1_752_147_200_100,
             seed: 7,
             interval_ms: 1_000,

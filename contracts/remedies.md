@@ -462,7 +462,12 @@ The host derives every round from records the ledger already holds, live and at 
   `scheduling_disposition.outcome_key` (one terminal read per settlement, the read the settlement
   already makes for referenced keys, now made whatever the catalog references);
 - the dispatches after it whose chains carry `policy_remedy_requested` or `policy_remedy_retry`
-  naming the round (`task_id`, `decision_id`), their admissions and their settlements;
+  naming the round (`task_id`, `decision_id`), their admissions and their settlements; each
+  admission carries the end of the activity window its run was admitted in (since 0.12.86,
+  `window_until_unix_ms` of its activity sample; #503 CYC-3, [v012-register.md](v012-register.md)
+  §1.529), which is the end the journal gives the run and the expiry of 5.7 reads, so no catalog
+  generation is read for it, at start or after; a run admitted before carries none, and its end is
+  read once from its own catalog generation and kept in memory (#503 CYC-2, §1.528);
 - the round's stop, lift and expiry signals (`signal:remedy:`).
 
 The open rounds are held in memory only, per pair at most 64 runs since the pair's latest root

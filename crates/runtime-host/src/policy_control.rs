@@ -19,8 +19,9 @@ use actingcommand_contract::{
     PolicyRetryRoundRecord, RuntimeErrorCode, scheduled_failure_code_str,
 };
 use actingcommand_policy::{
-    ActivityProfile, CompiledCatalog, DispatchIntent, DispatchTerms, EvaluationFacts,
-    FACT_REFRESH_TASK_ID, FailureAction, TaskSpec, activity_window_at, evaluated_dispatch_terms,
+    ActivityProfile, ActivityWindowOccurrence, CompiledCatalog, DispatchIntent, DispatchTerms,
+    EvaluationFacts, FACT_REFRESH_TASK_ID, FailureAction, TaskSpec, activity_window_at,
+    evaluated_dispatch_terms,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -971,7 +972,19 @@ impl PolicyControlState {
         now_unix_ms: u64,
     ) -> RuntimeHostResult<PolicyAdmissionRecord> {
         let (task, profile) = task_and_profile(catalog, intent)?;
-        let (local_day, window_id) = active_activity_window(profile, now_unix_ms)?;
+        // #503 CYC-3 (register §1.529, ruling 1): one resolution of the window gives its day, its
+        // id and its end, which the record carries beside them.
+        let ActivityWindowOccurrence {
+            local_day,
+            window_id,
+            until_unix_ms: window_until_unix_ms,
+            ..
+        } = active_activity_occurrence(profile, now_unix_ms)?;
+        #[cfg(test)]
+        let window_until_unix_ms = (!ADMIT_WITHOUT_WINDOW_END_FOR_TEST.with(std::cell::Cell::get))
+            .then_some(window_until_unix_ms);
+        #[cfg(not(test))]
+        let window_until_unix_ms = Some(window_until_unix_ms);
         let cadence_key = (intent.instance_id.clone(), profile.id.clone());
         if self
             .next_activity_eligible
@@ -1117,6 +1130,7 @@ impl PolicyControlState {
                 profile_id: profile.id.clone(),
                 local_day,
                 window_id,
+                window_until_unix_ms,
                 admitted_at_unix_ms: now_unix_ms,
                 seed,
                 interval_ms,
@@ -1191,8 +1205,14 @@ impl PolicyControlState {
     ) -> RuntimeHostResult<()> {
         // Replaying an accepted admission validates its original budget receipt.
         // Live failure disposition is checked by preview_admission under the owner lock.
-        let expected =
+        let mut expected =
             self.preview_admission_at(catalog, intent, admission.activity.admitted_at_unix_ms)?;
+        // #503 CYC-3 (register §1.529, ruling 4): an admission recorded before 0.12.86 carries no
+        // window end and is compared on every other member, as it was; one that carries it is
+        // compared with it too.
+        if admission.activity.window_until_unix_ms.is_none() {
+            expected.activity.window_until_unix_ms = None;
+        }
         if &expected != admission {
             return Err(fatal(
                 HostCode::PolicyBudgetReceiptMismatch,
@@ -2506,6 +2526,16 @@ pub(crate) fn active_activity_window(
     profile: &ActivityProfile,
     now_unix_ms: u64,
 ) -> RuntimeHostResult<(i64, String)> {
+    active_activity_occurrence(profile, now_unix_ms)
+        .map(|window| (window.local_day, window.window_id))
+}
+
+/// #503 CYC-3 (register §1.529, ruling 1): the window of `profile` open at `now_unix_ms`, whole:
+/// its day, its id and its end; [`active_activity_window`]'s refusals.
+fn active_activity_occurrence(
+    profile: &ActivityProfile,
+    now_unix_ms: u64,
+) -> RuntimeHostResult<ActivityWindowOccurrence> {
     activity_window_at(profile, now_unix_ms)
         .map_err(|_| {
             fatal(
@@ -2513,13 +2543,27 @@ pub(crate) fn active_activity_window(
                 HostLocation::ResolveActivityWindow,
             )
         })?
-        .map(|window| (window.local_day, window.window_id))
         .ok_or_else(|| {
             request(
                 HostCode::PolicyActivityWindowClosed,
                 HostLocation::ReservePolicyBudget,
             )
         })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #503 CYC-3, tests: whether the admissions previewed on this thread leave out the end of
+    /// their window, as every admission before 0.12.86 was recorded.
+    static ADMIT_WITHOUT_WINDOW_END_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// #503 CYC-3, tests: the admissions previewed on this thread from now on leave out the end of
+/// their window (`without`), or carry it again.
+#[cfg(test)]
+pub(crate) fn admit_without_window_end_for_test(without: bool) {
+    ADMIT_WITHOUT_WINDOW_END_FOR_TEST.with(|flag| flag.set(without));
 }
 
 fn activity_seed(decision_id: &str, profile_id: &str, window_id: &str) -> u64 {

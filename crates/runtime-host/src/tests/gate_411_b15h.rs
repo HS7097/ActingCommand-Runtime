@@ -22,7 +22,8 @@ use actingcommand_policy::{PolicyEvaluation, RemedyTableEdge};
 use serde_json::{Value, json};
 
 // #503 CYC-2 (register §1.528): the fixture below is also the remedy journal's of that slice's gate
-// (`gate_503_cyc2.rs`), so the parts it reads are visible to the test modules.
+// (`gate_503_cyc2.rs`), so the parts it reads are visible to the test modules; #503 CYC-3 (register
+// §1.529) reads the window's end and the restart too (`gate_503_cyc3.rs`).
 pub(super) const MAIN_TASK: &str = "t_main";
 const SINK_TASK: &str = "t_sink";
 const MAIN_PROCEDURE: &str = "procedure.main";
@@ -35,7 +36,7 @@ const HOME: [u8; 3] = [255, 0, 0];
 const PAGE_B: [u8; 3] = [0, 0, 255];
 pub(super) const RESULT: [u8; 3] = [255, 255, 255];
 // The fixture catalog's activity window is 08:00 to 22:00 UTC; `POLICY_NOW_UNIX_MS` is 12:00 UTC.
-const WINDOW_END_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 36_000_000;
+pub(super) const WINDOW_END_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 36_000_000;
 
 const REQUESTED: &str = "policy_remedy_requested";
 const RETRY: &str = "policy_remedy_retry";
@@ -320,7 +321,7 @@ impl Fixture {
     }
 
     // The host closed and started again on the same state root and instance, its clock at `at`.
-    fn restart(self, at: u64) -> Self {
+    pub(super) fn restart(self, at: u64) -> Self {
         let Self {
             root,
             main,

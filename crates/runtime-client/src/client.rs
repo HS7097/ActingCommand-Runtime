@@ -7384,6 +7384,7 @@ mod run_summary_settlement_tests {
                 profile_id: "profile:settlement".to_owned(),
                 local_day: 1,
                 window_id: "window:settlement".to_owned(),
+                window_until_unix_ms: None,
                 admitted_at_unix_ms: 1,
                 seed: 7,
                 interval_ms: 1_000,

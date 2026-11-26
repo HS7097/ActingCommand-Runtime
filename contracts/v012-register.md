@@ -49605,6 +49605,117 @@ next start, where reading it at every cycle stopped it at once. And the per-fram
 frame retention that the first days of 0.12.84 showed (a pass that handles frames still spends
 about a hundred thousand query steps on each) is not this slice's and is left for one of its own.
 
+### 1.529 Slice #503 CYC-3 (0.12.86): the admission record carries the end of the activity window its run was admitted in, so the remedy journal's window end comes back from the ledger at a start and no catalog generation is read for it; ledger revision 10 (board #503; the owner's words below; the rulings 1 to 5 are the coordinator's of 11-26; coordinator work order `rd-1123/brief-503-cyc3.md`; on main `0654b467`, the code of v0.12.85)
+
+It ships in 0.12.86. [component-interfaces.md](component-interfaces.md) (the `ledger` row 10),
+[ledger-observer.md](ledger-observer.md) (the dispatch journal a start loads),
+[scheduling/README.md](scheduling/README.md) (what an admission records; "The policy driver's
+clock and the line of a cycle") and [remedies.md](remedies.md) (5.8) are the contract. No setting,
+no outcome code and no record type is added; `runtime-client` does not move.
+
+**Why.** Since 0.12.85 (§1.528) the remedy journal computes the end of the activity window each of
+its runs was admitted in once, from the run's own catalog generation, and keeps it in memory.
+After a start that memory is empty: the first evaluation reads every run's generation again from
+the state root (its documents read, their digests checked, the generation compiled: the seconds a
+cycle cost before 0.12.85, now paid once a start), and a generation whose files are damaged is
+noticed only then. The owner asked for the rule the Runtime already keeps for its two memories
+(the scheduler's and the instance fact store's): what a memory needs after a start is loaded from
+the ledger's own records, with no state file and no second source. Her words (11-26, the
+coordinator's window): 「我们应用重启后会直接从账本里翻带有对应标签的条目上载进内存，这个数字是不是也可以这么搞呢？」
+and, to the coordinator's plan below, 「对于那个读数进账本的，没问题，直接升级就行，好兄弟」. The
+rulings are the coordinator's.
+
+**The rules as built.**
+- *Ruling 1, the record* (`crates/actingcommand-contract/src/event/payload.rs`,
+  `PolicyActivitySample`; `crates/runtime-host/src/policy_control.rs`, `preview_admission_at`,
+  `active_activity_occurrence`). The activity sample of the admission record
+  (`PolicyAdmissionRecord.activity`, in `policy.dispatch_admitted`, `policy.dispatch_completed`
+  and the retry round of `policy.control_state_recorded`) gains, beside `window_id` and
+  `local_day`, the optional `window_until_unix_ms`: the end of the activity window the run was
+  admitted in, in Unix milliseconds. Absent in a record written before, it serializes as nothing
+  at all. Every admission of 0.12.86 records it: the admission resolves the open window once
+  (`active_activity_occurrence`, with the refusals `active_activity_window` had, which now reads
+  it too) and takes the day, the id and the end from that one resolution. It is the value
+  `admitted_window_end` reads from the run's generation: the admission resolves its window under
+  the active generation, which must be the one its intent names (`catalog_active_generation_changed`
+  otherwise), at its own time, by the profile it records (t1).
+- *Ruling 2, the reader* (`crates/runtime-host/src/policy_host.rs`, `recorded_window_end_or`,
+  `PolicyHost::remedy_window_end`, `PolicyHost::dispatch_window_end`). One function holds the
+  order: the end the record carries, else the run's generation. The remedy journal's end of a run
+  that carries the member is the member, with no generation loaded and nothing kept; a run
+  admitted before has its end read from its generation once and kept, as in 0.12.85, and only such
+  a run (t2, t3). The one other place that computes the end of the window a dispatch was admitted
+  in from the dispatch's generation by the same rule, `dispatch_window_end` (the window of a pair's
+  failures at the entry, Workflow #490 ENTRY-A), reads the member when the record carries it. Left
+  alone, as no generation load would be saved: the condition settlement's `expires_at_unix_ms` and
+  `PolicyControlState::entry_condition`, which compute the same end from a generation loaded for
+  the rest of their work, and the retry round's `until_unix_ms`, computed at the commit from the
+  catalog in hand.
+- *Ruling 3, the interface.* `ledger` revision 10, one way, raised as revision 9 was (§1.455):
+  the row of [component-interfaces.md](component-interfaces.md), the declaration
+  `distribution/windows/component-interfaces.json` [3, 10] and its pin
+  (`tools/actinglab-architecture/tests/component_interfaces.rs`, `V0120`). No migration, no stored
+  record rewritten, no stored identity or hash changed: the member enters no identity, digest or
+  seed, and a record without it keeps its bytes and is read exactly as before. The public
+  projection (`PublicPayload.policy_admission`) carries the admission without the member
+  (`PolicyAdmissionRecord::public_summary`), as CH-1's projection carries none of its members, so
+  a page of public projections is byte for byte what it was and `runtime-client` stays [12, 14];
+  the full-record tiers (`lab`, `verbose`, `forensic`), the ledger read offline and the run
+  summary (`actingcommand.run-summary.v1`, whose `admission` is the full record's) carry it. A
+  Runtime of revision 9 or lower refuses a record that carries it (`deny_unknown_fields`); the
+  owner accepted that the rollback narrows.
+- *Ruling 4, validation.* Where the record's members are validated (`validate_policy_admission`:
+  at the write, at every read, in the retry round of a value record) a member that is not later
+  than `admitted_at_unix_ms` is refused `invalid_policy_activity_sample`, as the sample's other
+  checks are. The start's replay of an admission (`PolicyControlState::commit_admission`) compares
+  the record with the admission recomputed under its generation at its time: on every member, the
+  window end included, when the record carries it; on every other member, as before, when it
+  carries none. A completion repeats the admission unchanged, the member with it: the host's
+  replay (`policy_dispatch_completion_incomplete`), the ledger's settlement recovery and the run
+  summary compare the two whole. A ledger whose admissions all lack the member, and one that holds
+  both kinds, open (t3).
+- *Ruling 5.* No setting, no outcome code, no change of a decision, an intent, a signal or their
+  order.
+
+**Tests** (incident `#503 CYC-3`: `crates/runtime-host/src/tests/gate_503_cyc3.rs`, host gate map,
+on the remedy fixture of `gate_411_b15h.rs` and the generations, cycle and delays of
+`gate_503_cyc2.rs`; `crates/actingcommand-contract/src/event/gate_503_cyc3.rs`, contract gate map;
+no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `cyc3_t1_an_admission_records_the_end_of_its_window_which_its_generation_gives` (ruling 1) | A run's `policy.dispatch_admitted` records the fixture window's end (22:00 UTC), its `policy.dispatch_completed` repeats the admission, the run's context holds it, and the remedy journal's end of the run and the one the run's generation gives (`admitted_window_end`) are that end |
+| `cyc3_t2_after_a_restart_the_first_cycle_reads_no_generation_for_a_recorded_window_end` (ruling 2) | After a restart on the same state root with a memo of one generation and two later generations activated (an activation reads the generation it replaces, so one would leave the run's in the memo), the first evaluated cycle reads no generation from its files (the delay planned for a read stays untaken; until 0.12.86 this cycle read the run's generation) and the journal keeps nothing; the premise is run: reading the run's generation then takes the delay; the journal's end of the run is the recorded one |
+| `cyc3_t3_a_run_admitted_without_a_window_end_is_read_once_beside_one_admitted_with_it` (rulings 2, 4) | A run admitted with no window end, as 0.12.85 recorded every admission (a test hook of the admission), and a later run of the same pair with it: the earlier run's records carry none, the later run's carry it; a start opens that ledger; its first cycle reads the earlier run's generation, and once another generation took the memo the next cycle reads none; only the earlier run's end is kept, and each run's end is the window's |
+| `cyc3_t4_an_admission_reads_back_with_its_window_end_and_without_it` (rulings 1, 3) | An admitted and a completed record with the member and without it are written, decode, validate and read back unchanged; the one without names no such member; each decodes to the admission it was written with |
+| `cyc3_t4_a_window_end_not_later_than_the_admission_is_refused_where_written_and_read` (ruling 4) | A window end equal to the admission time or before it is refused `invalid_policy_activity_sample` by the writer, and by the reader in a written record whose member was edited to it |
+| `cyc3_t4_the_public_projection_carries_the_admission_without_its_window_end` (ruling 3) | The public projection's `policy_admission` of both records with the member is the admission without it |
+
+No assertion of an existing test changes. Every construction of the sample in a test names the
+member `None` (`event/sh1_tests.rs`, `event/v2_tests.rs`, the ledger's `global/tests.rs`, the run
+summary test of `runtime-client/src/client.rs`, `pair_projection_for_test` of `policy_host.rs`).
+`gate_411_b15h.rs` makes its restart and its window end, `gate_503_cyc2.rs` its delay, fixture,
+cycle and later generations visible to the test modules; a hook of test builds alone
+(`admit_without_window_end_for_test`) lets the admissions of the test's thread leave the member
+out, for t3. No test leaves a gate map; no golden is re-recorded (no golden case holds a policy
+admission).
+
+**What is not changed.** The evaluation and the admission's decisions and refusals; every intent,
+signal and record but the admission's one member; the remedy table, journal, plan, rounds and
+expiry; the catalog store's memo and `standard_packs.cached_generations`; the window ends kept for
+runs admitted before 0.12.86 (§1.528) and their lock; the lock order; the public projection's
+bytes; `runtime-client`; the record types, tables and indexes. No game, package, instance or alias
+is named in code or contract.
+
+**At deploy.** Nothing to configure. The update to 0.12.86 raises `ledger` to 10, one way: the
+installer's `one_way` edge is acknowledged as for 0.12.71 (§1.455), once 0.12.86 ran no build that
+declares [3, 9] runs on the root, and the console that combines with it reads `ledger` 10. On
+production: the admissions recorded before the update carry no window end, so after each start the
+first cycles still name `catalog_reads` for the runs of 0.12.85 the remedy journal holds (each
+read once); runs admitted by 0.12.86 add none, and once the journal holds no run of 0.12.85 (it
+keeps up to 64 per pair, back to the pair's last root blocked run) a start's first cycle names no
+`catalog_reads` for the journal.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

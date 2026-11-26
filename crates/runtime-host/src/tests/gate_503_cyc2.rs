@@ -32,17 +32,20 @@ use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::Duration;
 
+// #503 CYC-3 (register §1.529): the delay, the fixture, its cycle and its later generations are
+// also that slice's gate's (`gate_503_cyc3.rs`), so they are visible to the test modules.
+
 /// The delay put into a call or a wait: longer than any call of these cycles takes by itself.
-const DELAY: Duration = Duration::from_secs(600);
-const DELAY_MICROS: u64 = 600_000_000;
+pub(super) const DELAY: Duration = Duration::from_secs(600);
+pub(super) const DELAY_MICROS: u64 = 600_000_000;
 
 /// The fixture with `main` declaring the remedy of `need_a` by `cap_x`, and `sink` providing it.
-fn remedy_fixture() -> Fixture {
+pub(super) fn remedy_fixture() -> Fixture {
     Fixture::new(&main_pack(&["cap_x"], Some(&["cap_x"])), &sink_pack())
 }
 
 /// One evaluated cycle at `at` on the fixture's facts, the Runtime clock moved there first.
-fn remedy_cycle(fixture: &Fixture, at: u64, seed: u64) -> PolicyCycle {
+pub(super) fn remedy_cycle(fixture: &Fixture, at: u64, seed: u64) -> PolicyCycle {
     advance_manual_clock_to(&fixture.clock, at);
     let cycle = fixture
         .host
@@ -62,7 +65,7 @@ fn remedy_cycle(fixture: &Fixture, at: u64, seed: u64) -> PolicyCycle {
 }
 
 /// The fixture's catalog as its version `version`: another generation of the same tasks.
-fn catalog_version(version: u64) -> CatalogSources {
+pub(super) fn catalog_version(version: u64) -> CatalogSources {
     let mut sources = catalog();
     for source in [
         &mut sources.tasks,
