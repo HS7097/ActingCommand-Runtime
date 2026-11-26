@@ -422,9 +422,9 @@ impl FrameAnswers for FrameQuery {
 /// cleaner"). Each pass, at most every `SWEEP_INTERVAL_MS`, lists the live frame store and
 /// `kept\`, asks the ledger (statements W, L and K on the query's own read-only connection,
 /// chunked and paced) for the action of every live frame and every kept frame due for
-/// examination, and queues the frames to remove or move. Each round re-checks at most 16 queued frames
-/// on a fresh snapshot and acts on that answer: it removes and moves live frames at their object
-/// keys, and removes kept evidence frames that were confirmed or reached
+/// examination, and queues the frames to remove or move. Each round re-checks at most 16 queued
+/// frames on a fresh snapshot and acts on that answer: it removes and moves live frames at their
+/// object keys, and removes kept evidence frames that were confirmed or reached
 /// `frame_retention_evidence_max_age_days`. It records nothing in the ledger and takes no lease
 /// or queue position. No retention state is kept: the examination schedule below is this
 /// process's only memory, and it never decides a class. Workflow #503 FR-1: a pass costs what is
