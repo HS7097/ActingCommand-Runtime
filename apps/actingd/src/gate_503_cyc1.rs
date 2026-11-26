@@ -260,4 +260,25 @@ fn cyc1_t3_a_long_cycle_is_no_clock_jump_and_a_wall_clock_set_forward_or_back_wa
         Some((PolicyTrigger::ClockObserved { jumped: false }, Vec::new())),
         "the time came"
     );
+
+    // Review of #1897: two clock observations coalesce into one that jumped when either did, so
+    // a jump is not lost behind an observation already kept.
+    for (left, right) in [(false, true), (true, false), (true, true)] {
+        assert_eq!(
+            coalesce_policy_trigger(
+                PolicyTrigger::ClockObserved { jumped: left },
+                PolicyTrigger::ClockObserved { jumped: right },
+            ),
+            PolicyTrigger::ClockObserved { jumped: true },
+            "{left} {right}"
+        );
+    }
+    assert_eq!(
+        coalesce_policy_trigger(
+            PolicyTrigger::ClockObserved { jumped: false },
+            PolicyTrigger::ClockObserved { jumped: false },
+        ),
+        PolicyTrigger::ClockObserved { jumped: false },
+        "neither jumped"
+    );
 }

@@ -49260,6 +49260,17 @@ retention; every record. No game, package, instance or alias is named in code or
 `unattributed_ms`). `wakes` shows no `clock_jump` without a change of the clock, and the cycle
 counter advances only when something wakes the driver.
 
+**From the review (pull request #1897).** Two clock observations that coalesce keep the jump of
+either: one that jumped was dropped behind an observation already kept, which cost one full
+evaluation. The waits timed apart are those for the five gates and for the policy lock; a wait
+for another lock, or for the store's shared connection, shows in the member of the stretch it
+falls in, so a slow preview may be cold reads or a wait for that connection, and the 2081 reads
+of the clock-slot preview on the same connection tell the two apart. And one condition the
+preview's memory rests on: every write of a planning signal goes through the host's one
+recorder, which corrects the memory after the store commits. A write that passed it by would
+leave a remembered "none", and the next emission of that id would stop the host on the identity
+conflict; a slice that adds such a write corrects the memory in the same place.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

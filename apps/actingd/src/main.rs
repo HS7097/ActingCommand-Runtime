@@ -1737,6 +1737,15 @@ fn combine_monitor_results(
 // (`actingcommand_runtime_host::policy_trigger_for_event`); the monitor coalesces the
 // host's wakes with the priority below, as it coalesced a batch of ledger events.
 fn coalesce_policy_trigger(left: PolicyTrigger, right: PolicyTrigger) -> PolicyTrigger {
+    // Review of #1897 (#503 CYC-1): two clock observations coalesce into one that jumped when
+    // either did, so a jump is not lost behind an observation already kept.
+    if let (
+        PolicyTrigger::ClockObserved { jumped: a },
+        PolicyTrigger::ClockObserved { jumped: b },
+    ) = (left, right)
+    {
+        return PolicyTrigger::ClockObserved { jumped: a || b };
+    }
     if trigger_priority(right) > trigger_priority(left) {
         right
     } else {

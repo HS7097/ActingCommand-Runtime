@@ -3623,10 +3623,12 @@ to 3). Not behind the switch.
   | `unattributed_ms` | the time up to the end of the capped record that none of the named parts covers |
 
   To read one: the named parts (with `projection_ms`, `evaluation_ms`, `clock_slots_ms` and
-  `held_ms`) and `unattributed_ms` add up to `total_ms` less `after_capped_ms`. A wait for another
-  thread shows in a `*_wait_ms` member, a slow read of the store in the member of the stretch that
-  reads; `unattributed_ms` of more than a few milliseconds names a stretch no member times yet.
-  Members are only added; none is renamed or dropped.
+  `held_ms`) and `unattributed_ms` add up to `total_ms` less `after_capped_ms`. The waits timed
+  apart are those for the five gates of `gates_wait_ms` and for the policy lock of
+  `policy_lock_wait_ms`; a wait for any other lock (the entry blocks' and the registered
+  instances' locks, the store's shared connection) and a slow read of the store show in the member
+  of the stretch they fall in. `unattributed_ms` of more than a few milliseconds names a stretch no
+  member times yet. Members are only added; none is renamed or dropped.
 - **The detection preview asks nothing it knows.** For a signal id the last preview asked about,
   the preview takes that answer instead of asking the store; the store's planning signals are
   written by the Runtime alone and never removed, so an answer that names a signal stays true, and
