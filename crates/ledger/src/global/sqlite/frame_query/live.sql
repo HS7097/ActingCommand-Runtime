@@ -190,7 +190,7 @@ dx AS MATERIALIZED (
 -- materialized as every CTE is (review F2): flattened, each CASE below that names a column ran
 -- its correlated subqueries again
 decided AS MATERIALIZED (
-  SELECT d.artifact_id, d.at, d.entry,
+  SELECT d.artifact_id, d.at, d.entry, d.frame_id, d.instance_id, d.run_id, d.lease_id,
     (d.entry IS NULL
      OR EXISTS (SELECT 1 FROM waits w WHERE w.instance_id = d.instance_id AND w.first_at <= d.at + :window_ms)) AS running,
     ((d.lab_run
@@ -256,7 +256,9 @@ decided AS MATERIALIZED (
                AND cr.pointer = 'read_confirmed' AND ce.timestamp_unix_ms >= d.at)) AS confirmed
   FROM dx d
 )
--- the class (in the view's order of precedence) and the action at :now
+-- the class (in the view's order of precedence) and the action at :now; Workflow #503 FR-1: and
+-- the frame's own links (frame, instance, run, lease), by which the cleaner knows what can end a
+-- running frame's wait
 SELECT artifact_id, at,
   CASE WHEN running THEN 'running'
        WHEN lab THEN 'lab'
@@ -271,6 +273,7 @@ SELECT artifact_id, at,
        WHEN resource THEN CASE WHEN at + :resource_ms <= :now THEN 'remove' ELSE 'keep_resource' END
        WHEN duplicate THEN 'remove_duplicate'
        ELSE CASE WHEN at + :default_ms <= :now THEN 'remove' ELSE 'keep' END
-  END AS action
+  END AS action,
+  frame_id, instance_id, run_id, lease_id
 FROM decided
 ORDER BY artifact_id

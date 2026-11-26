@@ -12,14 +12,15 @@ use actingcommand_contract::{
     ArtifactId, ArtifactKind, ArtifactPayloadDraft, ArtifactPinReason, ArtifactPinRecord,
     ArtifactRetentionFact, ArtifactRetentionIdentity, AuditInput, DiagnosticCode,
     DiagnosticDetailDraft, EffectDisposition, EventActor, EventLinksDraft, EventSeverity,
-    EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, OriginModule, OwnerEpoch,
-    RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS, RETENTION_ROUND_START_BUDGET_MS,
-    RuntimeErrorCode, RuntimePayloadDraft, TerminalEvent,
+    EventSource, EventType, FRAME_RETENTION_POLICY_VERSION, FrameId, InstanceId, LeaseId,
+    OriginModule, OwnerEpoch, RETENTION_ROUND_BYTES, RETENTION_ROUND_OBJECTS,
+    RETENTION_ROUND_START_BUDGET_MS, RunId, RuntimeErrorCode, RuntimePayloadDraft, TerminalEvent,
 };
 use actingcommand_ledger::{
-    ArtifactEvictionAdmission, FrameQuery, FrameQueryAction, FrameQueryFrame, FrameQueryOutcome,
-    FrameQuerySettings, FrameQueryStop, FrameRetentionSwitches, FrameWaits, GlobalLedger,
-    GlobalLedgerError, KeptFrameAnswer, KeptFrameFolder, LiveFrameAnswer, PersistedEvent,
+    ArtifactEvictionAdmission, FrameChanges, FrameQuery, FrameQueryAction, FrameQueryFrame,
+    FrameQueryOutcome, FrameQuerySettings, FrameQueryStop, FrameRetentionSwitches, FrameWaits,
+    GlobalLedger, GlobalLedgerError, KeptFrameAnswer, KeptFrameFolder, LiveFrameAnswer,
+    PersistedEvent,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
@@ -346,6 +347,9 @@ pub(super) struct CleanerClock {
 pub(super) trait FrameAnswers {
     /// Statement W, once per pass.
     fn answer_waits(&mut self) -> RuntimeHostResult<FrameQueryOutcome<FrameWaits>>;
+    /// Workflow #503 FR-1, statement C, once per pass after the process's first completed pass:
+    /// what was recorded after the head `after` that can end a wait or a keep.
+    fn answer_changes(&mut self, after: u64) -> RuntimeHostResult<FrameQueryOutcome<FrameChanges>>;
     /// Statement L for one chunk of live frames.
     fn answer_live(
         &mut self,
@@ -375,6 +379,10 @@ pub(super) trait FrameAnswers {
 impl FrameAnswers for FrameQuery {
     fn answer_waits(&mut self) -> RuntimeHostResult<FrameQueryOutcome<FrameWaits>> {
         self.waits().map_err(ledger_failure)
+    }
+
+    fn answer_changes(&mut self, after: u64) -> RuntimeHostResult<FrameQueryOutcome<FrameChanges>> {
+        self.changes(after).map_err(ledger_failure)
     }
 
     fn answer_live(
@@ -413,13 +421,17 @@ impl FrameAnswers for FrameQuery {
 /// Workflow #375 R5d, #422 LN-7c Q: the frame cleaner (`contracts/ledger-store.md`, "Frame
 /// cleaner"). Each pass, at most every `SWEEP_INTERVAL_MS`, lists the live frame store and
 /// `kept\`, asks the ledger (statements W, L and K on the query's own read-only connection,
-/// chunked and paced) for the action of every live frame due for examination and of every kept
-/// frame, and queues the frames to remove or move. Each round re-checks at most 16 queued frames
-/// on a fresh snapshot and acts on that answer: it removes and moves live frames at their object
-/// keys, and removes kept evidence frames that were confirmed or reached
+/// chunked and paced) for the action of every live frame and every kept frame due for
+/// examination, and queues the frames to remove or move. Each round re-checks at most 16 queued
+/// frames on a fresh snapshot and acts on that answer: it removes and moves live frames at their
+/// object keys, and removes kept evidence frames that were confirmed or reached
 /// `frame_retention_evidence_max_age_days`. It records nothing in the ledger and takes no lease
 /// or queue position. No retention state is kept: the examination schedule below is this
-/// process's only memory, and it never decides a class.
+/// process's only memory, and it never decides a class. Workflow #503 FR-1: a pass costs what is
+/// due. A frame is asked about again only when its answer can have changed: a kept frame at its
+/// maximum age or when statement C names a read confirmation of it or of its run; a running frame
+/// when the open runs that held it ended (statement W) or statement C names a close of its own
+/// run, lease or capture; a frame with no answer once more, then not until a restart.
 pub(super) struct FrameRetention {
     switches: FrameRetentionSwitches,
     moves: KeptMoves,
@@ -432,15 +444,75 @@ pub(super) struct FrameRetention {
     /// One Warning for a move counter that could not be written, per process.
     counter_warned: bool,
     /// #422 LN-7c Q (§1.4): when a live frame is examined again, by its last answer: `keep` at 1
-    /// day and `keep_resource` at 7 days after its ingestion time; a frame without an entry is
-    /// examined at every pass (not settled, running, busy, or new to this process).
+    /// day and `keep_resource` at 7 days after its ingestion time; a frame without an entry, in
+    /// `waiting`, `unanswered` or `unknown` is examined as they say, any other at every pass
+    /// (busy, or new to this process).
     schedule: BTreeMap<ArtifactId, u64>,
+    /// Workflow #503 FR-1: the live frames answered `running`, and what can end their wait.
+    waiting: BTreeMap<ArtifactId, Waiting>,
+    /// Workflow #503 FR-1: the live frames statement L gave no row, with the pass start's time
+    /// of the first such answer; and those it gave none again at a pass start at least
+    /// `SWEEP_INTERVAL_MS` later, which this process does not examine again.
+    unanswered: BTreeMap<ArtifactId, u64>,
+    unknown: BTreeSet<ArtifactId>,
+    /// Workflow #503 FR-1: the kept frames statement K answered, with their ingestion time and
+    /// run, and the kept files it gave no row, which this process looks at once.
+    kept_known: BTreeMap<ArtifactId, KeptKnown>,
+    kept_unknown_files: BTreeSet<ArtifactId>,
+    /// Workflow #503 FR-1: the head statement W of the last completed pass read at; statement C
+    /// reads after it. None until a pass completed: then every waiting and kept frame is due.
+    seen_through: Option<u64>,
     pass: Option<Pass>,
     /// The Runtime's own frame query while a pass runs.
     query: Option<FrameQuery>,
     last_pass_start_ms: Option<u64>,
     completed_passes: u64,
     origin: Instant,
+}
+
+/// Workflow #503 FR-1: a live frame answered `running` at its last examination, with its links
+/// and whether an open run of that pass's W held it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Waiting {
+    at: u64,
+    instance: Option<InstanceId>,
+    run: Option<RunId>,
+    lease: Option<LeaseId>,
+    frame: Option<FrameId>,
+    held: bool,
+}
+
+impl Waiting {
+    /// Whether this pass's W still holds the frame: its answer is `running` while it does.
+    fn still_held(&self, waits: &FrameWaits) -> bool {
+        waits.holds(self.instance.as_ref(), self.at)
+    }
+
+    /// Whether the open runs that held the frame at its last examination have ended by this
+    /// pass's W.
+    fn released(&self, waits: &FrameWaits) -> bool {
+        self.held && !self.still_held(waits)
+    }
+
+    /// Whether statement C's answer names a close that can end the wait of a frame W does not
+    /// hold: of its run, its lease or its capture, or a start or a takeover.
+    fn closed_by(&self, changes: &FrameChanges) -> bool {
+        changes.started
+            || self.run.is_some_and(|run| changes.runs.contains(&run))
+            || self
+                .lease
+                .is_some_and(|lease| changes.leases.contains(&lease))
+            || self
+                .frame
+                .is_some_and(|frame| changes.frames.contains(&frame))
+    }
+}
+
+/// Workflow #503 FR-1: a kept frame statement K answered: its ingestion time and its run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeptKnown {
+    at: u64,
+    run: Option<RunId>,
 }
 
 /// One pass: what it still examines, what it queued, its pace and its counts.
@@ -451,6 +523,10 @@ struct Pass {
     /// that started after W).
     started_unix_ms: u64,
     waits: FrameWaits,
+    /// Workflow #503 FR-1: the head statement C reads after, until it ran in this pass.
+    changes_after: Option<u64>,
+    /// Workflow #503 FR-1: every frame this pass examines, live and kept, each once.
+    listed: BTreeSet<ArtifactId>,
     /// The round's clock (a re-check runs at it), the switches and the evidence age.
     settings: FrameQuerySettings,
     /// Live frames due for examination, not yet asked about.
@@ -490,7 +566,10 @@ pub(super) enum PassStart {
     Stopped,
 }
 
+// One report is built at the end of a pass and read once for its line; boxing it gains nothing
+// (the report outgrew the lint's bound with the members of Workflow #503 FR-1).
 /// How a pass ended, when its line is printed.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PassEnd {
     /// `actingd frame_retention pass <report>`.
@@ -529,6 +608,17 @@ pub(super) struct SweepReport {
     pub(super) running: u64,
     pub(super) rounds: u64,
     pub(super) pass_ms: u64,
+    /// Workflow #503 FR-1: live frames answered `running` by an earlier pass that this pass did
+    /// not examine: nothing that can end their wait happened.
+    pub(super) waiting: u64,
+    /// Workflow #503 FR-1: the open runs of the current owner epoch (statement W), the oldest of
+    /// them, and how long before the pass start its first frame was captured.
+    pub(super) open_runs: u64,
+    pub(super) oldest_open_run: Option<RunId>,
+    pub(super) oldest_open_age_ms: u64,
+    /// Workflow #503 FR-1: live frames statement L gave no row at two pass starts ten minutes
+    /// apart, which this process examines no more.
+    pub(super) live_unknown: u64,
     /// #422 LN-7c Q: kept frames statement K examined.
     pub(super) kept_examined: u64,
     /// Evidence frames removed because an agent or a person confirmed reading them (live and
@@ -536,7 +626,8 @@ pub(super) struct SweepReport {
     pub(super) removed_confirmed: u64,
     /// Kept evidence frames removed at `frame_retention_evidence_max_age_days`.
     pub(super) removed_expired: u64,
-    /// Kept frame files whose artifact this ledger has no record of: left alone.
+    /// Kept frame files whose artifact this ledger has no record of: left alone (Workflow #503
+    /// FR-1: each counted at the one look this process gives it).
     pub(super) kept_unknown: u64,
     /// The SQLite virtual-machine steps of the pass's statements.
     pub(super) query_steps: u64,
@@ -544,12 +635,17 @@ pub(super) struct SweepReport {
 
 impl std::fmt::Display for SweepReport {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let oldest_open_run = match &self.oldest_open_run {
+            Some(run) => crate::failure_identity::identifier_text(run),
+            None => "none".to_owned(),
+        };
         write!(
             formatter,
             "frames={} deleted={} deleted_bytes={} moved={} moved_bytes={} absent={} \
              rescanned_absent={} busy={} failed={} kept_error={} kept_lab={} running={} \
-             rounds={} pass_ms={} kept_examined={} removed_confirmed={} removed_expired={} \
-             kept_unknown={} query_steps={}",
+             rounds={} pass_ms={} waiting={} open_runs={} oldest_open_run={} \
+             oldest_open_age_ms={} live_unknown={} kept_examined={} removed_confirmed={} \
+             removed_expired={} kept_unknown={} query_steps={}",
             self.frames,
             self.deleted,
             self.deleted_bytes,
@@ -564,6 +660,11 @@ impl std::fmt::Display for SweepReport {
             self.running,
             self.rounds,
             self.pass_ms,
+            self.waiting,
+            self.open_runs,
+            oldest_open_run,
+            self.oldest_open_age_ms,
+            self.live_unknown,
             self.kept_examined,
             self.removed_confirmed,
             self.removed_expired,
@@ -667,7 +768,7 @@ impl Pass {
     }
 
     fn examining(&self) -> bool {
-        !self.live.is_empty() || !self.kept.is_empty()
+        self.changes_after.is_some() || !self.live.is_empty() || !self.kept.is_empty()
     }
 }
 
@@ -681,6 +782,12 @@ impl FrameRetention {
             kept_failed: BTreeSet::new(),
             counter_warned: false,
             schedule: BTreeMap::new(),
+            waiting: BTreeMap::new(),
+            unanswered: BTreeMap::new(),
+            unknown: BTreeSet::new(),
+            kept_known: BTreeMap::new(),
+            kept_unknown_files: BTreeSet::new(),
+            seen_through: None,
             pass: None,
             query: None,
             last_pass_start_ms: None,
@@ -755,7 +862,9 @@ impl FrameRetention {
     }
 
     /// Begins a pass over the live frames `live` (the store's listing) and the kept listing
-    /// `kept`: statement W, then the frames due for examination (§1.4) and every kept frame.
+    /// `kept`: statement W, then the frames due for examination (§1.4). Workflow #503 FR-1: a
+    /// frame W held and no longer holds is due now; the frames statement C makes due are added
+    /// by the pass's first step.
     pub(super) fn begin_pass(
         &mut self,
         answers: &mut dyn FrameAnswers,
@@ -774,16 +883,32 @@ impl FrameRetention {
         self.handled.retain(|id| live.contains(id));
         self.failed.retain(|id| live.contains(id));
         self.schedule.retain(|id, _| live.contains(id));
+        self.waiting.retain(|id, _| live.contains(id));
+        self.unanswered.retain(|id, _| live.contains(id));
+        self.unknown.retain(|id| live.contains(id));
         let now = clock.unix_ms;
+        // Until a pass completed, statement C has no head to read after: every waiting frame and
+        // every kept frame is due.
+        let changes_known = self.seen_through.is_some();
         let examined = live
             .iter()
             .filter(|id| {
                 !self.handled.contains(*id)
                     && !self.failed.contains(*id)
+                    && !self.unknown.contains(*id)
                     && self.schedule.get(*id).is_none_or(|due| *due <= now)
+                    && self
+                        .waiting
+                        .get(*id)
+                        .is_none_or(|waiting| !changes_known || waiting.released(&waits))
             })
             .copied()
-            .collect();
+            .collect::<VecDeque<_>>();
+        let waiting = self
+            .waiting
+            .values()
+            .filter(|waiting| changes_known && !waiting.released(&waits))
+            .count() as u64;
         let mut kept_files = BTreeMap::new();
         for leaf in kept {
             for file in leaf.files {
@@ -797,27 +922,56 @@ impl FrameRetention {
                 }
             }
         }
+        // A kept file a person removed is not in the listing: it is forgotten at this pass start.
         self.kept_failed.retain(|id| kept_files.contains_key(id));
+        self.kept_known.retain(|id, _| kept_files.contains_key(id));
+        self.kept_unknown_files
+            .retain(|id| kept_files.contains_key(id));
+        let evidence_max_age_ms = settings.evidence_max_age_days.saturating_mul(DAY_MS);
+        // A kept frame is due when new to this process and at its maximum age (the one in effect
+        // at this pass start); a kept file K gave no row is not looked at again.
         let kept = kept_files
             .keys()
-            .filter(|id| !self.kept_failed.contains(*id))
+            .filter(|id| {
+                !self.kept_failed.contains(*id)
+                    && !self.kept_unknown_files.contains(*id)
+                    && self.kept_known.get(*id).is_none_or(|known| {
+                        !changes_known || known.at.saturating_add(evidence_max_age_ms) <= now
+                    })
+            })
             .copied()
-            .collect();
+            .collect::<VecDeque<_>>();
+        let listed = examined.iter().chain(kept.iter()).copied().collect();
+        let mut report = SweepReport {
+            waiting,
+            open_runs: waits.open_runs().len() as u64,
+            ..SweepReport::default()
+        };
+        if let Some(oldest) = waits
+            .open_runs()
+            .iter()
+            .min_by_key(|run| run.first_at_unix_ms)
+        {
+            report.oldest_open_run = Some(oldest.run_id);
+            report.oldest_open_age_ms = now.saturating_sub(oldest.first_at_unix_ms);
+        }
         let mut pass = Pass {
             started_ms: clock.monotonic_ms,
             started_unix_ms: now,
             waits,
+            changes_after: self.seen_through,
+            listed,
             settings: FrameQuerySettings {
                 now_unix_ms: now,
                 switches: self.switches,
-                evidence_max_age_ms: settings.evidence_max_age_days.saturating_mul(DAY_MS),
+                evidence_max_age_ms,
             },
             live: examined,
             kept,
             kept_files,
             queue: VecDeque::new(),
             due_ms: clock.monotonic_ms,
-            report: SweepReport::default(),
+            report,
         };
         pass.paced(clock.monotonic_ms, steps, settings.steps_per_second);
         self.pass = Some(pass);
@@ -868,6 +1022,9 @@ impl FrameRetention {
             self.pass = Some(pass);
             return Ok(None);
         }
+        // Workflow #503 FR-1: the next pass's statement C reads after this pass's W; a pass that
+        // did not complete leaves the bound where it was, so nothing it did not examine is lost.
+        self.seen_through = Some(pass.waits.head());
         let mut report = pass.report;
         report.pass_ms = clock.monotonic_ms.saturating_sub(pass.started_ms);
         self.completed_passes += 1;
@@ -887,6 +1044,17 @@ impl FrameRetention {
         clock: CleanerClock,
         settings: CleanerSettings,
     ) -> RuntimeHostResult<Step> {
+        // Workflow #503 FR-1: statement C first, once the process completed a pass.
+        if let Some(after) = pass.changes_after.take() {
+            let (changes, steps) = match answers.answer_changes(after)? {
+                FrameQueryOutcome::Answered { value, steps } => (value, steps),
+                FrameQueryOutcome::Incomplete => return Ok(Step::Incomplete),
+                FrameQueryOutcome::Stopped => return Ok(Step::Stopped),
+            };
+            pass.paced(clock.monotonic_ms, steps, settings.steps_per_second);
+            self.add_changed(pass, &changes);
+            return Ok(Step::Continue);
+        }
         let chunk = settings.chunk_frames.max(1);
         if !pass.live.is_empty() {
             let frames = pass
@@ -903,6 +1071,13 @@ impl FrameRetention {
                 FrameQueryOutcome::Stopped => return Ok(Step::Stopped),
             };
             pass.paced(clock.monotonic_ms, steps, settings.steps_per_second);
+            let rows = answered
+                .iter()
+                .map(|answer| answer.artifact_id)
+                .collect::<BTreeSet<_>>();
+            for id in frames.iter().filter(|id| !rows.contains(*id)) {
+                self.unanswered_at(pass, *id);
+            }
             for answer in answered {
                 self.decide_live(pass, &answer);
             }
@@ -923,8 +1098,18 @@ impl FrameRetention {
             .iter()
             .map(|answer| answer.artifact_id)
             .collect::<BTreeSet<_>>();
-        pass.report.kept_unknown += frames.iter().filter(|id| !known.contains(*id)).count() as u64;
+        for id in frames.iter().filter(|id| !known.contains(*id)) {
+            pass.report.kept_unknown += 1;
+            self.kept_unknown_files.insert(*id);
+        }
         for answer in answered {
+            self.kept_known.insert(
+                answer.artifact_id,
+                KeptKnown {
+                    at: answer.created_at_unix_ms,
+                    run: answer.run_id,
+                },
+            );
             if matches!(
                 answer.action,
                 FrameQueryAction::RemoveConfirmed | FrameQueryAction::RemoveExpired
@@ -936,15 +1121,77 @@ impl FrameRetention {
         Ok(Step::Continue)
     }
 
+    /// Workflow #503 FR-1: the frames statement C's answer `changes` makes due in this pass: a
+    /// waiting frame W does not hold whose run, lease or capture closed (any such frame, after a
+    /// start or a takeover), and a kept frame a read confirmation names, by itself or by its run.
+    fn add_changed(&self, pass: &mut Pass, changes: &FrameChanges) {
+        for (id, waiting) in &self.waiting {
+            if !waiting.still_held(&pass.waits)
+                && waiting.closed_by(changes)
+                && pass.listed.insert(*id)
+            {
+                pass.live.push_back(*id);
+                pass.report.waiting = pass.report.waiting.saturating_sub(1);
+            }
+        }
+        for (id, known) in &self.kept_known {
+            let confirmed = changes.confirmed_artifacts.contains(id)
+                || known
+                    .run
+                    .is_some_and(|run| changes.confirmed_runs.contains(&run));
+            if confirmed && !self.kept_failed.contains(id) && pass.listed.insert(*id) {
+                pass.kept.push_back(*id);
+            }
+        }
+    }
+
+    /// Workflow #503 FR-1: a live frame statement L gave no row at this pass start: not settled
+    /// then, or not known to the ledger by its verified record and its pin, or with an eviction
+    /// intent. It is examined at the next pass; given no row again at a pass start at least
+    /// `SWEEP_INTERVAL_MS` (past any frame's settle age) after the first, it is unknown to this
+    /// process: counted `live_unknown` once and not examined again until a restart.
+    fn unanswered_at(&mut self, pass: &mut Pass, id: ArtifactId) {
+        let first = *self.unanswered.entry(id).or_insert(pass.started_unix_ms);
+        // Review of #1896: a frame that waited and is given no row now waits for nothing; left
+        // among the waiting frames it would not be listed at the next pass.
+        self.waiting.remove(&id);
+        if pass.started_unix_ms.saturating_sub(first) >= SWEEP_INTERVAL_MS {
+            self.unanswered.remove(&id);
+            self.schedule.remove(&id);
+            self.unknown.insert(id);
+            pass.report.live_unknown += 1;
+        }
+    }
+
+    /// Workflow #503 FR-1: a frame answered `running` waits for what can end it: the end of the
+    /// open runs of `waits` that hold it, else a close of its own run, lease or capture.
+    fn wait(&mut self, waits: &FrameWaits, answer: &LiveFrameAnswer) {
+        self.waiting.insert(
+            answer.artifact_id,
+            Waiting {
+                at: answer.created_at_unix_ms,
+                instance: answer.instance_id,
+                run: answer.run_id,
+                lease: answer.lease_id,
+                frame: answer.frame_id,
+                held: waits.holds(answer.instance_id.as_ref(), answer.created_at_unix_ms),
+            },
+        );
+    }
+
     /// A live frame's answer at its examination: queued when it is acted on, else examined again
-    /// at its next decision age (`keep` at 1 day, `keep_resource` at 7 days) or at the next pass.
+    /// at its next decision age (`keep` at 1 day, `keep_resource` at 7 days) or, running, when
+    /// what holds it can have ended (Workflow #503 FR-1).
     fn decide_live(&mut self, pass: &mut Pass, answer: &LiveFrameAnswer) {
         let id = answer.artifact_id;
         let at = answer.created_at_unix_ms;
+        self.unanswered.remove(&id);
+        self.waiting.remove(&id);
         match answer.action {
             FrameQueryAction::Running => {
                 pass.report.running += 1;
                 self.schedule.remove(&id);
+                self.wait(&pass.waits, answer);
             }
             FrameQueryAction::Keep => {
                 self.schedule.insert(id, at.saturating_add(DAY_MS));
@@ -1070,7 +1317,7 @@ impl FrameRetention {
         let id = answer.artifact_id;
         let action = answer.action;
         if !action.removes() && !action.moves() {
-            self.decide_live_again(answer);
+            self.decide_live_again(&pass.waits, answer);
             return Ok(());
         }
         // The frame's own verified record, authenticated, names its object.
@@ -1168,14 +1415,21 @@ impl FrameRetention {
         }
         if self.handled.contains(&id) || self.failed.contains(&id) {
             self.schedule.remove(&id);
+            self.waiting.remove(&id);
         }
         Ok(())
     }
 
-    /// A queued live frame the round's answer no longer acts on: scheduled by that answer.
-    fn decide_live_again(&mut self, answer: &LiveFrameAnswer) {
+    /// A queued live frame the round's answer no longer acts on: scheduled by that answer; one
+    /// now running waits for what holds it (Workflow #503 FR-1).
+    fn decide_live_again(&mut self, waits: &FrameWaits, answer: &LiveFrameAnswer) {
         let id = answer.artifact_id;
+        self.waiting.remove(&id);
         match answer.action {
+            FrameQueryAction::Running => {
+                self.schedule.remove(&id);
+                self.wait(waits, answer);
+            }
             FrameQueryAction::Keep => {
                 self.schedule
                     .insert(id, answer.created_at_unix_ms.saturating_add(DAY_MS));
@@ -1240,7 +1494,11 @@ impl FrameRetention {
                 }
             }
             FrameFileOutcome::Absent => report.absent += 1,
-            FrameFileOutcome::Busy => report.busy += 1,
+            FrameFileOutcome::Busy => {
+                // Retried by the next pass (Workflow #503 FR-1: as a frame new to this process).
+                report.busy += 1;
+                self.kept_known.remove(&id);
+            }
             FrameFileOutcome::Moved | FrameFileOutcome::MovedLockLeft(_) => {}
         }
         if let Some(left) = removal.outcome.lock_left() {

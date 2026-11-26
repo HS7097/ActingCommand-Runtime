@@ -2954,7 +2954,7 @@ tests = [
 ]
 incident = ["#419 DIAG-RUN"]
 
-# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1.4, §1.5, §4, §5; brief rd-1026/brief-ln7c-q.md): the frame cleaner by query, on a fake clock and step counter: a statement starts no earlier than the one before plus its steps at frame_query_steps_per_second, so the steps never exceed the rate by more than one statement, and a raised stop interrupts the pass (T-pace); a live frame is examined at settle, at 1 day and at 7 days by its answers, a running one at every pass, a late window point after settle moves the frame at 1 day, and a class change between queueing and the round is acted on by the round's answer, and every chunk is examined at the pass start's clock, so a frame captured in the 30 s before the pass start waits for a run that started after W (T-schedule; fix round 1, review F1); kept frames go when confirmed or at the age the pass starts with, and a changed age takes effect at the next pass (T-evidence); frame_retention_evidence_max_age_days is 15 by default, settable within 1..=3650 and refused outside it, frame_query_steps_per_second settable and frame_query_chunk_frames read at start
+# LN-7c Q (#422; rd-1026/ln7c/final-query.md §7 row Q, §1.4, §1.5, §4, §5; brief rd-1026/brief-ln7c-q.md): the frame cleaner by query, on a fake clock and step counter: a statement starts no earlier than the one before plus its steps at frame_query_steps_per_second, so the steps never exceed the rate by more than one statement, and a raised stop interrupts the pass (T-pace); a live frame is examined at settle, at 1 day and at 7 days by its answers, a running one at every pass (#503 FR-1, its test adapted: at settle, then when what holds it can have ended), a late window point after settle moves the frame at 1 day, and a class change between queueing and the round is acted on by the round's answer, and every chunk is examined at the pass start's clock, so a frame captured in the 30 s before the pass start waits for a run that started after W (T-schedule; fix round 1, review F1); kept frames go when confirmed or at the age the pass starts with, and a changed age takes effect at the next pass (T-evidence); frame_retention_evidence_max_age_days is 15 by default, settable within 1..=3650 and refused outside it, frame_query_steps_per_second settable and frame_query_chunk_frames read at start
 [[gate]]
 coverage = "Y"
 tests = [
@@ -4866,3 +4866,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_cyc1::cyc1_h2_with_nothing_changed_the_detection_preview_asks_the_store_nothing_again",
 ]
 incident = ["#503 CYC-1"]
+
+# FR-1 (#503; register §1.527; brief rd-1123/brief-503-fr1.md): a frame retention pass costs what is due. On the fake ledger query of the cleaner's tests, whose statements W, C, L and K record what each was asked: a second pass over an unchanged store runs W and one C only, no L and no K (T1); a kept frame is asked about at its maximum age and removed then, or when C names a read confirmation of it, and not before; a kept file a person removed is forgotten at the next pass start with no statement; a kept file the ledger does not know is looked at once (T2); a running frame an open run holds is not asked about while the run stays open, even when a record closes its capture, and is at the first pass after the run ended; one no open run holds is asked about when C names a close of its capture; the line names the open runs, the oldest and its age, and counts the frames left waiting (T3); a live frame L gives no row is asked about at two pass starts ten minutes apart, then no more (T4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_503_fr1::fr1_t1_a_second_pass_over_an_unchanged_store_reads_no_frame_again",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_503_fr1::fr1_t2_a_kept_frame_is_asked_about_at_its_maximum_age_or_its_confirmation_an_unknown_once",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_503_fr1::fr1_t3_a_running_frame_waits_for_what_can_end_it_and_the_line_names_the_open_run",
+    "actingcommand-runtime-host::lib::host::frame_retention::tests::gate_503_fr1::fr1_t4_a_live_frame_without_an_answer_is_asked_about_twice_ten_minutes_apart_then_no_more",
+]
+incident = ["#503 FR-1"]
