@@ -49691,7 +49691,12 @@ no clock read, no sleep).
 | `cyc3_t4_a_window_end_not_later_than_the_admission_is_refused_where_written_and_read` (ruling 4) | A window end equal to the admission time or before it is refused `invalid_policy_activity_sample` by the writer, and by the reader in a written record whose member was edited to it |
 | `cyc3_t4_the_public_projection_carries_the_admission_without_its_window_end` (ruling 3) | The public projection's `policy_admission` of both records with the member is the admission without it |
 
-No assertion of an existing test changes. Every construction of the sample in a test names the
+No assertion of an existing test changes. Two existing tests change their premise (found by the
+first build's run, not by reading): `cyc2_h1` and `cyc2_h2` of §1.528 show what the journal does for
+a run whose window end is read from its generation, and a run admitted by this version has none to
+read, so each admits its run with the same hook as t3, as 0.12.85 admitted every run; what they
+assert is unchanged and now holds for the records of earlier versions. Every construction of the
+sample in a test names the
 member `None` (`event/sh1_tests.rs`, `event/v2_tests.rs`, the ledger's `global/tests.rs`, the run
 summary test of `runtime-client/src/client.rs`, `pair_projection_for_test` of `policy_host.rs`).
 `gate_411_b15h.rs` makes its restart and its window end, `gate_503_cyc2.rs` its delay, fixture,
