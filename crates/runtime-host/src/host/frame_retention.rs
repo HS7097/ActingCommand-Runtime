@@ -566,7 +566,10 @@ pub(super) enum PassStart {
     Stopped,
 }
 
+// One report is built at the end of a pass and read once for its line; boxing it gains nothing
+// (the report outgrew the lint's bound with the members of Workflow #503 FR-1).
 /// How a pass ended, when its line is printed.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PassEnd {
     /// `actingd frame_retention pass <report>`.
@@ -1149,10 +1152,12 @@ impl FrameRetention {
     /// process: counted `live_unknown` once and not examined again until a restart.
     fn unanswered_at(&mut self, pass: &mut Pass, id: ArtifactId) {
         let first = *self.unanswered.entry(id).or_insert(pass.started_unix_ms);
+        // Review of #1896: a frame that waited and is given no row now waits for nothing; left
+        // among the waiting frames it would not be listed at the next pass.
+        self.waiting.remove(&id);
         if pass.started_unix_ms.saturating_sub(first) >= SWEEP_INTERVAL_MS {
             self.unanswered.remove(&id);
             self.schedule.remove(&id);
-            self.waiting.remove(&id);
             self.unknown.insert(id);
             pass.report.live_unknown += 1;
         }

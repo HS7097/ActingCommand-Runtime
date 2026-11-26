@@ -49293,9 +49293,19 @@ once (on 11-26, 712 million steps).
   million steps reads much of a 30 GB file at random.
 
 **At deploy.** Nothing to configure. On production the first pass after a start shows the cost
-it showed (every frame examined once); the second pass shows `query_steps` and `pass_ms` far
-below the first, `running` near 0 and `waiting` the frames still held; `open_runs` and
-`oldest_open_run` name a run that never ends.
+it showed (every frame examined once); the next pass that has a line shows `query_steps` and
+`pass_ms` far below the first, `running` near 0 and `waiting` the frames still held; `open_runs`
+and `oldest_open_run` name a run that never ends. A pass has a line when it is the first of the
+process or handled a frame, as before: a pass that found nothing to do prints none, so the
+members are read on the passes that acted.
+
+**From the review (pull request #1896).** A frame that waited and is then given no row by
+statement L leaves the waiting frames at once, so that it is listed at the next pass as the
+contract says (it stayed among them until a close or a restart). Two judgements are written
+twice and must be changed together: which open runs hold a frame (statement L and
+`FrameWaits::holds`), and which records close a frame's run, lease or capture (statement L's
+entry and statement C's list); a drift between them delays a frame until a restart and removes
+none early.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
