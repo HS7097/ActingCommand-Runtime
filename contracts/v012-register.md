@@ -49559,7 +49559,7 @@ sleep).
 | Test | What it shows |
 |---|---|
 | `cyc2_h1_a_delay_put_into_a_setup_call_and_into_the_memo_wait_shows_under_its_name` (ruling 1) | 600 s put into the run slots' call and 600 s into the wait for the memo's lock (the remedy journal reading a new run's window end) show as `run_slots` and `catalog_memo_wait` among the three slowest, the slowest first, and in `evaluation_setup_ms`; the remedy plan that waited shows neither; the cycle's other stretches none; a cycle after it none |
-| `cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it_again` (ruling 2) | Runs under two older generations and a memo of one (each cycle read both until 0.12.85): the first cycle reads the generation it has not met (`catalog_reads` takes the delay planned for a read), the next reads none (the delay stays planned, `evaluation_setup_ms` under it); each window end kept is the one its run's generation gives |
+| `cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it_again` (ruling 2) | A run under an older generation and a memo of one, which holds the active generation (until 0.12.85 every cycle whose memo did not hold the run's generation read it from its files): the first cycle reads the run's generation (`catalog_reads` takes the delay planned for a read); after another generation was activated and took the memo, the next cycle reads none (the delay stays planned, `evaluation_setup_ms` under it); the window end kept is the one the run's generation gives |
 | `cyc2_h3_a_summary_or_stutter_that_changes_no_input_wakes_no_cycle_a_change_wakes_one` (ruling 3) | With a scripted capacity sampler and the host's wakes taken as the driver takes them: a summary of the same volumes and states is recorded and wakes nothing, nor does a stutter or a summary raised at an append point; sufficient to soft pressure wakes one cycle (`perf.summary`, `perf.pressure_started`), soft again none, soft to hard one (`perf.summary` alone), hard again none; a pacing change and a change of the dispatch share one each; the cycle count stands still between them; the other performance records still wake |
 | `cyc2_t1_the_line_ends_with_the_three_slowest_calls_of_the_setup` (ruling 1) | The line ends with `evaluation_setup_slowest=catalog_reads:3590.000,remedy_plan:100.000,run_slots:2.000`; two cycles in a second name the three slowest of the sums, of calls that took as long the earlier in the cycle's order (`outcome_keys`); a setup no call took time of names `none` |
 
@@ -49588,7 +49588,12 @@ cycle counter advances only when something changed.
 **From the review (pull request #1899).** The test of the wakes advanced the clock by a second
 between two samples of the capacity owner, where a summary of an unchanged state is due only
 after the summary interval (60 s without a performance configuration): it now advances by the
-interval, which is the case production has. Besides the catalog store's memo the stretch takes a
+interval, which is the case production has. The test of the remedy journal ran a second run under
+a second catalog generation, whose admission needs an approval of that catalog that the fixture
+does not give (`approval_target_identity_conflict`): it now keeps one run, and puts its generation
+out of the memo of one again between its two cycles by activating another generation, so the
+second cycle is one that read the run's generation from its files until 0.12.85. Besides the
+catalog store's memo the stretch takes a
 second lock of the host's own, the one that guards the remembered window ends; it is a leaf (the
 generation is read outside it) and is taken only under the policy lock, where the memo is too, so
 `catalog_memo_wait` is expected near zero. Two things are written twice and change together: what

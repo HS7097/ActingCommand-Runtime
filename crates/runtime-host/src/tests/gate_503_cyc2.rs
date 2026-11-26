@@ -7,10 +7,11 @@
 // - h1 (ruling 1): a delay put into one call of the evaluation's setup and one into the wait for
 //   the catalog store's memo lock show under their names among the three slowest calls and in
 //   `evaluation_setup_ms`; the wait is not counted in the call that waited.
-// - h2 (ruling 2): the remedy journal holds runs admitted under two older catalog generations and
-//   the store's memo keeps one generation, so until 0.12.85 every cycle read both from their files
-//   again; now the first cycle reads the one it has not read yet and the next reads none, and each
-//   window end the journal keeps is the one its run's generation gives.
+// - h2 (ruling 2): the remedy journal holds a run admitted under an older catalog generation and
+//   the store's memo keeps one generation, the active one, so until 0.12.85 every cycle whose memo
+//   did not hold the run's generation read it from its files again; now the first cycle reads it,
+//   and the next, after another generation took the memo, reads none, and the window end the
+//   journal keeps is the one the run's generation gives.
 // - h3 (ruling 3): a summary whose capacity sample leaves the disk gate's input as it was, and a
 //   stutter, wake the policy driver for no cycle; a change of the capacity state, a pacing change
 //   and a change of the dispatch share each wake it once; the driver's cycle count stands still
@@ -143,25 +144,25 @@ fn cyc2_h1_a_delay_put_into_a_setup_call_and_into_the_memo_wait_shows_under_its_
 #[test]
 fn cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it_again() {
     let fixture = remedy_fixture();
-    // A run under the first generation, a run under the second, then a third active, and a memo
-    // of one generation: until 0.12.85 every cycle read the first and the second from their files.
+    // A run under the first generation, then a second and a third generation activated, and a memo
+    // of one generation, which holds the active one: the run's generation is in its files alone.
+    // (Review of #1899: the first build ran a second run under the second generation, whose
+    // admission needs an approval of that catalog; the fixture's one approval id names the first,
+    // and the test stopped there on `approval_target_identity_conflict`.)
     let (_, _, first) = fixture.evaluate_and_run(POLICY_NOW_UNIX_MS, 7, MAIN_TASK, RESULT);
-    fixture
-        .host
-        .activate_policy_catalog(&catalog_version(2))
-        .expect("activate the second generation");
-    let (_, _, second) = fixture.evaluate_and_run(next_eligible(&first), 8, MAIN_TASK, RESULT);
-    fixture
-        .host
-        .activate_policy_catalog(&catalog_version(3))
-        .expect("activate the third generation");
+    for version in [2, 3] {
+        fixture
+            .host
+            .activate_policy_catalog(&catalog_version(version))
+            .expect("activate a later generation");
+    }
     fixture
         .host
         .set_catalog_memo_capacity_for_test(1)
         .expect("a memo of one generation");
 
-    // The first cycle after it reads the second run's generation from its files, once.
-    let at = next_eligible(&second);
+    // The first cycle after it reads the run's generation from its files, once.
+    let at = next_eligible(&first);
     plan_cycle_stretch_delay_for_test(CycleStretch::CatalogRead, DELAY);
     let reading = remedy_cycle(&fixture, at, 9);
     assert_eq!(
@@ -180,7 +181,14 @@ fn cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it
         calls.slowest()
     );
 
-    // The next cycle reads no generation: the wait is gone.
+    // A fourth generation is activated, and the memo of one holds it: the run's generation is in
+    // its files alone again (the activation read its own generation, before the delay below is
+    // planned). Until 0.12.85 the next cycle read the run's generation from them once more, as
+    // every cycle did whose memo did not hold it; now it reads no generation: the wait is gone.
+    fixture
+        .host
+        .activate_policy_catalog(&catalog_version(4))
+        .expect("activate the fourth generation");
     plan_cycle_stretch_delay_for_test(CycleStretch::CatalogRead, DELAY);
     let quiet = remedy_cycle(&fixture, at + 60_000, 10);
     assert_eq!(
@@ -204,13 +212,13 @@ fn cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it
         stretches.evaluation_setup_micros
     );
 
-    // What the journal hands the remedy plan is what reading each run's generation gives: the
-    // window end of both runs, each the one its own generation gives now.
+    // What the journal hands the remedy plan is what reading the run's generation gives: its
+    // window end, the one its own generation gives now.
     let ends = fixture
         .host
         .remedy_window_ends_for_test()
         .expect("the remedy journal's window ends");
-    assert_eq!(ends.len(), 2, "both runs: {ends:?}");
+    assert_eq!(ends.len(), 1, "the run: {ends:?}");
     for (decision_id, kept, read) in &ends {
         assert_eq!(kept, read, "{decision_id}");
     }
