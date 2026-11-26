@@ -25,11 +25,12 @@ use actingcommand_contract::{
     ArtifactProducer, ArtifactRedactionState, IdentifierIssuer, InstanceId,
     ProjectedArtifactReference, RetentionClass,
 };
-use actingcommand_ledger::FrameRetentionClass;
+use actingcommand_ledger::{FrameRetentionClass, OpenRun};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 mod gate_411_e3;
+mod gate_503_fr1;
 mod gate_h5g13;
 mod gate_h5g14;
 mod gate_ln7;
@@ -82,6 +83,14 @@ struct Fake {
     waits: Vec<u64>,
     /// The frame and action of every row statement L answered, in order.
     answered_live: Vec<(ArtifactId, FrameQueryAction)>,
+    /// Workflow #503 FR-1: the root's instance and the ids of the runs `open_runs` names, in
+    /// order; the fake ledger's head, which W answers; what statement C answers, and the head
+    /// each statement C was asked after.
+    instance: Option<InstanceId>,
+    run_ids: Vec<RunId>,
+    head: u64,
+    changes: FrameChanges,
+    asked_changes: Vec<u64>,
 }
 
 impl Fake {
@@ -134,6 +143,10 @@ impl Fake {
             created_at_unix_ms: at,
             class,
             action,
+            frame_id: frame.frame.reference.frame_id,
+            instance_id: Some(frame.frame.instance_id),
+            run_id: frame.frame.run_id,
+            lease_id: None,
         })
     }
 }
@@ -142,7 +155,23 @@ impl FrameAnswers for Fake {
     fn answer_waits(&mut self) -> RuntimeHostResult<FrameQueryOutcome<FrameWaits>> {
         // The runs open now are the pass's W: a run that starts later is not in it.
         self.waits = self.open_runs.clone();
-        Ok(self.answered(FrameWaits::none()))
+        let open = self
+            .open_runs
+            .iter()
+            .zip(&self.run_ids)
+            .map(|(first_at, run_id)| OpenRun {
+                run_id: *run_id,
+                instance_id: self.instance,
+                first_at_unix_ms: *first_at,
+            })
+            .collect();
+        let waits = FrameWaits::of_open_runs(self.head, open).expect("the fake's waits");
+        Ok(self.answered(waits))
+    }
+
+    fn answer_changes(&mut self, after: u64) -> RuntimeHostResult<FrameQueryOutcome<FrameChanges>> {
+        self.asked_changes.push(after);
+        Ok(self.answered(self.changes.clone()))
     }
 
     fn answer_live(
@@ -307,13 +336,18 @@ impl Root {
         self.frames.len() - 1
     }
 
-    /// The fake ledger query over the root's frames, as they are now.
+    /// The fake ledger query over the root's frames, as they are now, with the ids of four runs
+    /// on the root's instance for the runs a test opens.
     fn answers(&self) -> Fake {
         Fake {
             frames: self
                 .frames
                 .iter()
                 .map(|frame| (frame.frame.reference.artifact_id, frame.clone()))
+                .collect(),
+            instance: Some(self.instance),
+            run_ids: (0..4)
+                .map(|_| *self.ids.mint_run_id().expect("run").transport())
                 .collect(),
             ..Fake::default()
         }
@@ -970,7 +1004,10 @@ fn pass_at(
         .collect()
 }
 
-/// T-schedule (§1.4): when each live frame is examined.
+/// T-schedule (§1.4): when each live frame is examined. Adapted by Workflow #503 FR-1 (ruling 1:
+/// nothing a pass examined is examined again before its answer can have changed): the running
+/// frame, which no open run holds and whose run, lease and capture no record closes, is examined
+/// at settle and then no more; it was examined at every pass before. The test keeps its name.
 #[test]
 fn ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_every_pass() {
     let mut root = Root::new();
@@ -1019,7 +1056,7 @@ fn ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_eve
         .class = FrameRetentionClass::Error;
     for now in [T0 + 10 * 60_000, T0 + DAY_MS / 2, T0 + DAY_MS - 1] {
         let asked = pass_at(&mut retention, &root, &mut fake, now);
-        assert_eq!(asked, ids(&[running]), "only the running frame at {now}");
+        assert_eq!(asked, ids(&[]), "no frame at {now}");
     }
     assert!(
         root.object(late).is_file(),
@@ -1028,7 +1065,7 @@ fn ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_eve
     // At 1 day: the default frame is removed, the late frame moved into its error folder, the
     // resource frame not examined yet.
     let asked = pass_at(&mut retention, &root, &mut fake, T0 + DAY_MS);
-    assert_eq!(asked, ids(&[ordinary, running, late]));
+    assert_eq!(asked, ids(&[ordinary, late]));
     assert!(!root.object(ordinary).exists(), "removed at 1 day");
     assert!(!root.object(late).exists());
     assert!(
@@ -1037,11 +1074,11 @@ fn ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_eve
     );
     for now in [T0 + 2 * DAY_MS, T0 + 7 * DAY_MS - 1] {
         let asked = pass_at(&mut retention, &root, &mut fake, now);
-        assert_eq!(asked, ids(&[running]), "only the running frame at {now}");
+        assert_eq!(asked, ids(&[]), "no frame at {now}");
     }
-    // At 7 days the resource frame is examined and removed; the running frame at every pass.
+    // At 7 days the resource frame is examined and removed; the running frame is not.
     let asked = pass_at(&mut retention, &root, &mut fake, T0 + 7 * DAY_MS);
-    assert_eq!(asked, ids(&[reading, running]));
+    assert_eq!(asked, ids(&[reading]));
     assert!(!root.object(reading).exists(), "removed at 7 days");
     assert!(root.object(running).is_file(), "a running frame stays");
 }

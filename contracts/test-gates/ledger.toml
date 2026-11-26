@@ -1011,3 +1011,13 @@ tests = [
     "actingcommand-ledger::lib::global::sqlite::gate_485_start1::start1_l4_the_statement_reads_the_link_rows_by_their_row_id_and_breaks_no_plan_rule",
 ]
 incident = ["#485", "START-1"]
+
+# FR-1 (#503; register §1.527; brief rd-1123/brief-503-fr1.md), the ledger's half of the frame retention's cost, on a real formal root with the case fixture of gate_ln7.rs: a run of an owner epoch that ended holds none of its frames, which are settled at the epoch's end; an open run of the current epoch holds its own frames and the frames of its instance captured after it, and statement W names it with its instance and first frame time and names no run of the ended epoch; statement L answers each frame's own links (frame, instance, run, lease). Statement C answers only what was recorded after its head (the runs a terminal or a capture summary names, the frames whose capture completed, the frames and runs a read confirmation names, a start), nothing after the latest head, and its steps after a head do not grow when the history before the head does; by the crate's plan check it breaks no rule and reads only ranges above its head or keys
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-ledger::lib::global::tests::gate_503_fr1::fr1_a_run_open_at_its_epochs_end_holds_nothing_an_open_run_of_this_epoch_holds",
+    "actingcommand-ledger::lib::global::tests::gate_503_fr1::fr1_statement_c_answers_only_what_was_recorded_after_its_head",
+    "actingcommand-ledger::lib::global::sqlite::frame_query::tests::fr1_t_plan_statement_c_passes_the_rule_and_reads_only_ranges_above_its_head",
+]
+incident = ["#503 FR-1"]

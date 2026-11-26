@@ -11,7 +11,7 @@
 //! point passes the rule too.
 
 use super::super::plan_check::{PlanCheck, check_plan};
-use super::{KEPT, LIVE, OWNER, WAITS};
+use super::{CHANGES, KEPT, LIVE, OWNER, WAITS};
 
 #[test]
 fn ln7c_q_t_plan_w_l_and_k_pass_the_rule_and_equal_their_golden_plans() {
@@ -61,4 +61,30 @@ fn ln7c_q_t_plan_the_owner_point_statement_passes_the_rule() {
         check.violations,
         check.plan.join("\n")
     );
+}
+
+/// Workflow #503 FR-1: statement C passes the rule; every access it makes is a range above its
+/// head (the type index with a sequence bound, the frame index's sequence index) or a key.
+#[test]
+fn fr1_t_plan_statement_c_passes_the_rule_and_reads_only_ranges_above_its_head() {
+    let check = check_plan(CHANGES);
+    assert!(
+        check.violations.is_empty(),
+        "{:?}\n{}",
+        check.violations,
+        check.plan.join("\n")
+    );
+    for step in check
+        .plan
+        .iter()
+        .filter(|step| step.trim_start().starts_with("SEARCH "))
+    {
+        assert!(
+            step.contains("(event_type=? AND sequence>?)")
+                || step.contains("ledger_frame_refs_sequence (sequence>?)")
+                || step.contains("INTEGER PRIMARY KEY (rowid=?)"),
+            "statement C reads a range above its head or a key: {step}\n{}",
+            check.plan.join("\n")
+        );
+    }
 }

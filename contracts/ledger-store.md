@@ -1084,7 +1084,19 @@ writer keeps no frame facts and answers no frame view.
   `error`, `resource`, `duplicate`, `default`) and action (`running`, `keep`,
   `keep_resource`, `move_lab`, `move_error`, `remove`, `remove_duplicate`,
   `remove_confirmed`). K, per chunk of the kept listing: `keep`,
-  `remove_confirmed` or `remove_expired`. Every access is pinned (`INDEXED BY`,
+  `remove_confirmed` or `remove_expired`. Workflow #503 FR-1 (0.12.84): W names each open
+  run too, and answers the ledger head its snapshot read at; L answers each frame's own
+  links too (its frame, instance, run and lease). C, once per pass after the process's
+  first completed pass, before any chunk: what was recorded after the head the last
+  completed pass's W read at that can end a running frame's wait or a kept frame's keep:
+  the runs a terminal (`task.completed`, `task.failed`, `task.cancelled`) or a capture
+  summary names, the leases a `lease.released` names, the frames a `capture.completed`
+  names, the frames and runs a read confirmation names (`read_confirmed`), and whether a
+  `runtime.started` or `runtime.takeover` was recorded. It reads only the records after
+  that head: the type index and the frame index's sequence index, each from that head
+  on, and the link row of each record found, so its steps follow what was recorded since
+  the last pass, not the ledger's length. A pass that does not complete leaves the head
+  where it was. Every access is pinned (`INDEXED BY`,
   `CROSS JOIN`, unary `+`, `MATERIALIZED`), so a missing index fails the statement instead
   of reading the whole history; their plans on an empty database pass the rule of §1.3
   (no scan of a ledger table, a type index only with a sequence bound, no history-wide
@@ -1103,9 +1115,35 @@ writer keeps no frame facts and answers no frame view.
   link, artifact row or index row, makes it error (E4); a marker counts only when it is
   first on both sides (E5).
 - **The examination schedule** (§1.4) is the process's only memory and never decides a
-  class: a frame answered `keep` is examined again 1 day, one answered `keep_resource` 7
-  days after its ingestion time; a running frame, a busy one and one new to this process
-  are examined at every pass. Every kept frame is examined at every pass.
+  class. Workflow #503 FR-1 (0.12.84): a pass costs what is due; nothing a pass examined
+  is examined again before its answer can have changed.
+  - A frame answered `keep` is examined again 1 day, one answered `keep_resource` 7 days
+    after its ingestion time; a busy one and one new to this process at the next pass.
+  - A frame answered `running` is examined again when what holds it can have ended. One
+    an open run of W held (an open run on its instance whose first frame is at most 30 s
+    after it) is examined at the first pass whose W no longer holds it; while W holds it,
+    it is not examined, whatever else was recorded. One W did not hold (its own run, lease
+    or capture not closed) is examined at the first pass whose C names its run, its lease
+    or its frame, or a start or a takeover.
+  - A frame L gives no row (not settled at the pass start, not known to the ledger by its
+    verified record and its pin, or with an eviction intent) is examined at the next pass;
+    given no row again at a pass start at least 10 minutes after the first, it is unknown
+    to this process (`live_unknown`) and not examined again until a restart.
+  - A kept frame is examined when it is new to this process (its first listing), when it
+    reaches `frame_retention_evidence_max_age_days` (the value at the pass start) after its
+    ingestion time, and at the first pass whose C names a read confirmation of it or of its
+    run; a busy one at the next pass. A kept file K gives no row is looked at once by a
+    process. A kept file a person removed leaves the listing and is forgotten at the next
+    pass start, with no statement about it.
+  - Until a pass of the process completed there is no head for C: every waiting frame and
+    every kept frame is examined.
+- **Running** (Workflow #503 FR-1). A frame is `running` only while its run can still be
+  running: a run of an owner epoch that ended has ended with it, and its frames follow the
+  rules of ended runs, the epoch's end as the run's end ("Settled" above; W lists the open
+  runs of the current owner epoch only). Within the current epoch an open run holds its
+  frames and the frames of its instance captured after it; the pass's line names how many
+  runs are open and the oldest of them, so a run that never ends is seen. (An open run
+  holds the frames of its instance captured from 30 s before its first frame on.)
 - **The pace** (§1.5). Each answer carries its statement's SQLite virtual-machine steps
   (the unit is steps, not rows). A statement starts no earlier than the one before plus
   its steps at `ledger_observer.frame_query_steps_per_second` (500 000), read after each
@@ -1192,13 +1230,21 @@ writer keeps no frame facts and answers no frame view.
   the first pass: `actingd frame_retention pass frames=<n> deleted=<n>
   deleted_bytes=<b> moved=<n> moved_bytes=<b> absent=<n> rescanned_absent=<n> busy=<n>
   failed=<n> kept_error=<n> kept_lab=<n> running=<n> rounds=<n> pass_ms=<ms>
-  kept_examined=<n> removed_confirmed=<n> removed_expired=<n> kept_unknown=<n>
-  query_steps=<n>`. `frames` counts the frames the pass queued, live and kept; `deleted`
-  the removals of both; `kept_error` and `kept_lab` the live error and Lab frames its
-  answers move, `running` the live frames answered running; `kept_examined` the kept
+  waiting=<n> open_runs=<n> oldest_open_run=<run id or none> oldest_open_age_ms=<ms>
+  live_unknown=<n> kept_examined=<n> removed_confirmed=<n> removed_expired=<n>
+  kept_unknown=<n> query_steps=<n>`. `frames` counts the frames the pass queued, live and
+  kept; `deleted` the removals of both; `kept_error` and `kept_lab` the live error and Lab
+  frames its answers move, `running` the live frames answered running in this pass;
+  Workflow #503 FR-1 (0.12.84): `waiting` the live frames answered running before that
+  this pass did not examine (nothing that can end their wait happened), `open_runs` the
+  open runs of the current owner epoch W answered, `oldest_open_run` the one whose first
+  frame is the oldest (`none` without one) and `oldest_open_age_ms` how long before the
+  pass start that frame was captured (0 without one), `live_unknown` the live frames this
+  pass found unknown (examined no more by the process); `kept_examined` the kept
   frames K examined; `removed_confirmed` the evidence frames removed as confirmed, live
   and kept; `removed_expired` the kept frames removed at their maximum age;
-  `kept_unknown` as above; `query_steps` the steps of the pass's statements. A pass
+  `kept_unknown` as above, each kept file at the one look the process gives it;
+  `query_steps` the steps of the pass's statements. A pass
   without a complete frame index prints the `skipped` line above instead. With the
   cleaner off, actingd prints `actingd frame_retention disabled` once at start and runs
   no pass. A failed removal or move appends one Warning `runtime.failed` with system

@@ -49135,6 +49135,168 @@ package uses only what every Runtime that runs a select step reads, so it needs 
 `package fix-select` comes with the Lab of 0.12.83. In the release notes' language:
 录制里的选择步骤现在可以写 `wanted.fixed`（要找的那一项，或按先后顺序的几项），给只是找包自己那条路的步骤用：这样生成的包不再为这一步声明变量，目标页上也就不会出现它。原来按变量生成的包不用重录、也不碰设备：新命令 `actinglab package fix-select --package <内容目录> --variable <变量名>`（MCP 工具 `ac_package_fix_select`）只凭包里的文件就把这一步改成固定形式，默认固定成变量原来的默认值，也可以用 `--fixed` 按先后给几项；改不了的包会说明原因、一个文件也不写。录制还在、还能标注的包，也可以照旧在录制上把这一步再声明一次、改成 `fixed` 后 `record stop` 重新生成。转换时游戏根目录里 `goals.json` 对这个变量的摆放、`schedule.json` 规则里给它的值要在同一次改动里去掉，否则 `goals.json` 整份不生效、`schedule.json` 整份编排被拒。之前在那个变量名下存过的值留在原处，目标页把它列在没有条目显示的存值里，可以清掉。
 
+### 1.527 Slice #503 FR-1 (0.12.84): a frame retention pass costs what is due, not what is stored; and what makes the state store grow, its write-ahead log large and a status read time out (board #503; the week's plan the owner approved names this day's work as stanching, with an investigation of the store's size and of the read timeouts; the rulings 1 to 5 are the coordinator's of 11-26, not the owner's words; coordinator work order `rd-1123/brief-503-fr1.md`, after the read-only study `rd-1123/study-503-cycle.md`, its part 丙 and the coordinator's disposition, item 3; on main `02e5b31b`, the code of v0.12.83)
+
+This section takes 1.527 (1.526 belongs to another slice of this version). It ships in 0.12.84.
+[ledger-store.md](ledger-store.md) ("Frame cleaner": the statements, the examination schedule,
+"Running", the line) is the contract. No schema, index, ledger revision, interface revision,
+configuration key or outcome code changes; the daemon line gains members.
+
+**The incident** (production, v0.12.83). The pass after the start of 11-26 05:22 printed
+`frames=8361 deleted=6843 deleted_bytes=24774386609 moved=1518 moved_bytes=5546723070
+kept_error=1518 running=1 rounds=1007 pass_ms=2327989 kept_examined=4293 removed_expired=28
+query_steps=712907167`, the next `frames=383 deleted=245 moved=138 running=1 rounds=98
+pass_ms=204743 kept_examined=5783 query_steps=63108045`. On 11-24, pass after pass with almost
+nothing to do: `frames=40 deleted=40 running=8343 rounds=299 pass_ms=607068 kept_examined=4348
+removed_expired=39 query_steps=266545897` and `frames=16 running=8343 rounds=297 pass_ms=603216
+kept_examined=4309 query_steps=266422087`: ten minutes and 266 million steps to remove 16
+frames, every kept frame examined again at every pass, `running` at 8343 for a whole process and
+1 in another. The state store is 30.3 GB (28.9 GB a day before, about 1.4 GB a day), its
+write-ahead log 529 MB, its ledger 6.5 million records. While passes run a policy cycle takes
+5.2 s, 4.85 s of it waiting with an idle processor, and on 11-25 a status read of the Lab was
+answered `runtime_receipt_header_failed` with the socket's read timeout (os error 10060) three
+times in one call.
+
+**What cost the steps** (read in the code; the production counts per statement were not
+measured). A pass examined again, with statement L, every live frame it had answered `running`
+(no schedule entry: 8343 frames, about 33 chunks of 256 at every pass), and, with statement K,
+every kept frame (no schedule at all: about 4300 at every pass, a file K gives no row included).
+L's steps per frame are its per-run walks (each run of the chunk and of its frames' 30 s windows
+walked over all its link rows, `rw`; the run's request and correlation scopes, `lab_runs`), the
+error window over the time index for each frame, and, for a run whose lease is not yet released,
+a walk of the lease's link rows from the run's terminal on; for frames held by a run that stays
+open these are paid again at every pass, and the work grows with what the store holds. The first
+pass after a start examines every frame once and each due frame twice (the examination and the
+round's re-check): about 85 000 steps a handled frame on 11-26. W reads the current owner
+epoch's frames and terminals once per pass: it grows with the epoch's length, not the store's
+(below, owed).
+
+**The rules as built.**
+- *Rule 1, a pass costs what is due* (`crates/runtime-host/src/host/frame_retention.rs`,
+  `begin_pass`, `examine`, `add_changed`, `decide_live`; `crates/ledger/src/global/sqlite/
+  frame_query.rs` and `frame_query/changes.sql`). Nothing a pass examined is examined again
+  before its answer can have changed:
+  - a live frame answered `keep` or `keep_resource` at its due age, as before;
+  - a running frame an open run of W held (an open run on its instance whose first frame is at
+    most 30 s after it) at the first pass whose W no longer holds it, and never while W holds it;
+  - a running frame W did not hold (its own run, lease or capture not closed) at the first pass
+    whose statement C names its run, its lease or its frame, or a start or a takeover;
+  - a frame L gives no row at the next pass, and, given none again at a pass start at least the
+    cleaner's interval (ten minutes) later, not again by this process (`live_unknown`);
+  - a kept frame at its first listing, at `frame_retention_evidence_max_age_days` (the value at
+    the pass start) after its ingestion time, at the first pass whose C names a read confirmation
+    of it or of its run, and, busy, at the next pass; a kept file K gives no row once in a
+    process; a kept file a person removed leaves the listing and is forgotten at the next pass
+    start, with no statement about it (the bound is the pass interval);
+  - statement C, new, finds the work by a bounded read: what was recorded after the head the last
+    completed pass's W read at (W now answers its snapshot's head), from the type index with a
+    sequence bound and the frame index's sequence index, and the link row of each record found:
+    the runs a terminal or a capture summary names, the leases a release names, the frames a
+    capture completion names, the targets of read confirmations, and a start or a takeover. Its
+    steps follow what was recorded since the last pass, not the ledger's length. A pass that does
+    not complete leaves the head where it was; until a pass of the process completed, every
+    waiting and kept frame is due.
+  - L answers each frame's own links too (frame, instance, run, lease), from rows it already
+    joined; W names each open run.
+- *Rule 2, running.* A run of an owner epoch that ended has ended with it: already so in W (the
+  open runs of the current epoch only, `waits.sql`, the runs whose first link follows the epoch's
+  start) and in L (an unclosed run's entry is its epoch's end, `live.sql`, `rx.end_seq` and
+  `fe.entry`), now pinned by a test. Within the current epoch an open run still holds its frames
+  and those of its instance captured from 30 s before its first frame on; the line names the open
+  runs, the oldest and its age, and counts the frames left waiting. Nothing is removed on weaker
+  evidence than before.
+- *Rule 3, what is kept and for how long does not change*: the classes, the times, the switches,
+  the folders, the re-check of each queued frame on a fresh snapshot before it is acted on.
+- *Rule 4*: no schema, index or revision; none was needed.
+
+**The line.** `actingd frame_retention pass frames=… running=<n> rounds=<n> pass_ms=<ms>
+waiting=<n> open_runs=<n> oldest_open_run=<run id or none> oldest_open_age_ms=<ms>
+live_unknown=<n> kept_examined=<n> …`: `running` the live frames answered running in this pass,
+`waiting` those answered running before and not examined in it, `open_runs` W's open runs,
+`oldest_open_run` and `oldest_open_age_ms` the one whose first frame is the oldest and how long
+before the pass start it was captured; `kept_unknown` counts each unknown kept file at its one
+look. The members are inserted after `pass_ms`; every other member keeps its place.
+
+**Tests** (incident `#503 FR-1`: the host gate map's row,
+`crates/runtime-host/src/host/frame_retention/tests/gate_503_fr1.rs`; the ledger gate map's row,
+`crates/ledger/src/global/tests/gate_503_fr1.rs` and the plan test in
+`crates/ledger/src/global/sqlite/frame_query/tests.rs`; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `fr1_t1_a_second_pass_over_an_unchanged_store_reads_no_frame_again` | A second pass over the same store and ledger runs W and one C (after the first pass's head) and no L and no K; the first pass's C was not run (no head); nothing is touched |
+| `fr1_t2_a_kept_frame_is_asked_about_at_its_maximum_age_or_its_confirmation_an_unknown_once` | A millisecond before its maximum age no kept frame is asked about; a confirmation C names makes that frame alone asked about and removed; at its maximum age the other is asked about and removed; a file removed by hand is forgotten at the next pass start; an unknown kept file is counted at its one look and never asked about again |
+| `fr1_t3_a_running_frame_waits_for_what_can_end_it_and_the_line_names_the_open_run` | A frame an open run holds is not asked about while the run stays open, even with its capture closed; after the run ended it is; a frame no run holds is asked about when C names its capture; the line names `open_runs=1`, the run's id and its age, and `waiting=2` |
+| `fr1_t4_a_live_frame_without_an_answer_is_asked_about_twice_ten_minutes_apart_then_no_more` | A live frame L gives no row is asked about at two pass starts ten minutes apart, then not again; nothing touches it |
+| `fr1_a_run_open_at_its_epochs_end_holds_nothing_an_open_run_of_this_epoch_holds` | On a formal root: the frames of a run left open by an ended epoch are not running; an open run of the current epoch holds its own frame and a later frame of its instance, not one captured more than 30 s before its first frame; W names that run alone, its instance, its first frame time and the head; L answers each frame's links |
+| `fr1_statement_c_answers_only_what_was_recorded_after_its_head` | C answers the run closed, the capture completed, the two confirmations and the start recorded after its head, nothing recorded before it, nothing after the latest head; its steps after a head are the same with 2 000 more records before the head |
+| `fr1_t_plan_statement_c_passes_the_rule_and_reads_only_ranges_above_its_head` | By the crate's plan check C breaks no rule; each search is the type index with a sequence bound, the frame index's sequence index above its head, or a row by key |
+
+Changed: `ln7c_q_t_schedule_examined_at_settle_at_one_day_and_at_seven_days_running_every_pass`
+(rule 1 deliberately changes what it pinned: the running frame, which no open run holds and no
+record closes, is examined at settle and no more; it keeps its name, so the gate map keeps it, and
+the LN-7c Q row's comment says so). The cleaner tests' fake now answers W with its open runs and
+head, statement C as a test sets it, and L with a frame's links. No other test changes; no test
+leaves a gate map; no golden is re-recorded (the plans of W and L gain output columns only).
+
+**What is not changed.** The classes, the times and the switches; the re-check before acting;
+the pace and its key; the stop; the kept folders; the offline check (`ledger-maintenance verify
+--frame-query`), which still examines every frame at one clock; `actingledger frames`.
+
+**Owed.** W still reads the current epoch's frames and terminals at every pass; a process that
+runs for days pays it in full each time. It could keep the open runs between passes and read only
+the frames and terminals after C's head. The first pass after a start still examines every frame
+once (on 11-26, 712 million steps).
+
+**Findings (ruling 5, reported, nothing changed).**
+- *(a) The store's growth.* Nothing is ever removed from the ledger's tables: the ledger is
+  append-only and chained; only rows of `ledger_index` and the frame index are deleted
+  (`crates/ledger/src/global/sqlite.rs`, the two `DELETE FROM ledger_index`; `frame_refs.rs`),
+  and nothing vacuums. The largest regular writer the code shows is the runtime fact snapshot: the
+  whole runtime fact store is sealed again within a minute of any change
+  (`crates/runtime-host/src/host/runtime_facts.rs`, `append_runtime_fact_snapshot_if_dirty`;
+  `RUNTIME_FACT_SNAPSHOT_INTERVAL_MS` 60 000 and parts of at most 512 KiB,
+  `crates/actingcommand-contract/src/runtime_fact.rs`), while each change is also recorded on its
+  own (`runtime.fact_recorded`); a store of about 1 MB sealed 1 440 times a day is the measured
+  1.4 GB. Not measured here (the store was not opened). Proposal: measure first, on a copy, the
+  bytes of the last day by record type (`event_type`, count, sum of `LENGTH(canonical_record)`);
+  if the snapshot leads, the smallest change is a longer seal interval as a configuration key
+  (a restart still replays the individual records after the last seal).
+- *(b) The 529 MB write-ahead log.* No code checkpoints: the shared connection runs on SQLite's
+  automatic passive checkpoint after a commit (no `wal_autocheckpoint`, `journal_size_limit` or
+  `wal_checkpoint` anywhere in the product, `crates/runtime-database/src/lib.rs`), and the file is
+  never truncated, so its size is its high-water mark: once, 529 MB was written while some reader
+  held one snapshot open, and a passive checkpoint cannot copy past a reader's snapshot nor
+  restart the log under it. The longest single snapshot the code holds is the scrub's whole-file
+  `PRAGMA quick_check(1)` at the end of each pass, on its own connection over the 30 GB file
+  (`crates/ledger/src/global/sqlite/scrub.rs`, `end`); the frame cleaner holds a snapshot for one
+  statement at a time, never across statements (`frame_query.rs`, `run`). Proposal: a
+  `journal_size_limit` on the shared connection at its open, so a restarted log is cut back; and
+  the scrub's whole-file check less often than each pass, or in pieces.
+- *(c) A status read that times out.* The Runtime's status read answers from memory under the
+  host's locks and reads the writer's published head without a writer command
+  (`crates/runtime-host/src/host/read_events.rs`, `control_plane_status`,
+  `observe_runtime_state`); it opens no connection and runs no statement, so no retention
+  statement holds it. The Lab's status asks several reads in one call, the schedule explanation
+  among them, which waits for the policy host lock a policy cycle holds for its evaluation
+  (`policy_dispatch.rs`, `EvaluatePolicyCycle`); the client's read timeout is 5 s
+  (`crates/runtime-client/src/client.rs`, `DEFAULT_RUNTIME_IO_TIMEOUT`), and a cycle took 5.2 s.
+  A read that meets a cycle then times out; one between cycles answers at once, as on 11-26. Not
+  reproduced here. Proposal: the cycle publishes its explanation and status inputs at its end and
+  the reads take only that copy's lock, so no read waits for an evaluation; failing that, a longer
+  read timeout for the Lab's status reads.
+- *What the cleaner holds.* Its statements run on a read-only connection of its own
+  (`RuntimeDatabase::read_snapshot_connection`), one read transaction each; it takes no lock a
+  cycle or a status read takes. It shares with them the performance thread's tick (its round runs
+  inside the tick's lifecycle work, `performance.rs`, `performance_monitor_loop`), the writer for
+  the bounded chunks of its listing's hand-over at a pass start, and the disk: a pass of 266
+  million steps reads much of a 30 GB file at random.
+
+**At deploy.** Nothing to configure. On production the first pass after a start shows the cost
+it showed (every frame examined once); the second pass shows `query_steps` and `pass_ms` far
+below the first, `running` near 0 and `waiting` the frames still held; `open_runs` and
+`oldest_open_run` name a run that never ends.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

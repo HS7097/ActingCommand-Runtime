@@ -64,9 +64,9 @@ pub use sqlite::scrub::SteppingScrubClock;
 pub use sqlite::scrub::{LedgerScrubClock, LedgerScrubPolicy, LedgerScrubStop};
 // #422 LN-7c Q (final-query §1): the frame cleaner's ledger query.
 pub use sqlite::frame_query::{
-    EvidenceCovers, EvidenceTarget, FrameConfirmation, FrameQuery, FrameQueryAction,
+    EvidenceCovers, EvidenceTarget, FrameChanges, FrameConfirmation, FrameQuery, FrameQueryAction,
     FrameQueryCheck, FrameQueryCheckSettings, FrameQueryFrame, FrameQueryOutcome,
-    FrameQuerySettings, FrameQueryStop, FrameWaits, KeptFrameAnswer, LiveFrameAnswer,
+    FrameQuerySettings, FrameQueryStop, FrameWaits, KeptFrameAnswer, LiveFrameAnswer, OpenRun,
     evidence_covers,
 };
 pub use sqlite::{

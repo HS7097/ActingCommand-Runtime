@@ -7,7 +7,9 @@
 //! - **The statements.** W (`frame_query/waits.sql`) answers the open runs of the current owner
 //!   epoch once per pass; L (`live.sql`) answers each live frame's class and action for one chunk
 //!   of the live listing; K (`kept.sql`) answers the evidence-frame rule for one chunk of the kept
-//!   listing. Every access is pinned (`INDEXED BY`, `CROSS JOIN`, unary `+`, `MATERIALIZED`), so a
+//!   listing; Workflow #503 FR-1: C (`changes.sql`) answers, once per pass, what was recorded after
+//!   the last completed pass's head that can end a running frame's wait or a kept frame's keep.
+//!   Every access is pinned (`INDEXED BY`, `CROSS JOIN`, unary `+`, `MATERIALIZED`), so a
 //!   missing index fails the statement instead of reading the whole history; their plans on an
 //!   empty database are held to the §1.3 rule and to golden texts (`plan_*.txt`, test T-plan).
 //! - **One read transaction per statement.** No snapshot is held from one statement to the next.
@@ -44,8 +46,8 @@ use crate::global::{
 use actingcommand_contract::outcome::Location;
 use actingcommand_contract::{
     ArtifactId, ArtifactKind, ClientPayload, EventActor, EventPayload, EventSource, EventType,
-    InstanceId, ProjectedArtifactReference, RunId, RuntimePayload, TaskOutcome, TaskPayload,
-    TaskSemanticFact,
+    FrameId, InstanceId, LeaseId, ProjectedArtifactReference, RunId, RuntimePayload, TaskOutcome,
+    TaskPayload, TaskSemanticFact,
 };
 use actingcommand_runtime_database::RuntimeDatabase;
 use rusqlite::{Connection, TransactionBehavior, types::Value as SqlValue};
@@ -67,6 +69,8 @@ pub(in crate::global) const LIVE: &str = include_str!("frame_query/live.sql");
 pub(in crate::global) const KEPT: &str = include_str!("frame_query/kept.sql");
 /// The owner point of one frame to move into an error folder.
 pub(in crate::global) const OWNER: &str = include_str!("frame_query/owner.sql");
+/// Workflow #503 FR-1, statement C: what was recorded after a head that can end a wait or a keep.
+pub(in crate::global) const CHANGES: &str = include_str!("frame_query/changes.sql");
 
 /// A frame's own `artifact.verified` row.
 const VERIFIED_SEQUENCE: &str = "SELECT a.sequence FROM ledger_artifacts a INDEXED BY ledger_artifacts_artifact CROSS JOIN ledger_events e ON e.sequence = a.sequence WHERE a.artifact_id = ?1 AND a.kind = 'capture.frame' AND +e.event_type = 'artifact.verified' ORDER BY a.sequence LIMIT 1";
@@ -178,17 +182,34 @@ pub enum FrameQueryOutcome<T> {
     Stopped,
 }
 
-/// Statement W's answer: the instance and first frame time of each open run.
+/// Statement W's answer: the instance and first frame time of each open run; Workflow #503 FR-1:
+/// and every open run with its id, and the head the statement read at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FrameWaits {
-    /// `(instance key, first frame time as stored)`.
+    /// `(instance key, first frame time as stored)`, statement L's `:waits`.
     rows: Vec<(String, i64)>,
+    /// Every open run, with an instance link or without one.
+    open: Vec<OpenRun>,
+    /// The ledger head of the statement's snapshot.
+    head: u64,
 }
 
 impl FrameWaits {
     /// No open run (a test's waits).
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Workflow #503 FR-1: the waits of the open runs `open` at the head `head`, as statement W
+    /// answers them (a test's waits).
+    pub fn of_open_runs(head: u64, open: Vec<OpenRun>) -> GlobalLedgerResult<Self> {
+        let mut rows = Vec::new();
+        for run in &open {
+            if let Some(instance) = run.instance_id {
+                rows.push((views::key(instance)?, encode(run.first_at_unix_ms)));
+            }
+        }
+        Ok(Self { rows, open, head })
     }
 
     /// The open runs that hold frames back.
@@ -199,6 +220,38 @@ impl FrameWaits {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+
+    /// Workflow #503 FR-1: every open run of the current owner epoch.
+    pub fn open_runs(&self) -> &[OpenRun] {
+        &self.open
+    }
+
+    /// Workflow #503 FR-1: the ledger head the statement read at.
+    pub fn head(&self) -> u64 {
+        self.head
+    }
+
+    /// Workflow #503 FR-1: statement L's hold over a frame of `instance` captured at `at`, an open
+    /// run on its instance whose first frame is at most 30 s after it. The cleaner reads it only
+    /// to know when statement L's answer can have changed, never to class a frame.
+    pub fn holds(&self, instance: Option<&InstanceId>, at: u64) -> bool {
+        instance.is_some_and(|instance| {
+            self.open.iter().any(|run| {
+                run.instance_id.as_ref() == Some(instance)
+                    && run.first_at_unix_ms <= at.saturating_add(ERROR_WINDOW_MS)
+            })
+        })
+    }
+}
+
+/// Workflow #503 FR-1: one open run of statement W's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenRun {
+    pub run_id: RunId,
+    /// Its first instance link; a run without one holds no frame back.
+    pub instance_id: Option<InstanceId>,
+    /// The ingestion time of its first frame.
+    pub first_at_unix_ms: u64,
 }
 
 /// One live frame's row of statement L.
@@ -209,6 +262,29 @@ pub struct LiveFrameAnswer {
     pub created_at_unix_ms: u64,
     pub class: FrameRetentionClass,
     pub action: FrameQueryAction,
+    /// Workflow #503 FR-1: the frame's own links (of its `artifact.verified`), by which the
+    /// cleaner knows what can end a running frame's wait.
+    pub frame_id: Option<FrameId>,
+    pub instance_id: Option<InstanceId>,
+    pub run_id: Option<RunId>,
+    pub lease_id: Option<LeaseId>,
+}
+
+/// Workflow #503 FR-1, statement C's answer: what was recorded after a head that can end a running
+/// frame's wait or a kept frame's keep.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrameChanges {
+    /// A `runtime.started` or `runtime.takeover` was recorded: any wait may have ended.
+    pub started: bool,
+    /// The runs a terminal or a capture summary names.
+    pub runs: BTreeSet<RunId>,
+    /// The leases a release names.
+    pub leases: BTreeSet<LeaseId>,
+    /// The frames whose capture completed.
+    pub frames: BTreeSet<FrameId>,
+    /// The frames and the runs a read confirmation names.
+    pub confirmed_artifacts: BTreeSet<ArtifactId>,
+    pub confirmed_runs: BTreeSet<RunId>,
 }
 
 /// One kept frame's row of statement K.
@@ -299,6 +375,20 @@ fn identifier<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
     serde_json::from_value(serde_json::Value::String(text.to_owned())).ok()
 }
 
+/// Workflow #503 FR-1: an identifier column that may be NULL, of `statement`'s answer.
+fn linked<T: serde::de::DeserializeOwned>(
+    value: &SqlValue,
+    statement: &str,
+) -> GlobalLedgerResult<Option<T>> {
+    match value {
+        SqlValue::Text(text) => identifier(text)
+            .map(Some)
+            .ok_or_else(|| invalid_row(statement)),
+        SqlValue::Null => Ok(None),
+        _ => Err(invalid_row(statement)),
+    }
+}
+
 /// The ids as the JSON array a statement's `json_each` reads.
 fn key_list<T: Serialize + Copy>(ids: &[T]) -> GlobalLedgerResult<String> {
     let keys = ids
@@ -322,9 +412,10 @@ fn first_integer(rows: &[SqlRow]) -> Option<i64> {
     }
 }
 
-/// Whether the frame index covers every record of this snapshot: its extent is `1..=head`. An
-/// extent that cannot be read (absent, malformed, a root before the index) covers nothing.
-fn covers_head(connection: &Connection) -> GlobalLedgerResult<bool> {
+/// The head of this snapshot when the frame index covers every record of it (its extent is
+/// `1..=head`), else `None`. An extent that cannot be read (absent, malformed, a root before the
+/// index) covers nothing.
+fn covered_head(connection: &Connection) -> GlobalLedgerResult<Option<u64>> {
     let head = connection
         .query_row("SELECT MAX(sequence) FROM ledger_events", [], |row| {
             row.get::<_, Option<i64>>(0)
@@ -332,12 +423,13 @@ fn covers_head(connection: &Connection) -> GlobalLedgerResult<bool> {
         .map_err(|error| non_terminal(sql_error(error, location())))?
         .map_or(0, decode);
     if head == 0 {
-        return Ok(true);
+        return Ok(Some(0));
     }
     Ok(matches!(
         frame_refs::read_extent(connection),
         Ok(Some((1, through))) if through >= head
-    ))
+    )
+    .then_some(head))
 }
 
 /// One statement's rows, its named parameters bound where it names them, and its steps.
@@ -537,33 +629,33 @@ impl FrameQuery {
     }
 
     /// One statement in a read transaction of its own, run only while the frame index covers the
-    /// snapshot and the stop is not raised.
+    /// snapshot and the stop is not raised; `answer` reads its rows with the snapshot's head.
     fn run<T>(
         &mut self,
         sql: &str,
         parameters: &[(&str, SqlValue)],
-        answer: impl FnOnce(Vec<SqlRow>) -> GlobalLedgerResult<T>,
+        answer: impl FnOnce(Vec<SqlRow>, u64) -> GlobalLedgerResult<T>,
     ) -> GlobalLedgerResult<FrameQueryOutcome<T>> {
         if (self.stop)() {
             return Ok(FrameQueryOutcome::Stopped);
         }
-        let read = (|| -> GlobalLedgerResult<Option<(Vec<SqlRow>, u64)>> {
+        let read = (|| -> GlobalLedgerResult<Option<(Vec<SqlRow>, u64, u64)>> {
             let transaction = self
                 .connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|error| non_terminal(sql_error(error, location())))?;
-            if !covers_head(&transaction)? {
+            let Some(head) = covered_head(&transaction)? else {
                 return Ok(None);
-            }
-            let rows = statement_rows(&transaction, sql, parameters)?;
+            };
+            let (rows, steps) = statement_rows(&transaction, sql, parameters)?;
             transaction
                 .commit()
                 .map_err(|error| non_terminal(sql_error(error, location())))?;
-            Ok(Some(rows))
+            Ok(Some((rows, steps, head)))
         })();
         match read {
-            Ok(Some((rows, steps))) => Ok(FrameQueryOutcome::Answered {
-                value: answer(rows)?,
+            Ok(Some((rows, steps, head))) => Ok(FrameQueryOutcome::Answered {
+                value: answer(rows, head)?,
                 steps,
             }),
             Ok(None) => Ok(FrameQueryOutcome::Incomplete),
@@ -591,17 +683,30 @@ impl FrameQuery {
 
     /// Statement W, once per pass.
     pub fn waits(&mut self) -> GlobalLedgerResult<FrameQueryOutcome<FrameWaits>> {
-        self.run(WAITS, &[], |rows| {
-            let mut waits = FrameWaits::default();
+        self.run(WAITS, &[], |rows, head| {
+            let mut waits = FrameWaits {
+                head,
+                ..FrameWaits::default()
+            };
             for row in rows {
-                match row.as_slice() {
-                    [SqlValue::Text(instance), SqlValue::Integer(first_at)] => {
+                let [SqlValue::Text(run), instance, SqlValue::Integer(first_at)] = row.as_slice()
+                else {
+                    return Err(invalid_row("waits"));
+                };
+                let instance_id = match instance {
+                    SqlValue::Text(instance) => {
                         waits.rows.push((instance.clone(), *first_at));
+                        Some(identifier(instance).ok_or_else(|| invalid_row("waits"))?)
                     }
                     // A run with no instance link holds no instance's frames back.
-                    [SqlValue::Null, SqlValue::Integer(_)] => {}
+                    SqlValue::Null => None,
                     _ => return Err(invalid_row("waits")),
-                }
+                };
+                waits.open.push(OpenRun {
+                    run_id: identifier(run).ok_or_else(|| invalid_row("waits"))?,
+                    instance_id,
+                    first_at_unix_ms: decode(*first_at),
+                });
             }
             Ok(waits)
         })
@@ -650,7 +755,7 @@ impl FrameQuery {
                 SqlValue::Integer(i64::from(settings.switches.dedup_lab)),
             ),
         ];
-        self.run(sql, &parameters, |rows| {
+        self.run(sql, &parameters, |rows, _| {
             rows.into_iter()
                 .map(|row| match row.as_slice() {
                     [
@@ -658,12 +763,20 @@ impl FrameQuery {
                         SqlValue::Integer(at),
                         SqlValue::Text(class),
                         SqlValue::Text(action),
+                        frame,
+                        instance,
+                        run,
+                        lease,
                     ] => Ok(LiveFrameAnswer {
                         artifact_id: identifier(artifact).ok_or_else(|| invalid_row("live"))?,
                         created_at_unix_ms: decode(*at),
                         class: class_of(class).ok_or_else(|| invalid_row("live"))?,
                         action: FrameQueryAction::parse(action)
                             .ok_or_else(|| invalid_row("live"))?,
+                        frame_id: linked(frame, "live")?,
+                        instance_id: linked(instance, "live")?,
+                        run_id: linked(run, "live")?,
+                        lease_id: linked(lease, "live")?,
                     }),
                     _ => Err(invalid_row("live")),
                 })
@@ -682,7 +795,7 @@ impl FrameQuery {
             (":now", stored(settings.now_unix_ms)),
             (":max_age_ms", integer(settings.evidence_max_age_ms)),
         ];
-        self.run(KEPT, &parameters, |rows| {
+        self.run(KEPT, &parameters, |rows, _| {
             rows.into_iter()
                 .map(|row| match row.as_slice() {
                     [
@@ -706,6 +819,46 @@ impl FrameQuery {
                     _ => Err(invalid_row("kept")),
                 })
                 .collect()
+        })
+    }
+
+    /// Workflow #503 FR-1, statement C: what was recorded after the head `after` that can end a
+    /// running frame's wait or a kept frame's keep.
+    pub fn changes(&mut self, after: u64) -> GlobalLedgerResult<FrameQueryOutcome<FrameChanges>> {
+        self.run(CHANGES, &[(":after", stored(after))], |rows, _| {
+            let invalid = || invalid_row("changes");
+            let mut changes = FrameChanges::default();
+            for row in rows {
+                match row.as_slice() {
+                    [SqlValue::Text(kind), SqlValue::Null] if kind.as_str() == "start" => {
+                        changes.started = true;
+                    }
+                    [SqlValue::Text(kind), SqlValue::Text(id)] => match kind.as_str() {
+                        "run" => {
+                            changes.runs.insert(identifier(id).ok_or_else(invalid)?);
+                        }
+                        "lease" => {
+                            changes.leases.insert(identifier(id).ok_or_else(invalid)?);
+                        }
+                        "frame" => {
+                            changes.frames.insert(identifier(id).ok_or_else(invalid)?);
+                        }
+                        "confirmed_artifact" => {
+                            changes
+                                .confirmed_artifacts
+                                .insert(identifier(id).ok_or_else(invalid)?);
+                        }
+                        "confirmed_run" => {
+                            changes
+                                .confirmed_runs
+                                .insert(identifier(id).ok_or_else(invalid)?);
+                        }
+                        _ => return Err(invalid()),
+                    },
+                    _ => return Err(invalid()),
+                }
+            }
+            Ok(changes)
         })
     }
 

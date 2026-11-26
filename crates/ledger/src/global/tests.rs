@@ -3297,3 +3297,8 @@ mod gate_429_rg_stop;
 // relation only when none does, with the same answer, on both stores.
 #[path = "tests/gate_463_s110.rs"]
 mod gate_463_s110;
+// Workflow #503 FR-1 (register §1.527): a run open at its epoch's end holds no frame, an open run
+// of the current epoch holds its instance and statement W names it; statement L answers a frame's
+// own links; statement C answers only what was recorded after its head.
+#[path = "tests/gate_503_fr1.rs"]
+mod gate_503_fr1;

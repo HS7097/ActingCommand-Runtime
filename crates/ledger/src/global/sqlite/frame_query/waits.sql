@@ -2,7 +2,8 @@
 -- #422 LN-7c Q (rd-1026/ln7c/final-query.md §1.2), statement W, once per pass: the open runs of
 -- the current owner epoch, each with its instance and first frame time. A frame of that instance
 -- captured at most 30 s before an open run's first frame waits (running). Bounded by the frames
--- and the terminals of the current epoch. Integers are ordered-u64 (`encode`).
+-- and the terminals of the current epoch. Workflow #503 FR-1: each row names its run too, so the
+-- pass's line names the open runs and the oldest of them. Integers are ordered-u64 (`encode`).
 WITH
 -- the current epoch's start: two one-entry seeks (MAX on the type index), then its row
 st AS MATERIALIZED (
@@ -30,7 +31,7 @@ term AS MATERIALIZED (
     AND tl.run_id IS NOT NULL
     AND json_extract(CAST(te.canonical_record AS TEXT), '$.payload.payload.kind') = 'semantic'
 )
-SELECT
+SELECT c.run_id AS run_id,
   (SELECT il.instance_id FROM ledger_links il INDEXED BY ledger_links_run
    WHERE il.run_id = c.run_id AND il.instance_id IS NOT NULL ORDER BY il.sequence LIMIT 1) AS instance_id,
   c.first_at
