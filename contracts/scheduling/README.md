@@ -3681,7 +3681,11 @@ driver. Not behind the switch.
   stale fact included; a summary of the interval, or of free bytes moved within a state, wakes it
   never. The latest observation's responsiveness and third-party pressure change with every sample
   and no record names them: an evaluation reads them as they are when it runs, as it reads the
-  clock. The line's `wakes` counts `perf.summary` only for a summary that woke the driver.
+  clock. They enter the ranking only (the contention penalty) and gate nothing, so no task waits
+  for them; a ranking can be that of the last evaluation for at most the reconciliation interval
+  (`policy_cadence.reconciliation_interval_ms`, 60 s by default), after which the driver evaluates
+  whatever happened. The line's `wakes` counts `perf.summary` only for a summary that woke the
+  driver.
 
 ## Evaluation failures
 

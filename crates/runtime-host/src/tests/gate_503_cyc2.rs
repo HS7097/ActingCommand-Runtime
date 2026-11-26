@@ -312,9 +312,11 @@ fn cyc2_h3_a_summary_or_stutter_that_changes_no_input_wakes_no_cycle_a_change_wa
     let resample = host
         .capacity_sampler_for_test()
         .expect("the capacity owner");
-    // A second later, an admission's re-sample: one summary recorded at once.
+    // A summary interval later (60 s, the default: this host has no performance configuration),
+    // the capacity owner's sample: one summary recorded, as the summaries production records by
+    // interval are (review of #1899: a second later no summary was due with the state unchanged).
     let summarise = || {
-        clock.advance(1_000);
+        clock.advance(60_000);
         resample().expect("a capacity summary");
     };
     let mut driver = DriverCount {

@@ -49585,6 +49585,21 @@ and `remedy_plan` (each run's generation read once) and later cycles neither, wi
 names `perf.summary` only at a capacity state change and `perf.stutter_detected` never, and the
 cycle counter advances only when something changed.
 
+**From the review (pull request #1899).** The test of the wakes advanced the clock by a second
+between two samples of the capacity owner, where a summary of an unchanged state is due only
+after the summary interval (60 s without a performance configuration): it now advances by the
+interval, which is the case production has. Besides the catalog store's memo the stretch takes a
+second lock of the host's own, the one that guards the remembered window ends; it is a leaf (the
+generation is read outside it) and is taken only under the policy lock, where the memo is too, so
+`catalog_memo_wait` is expected near zero. Two things are written twice and change together: what
+the disk gate decides on (the capacity projection's decision and the comparison of two samples
+that wakes the driver); a drift between them wakes a cycle too often or leaves one to the
+reconciliation interval, and changes no decision. One difference from before is kept: a
+generation whose files are damaged or gone after a run's end was remembered stops the host at the
+next start, where reading it at every cycle stopped it at once. And the per-frame cost of the
+frame retention that the first days of 0.12.84 showed (a pass that handles frames still spends
+about a hundred thousand query steps on each) is not this slice's and is left for one of its own.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
