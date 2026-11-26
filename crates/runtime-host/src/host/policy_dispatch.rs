@@ -12,7 +12,7 @@ use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::codes::SchedulingRuleHostCode;
 use crate::fact_store::LeftOutRecordLists;
-use crate::policy_host::{AvailabilityWithdrawals, DeviceQueue, InstanceOccupancy};
+use crate::policy_host::{AvailabilityWithdrawals, DeviceQueue, InstanceOccupancy, SetupCall};
 use crate::{PolicyRecomputeDirective, PolicyRecomputeKind, PolicyRecomputeReason};
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::outcome::{CauseRelation, Code, Location, Outcome};
@@ -2227,6 +2227,7 @@ impl HostShared {
             locked,
             evaluating,
             returned,
+            locked_setup_calls,
         ) = {
             #[cfg(test)]
             crate::policy_host::delay_cycle_stretch_for_test(
@@ -2234,18 +2235,24 @@ impl HostShared {
             );
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
             let locked = crate::policy_host::lap_instant();
+            // #503 CYC-2 (register §1.528, ruling 1): the calls under the lock before the
+            // evaluation, timed one by one as the evaluation's own setup is.
+            let mut setup = crate::policy_host::SetupTimer::start(policy.catalog_costs());
             // Workflow #427-A (C1): another instance's run may settle between the sample and
             // this validation; its `policy_outcome_snapshot_changed` is a request error, which
             // actingd answers with a bounded re-sample.
             policy.validate_outcome_key_snapshot(&outcome_keys)?;
+            setup.lap(SetupCall::OutcomeKeys, policy.catalog_costs());
             // Workflow #386 SR-4a2 (position 4): the instances a blackout covers as this cycle
             // starts, judged once for the evaluation and the fact refresh's recorder.
             let blackout_holds =
                 policy.blackout_holds(&blackout_context, &facts.instances, time)?;
+            setup.lap(SetupCall::Blackouts, policy.catalog_costs());
             // #477 LF-1 (register §1.509): the pairs whose latest dispatch at the inputs' position
             // carried a `run_cap`, with when that run ended; a pool such a run's task consumes is
             // unknown in the evaluation until it is read after that end.
             left_out.give_handed_runs(policy.handed_runs(facts.ledger_position));
+            setup.lap(SetupCall::HandedRuns, policy.catalog_costs());
             let evaluating = crate::policy_host::lap_instant();
             let cycle = policy.evaluate(
                 &facts,
@@ -2309,6 +2316,7 @@ impl HostShared {
                 locked,
                 evaluating,
                 returned,
+                setup.times(),
             )
         };
         let released = crate::policy_host::lap_instant();
@@ -2341,6 +2349,10 @@ impl HostShared {
             stretches.evaluation_setup_micros = stretches
                 .evaluation_setup_micros
                 .saturating_add(micros_between(locked, evaluating));
+            // #503 CYC-2 (register §1.528, ruling 1): with its calls under the lock.
+            stretches
+                .evaluation_setup_calls
+                .add_all(&locked_setup_calls);
             stretches.after_held_micros = stretches
                 .after_held_micros
                 .saturating_add(micros_between(returned, released));

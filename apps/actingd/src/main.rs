@@ -99,6 +99,9 @@ mod gate_486_asleep5;
 // Test-only: #503 CYC-1, the line's stretches and the driver's clock jump judged on both clocks.
 #[cfg(test)]
 mod gate_503_cyc1;
+// Test-only: #503 CYC-2, the line's slowest calls of the evaluation's setup.
+#[cfg(test)]
+mod gate_503_cyc2;
 // #486 ASLEEP-5: the daemon's line of each evaluated policy cycle.
 mod policy_cycle_line;
 

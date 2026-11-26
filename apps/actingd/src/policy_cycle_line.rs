@@ -24,6 +24,12 @@
 //! the evaluation's policy lock apart from the work done under them; the detection preview with
 //! its reads of the store), and `unattributed_ms`, the time up to the capped record that none of
 //! the named stretches covers. Members are only added; none is renamed or dropped.
+//!
+//! #503 CYC-2 (register §1.528, ruling 1): last, `evaluation_setup_slowest`, the three calls of
+//! the evaluation's setup (`evaluation_setup_ms`) that took longest, each `name:milliseconds` in
+//! the form of `wakes`, the slowest first (the waits for the catalog store's memo and its reads of
+//! a generation's files named apart from the calls that made them); `none` when no call took any
+//! time. For a line of several cycles, the calls' sums.
 
 use actingcommand_contract::EventType;
 use actingcommand_runtime_host::{
@@ -126,6 +132,14 @@ impl CycleSums {
                 .collect(),
         );
         let stretches = &self.stretches;
+        let setup_slowest = tally(
+            stretches
+                .evaluation_setup_calls
+                .slowest()
+                .into_iter()
+                .map(|(call, micros)| format!("{}:{}", call.word(), milliseconds(micros)))
+                .collect(),
+        );
         format!(
             "actingd policy_cycle wakes={wakes} seq={} first_seq={} cycles={} \
              triggers={triggers} projection_ms={} evaluation_ms={} clock_slots_ms={} \
@@ -133,7 +147,8 @@ impl CycleSums {
              after_capped_ms={} total_ms={} before_gates_ms={} gates_wait_ms={} \
              gates_held_ms={} cycle_inputs_ms={} policy_lock_wait_ms={} evaluation_setup_ms={} \
              no_progress_ms={} detection_preview_ms={} detection_preview_store_reads={} \
-             explanation_ms={} after_held_ms={} capped_record_ms={} unattributed_ms={}",
+             explanation_ms={} after_held_ms={} capped_record_ms={} unattributed_ms={} \
+             evaluation_setup_slowest={setup_slowest}",
             self.last_seq,
             self.first_seq,
             self.cycles,
@@ -287,6 +302,10 @@ impl PolicyCycleLines {
         ] {
             *field = field.saturating_add(value);
         }
+        // #503 CYC-2: the calls of the evaluation's setup, summed call by call.
+        summed
+            .evaluation_setup_calls
+            .add_all(&stretches.evaluation_setup_calls);
         self.flush(now_ms)
     }
 

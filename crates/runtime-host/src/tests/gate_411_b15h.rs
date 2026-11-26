@@ -21,7 +21,9 @@ use actingcommand_contract::outcome::Outcome;
 use actingcommand_policy::{PolicyEvaluation, RemedyTableEdge};
 use serde_json::{Value, json};
 
-const MAIN_TASK: &str = "t_main";
+// #503 CYC-2 (register §1.528): the fixture below is also the remedy journal's of that slice's gate
+// (`gate_503_cyc2.rs`), so the parts it reads are visible to the test modules.
+pub(super) const MAIN_TASK: &str = "t_main";
 const SINK_TASK: &str = "t_sink";
 const MAIN_PROCEDURE: &str = "procedure.main";
 const SINK_PROCEDURE: &str = "procedure.sink";
@@ -31,7 +33,7 @@ const BLOCKED_KEY: &str = "blocked_k";
 const DONE_KEY: &str = "done";
 const HOME: [u8; 3] = [255, 0, 0];
 const PAGE_B: [u8; 3] = [0, 0, 255];
-const RESULT: [u8; 3] = [255, 255, 255];
+pub(super) const RESULT: [u8; 3] = [255, 255, 255];
 // The fixture catalog's activity window is 08:00 to 22:00 UTC; `POLICY_NOW_UNIX_MS` is 12:00 UTC.
 const WINDOW_END_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 36_000_000;
 
@@ -49,7 +51,7 @@ const ROUND_CLOSED: &str = "policy_remedy_round_closed";
 // One package: from `home` to `page_b` or `result` when it declares the remedy `remedy` on the
 // mapping of `page_b`, otherwise from `home` to `result` with no outcome declaration; with
 // `provides` when one is given.
-struct Pack {
+pub(super) struct Pack {
     package_id: &'static str,
     remedy: Option<Value>,
     provides: Option<Value>,
@@ -145,7 +147,7 @@ impl Pack {
 }
 
 // `main` with the remedy of `need_a` over `capabilities`, its package default `default`.
-fn main_pack(capabilities: &[&str], default: Option<&[&str]>) -> Pack {
+pub(super) fn main_pack(capabilities: &[&str], default: Option<&[&str]>) -> Pack {
     let mut remedy = json!({"need": "need_a", "capabilities": capabilities});
     if let Some(default) = default {
         remedy["default"] = json!(default);
@@ -158,7 +160,7 @@ fn main_pack(capabilities: &[&str], default: Option<&[&str]>) -> Pack {
 }
 
 // `sink`, providing `cap_x`.
-fn sink_pack() -> Pack {
+pub(super) fn sink_pack() -> Pack {
     Pack {
         package_id: SINK_PACKAGE,
         remedy: None,
@@ -170,7 +172,7 @@ fn sink_pack() -> Pack {
 
 // The fixture catalog with `t_main` (due at every evaluation) and `t_sink` (never due by itself),
 // and room in the activity window for every run of a test.
-fn catalog() -> CatalogSources {
+pub(super) fn catalog() -> CatalogSources {
     let mut sources = policy_sources(1);
     let mut tasks: Value = serde_json::from_slice(&sources.tasks.bytes).expect("fixture tasks");
     let mut main = tasks["tasks"][0].clone();
@@ -217,7 +219,7 @@ fn manifest(main: &Path, sink: &Path) -> ProcedureManifest {
 }
 
 // The fixture's facts without a scheduling outcome (the catalog references none).
-fn facts() -> EvaluationFacts {
+pub(super) fn facts() -> EvaluationFacts {
     let mut facts = policy_facts();
     facts.outcomes.clear();
     facts
@@ -259,15 +261,15 @@ impl Screen {
 
 // ---- The fixture.
 
-struct Fixture {
+pub(super) struct Fixture {
     root: TempDir,
     main: PathBuf,
     sink: PathBuf,
     instance: InstanceId,
     state: Arc<FakeState>,
     screen: Screen,
-    clock: Arc<ManualRuntimeClock>,
-    host: RuntimeHost,
+    pub(super) clock: Arc<ManualRuntimeClock>,
+    pub(super) host: RuntimeHost,
 }
 
 fn start_host(
@@ -293,7 +295,7 @@ fn start_host(
 impl Fixture {
     // A host with `main` and `sink` written and bound and the catalog active, its clock at the
     // fixture's time.
-    fn new(main: &Pack, sink: &Pack) -> Self {
+    pub(super) fn new(main: &Pack, sink: &Pack) -> Self {
         let root = TempDir::new().expect("tempdir");
         let (main_path, sink_path) = (root.path().join("main"), root.path().join("sink"));
         main.write(&main_path);
@@ -425,7 +427,7 @@ impl Fixture {
 
     // Evaluates at `at`, then runs the dispatch of `task_id` it must select, the device showing
     // `page` after the tap.
-    fn evaluate_and_run(
+    pub(super) fn evaluate_and_run(
         &self,
         at: u64,
         seed: u64,
@@ -541,7 +543,7 @@ fn text<'a>(outcome: &'a Outcome, key: &str) -> Option<&'a str> {
 }
 
 // When the instance may run its next dispatch after the run of `context`.
-fn next_eligible(context: &PolicyRunContext) -> u64 {
+pub(super) fn next_eligible(context: &PolicyRunContext) -> u64 {
     context.admission().activity.next_eligible_unix_ms
 }
 

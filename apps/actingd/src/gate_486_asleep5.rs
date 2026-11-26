@@ -22,11 +22,13 @@ use actingcommand_runtime_host::{
 
 /// #503 CYC-1 (register §1.526, ruling 1): the members the line gained after `total_ms`, for a
 /// measurement that names none of its other stretches; what is not covered up to the capped
-/// record is none here, since this fixture's parts already exceed it.
+/// record is none here, since this fixture's parts already exceed it. #503 CYC-2 (register
+/// §1.528, ruling 1): and the slowest calls of the evaluation's setup, none here.
 const NO_STRETCHES: &str = " before_gates_ms=0.000 gates_wait_ms=0.000 gates_held_ms=0.000 \
      cycle_inputs_ms=0.000 policy_lock_wait_ms=0.000 evaluation_setup_ms=0.000 \
      no_progress_ms=0.000 detection_preview_ms=0.000 detection_preview_store_reads=0 \
-     explanation_ms=0.000 after_held_ms=0.000 capped_record_ms=0.000 unattributed_ms=0.000";
+     explanation_ms=0.000 after_held_ms=0.000 capped_record_ms=0.000 unattributed_ms=0.000 \
+     evaluation_setup_slowest=none";
 
 /// A measurement of the cycle numbered `seq`: each time in microseconds as given.
 fn measurement(seq: u64, scale: u64) -> PolicyEvaluationMeasurement {

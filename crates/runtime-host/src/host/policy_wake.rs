@@ -19,6 +19,13 @@
 //! synchronization, approval decisions (`governance.rs`), catalog transitions
 //! (`policy_catalog.rs`), the lease critical executions that end a lease (`lease.rs`, through
 //! [`PolicyWakingLedger`]) and the capacity monitor's records (`performance/capacity.rs`).
+//!
+//! #503 CYC-2 (register §1.528, ruling 3): a record of the performance thread wakes the driver
+//! only when it changes an input of the evaluation. A `perf.stutter_detected` (an instance's frames
+//! stalling) and a `perf.summary` change none by their type: a summary wakes the driver only when
+//! its capacity sample changes what the disk gate decides on, which the capacity monitor raises
+//! itself ([`PolicyWakeSignal::raise_change`]); every other performance record (pacing, dispatch
+//! share, run hold, balance, pressure, monitor health) still wakes it at once.
 
 use super::*;
 use actingcommand_contract::{EventFamily, SanitizedEventDraft};
@@ -48,6 +55,14 @@ impl PolicyWakeSignal {
         let Some(trigger) = policy_trigger_for_event(event_type) else {
             return;
         };
+        self.raise_change(event_type, trigger);
+    }
+
+    /// #503 CYC-2 (register §1.528, ruling 3): raises `trigger` for a record of `event_type` the
+    /// host has just committed and found to change an input of the evaluation, whether or not its
+    /// type wakes the driver by itself (a `perf.summary` whose capacity sample changed what the disk
+    /// gate decides on); the line of the cycle counts it under its type.
+    pub(crate) fn raise_change(&self, event_type: EventType, trigger: PolicyTrigger) {
         let mut pending = self.pending();
         if !pending.triggers.contains(&trigger) {
             pending.triggers.push(trigger);
@@ -140,12 +155,16 @@ impl HostShared {
 /// The policy driver's wake for a committed record of type `event_type`, as the daemon's
 /// monitor mapped the ledger's events before AO-7. Workflow #369 W-1: a lease end returns a
 /// key, so the driver wakes on `lease.released`, `lease.transferred` and `lease.expired`, and
-/// on no other lease, scheduler, capture or runtime record.
+/// on no other lease, scheduler, capture or runtime record. #503 CYC-2 (register §1.528, ruling
+/// 3): nor on a stutter or a summary of the performance thread, which change no input of the
+/// evaluation by their type (a summary that changes the disk gate's input is raised by the
+/// capacity monitor, `PolicyWakeSignal::raise_change`).
 pub fn policy_trigger_for_event(event_type: EventType) -> Option<PolicyTrigger> {
     match event_type {
         EventType::LeaseReleased | EventType::LeaseTransferred | EventType::LeaseExpired => {
             Some(PolicyTrigger::ResourcesChanged)
         }
+        EventType::PerformanceStutterDetected | EventType::PerformanceSummary => None,
         other => policy_trigger_for_family(other.family()),
     }
 }

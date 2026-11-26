@@ -3919,6 +3919,39 @@ impl RuntimeHost {
             .evaluate_policy_cycle_with_test_inputs(facts, resources, time, seed, trigger)
     }
 
+    /// #503 CYC-2, test only: the catalog store's memo keeps `generations` compiled generations
+    /// from now on (`standard_packs.cached_generations` plus the active one in production).
+    #[cfg(test)]
+    pub(crate) fn set_catalog_memo_capacity_for_test(
+        &self,
+        generations: usize,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?
+            .set_catalog_memo_capacity_for_test(generations)
+    }
+
+    /// #503 CYC-2, test only: each window end the remedy journal keeps, by its run's decision,
+    /// beside the one read from the run's catalog generation now.
+    #[cfg(test)]
+    pub(crate) fn remedy_window_ends_for_test(&self) -> RuntimeHostResult<Vec<(String, u64, u64)>> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?.remedy_window_ends_for_test()
+    }
+
+    /// #503 CYC-2, test only: raises the policy driver's wake for a committed record of
+    /// `event_type`, as every append point of the host does after its commit.
+    #[cfg(test)]
+    pub(crate) fn raise_policy_wake_for_test(
+        &self,
+        event_type: EventType,
+    ) -> RuntimeHostResult<()> {
+        self.shared_ref(HostLocation::EvaluatePolicyCycle)?
+            .policy_wakes
+            .raise(event_type);
+        Ok(())
+    }
+
     /// Workflow #384 D2-S5, test only: puts the fact refresh's transition recorder in the state
     /// `recorder` holds.
     #[cfg(test)]

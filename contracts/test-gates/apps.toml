@@ -3084,3 +3084,11 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_503_cyc1::cyc1_t3_a_long_cycle_is_no_clock_jump_and_a_wall_clock_set_forward_or_back_wakes_once",
 ]
 incident = ["#503 CYC-1"]
+
+# #503 CYC-2 (0.12.85; register §1.528; brief rd-1123/brief-503-cyc2.md, ruling 1, the test of the line; contracts/scheduling/README.md, "The policy driver's clock and the line of a cycle"), actingd's half, on the pure line keeper with given times, no clock read: an evaluated cycle's line ends with evaluation_setup_slowest, the three calls of the evaluation's setup that took longest as name:milliseconds, the slowest first (catalog_reads:3590.000,remedy_plan:100.000,run_slots:2.000); two cycles within the second name the three slowest of the calls' sums, and of calls that took as long the earlier in the cycle's order (outcome_keys); a cycle whose setup no call took any time of names none (t1)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::gate_503_cyc2::cyc2_t1_the_line_ends_with_the_three_slowest_calls_of_the_setup",
+]
+incident = ["#503 CYC-2"]

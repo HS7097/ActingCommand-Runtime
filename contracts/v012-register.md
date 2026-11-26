@@ -49443,6 +49443,148 @@ twice and must be changed together: which open runs hold a frame (statement L an
 entry and statement C's list); a drift between them delays a frame until a restart and removes
 none early.
 
+### 1.528 Slice #503 CYC-2 (0.12.85): the evaluation's setup says which of its calls waits, the remedy journal reads a run's catalog generation once, and a record of the performance thread that changes no input of the evaluation wakes no policy cycle (board #503; the rulings 1 to 4 are the coordinator's of 11-26, no words of the owner's behind them; the owner approved the week's plan whose first days this stanching is; coordinator work order `rd-1123/brief-503-cyc2.md` and its addition of the same evening; on main `dbc5c8fd`, the code of v0.12.84)
+
+It ships in 0.12.85. [scheduling/README.md](scheduling/README.md) ("The policy driver's clock and
+the line of a cycle": the calls of the evaluation's setup, a remedy run's window end, what of the
+performance thread wakes the driver) and [performance-timing-signals.md](performance-timing-signals.md)
+("Pipeline observation", what follows a record) are the contract. No setting, no outcome code, no
+record and no interface range is added; the daemon line gains one member.
+
+**The incident** (production, v0.12.84, 11-26, from a start at 17:41). The line of each evaluated
+cycle (§1.526) put the cycle's time in `evaluation_setup_ms`: of the second cycle's 4 130.8 ms,
+3 788.9 ms (projection 193.4, evaluation 9.2, clock slots 55.3, the gates' wait 0, the work under
+them 8.5, the policy lock's wait 0, the detection preview 2.9 with 226 reads, unattributed 0.04);
+3.6 to 3.7 s through the first ten minutes, 5.1 s at 17:57, 7.1 s at 18:04 and 8.0 s at 18:05. On
+v0.12.83 the same stretch, then untimed, was a near constant 4.85 s through the first 24 minutes
+after a start of 05:22. The process used 0.29 % of a processor in a summary of the afternoon. The
+frame retention's first pass ended at 17:57 after 970 s (422 million query steps), the second took
+77 s (5.4 million), and the stretch did not shrink. From 17:57 to 18:05 two emulator instances of
+the machine were being upgraded: a `perf.pressure_started` of 18:06 names one third-party process,
+elevated, at up to 171 MB a second of I/O, and `perf.stutter_detected` records named an emulator
+instance's frame gaps of about two seconds. No cycle was woken by a clock jump any more; from 17:43
+to 17:50 25 cycles were woken (`perf.summary` 8, the reconciliation 7, `next_wake` 5,
+`perf.pacing_changed` 2, `fact.published` 2, one each of `run_ended`, `perf.stutter_detected`,
+`perf.pressure_started`, `perf.pressure_ended`, `lease.released`), from 17:57 to 18:04 65, mostly
+by `perf.stutter_detected` (up to four in one cycle's wakes).
+
+**The stretch, by the code.** `evaluation_setup_ms` is the time under the evaluation's policy lock
+before the evaluation proper: the outcome keys' validation, the blackouts and the handed runs in
+`evaluate_policy_cycle_authoritative`, then the evaluation's own inputs in `PolicyHost::evaluate`
+up to its timed part. The calls the work order named (the left-out lists to the pacing stages) are
+those of `cycle_inputs_ms`, which the second cycle's members leave under 73 ms. The rulings are
+built on the stretch the member names.
+
+**The rules as built.**
+- *Ruling 1, the stretch says which call waits* (`crates/runtime-host/src/policy_host.rs`,
+  `SetupCall`, `SetupCallTimes`, `SetupTimer`, `CatalogStore::lock_memo`, `load_generation`,
+  `cost_totals`; `host/policy_dispatch.rs`; `apps/actingd/src/policy_cycle_line.rs`). Every call of
+  the stretch is timed, each from the end of the one before, on the cycle's lap clock, under a fixed
+  word: `outcome_keys`, `blackouts`, `handed_runs`, `cadence`, `remedy_table`, `evaluation_cost`,
+  `random_delays`, `immediate_retries`, `fact_refresh_inputs`, `remedy_plan`, `variable_plan`,
+  `run_slots`, `rerun_plan`, `instance_holds`, `pack_schedule`, `no_progress`. No call of the
+  stretch takes a lock of the host's own: the policy lock is taken before it, and the one lock its
+  calls take, the catalog store's memo of compiled generations, is timed apart from the call that
+  took it (`catalog_memo_wait`), as are the reads of a generation from the catalog store's files
+  when the memo does not hold it (`catalog_reads`: the documents read, their digests checked, the
+  generation compiled). The owed reruns' reads of the planning-signal store stay in `rerun_plan`
+  (one per new signal id). The line gains, after `unattributed_ms`,
+  `evaluation_setup_slowest=<name>:<ms>,...`: the three calls that took longest, the slowest first,
+  `none` when no call took any time; a line of several cycles names the three slowest of the sums.
+  `evaluation_setup_ms` still covers the whole stretch.
+- *Ruling 2, the wait removed* (`PolicyHost::remedy_window_end`, `admitted_window_end`,
+  `remedy_journal`). See the next paragraph.
+- *Ruling 3, a performance record wakes the driver only when it changes an input*
+  (`host/policy_wake.rs`, `policy_trigger_for_event`, `PolicyWakeSignal::raise_change`;
+  `performance/capacity.rs`, `record_capacity_sample`, `disk_gate_changed`). Below.
+- *Ruling 4.* No setting, no outcome code, no interface revision, no ledger record.
+
+**What the wait is, and how it was found** (by reading; production names it with this version).
+Of the stretch's calls only two leave memory: the owed reruns' reads of the planning-signal store,
+once per signal id the plan has not signalled, and the catalog store's generation reads. The remedy
+journal (`remedy_plan`, every evaluation with remedies on, the default, and a table in which a
+bound package declares a remedy or provides a capability) gives each run it holds (up to 64 per pair, back to the pair's last
+root blocked run) the end of the activity window it was admitted in, and read it, at every
+evaluation and for every run, from the run's own catalog generation (`load_generation`). In
+composer mode the memo keeps the active generation and `standard_packs.cached_generations` more
+(one by default), and every placement that changes a game root's rules composes a new generation,
+so a pair's runs span many: each cycle read those the memo did not hold from their files and
+compiled them again, and two of them in one pair's runs pushed each other out. That is a wait on
+the state root's disk which a busy disk lengthens (the retention's first pass, the upgrades'
+171 MB a second), and whose count grows with the generations the journal's runs span. A
+generation's compile also costs processor time, which the 0.29 % does not show; whether these
+reads are the 3.6 s or only part of them is what `evaluation_setup_slowest` says on production.
+The construction and its removal are shown by test h2.
+
+**The removal** (ruling 2). A run's generation and admission never change, so neither does its
+window end: it is read the first time the journal holds the run and kept, by the run's decision,
+in memory beside the journal (`remedy_window_ends`, its own lock, taken under the policy lock with
+nothing taken while it is held); each build of the journal drops the ends of the runs it no longer
+holds. A cycle reads a generation only for a run it has not met. The journal the remedy plan is
+given, and with it every intent, signal and record, is the one reading every run each time gives;
+a read that fails fails as before, the first time.
+
+**What wakes the driver** (ruling 3). Read in the code: the host raises the driver's wake for every
+committed record of the performance family (`ResourcesChanged`). What the evaluation reads of the
+performance state: the effective pacing stage (the owed reruns' gate), the balance controller's
+level (the heavy dispatch limit of the resource overlay) and its latest observation (the
+responsiveness and third-party pressure behind the ranking's contention penalty); the admission
+after it reads the committed capacity sample (the disk gate). The dispatch share and the run hold
+are read by no evaluation of this build and recorded by no code of it; their records still wake.
+- `perf.stutter_detected` carries an instance's frame gap: the gap joins the pipeline samples, from
+  which the next control observation reads the responsiveness, and a level that changes from it is
+  a `perf.balance_changed`, which wakes. The stutter changes no input itself and wakes nothing now.
+- `perf.summary` is written on the summary interval, on a capacity state change, on a material
+  change of free bytes and at an admission's re-sample of a stale fact. It wakes the driver now
+  only when its capacity sample changes what the disk gate decides on against the last summary
+  recorded (a volume came or went, or a volume's state changed), raised by the capacity monitor
+  after the sample is committed; the first summary after a start or after a failed append wakes as
+  before. The reason register §1.524 gave for the admission's re-sample waking (what may be
+  dispatched can change with it) holds where it can: a re-sample that changes the gate's input
+  wakes. A summary without a capacity owner (no capacity sample) wakes nothing.
+- Every other record (pacing, dispatch share, run hold, balance, pressure started and ended,
+  monitor degraded and recovered) wakes the driver at once, as before.
+- The latest observation's responsiveness and third-party pressure change with every sample, which
+  no record names; an evaluation reads them as they are when it runs. Before, a summary woke a
+  cycle once a minute that read them; now another wake does.
+
+Woke a cycle before: every performance record. Wake one now: every one but `perf.stutter_detected`
+and a `perf.summary` whose capacity sample leaves the disk gate's input as it was.
+
+**Tests** (incident `#503 CYC-2`: `crates/runtime-host/src/tests/gate_503_cyc2.rs`, host gate map,
+on the remedy fixture of `gate_411_b15h.rs`; `apps/actingd/src/gate_503_cyc2.rs`, apps gate map;
+a delay is put into a call or a wait by advancing the test thread's lap clock; no clock read, no
+sleep).
+
+| Test | What it shows |
+|---|---|
+| `cyc2_h1_a_delay_put_into_a_setup_call_and_into_the_memo_wait_shows_under_its_name` (ruling 1) | 600 s put into the run slots' call and 600 s into the wait for the memo's lock (the remedy journal reading a new run's window end) show as `run_slots` and `catalog_memo_wait` among the three slowest, the slowest first, and in `evaluation_setup_ms`; the remedy plan that waited shows neither; the cycle's other stretches none; a cycle after it none |
+| `cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it_again` (ruling 2) | Runs under two older generations and a memo of one (each cycle read both until 0.12.85): the first cycle reads the generation it has not met (`catalog_reads` takes the delay planned for a read), the next reads none (the delay stays planned, `evaluation_setup_ms` under it); each window end kept is the one its run's generation gives |
+| `cyc2_h3_a_summary_or_stutter_that_changes_no_input_wakes_no_cycle_a_change_wakes_one` (ruling 3) | With a scripted capacity sampler and the host's wakes taken as the driver takes them: a summary of the same volumes and states is recorded and wakes nothing, nor does a stutter or a summary raised at an append point; sufficient to soft pressure wakes one cycle (`perf.summary`, `perf.pressure_started`), soft again none, soft to hard one (`perf.summary` alone), hard again none; a pacing change and a change of the dispatch share one each; the cycle count stands still between them; the other performance records still wake |
+| `cyc2_t1_the_line_ends_with_the_three_slowest_calls_of_the_setup` (ruling 1) | The line ends with `evaluation_setup_slowest=catalog_reads:3590.000,remedy_plan:100.000,run_slots:2.000`; two cycles in a second name the three slowest of the sums, of calls that took as long the earlier in the cycle's order (`outcome_keys`); a setup no call took time of names `none` |
+
+Adapted, because they pin the whole line, which gains a member:
+`cyc1_t1_the_line_prints_every_member_and_what_no_named_stretch_covers` (its lines end with
+`evaluation_setup_slowest=none`, its measurement names no call) and
+`asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at_most` (the same,
+through its `NO_STRETCHES`). `gate_411_b15h.rs` makes its fixture visible to the test modules; no
+test of it changes. No test leaves a gate map; no golden is re-recorded.
+
+**What is not changed.** The evaluation, its inputs and every decision, intent, signal and record;
+the remedy table, journal and plan; the memo, its capacity and `standard_packs.cached_generations`;
+the capacity gate, its re-sample and the summaries recorded (when and what); the lock order (the
+window ends' lock is a leaf under the policy lock); the wake of every record but a stutter and a
+summary that changes nothing; the cadence, the cool-down and the reconciliation; the store and the
+ledger. No game, package, instance or alias is named in code or contract.
+
+**At deploy.** Nothing to configure. On production, read `evaluation_setup_ms` and
+`evaluation_setup_slowest` after the first cycles and again after twenty minutes. If the remedy
+journal's generation reads were the wait, the first cycles after the start name `catalog_reads`
+and `remedy_plan` (each run's generation read once) and later cycles neither, with
+`evaluation_setup_ms` in milliseconds; a call named instead is the wait, for the next slice. `wakes`
+names `perf.summary` only at a capacity state change and `perf.stutter_detected` never, and the
+cycle counter advances only when something changed.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

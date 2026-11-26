@@ -86,6 +86,14 @@ recorded summary carries both the monitor context of that moment
 and the capacity admission fact. Its context is `PerformanceContext::unavailable`
 only when counters are disabled or the window holds no data.
 
+What follows a record (#503 CYC-2, 0.12.85; [v012-register.md](v012-register.md)
+§1.528, ruling 3; [scheduling/README.md](scheduling/README.md), "What of the
+performance thread wakes the driver"): a `perf.summary` wakes the policy driver
+only when its capacity sample changes what the disk gate decides on against the
+last summary recorded (a volume came or went, or a volume's capacity state
+changed); a `perf.stutter_detected` wakes it never. Every other performance
+record wakes it at once, as before.
+
 ## Summary instance semantics
 
 The periodic (60 s) `perf.summary` context previously queried the pipeline
