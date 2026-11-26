@@ -139,7 +139,8 @@ pub use policy_host::{
     ClockSlotPreviewCost, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyCycleStretches,
     PolicyDispatchAdmission, PolicyEvaluationCost, PolicyEvaluationExecution,
     PolicyEvaluationMeasurement, PolicyRecomputeDirective, PolicyRecomputeKind,
-    PolicyRecomputeReason, PolicyRunContext, PolicyTrigger, preview_policy_catalog_transition,
+    PolicyRecomputeReason, PolicyRunContext, PolicyTrigger, SetupCall, SetupCallTimes,
+    preview_policy_catalog_transition,
 };
 pub use procedure_manifest::{ProcedureBinding, ProcedureManifest};
 pub use provider::*;

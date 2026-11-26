@@ -16,7 +16,7 @@ use super::policy_cycle_line::PolicyCycleLines;
 use super::*;
 use actingcommand_runtime_host::{
     ClockSlotPreviewCost, PolicyCycleStretches, PolicyEvaluationCost, PolicyEvaluationExecution,
-    PolicyEvaluationMeasurement,
+    PolicyEvaluationMeasurement, SetupCallTimes,
 };
 
 /// The wall clock as the fixture's schedule starts.
@@ -58,6 +58,8 @@ fn measurement(seq: u64) -> PolicyEvaluationMeasurement {
             cycle_inputs_micros: 5_000,
             policy_lock_wait_micros: 6_000,
             evaluation_setup_micros: 7_000,
+            // #503 CYC-2: no call of the setup timed here (`evaluation_setup_slowest=none`).
+            evaluation_setup_calls: SetupCallTimes::default(),
             no_progress_micros: 9_000,
             detection_preview_micros: 4_800_000,
             detection_preview_store_reads: 600,
@@ -93,7 +95,7 @@ fn cyc1_t1_the_line_prints_every_member_and_what_no_named_stretch_covers() {
              cycle_inputs_ms=5.000 policy_lock_wait_ms=6.000 evaluation_setup_ms=7.000 \
              no_progress_ms=9.000 detection_preview_ms=4800.000 \
              detection_preview_store_reads=600 explanation_ms=10.000 after_held_ms=11.000 \
-             capped_record_ms=12.000 unattributed_ms=1.500"
+             capped_record_ms=12.000 unattributed_ms=1.500 evaluation_setup_slowest=none"
         ),
         "every member, the stretches after total_ms, and the 1.5 ms no stretch names"
     );
@@ -121,7 +123,7 @@ fn cyc1_t1_the_line_prints_every_member_and_what_no_named_stretch_covers() {
              cycle_inputs_ms=10.000 policy_lock_wait_ms=12.000 evaluation_setup_ms=14.000 \
              no_progress_ms=18.000 detection_preview_ms=9600.000 \
              detection_preview_store_reads=1200 explanation_ms=20.000 after_held_ms=22.000 \
-             capped_record_ms=24.000 unattributed_ms=3.000"
+             capped_record_ms=24.000 unattributed_ms=3.000 evaluation_setup_slowest=none"
         ),
         "one line for both"
     );
@@ -134,7 +136,9 @@ fn cyc1_t1_the_line_prints_every_member_and_what_no_named_stretch_covers() {
         .record(13_000, PolicyTrigger::Reconciliation, &over, TOTAL)
         .expect("a line a second after the last");
     assert!(
-        line.ends_with(" capped_record_ms=12.000 unattributed_ms=0.000"),
+        line.ends_with(
+            " capped_record_ms=12.000 unattributed_ms=0.000 evaluation_setup_slowest=none"
+        ),
         "{line}"
     );
 }

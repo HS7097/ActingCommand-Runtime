@@ -274,6 +274,10 @@ mod gate_503_sd1;
 // #503 CYC-1 (0.12.84; register §1.526): every stretch of a policy cycle is timed, and the
 // detection preview asks the store nothing the host already knows the answer to.
 mod gate_503_cyc1;
+// #503 CYC-2 (0.12.85; register §1.528): the evaluation's setup is timed call by call, the remedy
+// journal reads a run's generation once, and a record of the performance thread that changes no
+// input of the evaluation wakes no cycle.
+mod gate_503_cyc2;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.

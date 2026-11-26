@@ -7,7 +7,7 @@ use super::{
 use crate::codes::{HostCode, HostLocation};
 use crate::events::{RuntimeEvents, is_sanitization_failure};
 use crate::host::PolicyWakeSignal;
-use crate::{RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
+use crate::{PolicyTrigger, RuntimeClock, RuntimeClockSample, RuntimeHostError, RuntimeHostResult};
 use actingcommand_artifact_store::{
     ArtifactCapacityAdmission, ArtifactStore, ArtifactStoreError, ArtifactStoreResult,
 };
@@ -512,6 +512,13 @@ impl PerformanceMonitor {
             capacity.projection.refresh(sample.clone())?;
             return capacity.record_transitions(&sample, now, ledger, events);
         }
+        // #503 CYC-2 (register §1.528, ruling 3): whether this summary changes what the disk gate
+        // decides on, against the last summary recorded; only then does it wake the policy driver.
+        let gate_changed = self
+            .capacity
+            .as_ref()
+            .and_then(|owner| owner.recorded.as_ref())
+            .is_none_or(|recorded| disk_gate_changed(recorded, &sample));
         let mut tick = PerformanceTick {
             events: Vec::new(),
             stop_sampling: false,
@@ -562,6 +569,9 @@ impl PerformanceMonitor {
             }
         };
         capacity.projection.commit(sample.clone(), &event)?;
+        if gate_changed {
+            wakes.raise_change(event.event_type(), PolicyTrigger::ResourcesChanged);
+        }
         capacity.recorded = Some(sample.clone());
         self.last_summary_unix_ms = Some(now.unix_ms);
         capacity.record_transitions(&sample, now, ledger, events)?;
@@ -598,6 +608,26 @@ const MATERIAL_CAPACITY_BYTES: u64 = 1024 * 1024 * 1024;
 /// Material-change summaries are recorded at most this often (measured from the last recorded
 /// summary); a capacity state change bypasses the floor. Not configurable.
 pub(super) const MATERIAL_SUMMARY_MIN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// #503 CYC-2 (register §1.528, ruling 3): whether what the disk gate decides on
+/// (`CapacityProjection::decide`) differs between the last recorded fact and `live`: a volume
+/// (identity plus purposes) came or went, or its state (sufficient, soft or hard pressure,
+/// unknown) changed. Free bytes that move within a state change nothing the gate decides.
+pub(super) fn disk_gate_changed(
+    recorded: &PerformanceCapacitySample,
+    live: &PerformanceCapacitySample,
+) -> bool {
+    recorded.volumes.len() != live.volumes.len()
+        || recorded
+            .volumes
+            .iter()
+            .zip(&live.volumes)
+            .any(|(before, after)| {
+                before.volume_id != after.volume_id
+                    || before.purposes != after.purposes
+                    || before.state != after.state
+            })
+}
 
 /// A volume (identity plus purposes) whose state (sufficient, soft or hard pressure, unknown)
 /// differs from the last recorded fact.

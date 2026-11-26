@@ -307,6 +307,10 @@ pub struct PolicyCycleStretches {
     /// refresh's readers, the variable plan, the run slots, the owed reruns, the no-progress
     /// observation).
     pub evaluation_setup_micros: u64,
+    /// #503 CYC-2 (register §1.528, ruling 1): that stretch call by call, with the waits for the
+    /// catalog store's memo and its reads of a generation's files apart from the calls that made
+    /// them; `evaluation_setup_micros` still covers the whole stretch.
+    pub evaluation_setup_calls: SetupCallTimes,
     /// From the evaluation's end through the no-progress guards' capture of the new intents.
     pub no_progress_micros: u64,
     /// The detection planning signals' preview.
@@ -321,6 +325,200 @@ pub struct PolicyCycleStretches {
     pub after_held_micros: u64,
     /// The capped record (`keep_capped_episodes`).
     pub capped_record_micros: u64,
+}
+
+/// #503 CYC-2 (register §1.528, ruling 1; `contracts/scheduling/README.md`, "The policy driver's
+/// clock and the line of a cycle"): each call of the evaluation's setup (`evaluation_setup_ms`), in
+/// the cycle's order, and the two waits a call of it can make that are timed apart from the call:
+/// for the lock of the catalog store's memo of compiled generations, and for a generation read
+/// from the catalog store's files when the memo does not hold it. The words are the daemon line's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SetupCall {
+    /// The outcome keys' validation against the projection's.
+    OutcomeKeys,
+    /// The instances a blackout covers.
+    Blackouts,
+    /// The pairs whose latest dispatch handed its run a cap.
+    HandedRuns,
+    /// The cadence's judgement of the trigger.
+    Cadence,
+    /// The instances waiting for a client update, and the remedy table when it is due.
+    RemedyTable,
+    /// The catalog in effect and the evaluation's cost.
+    EvaluationCost,
+    /// The random delays no longer kept.
+    RandomDelays,
+    /// The pairs rerun at once.
+    ImmediateRetries,
+    /// The fact refresh's readers and holds.
+    FactRefreshInputs,
+    /// The remedy journal and plan.
+    RemedyPlan,
+    /// The variable values and the plan's parameters.
+    VariablePlan,
+    /// The dispatches admitted or running.
+    RunSlots,
+    /// The owed reruns.
+    RerunPlan,
+    /// The holds of the instances (update, entry block, switch cooldown, asleep).
+    InstanceHolds,
+    /// The pack schedules.
+    PackSchedule,
+    /// The no-progress observation and the capped episodes taken out.
+    NoProgress,
+    /// The waits for the lock of the catalog store's memo, apart from the call that waited.
+    CatalogMemoWait,
+    /// The reads of a generation from the catalog store's files, apart from the call that read.
+    CatalogReads,
+}
+
+/// #503 CYC-2: how many [`SetupCall`]s there are.
+const SETUP_CALL_COUNT: usize = 18;
+
+/// #503 CYC-2 (ruling 1): how many of the slowest calls the daemon's line names.
+const SLOWEST_SETUP_CALLS: usize = 3;
+
+impl SetupCall {
+    /// Every call, in the cycle's order, the two waits last.
+    pub const ALL: [Self; SETUP_CALL_COUNT] = [
+        Self::OutcomeKeys,
+        Self::Blackouts,
+        Self::HandedRuns,
+        Self::Cadence,
+        Self::RemedyTable,
+        Self::EvaluationCost,
+        Self::RandomDelays,
+        Self::ImmediateRetries,
+        Self::FactRefreshInputs,
+        Self::RemedyPlan,
+        Self::VariablePlan,
+        Self::RunSlots,
+        Self::RerunPlan,
+        Self::InstanceHolds,
+        Self::PackSchedule,
+        Self::NoProgress,
+        Self::CatalogMemoWait,
+        Self::CatalogReads,
+    ];
+
+    /// The call's word on the daemon's line.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::OutcomeKeys => "outcome_keys",
+            Self::Blackouts => "blackouts",
+            Self::HandedRuns => "handed_runs",
+            Self::Cadence => "cadence",
+            Self::RemedyTable => "remedy_table",
+            Self::EvaluationCost => "evaluation_cost",
+            Self::RandomDelays => "random_delays",
+            Self::ImmediateRetries => "immediate_retries",
+            Self::FactRefreshInputs => "fact_refresh_inputs",
+            Self::RemedyPlan => "remedy_plan",
+            Self::VariablePlan => "variable_plan",
+            Self::RunSlots => "run_slots",
+            Self::RerunPlan => "rerun_plan",
+            Self::InstanceHolds => "instance_holds",
+            Self::PackSchedule => "pack_schedule",
+            Self::NoProgress => "no_progress",
+            Self::CatalogMemoWait => "catalog_memo_wait",
+            Self::CatalogReads => "catalog_reads",
+        }
+    }
+}
+
+/// #503 CYC-2 (ruling 1): the microseconds of each [`SetupCall`] of one cycle, or the sums of
+/// several.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SetupCallTimes {
+    micros: [u64; SETUP_CALL_COUNT],
+}
+
+impl SetupCallTimes {
+    /// Adds `micros` to `call`'s time.
+    pub fn add(&mut self, call: SetupCall, micros: u64) {
+        let time = &mut self.micros[call as usize];
+        *time = time.saturating_add(micros);
+    }
+
+    /// The time of `call`, in microseconds.
+    pub const fn micros(&self, call: SetupCall) -> u64 {
+        self.micros[call as usize]
+    }
+
+    /// Adds every call's time of `other`.
+    pub fn add_all(&mut self, other: &Self) {
+        for call in SetupCall::ALL {
+            self.add(call, other.micros(call));
+        }
+    }
+
+    /// The three slowest calls with their times, the slowest first, of the ones that took any
+    /// time; of two that took as long, the earlier in the cycle's order first.
+    pub fn slowest(&self) -> Vec<(SetupCall, u64)> {
+        let mut timed = SetupCall::ALL
+            .into_iter()
+            .map(|call| (call, self.micros(call)))
+            .filter(|(_, micros)| *micros > 0)
+            .collect::<Vec<_>>();
+        timed.sort_by_key(|(_, micros)| std::cmp::Reverse(*micros));
+        timed.truncate(SLOWEST_SETUP_CALLS);
+        timed
+    }
+}
+
+/// #503 CYC-2 (ruling 1): what the catalog store's memo waits and generation reads took since the
+/// store was opened, in microseconds on the lap clock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CatalogCosts {
+    memo_wait_micros: u64,
+    read_micros: u64,
+}
+
+/// #503 CYC-2 (ruling 1): times the calls of the evaluation's setup on the cycle's lap clock, each
+/// from the end of the one before; what the catalog store's memo waits and generation reads took
+/// meanwhile is counted apart from the call.
+pub(crate) struct SetupTimer {
+    lapped: Instant,
+    costs: CatalogCosts,
+    times: SetupCallTimes,
+}
+
+impl SetupTimer {
+    /// A timer whose first call starts now, the catalog store having taken `costs` so far.
+    pub(crate) fn start(costs: CatalogCosts) -> Self {
+        Self {
+            lapped: lap_instant(),
+            costs,
+            times: SetupCallTimes::default(),
+        }
+    }
+
+    /// `call` ends now, the catalog store having taken `costs` so far. Tests: the delay planned
+    /// for the call is taken first.
+    pub(crate) fn lap(&mut self, call: SetupCall, costs: CatalogCosts) {
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::SetupCall(call));
+        let now = lap_instant();
+        let waited = costs
+            .memo_wait_micros
+            .saturating_sub(self.costs.memo_wait_micros);
+        let read = costs.read_micros.saturating_sub(self.costs.read_micros);
+        self.times.add(SetupCall::CatalogMemoWait, waited);
+        self.times.add(SetupCall::CatalogReads, read);
+        self.times.add(
+            call,
+            micros_between(self.lapped, now)
+                .saturating_sub(waited)
+                .saturating_sub(read),
+        );
+        self.lapped = now;
+        self.costs = costs;
+    }
+
+    /// The calls timed so far.
+    pub(crate) const fn times(&self) -> SetupCallTimes {
+        self.times
+    }
 }
 
 /// #503 CYC-1 (register §1.526, ruling 1): the instant every stretch of a policy cycle is timed
@@ -373,6 +571,12 @@ pub(crate) enum CycleStretch {
     Explanation,
     AfterHeld,
     CappedRecord,
+    /// #503 CYC-2: one call of the evaluation's setup.
+    SetupCall(SetupCall),
+    /// #503 CYC-2: a wait for the lock of the catalog store's memo.
+    CatalogMemoWait,
+    /// #503 CYC-2: a read of a generation from the catalog store's files.
+    CatalogRead,
 }
 
 /// #503 CYC-1, tests: moves this thread's lap clock forward by `delay`, as if that much time had
@@ -398,6 +602,15 @@ pub(crate) fn delay_cycle_stretch_for_test(stretch: CycleStretch) {
     {
         advance_lap_clock_for_test(delay);
     }
+}
+
+/// #503 CYC-2, tests: the delay still planned for `stretch` on this thread, taken out; none when
+/// the stretch took it.
+#[cfg(test)]
+pub(crate) fn take_cycle_stretch_delay_for_test(
+    stretch: CycleStretch,
+) -> Option<std::time::Duration> {
+    CYCLE_STRETCH_DELAYS_FOR_TEST.with_borrow_mut(|delays| delays.remove(&stretch))
 }
 
 /// #486 ASLEEP-5 (register §1.524, ruling 4): what one evaluation's clock slots' preview cost: its
@@ -2074,6 +2287,11 @@ pub(crate) struct PolicyHost {
     /// resolved, its `policy_dispatch_parameters` per (task, instance) before the variable values
     /// joined it, which the goal page shows read-only. Memory only; none before an evaluation.
     resolved_parameters: BTreeMap<(String, String), DecisionReason>,
+    /// #503 CYC-2 (register §1.528, ruling 2): the end of the activity window each run of the
+    /// remedy journal was admitted in, by its decision, read from its own catalog generation the
+    /// first time the journal holds it. A run's generation and admission never change, so neither
+    /// does the end; the journal's last build keeps the runs it holds. Memory only.
+    remedy_window_ends: Mutex<BTreeMap<String, u64>>,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -2666,6 +2884,7 @@ impl PolicyHost {
             variable_warnings: Vec::new(),
             idle_look_ahead_failures: Vec::new(),
             resolved_parameters: BTreeMap::new(),
+            remedy_window_ends: Mutex::new(BTreeMap::new()),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -4309,8 +4528,10 @@ impl PolicyHost {
         context: PolicyEvaluationContext<'_>,
     ) -> RuntimeHostResult<PolicyCycle> {
         // #503 CYC-1 (register §1.526, ruling 1): the evaluation's own inputs are timed from here
-        // to its `started`, as part of `evaluation_setup_ms`.
+        // to its `started`, as part of `evaluation_setup_ms`. #503 CYC-2 (register §1.528, ruling
+        // 1): call by call, the catalog store's memo waits and generation reads apart.
         let entered = lap_instant();
+        let mut setup = SetupTimer::start(self.store.cost_totals());
         let PolicyEvaluationContext {
             procedure_manifest,
             time,
@@ -4359,6 +4580,7 @@ impl PolicyHost {
                 idle_wake_unix_ms: None,
             });
         }
+        setup.lap(SetupCall::Cadence, self.store.cost_totals());
         // UPD-1 (design §4.2, `scheduling-blackout.md` position 4a): the instances whose
         // `health.application.update_required` is true in this evaluation's facts.
         let update_pending = crate::application_update::pending_instances(facts);
@@ -4385,6 +4607,7 @@ impl PolicyHost {
             );
             self.remedies.set_table(table);
         }
+        setup.lap(SetupCall::RemedyTable, self.store.cost_totals());
         let active = self.active.as_ref().ok_or_else(|| {
             request(
                 SharedCode::PolicyCatalogUnavailable,
@@ -4392,6 +4615,7 @@ impl PolicyHost {
             )
         })?;
         let cost = policy_evaluation_cost(&active.compiled, facts, resources)?;
+        setup.lap(SetupCall::EvaluationCost, self.store.cost_totals());
         // Workflow #405 D1: the random delays this evaluation no longer keeps end before its
         // closure reads them.
         self.random_delays.prune(
@@ -4400,6 +4624,7 @@ impl PolicyHost {
             &facts.tasks,
             time.unix_ms,
         );
+        setup.lap(SetupCall::RandomDelays, self.store.cost_totals());
         // Workflow #336 R22: the pairs a failure identity schedules for an immediate rerun. RR-1
         // (register §1.221): only those the admission's own predicate admits on the terms this
         // evaluation gives their intents (profile, expected duration E), so a round whose terms
@@ -4407,6 +4632,7 @@ impl PolicyHost {
         let mut immediate_retries =
             self.control
                 .offered_immediate_retries(&active.compiled, facts, time.unix_ms)?;
+        setup.lap(SetupCall::ImmediateRetries, self.store.cost_totals());
         // Workflow #384 D2-S4: the fact refresh's readers, holds and settings for this cycle.
         let refresh_inputs = self.fact_refresh_inputs(
             &active.compiled,
@@ -4419,6 +4645,7 @@ impl PolicyHost {
             blackout_holds,
             time.unix_ms,
         )?;
+        setup.lap(SetupCall::FactRefreshInputs, self.store.cost_totals());
         // Workflow #386 SR-4a2: the instance each candidate is judged on at positions 4 and 7.
         let instances: BTreeMap<&str, &InstanceSnapshot> = facts
             .instances
@@ -4429,6 +4656,7 @@ impl PolicyHost {
         // bound package declares a remedy or remedies are off.
         let (remedy_plan, remedy_decisions) =
             self.remedy_plan(&active.compiled, facts, time, remedy)?;
+        setup.lap(SetupCall::RemedyPlan, self.store.cost_totals());
         // Workflow #463 V3: the remedy parameters it resolved, for the goal page's read-only list.
         self.resolved_parameters
             .clone_from(&remedy_plan.run_parameters);
@@ -4456,9 +4684,11 @@ impl PolicyHost {
                 .unwrap_or_default(),
         };
         let remedy_plan = remedy_plan.with_variable_values(&variable_plan);
+        setup.lap(SetupCall::VariablePlan, self.store.cost_totals());
         // Workflow #427-B: the dispatches admitted or running and the limit of concurrent runs
         // (Workflow #429 R-2: the configuration's value in effect as the cycle starts).
         let run_slots = self.run_slots(max_concurrent_runs)?;
+        setup.lap(SetupCall::RunSlots, self.store.cost_totals());
         // Workflow #386 SR-2b-2: the owed reruns let in, their stage gate's waits, and the
         // expiries and first waits to record.
         let store = &self.store;
@@ -4473,6 +4703,7 @@ impl PolicyHost {
         // SR-2b-2 review M1: a pair that owes a rerun in the occurrence it was exhausted in is
         // not rerun at once by R22 either; it waits for its own trigger and cooldown.
         immediate_retries.retain(|pair| !rerun_plan.exhausted.contains(pair));
+        setup.lap(SetupCall::RerunPlan, self.store.cost_totals());
         // UPD-1: the catalog tasks whose bound package declares `store_update`, as the remedy
         // table read them; a package the table could not read is no store task.
         let store_tasks = self
@@ -4511,6 +4742,7 @@ impl PolicyHost {
         for alias in asleep {
             instance_holds.mark_asleep(alias.clone());
         }
+        setup.lap(SetupCall::InstanceHolds, self.store.cost_totals());
         // Workflow #429 R-8 (`scheduling-blackout.md`, "Order of the deferrals", position 5;
         // `instance-fact-store.md`, "Pack schedule facts"): each instance's pack schedule as this
         // evaluation's facts hold it, and the package each catalog task runs as the remedy table
@@ -4522,6 +4754,7 @@ impl PolicyHost {
                 .map(crate::remedy::BuiltTable::task_packages),
             time.unix_ms,
         );
+        setup.lap(SetupCall::PackSchedule, self.store.cost_totals());
         // SS-4 (register §1.231; `scheduling/README.md`, "No-progress guard"): an instance with
         // the guard off keeps none, and every guard a basis reading of another value released is
         // gone; the armed ones hold their pairs in this evaluation. #455 P2 fix round 1 (register
@@ -4541,10 +4774,12 @@ impl PolicyHost {
         // whatever its result.
         let mut capped = std::mem::take(&mut self.capped);
         let deferrals = clock_slot::Deferrals::default();
+        setup.lap(SetupCall::NoProgress, self.store.cost_totals());
         #[cfg(test)]
         delay_cycle_stretch_for_test(CycleStretch::EvaluationSetup);
         let started = lap_instant();
         let evaluation_setup_micros = micros_between(entered, started);
+        let evaluation_setup_calls = setup.times();
         // #428 SCHED-C1e (register §1.299 SC1-12): with the lines each instance's
         // `scheduling.pool_lines` in effect gives its pools as the cycle starts; #428 S168-LB1a:
         // with the keys the projection left out for their record list's rows.
@@ -5399,6 +5634,7 @@ impl PolicyHost {
                 // adds its own parts of `evaluation_setup` and `after_held`.
                 stretches: PolicyCycleStretches {
                     evaluation_setup_micros,
+                    evaluation_setup_calls,
                     no_progress_micros,
                     detection_preview_micros,
                     detection_preview_store_reads,
@@ -5591,6 +5827,14 @@ impl PolicyHost {
                 runs,
             });
         }
+        // #503 CYC-2 (register §1.528, ruling 2): the window ends of the runs the journal no
+        // longer holds are dropped.
+        let journal_runs = journals
+            .iter()
+            .flat_map(|journal| journal.runs.iter().map(|run| run.decision_id.as_str()))
+            .collect::<BTreeSet<_>>();
+        self.lock_remedy_window_ends()?
+            .retain(|decision_id, _| journal_runs.contains(decision_id.as_str()));
         Ok(journals)
     }
 
@@ -5633,33 +5877,8 @@ impl PolicyHost {
             )
         })?;
         let admitted_at_unix_ms = admission.activity.admitted_at_unix_ms;
-        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        let profile = catalog
-            .compiled
-            .catalog()
-            .activity
-            .profiles
-            .iter()
-            .find(|profile| profile.id == admission.activity.profile_id)
-            .ok_or_else(|| {
-                fatal(
-                    HostCode::PolicyActivityProfileMissing,
-                    HostLocation::ResolveActivityWindow,
-                )
-            })?;
-        let window = activity_window_at(profile, admitted_at_unix_ms)
-            .map_err(|_| {
-                fatal(
-                    HostCode::PolicyActivityDayOverflow,
-                    HostLocation::ResolveActivityWindow,
-                )
-            })?
-            .ok_or_else(|| {
-                fatal(
-                    HostCode::PolicyActivityWindowClosed,
-                    HostLocation::ResolveActivityWindow,
-                )
-            })?;
+        let activity_window_end_unix_ms =
+            self.remedy_window_end(decision_id, dispatch, admission)?;
         let settled = remedy_settlement(
             dispatch
                 .execution
@@ -5670,7 +5889,7 @@ impl PolicyHost {
         Ok(RemedyRun {
             decision_id: decision_id.to_owned(),
             admitted_at_unix_ms,
-            activity_window_end_unix_ms: window.until_unix_ms,
+            activity_window_end_unix_ms,
             remedy_reasons: dispatch
                 .data
                 .reasons
@@ -5685,6 +5904,81 @@ impl PolicyHost {
                 .as_ref()
                 .map(|execution| execution.observed_at_unix_ms),
         })
+    }
+
+    /// #503 CYC-2 (register §1.528, ruling 2): the end of the activity window the journal's run
+    /// `decision_id` was admitted in. Until 0.12.85 it was read from the run's catalog generation
+    /// at every evaluation, for every run the journal holds; a generation the catalog store's memo
+    /// did not hold (the memo keeps the active one and `standard_packs.cached_generations` more) was
+    /// read from its files and compiled again each time. It is read once per run now: the run's
+    /// generation and admission never change, so neither does the end.
+    fn remedy_window_end(
+        &self,
+        decision_id: &str,
+        dispatch: &SeenDispatch,
+        admission: &PolicyAdmissionRecord,
+    ) -> RuntimeHostResult<u64> {
+        let known = self.lock_remedy_window_ends()?.get(decision_id).copied();
+        if let Some(end) = known {
+            return Ok(end);
+        }
+        let end = admitted_window_end(&self.store, dispatch, admission)?;
+        self.lock_remedy_window_ends()?
+            .insert(decision_id.to_owned(), end);
+        Ok(end)
+    }
+
+    /// #503 CYC-2: the remedy journal's window ends, under their own lock (taken under the policy
+    /// lock, and nothing is locked while it is held).
+    fn lock_remedy_window_ends(
+        &self,
+    ) -> RuntimeHostResult<std::sync::MutexGuard<'_, BTreeMap<String, u64>>> {
+        self.remedy_window_ends.lock().map_err(|_| {
+            fatal(
+                HostCode::RuntimeStatePoisoned,
+                HostLocation::EvaluatePolicyCycle,
+            )
+        })
+    }
+
+    /// #503 CYC-2, tests: each window end the remedy journal keeps, by its run's decision, beside
+    /// the one read from the run's catalog generation now.
+    #[cfg(test)]
+    pub(crate) fn remedy_window_ends_for_test(&self) -> RuntimeHostResult<Vec<(String, u64, u64)>> {
+        let kept = self.lock_remedy_window_ends()?.clone();
+        kept.into_iter()
+            .map(|(decision_id, end)| {
+                let dispatch = self.seen_dispatches.get(&decision_id).ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchUnknown,
+                        HostLocation::EvaluatePolicyCycle,
+                    )
+                })?;
+                let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                    fatal(
+                        HostCode::PolicyDispatchAdmissionMissing,
+                        HostLocation::EvaluatePolicyCycle,
+                    )
+                })?;
+                let read = admitted_window_end(&self.store, dispatch, admission)?;
+                Ok((decision_id, end, read))
+            })
+            .collect()
+    }
+
+    /// #503 CYC-2, tests: how many catalog generations the catalog store's memo keeps.
+    #[cfg(test)]
+    pub(crate) fn set_catalog_memo_capacity_for_test(
+        &self,
+        generations: usize,
+    ) -> RuntimeHostResult<()> {
+        self.store.set_memo_capacity(generations)
+    }
+
+    /// #503 CYC-2 (register §1.528, ruling 1): what the catalog store's memo waits and generation
+    /// reads took so far, for the timer of the evaluation's setup.
+    pub(crate) fn catalog_costs(&self) -> CatalogCosts {
+        self.store.cost_totals()
     }
 
     /// Workflow #411 B15 R4 (model-b15 §7.9): an intent whose chain names a remedy round
@@ -7626,6 +7920,45 @@ pub(crate) fn remedy_settlement(
     }
 }
 
+/// Workflow #411 B15 R4 (model-b15 §7.8): the end of the activity window `dispatch` was admitted
+/// in, read from its own catalog generation by the activity profile `admission` names. #503 CYC-2
+/// (register §1.528, ruling 2): read once per run of the remedy journal
+/// ([`PolicyHost::remedy_window_end`]).
+fn admitted_window_end(
+    store: &CatalogStore,
+    dispatch: &SeenDispatch,
+    admission: &PolicyAdmissionRecord,
+) -> RuntimeHostResult<u64> {
+    let catalog = store.load_generation(&dispatch.data.catalog_hash)?;
+    let profile = catalog
+        .compiled
+        .catalog()
+        .activity
+        .profiles
+        .iter()
+        .find(|profile| profile.id == admission.activity.profile_id)
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyActivityProfileMissing,
+                HostLocation::ResolveActivityWindow,
+            )
+        })?;
+    let window = activity_window_at(profile, admission.activity.admitted_at_unix_ms)
+        .map_err(|_| {
+            fatal(
+                HostCode::PolicyActivityDayOverflow,
+                HostLocation::ResolveActivityWindow,
+            )
+        })?
+        .ok_or_else(|| {
+            fatal(
+                HostCode::PolicyActivityWindowClosed,
+                HostLocation::ResolveActivityWindow,
+            )
+        })?;
+    Ok(window.until_unix_ms)
+}
+
 /// UNSET-2 (register §1.296): whether `outcome` records a run settled as interrupted
 /// (`policy_settlement_interrupted`).
 pub(crate) fn settled_as_interrupted(outcome: &PolicyExecutionOutcome) -> bool {
@@ -9000,6 +9333,16 @@ struct CatalogStore {
     legacy_active_pointer: PathBuf,
     state: Arc<RuntimeStateStore>,
     memo: Mutex<CatalogMemo>,
+    /// #503 CYC-2 (register §1.528, ruling 1): what the waits for `memo` and the reads of a
+    /// generation's files took since the store was opened, for the line of a cycle.
+    costs: CatalogCostCounters,
+}
+
+/// #503 CYC-2: [`CatalogCosts`] as the store counts them.
+#[derive(Default)]
+struct CatalogCostCounters {
+    memo_wait_micros: AtomicU64,
+    read_micros: AtomicU64,
 }
 
 /// Bounded least-recently-used memo of verified, compiled generations keyed by
@@ -9076,6 +9419,7 @@ impl CatalogStore {
             generations,
             state,
             memo: Mutex::new(CatalogMemo::default()),
+            costs: CatalogCostCounters::default(),
         };
         Ok(store)
     }
@@ -9090,6 +9434,7 @@ impl CatalogStore {
             root,
             state,
             memo: Mutex::new(CatalogMemo::default()),
+            costs: CatalogCostCounters::default(),
         }
     }
 
@@ -9318,22 +9663,48 @@ impl CatalogStore {
         if let Some(loaded) = self.memoised_generation(hash)? {
             return Ok(loaded);
         }
-        let loaded = Arc::new(self.read_generation(hash)?);
+        // #503 CYC-2 (register §1.528, ruling 1): the read of the generation's files, timed for
+        // the line of a cycle. Tests: the delay planned for a read is taken here.
+        let reading = lap_instant();
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::CatalogRead);
+        let generation = self.read_generation(hash);
+        self.costs
+            .read_micros
+            .fetch_add(micros_since(reading), Ordering::Relaxed);
+        let loaded = Arc::new(generation?);
         self.memoise_generation(hash, Arc::clone(&loaded))?;
         Ok(loaded)
     }
 
+    /// #503 CYC-2 (register §1.528, ruling 1): the memo's lock, its wait timed for the line of a
+    /// cycle. Tests: the delay planned for the wait is taken while it is waited for.
+    fn lock_memo(&self) -> RuntimeHostResult<std::sync::MutexGuard<'_, CatalogMemo>> {
+        let waiting = lap_instant();
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::CatalogMemoWait);
+        let guard = self.memo.lock().map_err(|_| {
+            fatal(
+                HostCode::RuntimeStatePoisoned,
+                HostLocation::LoadCatalogGeneration,
+            )
+        })?;
+        self.costs
+            .memo_wait_micros
+            .fetch_add(micros_since(waiting), Ordering::Relaxed);
+        Ok(guard)
+    }
+
+    /// #503 CYC-2: what the memo's waits and the generations' reads took so far.
+    fn cost_totals(&self) -> CatalogCosts {
+        CatalogCosts {
+            memo_wait_micros: self.costs.memo_wait_micros.load(Ordering::Relaxed),
+            read_micros: self.costs.read_micros.load(Ordering::Relaxed),
+        }
+    }
+
     fn memoised_generation(&self, hash: &str) -> RuntimeHostResult<Option<Arc<LoadedCatalog>>> {
-        let loaded = self
-            .memo
-            .lock()
-            .map_err(|_| {
-                fatal(
-                    HostCode::RuntimeStatePoisoned,
-                    HostLocation::LoadCatalogGeneration,
-                )
-            })?
-            .get(hash);
+        let loaded = self.lock_memo()?.get(hash);
         let Some(loaded) = loaded else {
             return Ok(None);
         };
@@ -9349,15 +9720,7 @@ impl CatalogStore {
     }
 
     fn memoise_generation(&self, hash: &str, loaded: Arc<LoadedCatalog>) -> RuntimeHostResult<()> {
-        self.memo
-            .lock()
-            .map_err(|_| {
-                fatal(
-                    HostCode::RuntimeStatePoisoned,
-                    HostLocation::LoadCatalogGeneration,
-                )
-            })?
-            .insert(hash.to_owned(), loaded);
+        self.lock_memo()?.insert(hash.to_owned(), loaded);
         Ok(())
     }
 

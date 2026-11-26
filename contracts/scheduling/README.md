@@ -3587,7 +3587,9 @@ finishes and is settled there whatever the switch says afterwards.
 ## The policy driver's clock and the line of a cycle
 
 #503 CYC-1 (0.12.84; [v012-register.md](../v012-register.md) §1.526, the coordinator's rulings 1
-to 3). Not behind the switch.
+to 3). #503 CYC-2 (0.12.85; §1.528, the coordinator's rulings 1 to 3): the calls of the
+evaluation's setup, the remedy journal's window ends and what of the performance thread wakes the
+driver. Not behind the switch.
 
 - **A clock jump.** actingd's policy driver looks at the wall clock at least every half
   `policy_cadence.clock_jump_threshold_ms` (5 000 ms in the defaults, so every 2.5 s while it
@@ -3614,13 +3616,14 @@ to 3). Not behind the switch.
   | `gates_held_ms` | the work under those gates, `projection_ms` apart: the manifest's copy, the entry blocks, the verdicts, the outcome keys, the clock sample |
   | `cycle_inputs_ms` | from the gates' release to the evaluation's policy lock: the left-out lists, the run limits, the pauses and fences, the asleep instances, the queues and device groups, the lift view, the configuration in effect |
   | `policy_lock_wait_ms` | the wait to take the policy lock the evaluation runs under |
-  | `evaluation_setup_ms` | under it, up to `evaluation_ms`: the outcome keys' validation, the blackouts, and the evaluation's own inputs (the remedy table and plan, the fact refresh's readers, the owed reruns, the no-progress observation) |
+  | `evaluation_setup_ms` | under it, up to `evaluation_ms`: the outcome keys' validation, the blackouts, the handed runs, and the evaluation's own inputs (the cadence, the remedy table and plan, the evaluation's cost, the random delays, the immediate reruns, the fact refresh's readers, the variable plan, the run slots, the owed reruns, the instances' holds, the pack schedules, the no-progress observation); `evaluation_setup_slowest` names its slowest calls |
   | `no_progress_ms` | from the evaluation's end through the no-progress guards' capture of the new intents |
   | `detection_preview_ms`, `detection_preview_store_reads` | the detection planning signals' preview, and its reads of the planning-signal store |
   | `explanation_ms` | from the clock slots' preview to `held_ms`: the eligibility ages, the queue waits, the not-run explanation and the idle plan's inputs |
   | `after_held_ms` | from the held observation through the evaluation's last bookkeeping and the reads under the policy lock after it |
   | `capped_record_ms` | the capped record |
   | `unattributed_ms` | the time up to the end of the capped record that none of the named parts covers |
+  | `evaluation_setup_slowest` | the three calls of `evaluation_setup_ms` that took longest, `name:milliseconds` each and comma-separated as `wakes` is, the slowest first and of two that took as long the earlier in the cycle's order; `none` when no call took any time; for a line of several cycles, the three slowest of the calls' sums |
 
   To read one: the named parts (with `projection_ms`, `evaluation_ms`, `clock_slots_ms` and
   `held_ms`) and `unattributed_ms` add up to `total_ms` less `after_capped_ms`. The waits timed
@@ -3637,6 +3640,52 @@ to 3). Not behind the switch.
   window takes it, until the Runtime records usage for it. The preview asks each id once, however
   many suggestions name it. What it reserves, records and returns, and in what order, is what
   asking the store each time gives.
+- **The calls of the evaluation's setup** (CYC-2, ruling 1). Each call of `evaluation_setup_ms` is
+  timed, each from the end of the one before, on the cycle's lap clock, under a fixed word:
+  `outcome_keys`, `blackouts` and `handed_runs` (under the evaluation's policy lock, before the
+  evaluation is entered), then `cadence`, `remedy_table` (the instances waiting for a client update
+  and the remedy table when it is due), `evaluation_cost`, `random_delays`, `immediate_retries`,
+  `fact_refresh_inputs`, `remedy_plan` (the remedy journal and plan), `variable_plan`, `run_slots`,
+  `rerun_plan`, `instance_holds`, `pack_schedule` and `no_progress`. Two waits a call can make are
+  timed apart from the call that made them and named on their own: `catalog_memo_wait`, the waits
+  for the lock of the catalog store's memo of compiled generations, and `catalog_reads`, the reads
+  of a generation from the catalog store's files (its documents read, their digests checked and
+  the generation compiled) when the memo does not hold it. The memo keeps the active generation
+  and `standard_packs.cached_generations` older ones (one by default) in composer mode, eight in
+  configured mode. `evaluation_setup_ms` still covers the whole stretch; the calls' times lie
+  within it.
+- **A remedy run's window end is read once** (CYC-2, ruling 2). The remedy journal gives the
+  remedy plan, for each run it holds, the end of the activity window the run was admitted in, read
+  from the run's own catalog generation by the activity profile its admission names. Until 0.12.85
+  every evaluation read it again for every run the journal holds (up to 64 per pair, back to the
+  pair's last root blocked run), so a run admitted under a generation the memo no longer holds had
+  that generation read from its files and compiled at every cycle, and two such generations in a
+  pair's runs pushed each other out of a memo of one. Now the end is read the first time the
+  journal holds the run and kept, by the run's decision, while the journal holds it: a run's
+  generation and admission never change, so neither does the end. The journal, the plan, and every
+  intent, signal and record are those the reading at every cycle gives.
+- **What of the performance thread wakes the driver** (CYC-2, ruling 3). A record of the
+  performance thread wakes the driver only when it changes an input of the evaluation or of the
+  admission that follows it. The evaluation reads, of the performance state, the pacing stage
+  (the owed reruns' gate), the balance controller's level (the heavy dispatch limit) and its latest
+  observation (the responsiveness and third-party pressure behind the ranking's contention
+  penalty); the admission reads the committed capacity sample (the disk gate). A
+  `perf.pacing_changed`, `perf.dispatch_share_changed`, `perf.run_hold`, `perf.balance_changed`,
+  `perf.pressure_started`, `perf.pressure_ended`, `perf.monitor_degraded` and
+  `perf.monitor_recovered` each wake it at once, as before. A `perf.stutter_detected` (an
+  instance's frames stalling) wakes it never: the frame gap joins the pipeline samples, from which
+  the next control observation reads the responsiveness, and a level that changes from it is a
+  `perf.balance_changed`. A `perf.summary` wakes it only when its capacity sample changes what the
+  disk gate decides on against the last summary recorded (a volume came or went, or a volume's state
+  of sufficient, soft or hard pressure or unknown changed), the admission's own re-sample of a
+  stale fact included; a summary of the interval, or of free bytes moved within a state, wakes it
+  never. The latest observation's responsiveness and third-party pressure change with every sample
+  and no record names them: an evaluation reads them as they are when it runs, as it reads the
+  clock. They enter the ranking only (the contention penalty) and gate nothing, so no task waits
+  for them; a ranking can be that of the last evaluation for at most the reconciliation interval
+  (`policy_cadence.reconciliation_interval_ms`, 60 s by default), after which the driver evaluates
+  whatever happened. The line's `wakes` counts `perf.summary` only for a summary that woke the
+  driver.
 
 ## Evaluation failures
 
