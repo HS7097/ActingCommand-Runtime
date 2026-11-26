@@ -16,9 +16,17 @@
 use super::policy_cycle_line::{PolicyCycleLines, RUN_ENDED_WAKE};
 use super::*;
 use actingcommand_runtime_host::{
-    ClockSlotPreviewCost, PolicyEvaluationCost, PolicyEvaluationExecution,
+    ClockSlotPreviewCost, PolicyCycleStretches, PolicyEvaluationCost, PolicyEvaluationExecution,
     PolicyEvaluationMeasurement,
 };
+
+/// #503 CYC-1 (register §1.526, ruling 1): the members the line gained after `total_ms`, for a
+/// measurement that names none of its other stretches; what is not covered up to the capped
+/// record is none here, since this fixture's parts already exceed it.
+const NO_STRETCHES: &str = " before_gates_ms=0.000 gates_wait_ms=0.000 gates_held_ms=0.000 \
+     cycle_inputs_ms=0.000 policy_lock_wait_ms=0.000 evaluation_setup_ms=0.000 \
+     no_progress_ms=0.000 detection_preview_ms=0.000 detection_preview_store_reads=0 \
+     explanation_ms=0.000 after_held_ms=0.000 capped_record_ms=0.000 unattributed_ms=0.000";
 
 /// A measurement of the cycle numbered `seq`: each time in microseconds as given.
 fn measurement(seq: u64, scale: u64) -> PolicyEvaluationMeasurement {
@@ -48,6 +56,7 @@ fn measurement(seq: u64, scale: u64) -> PolicyEvaluationMeasurement {
         },
         held_observe_micros: 250 * scale,
         until_capped_micros: 4_900_000 * scale,
+        stretches: PolicyCycleStretches::default(),
     }
 }
 
@@ -62,6 +71,7 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
         ("fact.published".to_owned(), 1),
         ("lease.released".to_owned(), 1),
     ]);
+    // #503 CYC-1: each line ends with the members the line gained (`NO_STRETCHES`).
     assert_eq!(
         lines
             .record(
@@ -72,11 +82,14 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
             )
             .as_deref(),
         Some(
-            "actingd policy_cycle wakes=lease.released:3,fact.published:1 seq=41 first_seq=41 \
-             cycles=1 triggers=resources_changed:1 projection_ms=1.500 \
-             evaluation_ms=4000.000 clock_slots_ms=2000.250 clock_slot_pairs=12 \
-             clock_slot_live_calls=3 clock_slot_store_reads=40 held_ms=0.250 \
-             after_capped_ms=100.000 total_ms=5000.000"
+            format!(
+                "actingd policy_cycle wakes=lease.released:3,fact.published:1 seq=41 \
+                 first_seq=41 cycles=1 triggers=resources_changed:1 projection_ms=1.500 \
+                 evaluation_ms=4000.000 clock_slots_ms=2000.250 clock_slot_pairs=12 \
+                 clock_slot_live_calls=3 clock_slot_store_reads=40 held_ms=0.250 \
+                 after_capped_ms=100.000 total_ms=5000.000{NO_STRETCHES}"
+            )
+            .as_str()
         ),
         "the cycle's line"
     );
@@ -96,9 +109,7 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
     assert_eq!(
         lines.record(
             10_800,
-            PolicyTrigger::ClockObserved {
-                previous_unix_ms: 10_000,
-            },
+            PolicyTrigger::ClockObserved { jumped: false },
             &measurement(43, 2),
             Duration::from_micros(10_000_000),
         ),
@@ -112,11 +123,14 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
     assert_eq!(
         lines.flush(11_000).as_deref(),
         Some(
-            "actingd policy_cycle wakes=run_ended:1 seq=43 first_seq=42 cycles=2 \
-             triggers=facts_changed:1,clock_observed:1 projection_ms=4.500 \
-             evaluation_ms=12000.000 clock_slots_ms=6000.750 clock_slot_pairs=36 \
-             clock_slot_live_calls=9 clock_slot_store_reads=120 held_ms=0.750 \
-             after_capped_ms=300.000 total_ms=15000.000"
+            format!(
+                "actingd policy_cycle wakes=run_ended:1 seq=43 first_seq=42 cycles=2 \
+                 triggers=facts_changed:1,clock_observed:1 projection_ms=4.500 \
+                 evaluation_ms=12000.000 clock_slots_ms=6000.750 clock_slot_pairs=36 \
+                 clock_slot_live_calls=9 clock_slot_store_reads=120 held_ms=0.750 \
+                 after_capped_ms=300.000 total_ms=15000.000{NO_STRETCHES}"
+            )
+            .as_str()
         ),
         "one line for both"
     );
@@ -134,10 +148,14 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
             )
             .as_deref(),
         Some(
-            "actingd policy_cycle wakes=none seq=44 first_seq=44 cycles=1 \
-             triggers=reconciliation:1 projection_ms=1.500 evaluation_ms=4000.000 \
-             clock_slots_ms=2000.250 clock_slot_pairs=12 clock_slot_live_calls=3 \
-             clock_slot_store_reads=40 held_ms=0.250 after_capped_ms=50.000 total_ms=4950.000"
+            format!(
+                "actingd policy_cycle wakes=none seq=44 first_seq=44 cycles=1 \
+                 triggers=reconciliation:1 projection_ms=1.500 evaluation_ms=4000.000 \
+                 clock_slots_ms=2000.250 clock_slot_pairs=12 clock_slot_live_calls=3 \
+                 clock_slot_store_reads=40 held_ms=0.250 after_capped_ms=50.000 \
+                 total_ms=4950.000{NO_STRETCHES}"
+            )
+            .as_str()
         ),
         "its own line"
     );
@@ -156,10 +174,14 @@ fn asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at
     assert_eq!(
         lines.finish().as_deref(),
         Some(
-            "actingd policy_cycle wakes=none seq=45 first_seq=45 cycles=1 \
-             triggers=facts_changed:1 projection_ms=1.500 evaluation_ms=4000.000 \
-             clock_slots_ms=2000.250 clock_slot_pairs=12 clock_slot_live_calls=3 \
-             clock_slot_store_reads=40 held_ms=0.250 after_capped_ms=100.000 total_ms=5000.000"
+            format!(
+                "actingd policy_cycle wakes=none seq=45 first_seq=45 cycles=1 \
+                 triggers=facts_changed:1 projection_ms=1.500 evaluation_ms=4000.000 \
+                 clock_slots_ms=2000.250 clock_slot_pairs=12 clock_slot_live_calls=3 \
+                 clock_slot_store_reads=40 held_ms=0.250 after_capped_ms=100.000 \
+                 total_ms=5000.000{NO_STRETCHES}"
+            )
+            .as_str()
         ),
         "the line kept, as the driver ends"
     );

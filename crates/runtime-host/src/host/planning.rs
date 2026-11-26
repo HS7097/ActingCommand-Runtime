@@ -73,6 +73,8 @@ impl HostShared {
             policy.validate_planning_signal(&signal)?;
             if let Some(existing) = policy.planning_signal(&signal.signal_id)? {
                 return if existing == signal {
+                    // #503 CYC-1 (register §1.526, ruling 2): the next detection preview knows it.
+                    policy.note_planning_signal_recorded(&existing);
                     Ok(())
                 } else {
                     Err(RuntimeHostError::fatal(
@@ -111,6 +113,9 @@ impl HostShared {
                 })?;
             committed_signal = Some((*persisted.event_id(), persisted.sequence()));
             policy.publish_planning_signal(staged_quota);
+            // #503 CYC-1 (register §1.526, ruling 2): recorded; the next detection preview knows
+            // it without asking the store.
+            policy.note_planning_signal_recorded(&signal);
             // Workflow #411 B15 R4 (model-b15 §7.8): a remedy stop, lift or expiry is part of
             // the remedy state from its record on.
             policy.observe_remedy_signal(

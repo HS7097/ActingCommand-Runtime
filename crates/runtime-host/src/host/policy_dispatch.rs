@@ -29,6 +29,22 @@ const POLICY_ADMISSION_CONTENTION_RETRY: Duration = Duration::from_millis(100);
 /// Workflow #369 W-1: how far ahead a contended dispatch may run again.
 const DISPATCH_CONTENDED_RETRY_AFTER_MS: u64 = 1_000;
 
+/// #503 CYC-1 (register §1.526, ruling 1): `lock` for one of the gates a policy cycle reads its
+/// inputs under, adding the microseconds the cycle waited for it to `waited` (on the cycle's lap
+/// clock). Tests: the delay planned for the gates' wait is taken while the first one is waited for.
+fn lock_waited<'a, T>(
+    mutex: &'a std::sync::Mutex<T>,
+    operation: HostLocation,
+    waited: &mut u64,
+) -> RuntimeHostResult<std::sync::MutexGuard<'a, T>> {
+    let waiting = crate::policy_host::lap_instant();
+    #[cfg(test)]
+    crate::policy_host::delay_cycle_stretch_for_test(crate::policy_host::CycleStretch::GatesWait);
+    let guard = lock(mutex, operation)?;
+    *waited = waited.saturating_add(crate::policy_host::micros_since(waiting));
+    Ok(guard)
+}
+
 /// Workflow #369 W-1: a dispatch refused because its instance is held, or because its admission
 /// guard stayed contended, is an Info record; every other refusal stays an Error.
 fn policy_rejection_severity(code: &str) -> EventSeverity {
@@ -1913,8 +1929,9 @@ impl HostShared {
         trigger: PolicyTrigger,
     ) -> RuntimeHostResult<PolicyCycle> {
         // #486 ASLEEP-5 (register §1.524, ruling 4): the cycle's start, from which the time up to
-        // its capped record is counted for the daemon's line of the cycle.
-        let cycle_started = std::time::Instant::now();
+        // its capped record is counted for the daemon's line of the cycle. #503 CYC-1 (register
+        // §1.526, ruling 1): on the cycle's lap clock, as each stretch of it below.
+        let cycle_started = crate::policy_host::lap_instant();
         if trigger == PolicyTrigger::Reconciliation {
             self.reconcile_pending_policy_settlements()?;
         }
@@ -1947,21 +1964,27 @@ impl HostShared {
         let standard_pack_variables = self.standard_pack_variables()?;
         #[cfg(test)]
         self.before_policy_inputs_read_for_test()?;
-        let _detection_gate = lock(
+        // #503 CYC-1 (ruling 1): what precedes the gates ends here; from here to their release the
+        // waits to take them are counted apart from the work done under them and the projection.
+        let gates_reached = crate::policy_host::lap_instant();
+        let mut gates_wait_micros = 0_u64;
+        let _detection_gate = lock_waited(
             &self.detection_write_gate,
             HostLocation::PlanPolicyDetection,
+            &mut gates_wait_micros,
         )?;
-        let procedure_manifest = lock(
+        let manifest = lock_waited(
             &self.procedure_manifest,
             HostLocation::ReadProcedureManifest,
-        )?
-        .clone()
-        .ok_or_else(|| {
+            &mut gates_wait_micros,
+        )?;
+        let procedure_manifest = manifest.clone().ok_or_else(|| {
             policy_admission_request(
                 HostCode::ProcedureManifestUnconfigured,
                 HostLocation::EvaluatePolicyCycle,
             )
         })?;
+        drop(manifest);
         let (
             time,
             observed_monotonic_ms,
@@ -1978,22 +2001,35 @@ impl HostShared {
             entry_blocked,
             projection_micros,
         ) = {
-            let _outcome_gate = lock(
+            let _outcome_gate = lock_waited(
                 &self.policy_outcome_gate,
                 HostLocation::SnapshotPolicyOutcomeState,
+                &mut gates_wait_micros,
             )?;
             // Workflow #490 ENTRY-A: the entry-blocked instances, read under the gate a settlement
             // blocks its instance under, so no evaluation sees a run's settlement without its
             // block.
             let entry_blocked = self.entry_block_gates()?;
-            let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
+            let mut policy = lock_waited(
+                self.policy()?,
+                HostLocation::ReadPolicyOutcomeKeys,
+                &mut gates_wait_micros,
+            )?;
             // The previous evaluated cycle's eligibility verdicts take effect here, before
             // this cycle's inputs are projected (Workflow #308 slice 5b). Workflow #437 ORD-1c:
             // and its queue-wait verdicts, whose starts this evaluation passes.
             policy.apply_eligibility_verdicts();
             let queue_wait_starts = policy.apply_queue_wait_verdicts();
             let outcome_keys = policy.outcome_key_snapshot()?;
-            let _gate = lock(&self.fact_write_gate, HostLocation::ProjectPolicyFacts)?;
+            let _gate = lock_waited(
+                &self.fact_write_gate,
+                HostLocation::ProjectPolicyFacts,
+                &mut gates_wait_micros,
+            )?;
+            #[cfg(test)]
+            crate::policy_host::delay_cycle_stretch_for_test(
+                crate::policy_host::CycleStretch::GatesHeld,
+            );
             // ISO-PE (#419): the evaluation's time, sampled under the gates its inputs are
             // written under (`policy_outcome_gate` for a settlement and its four facts,
             // `fact_write_gate` for every fact). Every input read below was committed before this
@@ -2016,7 +2052,7 @@ impl HostShared {
             };
             // #486 ASLEEP-5 (ruling 4): the projection of the cycle's inputs, the finished runs'
             // outcomes among them, timed for the daemon's line of the cycle.
-            let projection_started = std::time::Instant::now();
+            let projection_started = crate::policy_host::lap_instant();
             let (
                 facts,
                 resources,
@@ -2055,6 +2091,9 @@ impl HostShared {
                 projection_micros,
             )
         };
+        // #503 CYC-1 (ruling 1): the gates above are released; the cycle's other inputs follow,
+        // up to the wait for the evaluation's policy lock.
+        let inputs_started = crate::policy_host::lap_instant();
         // Workflow #428 S168-LB1a (`contracts/instance-fact-store.md`, "Left out of the
         // projection"): each record list the projection left out for its rows is recorded once
         // after a start, and its key raises no fact refresh demand on the instances it applies to.
@@ -2174,8 +2213,27 @@ impl HostShared {
         // below, and the forced snapshot changes.
         #[cfg(any(test, feature = "test-hooks"))]
         self.between_policy_sample_and_validation_for_test()?;
-        let (mut cycle, eligibility_unknown_pairs, pool_scopes, random_delays, blackout_holds) = {
+        // #503 CYC-1 (ruling 1): the cycle's inputs end here; then the wait for the evaluation's
+        // policy lock, the work under it before the evaluation (with the evaluation's own inputs,
+        // `evaluation_setup`) and after it up to the lock's release (with the evaluation's last
+        // bookkeeping, `after_held`).
+        let lock_waiting = crate::policy_host::lap_instant();
+        let (
+            mut cycle,
+            eligibility_unknown_pairs,
+            pool_scopes,
+            random_delays,
+            blackout_holds,
+            locked,
+            evaluating,
+            returned,
+        ) = {
+            #[cfg(test)]
+            crate::policy_host::delay_cycle_stretch_for_test(
+                crate::policy_host::CycleStretch::PolicyLockWait,
+            );
             let mut policy = lock(self.policy()?, HostLocation::EvaluatePolicyCycle)?;
+            let locked = crate::policy_host::lap_instant();
             // Workflow #427-A (C1): another instance's run may settle between the sample and
             // this validation; its `policy_outcome_snapshot_changed` is a request error, which
             // actingd answers with a bounded re-sample.
@@ -2188,6 +2246,7 @@ impl HostShared {
             // carried a `run_cap`, with when that run ended; a pool such a run's task consumes is
             // unknown in the evaluation until it is read after that end.
             left_out.give_handed_runs(policy.handed_runs(facts.ledger_position));
+            let evaluating = crate::policy_host::lap_instant();
             let cycle = policy.evaluate(
                 &facts,
                 &controlled_resources,
@@ -2233,6 +2292,7 @@ impl HostShared {
                     entry_blocked: &entry_blocked,
                 },
             )?;
+            let returned = crate::policy_host::lap_instant();
             let unknown = if cycle.evaluation.is_some() {
                 policy.eligibility_unknown_pairs()
             } else {
@@ -2246,19 +2306,45 @@ impl HostShared {
                 catalog_pool_scopes(&policy),
                 random_delays,
                 blackout_holds,
+                locked,
+                evaluating,
+                returned,
             )
         };
+        let released = crate::policy_host::lap_instant();
         // #428 SCHED-C1d (register §1.299 SC1-11): an evaluated cycle that changed a capped
         // episode records `host.capped_episodes`; a record the store refuses is a warning.
         if cycle.evaluation.is_some() {
+            #[cfg(test)]
+            crate::policy_host::delay_cycle_stretch_for_test(
+                crate::policy_host::CycleStretch::CappedRecord,
+            );
             self.keep_capped_episodes(RuntimeLifecycleFailureStage::PolicyDriver)?;
         }
         // #486 ASLEEP-5 (register §1.524, ruling 4): the projection's time, and the time from the
         // cycle's start to the end of its capped record, for the daemon's line of the cycle;
-        // nothing is stored.
+        // nothing is stored. #503 CYC-1 (register §1.526, ruling 1): with every other stretch the
+        // host times, each from the end of the one before.
         if let Some(measurement) = cycle.measurement.as_mut() {
+            use crate::policy_host::micros_between;
+            let capped_ended = crate::policy_host::lap_instant();
             measurement.projection_micros = projection_micros;
-            measurement.until_capped_micros = crate::policy_host::micros_since(cycle_started);
+            measurement.until_capped_micros = micros_between(cycle_started, capped_ended);
+            let stretches = &mut measurement.stretches;
+            stretches.before_gates_micros = micros_between(cycle_started, gates_reached);
+            stretches.gates_wait_micros = gates_wait_micros;
+            stretches.gates_held_micros = micros_between(gates_reached, inputs_started)
+                .saturating_sub(gates_wait_micros)
+                .saturating_sub(projection_micros);
+            stretches.cycle_inputs_micros = micros_between(inputs_started, lock_waiting);
+            stretches.policy_lock_wait_micros = micros_between(lock_waiting, locked);
+            stretches.evaluation_setup_micros = stretches
+                .evaluation_setup_micros
+                .saturating_add(micros_between(locked, evaluating));
+            stretches.after_held_micros = stretches
+                .after_held_micros
+                .saturating_add(micros_between(returned, released));
+            stretches.capped_record_micros = micros_between(released, capped_ended);
         }
         attach_eligible_since_unknown_reasons(&mut cycle, &eligibility_unknown_pairs);
         attach_missing_instance_fact_reasons(

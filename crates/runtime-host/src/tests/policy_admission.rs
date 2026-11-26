@@ -105,9 +105,8 @@ fn policy_cadence_is_explicit_and_clock_jumps_force_full_recompute() {
                 monotonic_ms: POLICY_NOW_UNIX_MS + 7_000,
             },
             7,
-            PolicyTrigger::ClockObserved {
-                previous_unix_ms: POLICY_NOW_UNIX_MS + 1_100,
-            },
+            // #503 CYC-1 (register §1.526, ruling 3): the driver's word that its clocks disagreed.
+            PolicyTrigger::ClockObserved { jumped: true },
         )
         .expect("clock-jump policy cycle");
     assert_eq!(clock_jump.directive.kind, PolicyRecomputeKind::Full);
