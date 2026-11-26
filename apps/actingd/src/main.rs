@@ -96,6 +96,9 @@ mod gate_398_db1;
 // Test-only: #486 ASLEEP-5, the daemon's line of an evaluated policy cycle and its cap.
 #[cfg(test)]
 mod gate_486_asleep5;
+// Test-only: #503 CYC-1, the line's stretches and the driver's clock jump judged on both clocks.
+#[cfg(test)]
+mod gate_503_cyc1;
 // #486 ASLEEP-5: the daemon's line of each evaluated policy cycle.
 mod policy_cycle_line;
 
@@ -1734,6 +1737,15 @@ fn combine_monitor_results(
 // (`actingcommand_runtime_host::policy_trigger_for_event`); the monitor coalesces the
 // host's wakes with the priority below, as it coalesced a batch of ledger events.
 fn coalesce_policy_trigger(left: PolicyTrigger, right: PolicyTrigger) -> PolicyTrigger {
+    // Review of #1897 (#503 CYC-1): two clock observations coalesce into one that jumped when
+    // either did, so a jump is not lost behind an observation already kept.
+    if let (
+        PolicyTrigger::ClockObserved { jumped: a },
+        PolicyTrigger::ClockObserved { jumped: b },
+    ) = (left, right)
+    {
+        return PolicyTrigger::ClockObserved { jumped: a || b };
+    }
     if trigger_priority(right) > trigger_priority(left) {
         right
     } else {
@@ -2060,6 +2072,9 @@ struct PolicyDriverSchedule {
     next_reconciliation_unix_ms: u64,
     next_clock_observation_unix_ms: u64,
     last_clock_observation_unix_ms: u64,
+    /// #503 CYC-1 (register §1.526, ruling 3): the schedule's monotonic milliseconds
+    /// ([`Self::line_clock_ms`]) at that observation, against which a clock jump is judged.
+    last_clock_observation_monotonic_ms: u64,
     deferred: Option<DeferredPolicyTrigger>,
     /// #486 ASLEEP-5 (register §1.524, ruling 4): the daemon's lines of the evaluated cycles,
     /// with what woke the driver since the last one (the schedule's own wakes among them: a time
@@ -2087,6 +2102,7 @@ impl PolicyDriverSchedule {
                 clock_observation_interval_ms(&cadence),
             )?,
             last_clock_observation_unix_ms: now_unix_ms,
+            last_clock_observation_monotonic_ms: 0,
             deferred: None,
             lines: PolicyCycleLines::default(),
             started: Instant::now(),
@@ -2180,24 +2196,36 @@ impl PolicyDriverSchedule {
         Ok(())
     }
 
+    /// The work due at `now_unix_ms` on the wall clock, `now_monotonic_ms` on the schedule's
+    /// monotonic clock ([`Self::line_clock_ms`]). #503 CYC-1 (register §1.526, ruling 3;
+    /// `contracts/scheduling/README.md`, "The policy driver's clock and the line of a cycle"): a
+    /// clock jump is the wall clock disagreeing with the monotonic clock since the last
+    /// observation, by more than `clock_jump_threshold_ms` in either direction, or a wall clock
+    /// that went backwards; however long a cycle or a wait took, both clocks moved by it. Until
+    /// 0.12.84 the wall clock alone was compared, so a cycle longer than the threshold made the
+    /// next look a jump, and its cycle the next one at once.
     fn take_due_work(
         &mut self,
         now_unix_ms: u64,
+        now_monotonic_ms: u64,
     ) -> Result<Option<(PolicyTrigger, Vec<PolicyRecomputeWake>)>, ActingdError> {
-        let previous = self.last_clock_observation_unix_ms;
-        let delta = now_unix_ms.saturating_sub(previous);
-        if now_unix_ms < previous || delta > self.cadence.clock_jump_threshold_ms {
-            self.record_clock_observation(now_unix_ms)?;
+        let monotonic_ms =
+            now_monotonic_ms.saturating_sub(self.last_clock_observation_monotonic_ms);
+        let jumped = now_unix_ms
+            .checked_sub(self.last_clock_observation_unix_ms)
+            .is_none_or(|wall_ms| {
+                wall_ms.abs_diff(monotonic_ms) > self.cadence.clock_jump_threshold_ms
+            });
+        if jumped {
+            self.record_clock_observation(now_unix_ms, now_monotonic_ms)?;
             self.note_due(policy_cycle_line::CLOCK_JUMP_WAKE);
             return Ok(Some((
-                PolicyTrigger::ClockObserved {
-                    previous_unix_ms: previous,
-                },
+                PolicyTrigger::ClockObserved { jumped: true },
                 Vec::new(),
             )));
         }
         if now_unix_ms >= self.next_clock_observation_unix_ms {
-            self.record_clock_observation(now_unix_ms)?;
+            self.record_clock_observation(now_unix_ms, now_monotonic_ms)?;
         }
         if now_unix_ms >= self.next_reconciliation_unix_ms {
             self.note_due(policy_cycle_line::RECONCILIATION_WAKE);
@@ -2221,11 +2249,10 @@ impl PolicyDriverSchedule {
             .is_some_and(|next_wake| now_unix_ms >= next_wake)
         {
             self.next_wake_unix_ms = None;
-            let previous_unix_ms = self.last_clock_observation_unix_ms;
-            self.record_clock_observation(now_unix_ms)?;
+            self.record_clock_observation(now_unix_ms, now_monotonic_ms)?;
             self.note_due(policy_cycle_line::NEXT_WAKE);
             return Ok(Some((
-                PolicyTrigger::ClockObserved { previous_unix_ms },
+                PolicyTrigger::ClockObserved { jumped: false },
                 Vec::new(),
             )));
         }
@@ -2238,7 +2265,8 @@ impl PolicyDriverSchedule {
     }
 
     /// #486 ASLEEP-5 (fix round 1): the milliseconds since the schedule started, on the monotonic
-    /// clock, which the lines' cap counts by; it reads no clock that can fail.
+    /// clock, which the lines' cap counts by; it reads no clock that can fail. #503 CYC-1 (ruling
+    /// 3): the monotonic clock a clock observation is judged against, too.
     fn line_clock_ms(&self) -> u64 {
         u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
@@ -2267,8 +2295,13 @@ impl PolicyDriverSchedule {
         Duration::from_millis(next.saturating_sub(now_unix_ms))
     }
 
-    fn record_clock_observation(&mut self, now_unix_ms: u64) -> Result<(), ActingdError> {
+    fn record_clock_observation(
+        &mut self,
+        now_unix_ms: u64,
+        now_monotonic_ms: u64,
+    ) -> Result<(), ActingdError> {
         self.last_clock_observation_unix_ms = now_unix_ms;
+        self.last_clock_observation_monotonic_ms = now_monotonic_ms;
         self.next_clock_observation_unix_ms =
             checked_deadline(now_unix_ms, clock_observation_interval_ms(&self.cadence))?;
         Ok(())
@@ -2326,7 +2359,8 @@ fn run_policy_driver(
         if let Some(line) = schedule.lines.flush(at_ms) {
             write_policy_cycle_line(&line);
         }
-        if let Some((trigger, recomputes)) = schedule.take_due_work(now)? {
+        // #503 CYC-1 (ruling 3): the clocks are judged on both readings.
+        if let Some((trigger, recomputes)) = schedule.take_due_work(now, at_ms)? {
             execute_ready_policy_trigger(
                 host, policy, control, schedule, trigger, recomputes, now,
             )?;
@@ -2360,7 +2394,8 @@ fn handle_policy_driver_trigger(
         return Ok(());
     }
     let now = system_unix_ms()?;
-    if let Some((due, due_recomputes)) = schedule.take_due_work(now)? {
+    let now_monotonic_ms = schedule.line_clock_ms();
+    if let Some((due, due_recomputes)) = schedule.take_due_work(now, now_monotonic_ms)? {
         trigger = coalesce_policy_trigger(due, trigger);
         let mut keyed = recompute_wakes_by_key(recomputes)?;
         merge_recompute_wakes(&mut keyed, due_recomputes)?;
@@ -3247,12 +3282,15 @@ mod tests {
         .expect("first bounded not-ready defer");
         assert!(
             projection_schedule
-                .take_due_work(defer_now)
+                .take_due_work(defer_now, 0)
                 .expect("pre-deadline projection work")
                 .is_none()
         );
         let (first_deferred_trigger, first_deferred_recomputes) = projection_schedule
-            .take_due_work(defer_now + policy.cadence.debounce_ms)
+            .take_due_work(
+                defer_now + policy.cadence.debounce_ms,
+                policy.cadence.debounce_ms,
+            )
             .expect("first projection deadline")
             .expect("first retained exact projection work");
         assert_eq!(first_deferred_trigger, PolicyTrigger::FactsChanged);
@@ -3281,7 +3319,10 @@ mod tests {
         )
         .expect("second bounded not-ready defer");
         let (second_deferred_trigger, second_deferred_recomputes) = projection_schedule
-            .take_due_work(defer_now + (policy.cadence.debounce_ms * 2))
+            .take_due_work(
+                defer_now + (policy.cadence.debounce_ms * 2),
+                policy.cadence.debounce_ms * 2,
+            )
             .expect("second projection deadline")
             .expect("second retained exact projection work");
         assert_eq!(second_deferred_trigger, PolicyTrigger::FactsChanged);
@@ -3444,7 +3485,7 @@ mod tests {
         assert_eq!(schedule.wait_duration(now), Duration::from_millis(1_000));
         assert_eq!(
             schedule
-                .take_due_work(now + 1_000)
+                .take_due_work(now + 1_000, 1_000)
                 .expect("reconciliation deadline"),
             Some((PolicyTrigger::Reconciliation, Vec::new()))
         );
@@ -3457,14 +3498,11 @@ mod tests {
         };
         let cycle = policy_cycle(PolicyRecomputeKind::Full, now);
         let mut schedule = PolicyDriverSchedule::new(cadence, &cycle, now).expect("clock schedule");
+        // #503 CYC-1 (ruling 3): the wall clock set 1 001 ms forward while no monotonic time
+        // passed.
         assert_eq!(
-            schedule.take_due_work(now + 1_001).expect("clock jump"),
-            Some((
-                PolicyTrigger::ClockObserved {
-                    previous_unix_ms: now
-                },
-                Vec::new()
-            ))
+            schedule.take_due_work(now + 1_001, 0).expect("clock jump"),
+            Some((PolicyTrigger::ClockObserved { jumped: true }, Vec::new()))
         );
     }
 
@@ -3507,13 +3545,15 @@ mod tests {
         .expect("a skipped evaluation does not end the driver");
         assert_eq!(
             schedule
-                .take_due_work(now + retry_ms - 1)
+                .take_due_work(now + retry_ms - 1, retry_ms - 1)
                 .expect("before the retry"),
             None,
             "nothing is evaluated before the retry"
         );
         assert_eq!(
-            schedule.take_due_work(now + retry_ms).expect("the retry"),
+            schedule
+                .take_due_work(now + retry_ms, retry_ms)
+                .expect("the retry"),
             Some((PolicyTrigger::FactsChanged, Vec::new())),
             "the kept trigger is evaluated again at the retry"
         );
@@ -3536,7 +3576,7 @@ mod tests {
         )
         .expect("a projection not ready yet does not end the driver");
         assert_eq!(
-            schedule.take_due_work(now + 10).expect("the debounce"),
+            schedule.take_due_work(now + 10, 10).expect("the debounce"),
             Some((PolicyTrigger::FactsChanged, Vec::new()))
         );
     }

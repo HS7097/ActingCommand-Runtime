@@ -3584,6 +3584,60 @@ finishes and is settled there whatever the switch says afterwards.
     before a run" there).
   - A group of one is today's lane, unchanged.
 
+## The policy driver's clock and the line of a cycle
+
+#503 CYC-1 (0.12.84; [v012-register.md](../v012-register.md) §1.526, the coordinator's rulings 1
+to 3). Not behind the switch.
+
+- **A clock jump.** actingd's policy driver looks at the wall clock at least every half
+  `policy_cadence.clock_jump_threshold_ms` (5 000 ms in the defaults, so every 2.5 s while it
+  waits) and keeps, with each look, its own monotonic clock's reading. A look is a clock jump when
+  the wall clock moved since the last look by more than the threshold more or less than the
+  monotonic clock did, or went backwards. The driver then evaluates at once (the trigger
+  `clock_observed`, the line's wake `clock_jump`), and the cadence takes the cycle as a full one
+  (`ClockJump`), past its cool-down and debounce; it reads the driver's word and judges no jump
+  of its own. However long a cycle or a wait took, both clocks moved by it: a long cycle or a late
+  look is no jump. A time the driver waited for (the evaluation's wake or the host's) is a look
+  that is no jump; its cycle goes through the cool-down and debounce as any trigger. Until
+  0.12.84 the wall clock alone was compared with the last look, so a cycle longer than the
+  threshold (5.2 s on production on 11-26) made the next look a jump, and its cycle followed at
+  once, round after round.
+- **The line of a cycle** (the daemon's stdout, one line a second at most; nothing in the ledger,
+  nothing stored; register §1.524 for its first members, which are unchanged). After `total_ms` it
+  names every other stretch of the host's cycle up to the end of its capped record, in the cycle's
+  order, each from the end of the stretch before it:
+
+  | Member | The stretch |
+  |---|---|
+  | `before_gates_ms` | from the cycle's start to its first gate: a reconciliation's pending settlements, the idle action's instances, the scheduler workbench's check and its tables |
+  | `gates_wait_ms` | the waits to take the detection write gate, the procedure manifest, the outcome gate, the policy lock the outcome keys are read under and the fact write gate |
+  | `gates_held_ms` | the work under those gates, `projection_ms` apart: the manifest's copy, the entry blocks, the verdicts, the outcome keys, the clock sample |
+  | `cycle_inputs_ms` | from the gates' release to the evaluation's policy lock: the left-out lists, the run limits, the pauses and fences, the asleep instances, the queues and device groups, the lift view, the configuration in effect |
+  | `policy_lock_wait_ms` | the wait to take the policy lock the evaluation runs under |
+  | `evaluation_setup_ms` | under it, up to `evaluation_ms`: the outcome keys' validation, the blackouts, and the evaluation's own inputs (the remedy table and plan, the fact refresh's readers, the owed reruns, the no-progress observation) |
+  | `no_progress_ms` | from the evaluation's end through the no-progress guards' capture of the new intents |
+  | `detection_preview_ms`, `detection_preview_store_reads` | the detection planning signals' preview, and its reads of the planning-signal store |
+  | `explanation_ms` | from the clock slots' preview to `held_ms`: the eligibility ages, the queue waits, the not-run explanation and the idle plan's inputs |
+  | `after_held_ms` | from the held observation through the evaluation's last bookkeeping and the reads under the policy lock after it |
+  | `capped_record_ms` | the capped record |
+  | `unattributed_ms` | the time up to the end of the capped record that none of the named parts covers |
+
+  To read one: the named parts (with `projection_ms`, `evaluation_ms`, `clock_slots_ms` and
+  `held_ms`) and `unattributed_ms` add up to `total_ms` less `after_capped_ms`. The waits timed
+  apart are those for the five gates of `gates_wait_ms` and for the policy lock of
+  `policy_lock_wait_ms`; a wait for any other lock (the entry blocks' and the registered
+  instances' locks, the store's shared connection) and a slow read of the store show in the member
+  of the stretch they fall in. `unattributed_ms` of more than a few milliseconds names a stretch no
+  member times yet. Members are only added; none is renamed or dropped.
+- **The detection preview asks nothing it knows.** For a signal id the last preview asked about,
+  the preview takes that answer instead of asking the store; the store's planning signals are
+  written by the Runtime alone and never removed, so an answer that names a signal stays true, and
+  one that names none holds until the Runtime records a signal of that id, which updates it. A
+  quota window the store holds no usage for is kept as one with none, as every reader of the
+  window takes it, until the Runtime records usage for it. The preview asks each id once, however
+  many suggestions name it. What it reserves, records and returns, and in what order, is what
+  asking the store each time gives.
+
 ## Evaluation failures
 
 ISO-PE (#419, 0.12.28; production v0.12.26 on 10-29 11:19, where one

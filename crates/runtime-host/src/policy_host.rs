@@ -197,7 +197,13 @@ pub enum PolicyTrigger {
     CatalogChanged,
     Reconciliation,
     Recovery,
-    ClockObserved { previous_unix_ms: u64 },
+    /// The policy driver looked at the clock: a time it waited for came, or (`jumped`) the wall
+    /// clock disagreed with the monotonic clock by more than `clock_jump_threshold_ms`, or went
+    /// backwards. #503 CYC-1 (register §1.526, ruling 3): the driver judges the jump with both
+    /// clocks and the cadence reads its word; the time a cycle took is no jump.
+    ClockObserved {
+        jumped: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,6 +274,130 @@ pub struct PolicyEvaluationMeasurement {
     /// #486 ASLEEP-5: from the start of the host's cycle to the end of its capped record, in
     /// microseconds; the daemon's line counts what follows it up to the cycle's end.
     pub until_capped_micros: u64,
+    /// #503 CYC-1 (register §1.526, ruling 1): every other stretch of that time, so that with the
+    /// projection, the evaluation, the clock slots' preview and the held observation they cover
+    /// it; what none of them covers is the daemon line's `unattributed_ms`.
+    pub stretches: PolicyCycleStretches,
+}
+
+/// #503 CYC-1 (register §1.526, ruling 1; `contracts/scheduling/README.md`, "The policy driver's
+/// clock and the line of a cycle"): the stretches of the host's cycle beside the four the
+/// measurement names itself, in microseconds on the cycle's lap clock (`lap_instant`), each
+/// from the end of the stretch before it, in the cycle's order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PolicyCycleStretches {
+    /// From the cycle's start to its first gate: the idle action's instances, the scheduler
+    /// workbench's check and its tables (a reconciliation's pending settlements first).
+    pub before_gates_micros: u64,
+    /// The waits to take the detection write gate, the procedure manifest, the outcome gate, the
+    /// policy lock the outcome keys are read under and the fact write gate.
+    pub gates_wait_micros: u64,
+    /// The work done under those gates, the projection apart: the manifest's copy, the entry
+    /// blocks, the eligibility and queue-wait verdicts, the outcome keys, the clock sample and the
+    /// dispatches the projection counted.
+    pub gates_held_micros: u64,
+    /// From the gates' release to the wait for the evaluation's policy lock: the left-out lists,
+    /// the run limits and the resource overlay, the pauses and fences, the asleep instances, the
+    /// queues, device groups and switch cooldowns, the lift view and the configuration in effect.
+    pub cycle_inputs_micros: u64,
+    /// The wait to take the policy lock the evaluation runs under.
+    pub policy_lock_wait_micros: u64,
+    /// Under that lock, up to the evaluation proper: the outcome keys' validation, the blackouts,
+    /// the handed runs, and the evaluation's own inputs (the remedy table and plan, the fact
+    /// refresh's readers, the variable plan, the run slots, the owed reruns, the no-progress
+    /// observation).
+    pub evaluation_setup_micros: u64,
+    /// From the evaluation's end through the no-progress guards' capture of the new intents.
+    pub no_progress_micros: u64,
+    /// The detection planning signals' preview.
+    pub detection_preview_micros: u64,
+    /// That preview's reads of the planning-signal store, its quota windows' among them.
+    pub detection_preview_store_reads: u64,
+    /// From the clock slots' preview to the held observation: the eligibility ages, the queue
+    /// waits, the random delays, the not-run explanation and the idle plan's inputs.
+    pub explanation_micros: u64,
+    /// From the held observation through the evaluation's last bookkeeping and, under the policy
+    /// lock still, the reads that follow it.
+    pub after_held_micros: u64,
+    /// The capped record (`keep_capped_episodes`).
+    pub capped_record_micros: u64,
+}
+
+/// #503 CYC-1 (register §1.526, ruling 1): the instant every stretch of a policy cycle is timed
+/// by, the process's monotonic clock; in test builds plus what a test added to this thread's lap
+/// clock ([`advance_lap_clock_for_test`]), so a gate test puts a delay into a stretch without a
+/// sleep and without reading a clock.
+pub(crate) fn lap_instant() -> Instant {
+    Instant::now() + lap_clock_offset()
+}
+
+/// #503 CYC-1: what the lap clock is ahead of the monotonic clock: nothing outside test builds.
+#[cfg(not(test))]
+const fn lap_clock_offset() -> std::time::Duration {
+    std::time::Duration::ZERO
+}
+
+/// #503 CYC-1, tests: what this thread's lap clock is ahead of the monotonic clock.
+#[cfg(test)]
+fn lap_clock_offset() -> std::time::Duration {
+    LAP_CLOCK_OFFSET_FOR_TEST.with(std::cell::Cell::get)
+}
+
+/// #503 CYC-1: the microseconds from `from` to `to` on the lap clock; none when `to` is not
+/// later, a time too long for the type as its largest value.
+pub(crate) fn micros_between(from: Instant, to: Instant) -> u64 {
+    u64::try_from(to.saturating_duration_since(from).as_micros()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// #503 CYC-1, tests: what this thread's lap clock is ahead of the monotonic clock.
+    static LAP_CLOCK_OFFSET_FOR_TEST: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+    /// #503 CYC-1, tests: the delay each stretch of the next cycle on this thread takes, once.
+    static CYCLE_STRETCH_DELAYS_FOR_TEST: std::cell::RefCell<
+        BTreeMap<CycleStretch, std::time::Duration>,
+    > = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// #503 CYC-1, tests: the stretches a test puts a delay into where no older hook stands.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CycleStretch {
+    GatesWait,
+    GatesHeld,
+    PolicyLockWait,
+    EvaluationSetup,
+    NoProgress,
+    DetectionPreview,
+    Explanation,
+    AfterHeld,
+    CappedRecord,
+}
+
+/// #503 CYC-1, tests: moves this thread's lap clock forward by `delay`, as if that much time had
+/// passed where it is called.
+#[cfg(test)]
+pub(crate) fn advance_lap_clock_for_test(delay: std::time::Duration) {
+    LAP_CLOCK_OFFSET_FOR_TEST.with(|offset| offset.set(offset.get() + delay));
+}
+
+/// #503 CYC-1, tests: the next cycle on this thread takes `delay` in `stretch`.
+#[cfg(test)]
+pub(crate) fn plan_cycle_stretch_delay_for_test(stretch: CycleStretch, delay: std::time::Duration) {
+    CYCLE_STRETCH_DELAYS_FOR_TEST.with_borrow_mut(|delays| {
+        delays.insert(stretch, delay);
+    });
+}
+
+/// #503 CYC-1, tests: the delay planned for `stretch`, taken once, on this thread's lap clock.
+#[cfg(test)]
+pub(crate) fn delay_cycle_stretch_for_test(stretch: CycleStretch) {
+    if let Some(delay) =
+        CYCLE_STRETCH_DELAYS_FOR_TEST.with_borrow_mut(|delays| delays.remove(&stretch))
+    {
+        advance_lap_clock_for_test(delay);
+    }
 }
 
 /// #486 ASLEEP-5 (register §1.524, ruling 4): what one evaluation's clock slots' preview cost: its
@@ -282,9 +412,9 @@ pub struct ClockSlotPreviewCost {
 }
 
 /// #486 ASLEEP-5: the microseconds since `started`, for the daemon's line of a cycle; a time too
-/// long for the type reads as its largest value.
+/// long for the type reads as its largest value. #503 CYC-1: on the lap clock.
 pub(crate) fn micros_since(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+    micros_between(started, lap_instant())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -931,12 +1061,11 @@ impl PolicyCadenceState {
         if self.full_recompute_required || trigger == PolicyTrigger::Recovery {
             return self.full(now_unix_ms, PolicyRecomputeReason::StartupOrRecovery);
         }
-        if let PolicyTrigger::ClockObserved { previous_unix_ms } = trigger {
-            let forward_delta = now_unix_ms.saturating_sub(previous_unix_ms);
-            if now_unix_ms < previous_unix_ms || forward_delta > self.config.clock_jump_threshold_ms
-            {
-                return self.full(now_unix_ms, PolicyRecomputeReason::ClockJump);
-            }
+        // #503 CYC-1 (register §1.526, ruling 3): a clock jump is the driver's word, judged on its
+        // wall and monotonic clocks; until 0.12.84 the wall clock alone, so a cycle that took
+        // longer than the threshold made the next observation one.
+        if trigger == (PolicyTrigger::ClockObserved { jumped: true }) {
+            return self.full(now_unix_ms, PolicyRecomputeReason::ClockJump);
         }
         if trigger == PolicyTrigger::CatalogChanged {
             return self.full(now_unix_ms, PolicyRecomputeReason::CatalogActivation);
@@ -1849,6 +1978,13 @@ pub(crate) struct PolicyHost {
     dispatch_order: BTreeMap<u64, String>,
     pinned_dispatches: BTreeMap<String, CatalogGeneration>,
     detection_quota: DetectionQuotaState,
+    /// #503 CYC-1 (register §1.526, ruling 2): the planning-signal store's answer for each signal
+    /// id the last detection preview asked about, and for each signal recorded since. Memory only.
+    /// The store's planning signals are written by this host alone and never removed, so an answer
+    /// that names a signal stays true, and one that names none holds until this host records a
+    /// signal of that id ([`Self::note_planning_signal_recorded`]). Each preview replaces it with
+    /// the answers it used, so it holds one preview's ids at most.
+    detection_signal_answers: BTreeMap<String, Option<PolicyPlanningSignalEventData>>,
     control: PolicyControlState,
     eligibility: EligibilityAges,
     /// Workflow #437 ORD-1c: the queue waits of the members of a device of several, memory only.
@@ -2502,6 +2638,7 @@ impl PolicyHost {
             dispatch_order: BTreeMap::new(),
             pinned_dispatches: BTreeMap::new(),
             detection_quota: DetectionQuotaState::default(),
+            detection_signal_answers: BTreeMap::new(),
             control: PolicyControlState::default(),
             eligibility: EligibilityAges::default(),
             queue_waits: QueueWaits::default(),
@@ -4171,6 +4308,9 @@ impl PolicyHost {
         resources: &EvaluationResources,
         context: PolicyEvaluationContext<'_>,
     ) -> RuntimeHostResult<PolicyCycle> {
+        // #503 CYC-1 (register §1.526, ruling 1): the evaluation's own inputs are timed from here
+        // to its `started`, as part of `evaluation_setup_ms`.
+        let entered = lap_instant();
         let PolicyEvaluationContext {
             procedure_manifest,
             time,
@@ -4401,7 +4541,10 @@ impl PolicyHost {
         // whatever its result.
         let mut capped = std::mem::take(&mut self.capped);
         let deferrals = clock_slot::Deferrals::default();
-        let started = Instant::now();
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::EvaluationSetup);
+        let started = lap_instant();
+        let evaluation_setup_micros = micros_between(entered, started);
         // #428 SCHED-C1e (register §1.299 SC1-12): with the lines each instance's
         // `scheduling.pool_lines` in effect gives its pools as the cycle starts; #428 S168-LB1a:
         // with the keys the projection left out for their record list's rows.
@@ -4827,7 +4970,11 @@ impl PolicyHost {
         let remedy_active = !remedy_plan.overrides.is_empty()
             || !remedy_plan.deferrals.is_empty()
             || !remedy_signals.is_empty();
-        let elapsed_micros = u64::try_from(started.elapsed().as_micros()).map_err(|_| {
+        let evaluated = lap_instant();
+        let elapsed_micros = u64::try_from(
+            evaluated.saturating_duration_since(started).as_micros(),
+        )
+        .map_err(|_| {
             fatal(
                 HostCode::PolicyEvaluationMeasurementOverflow,
                 HostLocation::MeasurePolicyEvaluation,
@@ -4882,28 +5029,9 @@ impl PolicyHost {
                 );
             }
         }
-        // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
-        // arms the pair's guard (`commit_admission`). #455 P2 fix round 1: and the readings given
-        // the pools read from rows of a list, as this evaluation read them.
-        self.no_progress.capture_with_readings(
-            &active.compiled,
-            facts,
-            resources,
-            left_out.pool_readings(),
-            time,
-            &pending_dispatch_intents,
-            no_progress_on,
-        )?;
-        let detection_planning_signals = preview_detection_planning_signals(
-            &self.store,
-            &self.detection_quota,
-            &active.compiled,
-            facts,
-            left_out,
-            &evaluation,
-            &pending_dispatch_intents,
-            time.unix_ms,
-        )?;
+        // #503 CYC-1 (register §1.526, ruling 1): read here, before the no-progress capture and
+        // the detection preview, which change nothing it reads, so that no untimed stretch is left
+        // between the detection preview and the clock slots' preview.
         let in_flight = self
             .seen_dispatches
             .values()
@@ -4920,9 +5048,43 @@ impl PolicyHost {
                 )
             })
             .collect::<BTreeSet<_>>();
+        // SS-4: the basis of each new intent, as this evaluation read its facts; its admission
+        // arms the pair's guard (`commit_admission`). #455 P2 fix round 1: and the readings given
+        // the pools read from rows of a list, as this evaluation read them.
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::NoProgress);
+        self.no_progress.capture_with_readings(
+            &active.compiled,
+            facts,
+            resources,
+            left_out.pool_readings(),
+            time,
+            &pending_dispatch_intents,
+            no_progress_on,
+        )?;
+        // #503 CYC-1 (ruling 1): from the evaluation's end through the capture above, then the
+        // detection preview with its reads of the store (ruling 2: none the host already knows the
+        // answer to, `preview_detection_planning_signals`).
+        let detection_started = lap_instant();
+        let no_progress_micros = micros_between(evaluated, detection_started);
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::DetectionPreview);
+        let (detection_planning_signals, detection_preview_store_reads) =
+            preview_detection_planning_signals(
+                &self.store,
+                &mut self.detection_quota,
+                &mut self.detection_signal_answers,
+                &active.compiled,
+                facts,
+                left_out,
+                &evaluation,
+                &pending_dispatch_intents,
+                time.unix_ms,
+            )?;
         // #486 ASLEEP-5 (register §1.524, ruling 4): the preview timed and counted for the daemon's
         // line of the cycle.
-        let clock_slots_started = Instant::now();
+        let clock_slots_started = lap_instant();
+        let detection_preview_micros = micros_between(detection_started, clock_slots_started);
         let (clock_slot_signals, mut clock_slots) = clock_slot::preview(
             &self.store,
             &active.compiled,
@@ -4935,7 +5097,10 @@ impl PolicyHost {
             deferrals,
             time,
         )?;
-        clock_slots.micros = micros_since(clock_slots_started);
+        let clock_slots_ended = lap_instant();
+        clock_slots.micros = micros_between(clock_slots_started, clock_slots_ended);
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::Explanation);
         self.eligibility
             .stage(&evaluation, time.unix_ms, &in_flight);
         // Workflow #437 ORD-1c: the queue waits of the members of a device of several, staged as
@@ -5181,8 +5346,10 @@ impl PolicyHost {
         // planning-signal projection first. Nothing above reads them, and nothing after does
         // either: the cycle's recorder only appends them.
         let projection = &self.store;
-        // #486 ASLEEP-5 (ruling 4): timed for the daemon's line of the cycle.
-        let held_started = Instant::now();
+        // #486 ASLEEP-5 (ruling 4): timed for the daemon's line of the cycle. #503 CYC-1 (ruling 1):
+        // with what precedes it since the clock slots' preview.
+        let held_started = lap_instant();
+        let explanation_micros = micros_between(clock_slots_ended, held_started);
         let task_held_signals = self.held.observe(
             &self.explanation,
             &evaluation,
@@ -5193,7 +5360,10 @@ impl PolicyHost {
             },
             time.unix_ms,
         )?;
-        let held_observe_micros = micros_since(held_started);
+        let held_ended = lap_instant();
+        let held_observe_micros = micros_between(held_started, held_ended);
+        #[cfg(test)]
+        delay_cycle_stretch_for_test(CycleStretch::AfterHeld);
         if let Some(decisions) = &remedy_decisions {
             self.remedies.retain_keys(decisions);
         }
@@ -5203,6 +5373,8 @@ impl PolicyHost {
         // this evaluation could not read, each reported once (a decision of no instance).
         evaluation.decisions.extend(pack_schedule.into_notes());
         let requested_recompute = directive.kind;
+        // #503 CYC-1 (ruling 1): the host adds what follows under the policy lock.
+        let after_held_micros = micros_since(held_ended);
         Ok(PolicyCycle {
             directive,
             evaluation: Some(evaluation),
@@ -5223,6 +5395,17 @@ impl PolicyHost {
                 clock_slots,
                 held_observe_micros,
                 until_capped_micros: 0,
+                // #503 CYC-1: the stretches inside the evaluation; the host sets the others and
+                // adds its own parts of `evaluation_setup` and `after_held`.
+                stretches: PolicyCycleStretches {
+                    evaluation_setup_micros,
+                    no_progress_micros,
+                    detection_preview_micros,
+                    detection_preview_store_reads,
+                    explanation_micros,
+                    after_held_micros,
+                    ..PolicyCycleStretches::default()
+                },
             }),
             // The yield point adds the transitions (`evaluate_policy_cycle_authoritative`).
             fact_refresh_transitions: Vec::new(),
@@ -7085,6 +7268,16 @@ impl PolicyHost {
             .map(|entry| entry.map(|(_, data)| data))
     }
 
+    /// #503 CYC-1 (register §1.526, ruling 2): `signal` is in the planning-signal store, recorded
+    /// now or found there by the recorder; an answer of the last detection preview that named no
+    /// signal of its id names it now, so the next preview reads it as recorded without asking the
+    /// store. The one thing that ends an answer naming no signal.
+    pub(crate) fn note_planning_signal_recorded(&mut self, signal: &PolicyPlanningSignalEventData) {
+        if let Some(answer) = self.detection_signal_answers.get_mut(&signal.signal_id) {
+            *answer = Some(signal.clone());
+        }
+    }
+
     fn stage_planning_signal(
         &self,
         staged_quota: &mut DetectionQuotaState,
@@ -7774,21 +7967,50 @@ fn apply_dispatch_event(
 }
 
 impl DetectionQuotaState {
+    /// The usage of the window, from the cache, else from the store, counted in `store_reads`,
+    /// and cached either way. #503 CYC-1 (register §1.526, ruling 2): a window the store holds no
+    /// usage for is cached with none (what every reader of the cache takes a window it does not
+    /// hold for), so it is not asked of the store again; this host's next record of usage for it
+    /// replaces that (`commit_signal`, `stage_planning_signal`), and no one else records usage.
     fn ensure_loaded(
         &mut self,
         store: &CatalogStore,
         instance_id: &str,
         window_id: &str,
+        store_reads: &mut u64,
+    ) -> RuntimeHostResult<DetectionQuotaUsage> {
+        let key = (instance_id.to_owned(), window_id.to_owned());
+        if let Some(usage) = self.windows.get(&key).copied() {
+            self.touch(&key);
+            return Ok(usage);
+        }
+        *store_reads = store_reads.saturating_add(1);
+        let usage = store
+            .load_detection_quota(instance_id, window_id)?
+            .map(|(_, usage)| usage)
+            .unwrap_or_default();
+        self.cache_usage(key, usage)?;
+        Ok(usage)
+    }
+
+    /// #503 CYC-1: the window in this staged copy of `state`: as it holds it (a reservation staged
+    /// earlier in the same preview), else as `state` holds it or reads it
+    /// ([`Self::ensure_loaded`]), so what the store answered stays known after the copy is dropped.
+    fn ensure_staged(
+        &mut self,
+        state: &mut Self,
+        store: &CatalogStore,
+        instance_id: &str,
+        window_id: &str,
+        store_reads: &mut u64,
     ) -> RuntimeHostResult<()> {
         let key = (instance_id.to_owned(), window_id.to_owned());
         if self.windows.contains_key(&key) {
             self.touch(&key);
             return Ok(());
         }
-        if let Some((_, usage)) = store.load_detection_quota(instance_id, window_id)? {
-            self.cache_usage(key, usage)?;
-        }
-        Ok(())
+        let usage = state.ensure_loaded(store, instance_id, window_id, store_reads)?;
+        self.cache_usage(key, usage)
     }
 
     fn preview(
@@ -7967,17 +8189,25 @@ impl DetectionQuotaState {
 /// budget. #455 P2 fix round 1 (register §1.505): none for a key `left_out` covers for the
 /// instance (a list a pool's reading is computed from, or a record list left out for its rows):
 /// no probe reads it, so no allowance is taken and nothing is written for it.
+///
+/// #503 CYC-1 (register §1.526, ruling 2): with the number of its reads of the store. It asks the
+/// store nothing the host already knows the answer to: a signal id this preview or the last one
+/// asked about (`known`, replaced at the end with this preview's answers; an answer that named no
+/// signal ends when the host records one of that id, `PolicyHost::note_planning_signal_recorded`),
+/// and a quota window `state` holds, one with no usage among them (`ensure_loaded`). The signals it
+/// returns, and their order, are what asking the store each time gives.
 #[allow(clippy::too_many_arguments)]
 fn preview_detection_planning_signals(
     store: &CatalogStore,
-    state: &DetectionQuotaState,
+    state: &mut DetectionQuotaState,
+    known: &mut BTreeMap<String, Option<PolicyPlanningSignalEventData>>,
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     left_out: &actingcommand_policy::LeftOutFacts,
     evaluation: &PolicyEvaluation,
     pending_dispatch_intents: &[DispatchIntent],
     now_unix_ms: u64,
-) -> RuntimeHostResult<Vec<PolicyPlanningSignalEventData>> {
+) -> RuntimeHostResult<(Vec<PolicyPlanningSignalEventData>, u64)> {
     if now_unix_ms == 0 {
         return Err(fatal(
             HostCode::PolicyDetectionTimeInvalid,
@@ -7991,6 +8221,8 @@ fn preview_detection_planning_signals(
     let mut staged = state.clone();
     let mut emitted_ids = BTreeSet::new();
     let mut signals = Vec::new();
+    let mut answers = BTreeMap::new();
+    let mut store_reads = 0_u64;
     for decision in &evaluation.decisions {
         let Some(instance_id) = decision.instance_id.as_deref() else {
             continue;
@@ -8031,7 +8263,14 @@ fn preview_detection_planning_signals(
                     &suggestion.reason,
                 ],
             );
-            if store.load_planning_signal(&reservation_id)?.is_some()
+            if detection_signal_answer(
+                store,
+                known,
+                &mut answers,
+                &mut store_reads,
+                &reservation_id,
+            )?
+            .is_some()
                 || emitted_ids.contains(&reservation_id)
             {
                 continue;
@@ -8046,7 +8285,7 @@ fn preview_detection_planning_signals(
                 }
                 Err(error) => return Err(error),
             };
-            staged.ensure_loaded(store, instance_id, &window_id)?;
+            staged.ensure_staged(state, store, instance_id, &window_id, &mut store_reads)?;
             let (kind, budget) =
                 match staged.preview(profile, catalog.catalog_hash(), instance_id, now_unix_ms) {
                     Ok(value) => value,
@@ -8068,9 +8307,8 @@ fn preview_detection_planning_signals(
             } else {
                 reservation_id
             };
-            let existing = store
-                .load_planning_signal(&signal_id)?
-                .map(|(_, data)| data);
+            let existing =
+                detection_signal_answer(store, known, &mut answers, &mut store_reads, &signal_id)?;
             if kind == PolicyPlanningSignalKind::DetectionQuotaExhausted
                 && let Some(existing) = existing.as_ref()
             {
@@ -8095,7 +8333,32 @@ fn preview_detection_planning_signals(
             signals.push(signal);
         }
     }
-    Ok(signals)
+    *known = answers;
+    Ok((signals, store_reads))
+}
+
+/// #503 CYC-1 (register §1.526, ruling 2): the planning-signal store's answer for `signal_id`, as
+/// this preview had it (`answers`), else as the host knew it (`known`), else as the store gives it,
+/// counted in `store_reads`; kept in `answers` either way.
+fn detection_signal_answer(
+    store: &CatalogStore,
+    known: &BTreeMap<String, Option<PolicyPlanningSignalEventData>>,
+    answers: &mut BTreeMap<String, Option<PolicyPlanningSignalEventData>>,
+    store_reads: &mut u64,
+    signal_id: &str,
+) -> RuntimeHostResult<Option<PolicyPlanningSignalEventData>> {
+    if let Some(answer) = answers.get(signal_id) {
+        return Ok(answer.clone());
+    }
+    let answer = match known.get(signal_id) {
+        Some(answer) => answer.clone(),
+        None => {
+            *store_reads = store_reads.saturating_add(1);
+            store.load_planning_signal(signal_id)?.map(|(_, data)| data)
+        }
+    };
+    answers.insert(signal_id.to_owned(), answer.clone());
+    Ok(answer)
 }
 
 /// The outcome of a detection planning signal (Workflow #378 A2-P): `planning_fact_unknown`

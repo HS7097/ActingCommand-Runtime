@@ -18,9 +18,17 @@
 //! next line (that of a later cycle, or the driver's next look at the clock at least a second after
 //! the last line) stands for every cycle kept, with their number (`cycles`) and their summed times
 //! and counts. The cycles still kept when the driver ends are written then.
+//!
+//! #503 CYC-1 (register §1.526, ruling 1): after the whole cycle's time, every other stretch of
+//! the host's cycle up to its capped record, in the cycle's order (the waits for its gates and for
+//! the evaluation's policy lock apart from the work done under them; the detection preview with
+//! its reads of the store), and `unattributed_ms`, the time up to the capped record that none of
+//! the named stretches covers. Members are only added; none is renamed or dropped.
 
 use actingcommand_contract::EventType;
-use actingcommand_runtime_host::{PolicyEvaluationMeasurement, PolicyTrigger};
+use actingcommand_runtime_host::{
+    PolicyCycleStretches, PolicyEvaluationMeasurement, PolicyTrigger,
+};
 use std::time::Duration;
 
 /// The least time between two lines.
@@ -90,6 +98,10 @@ struct CycleSums {
     held_micros: u64,
     after_capped_micros: u64,
     total_micros: u64,
+    /// #503 CYC-1: the stretches the host's measurement names beside the ones above, and what
+    /// none of them covers up to the capped record.
+    stretches: PolicyCycleStretches,
+    unattributed_micros: u64,
 }
 
 impl CycleSums {
@@ -113,11 +125,15 @@ impl CycleSums {
                 .map(|(cause, count)| format!("{cause}:{count}"))
                 .collect(),
         );
+        let stretches = &self.stretches;
         format!(
             "actingd policy_cycle wakes={wakes} seq={} first_seq={} cycles={} \
              triggers={triggers} projection_ms={} evaluation_ms={} clock_slots_ms={} \
              clock_slot_pairs={} clock_slot_live_calls={} clock_slot_store_reads={} held_ms={} \
-             after_capped_ms={} total_ms={}",
+             after_capped_ms={} total_ms={} before_gates_ms={} gates_wait_ms={} \
+             gates_held_ms={} cycle_inputs_ms={} policy_lock_wait_ms={} evaluation_setup_ms={} \
+             no_progress_ms={} detection_preview_ms={} detection_preview_store_reads={} \
+             explanation_ms={} after_held_ms={} capped_record_ms={} unattributed_ms={}",
             self.last_seq,
             self.first_seq,
             self.cycles,
@@ -130,8 +146,46 @@ impl CycleSums {
             milliseconds(self.held_micros),
             milliseconds(self.after_capped_micros),
             milliseconds(self.total_micros),
+            milliseconds(stretches.before_gates_micros),
+            milliseconds(stretches.gates_wait_micros),
+            milliseconds(stretches.gates_held_micros),
+            milliseconds(stretches.cycle_inputs_micros),
+            milliseconds(stretches.policy_lock_wait_micros),
+            milliseconds(stretches.evaluation_setup_micros),
+            milliseconds(stretches.no_progress_micros),
+            milliseconds(stretches.detection_preview_micros),
+            stretches.detection_preview_store_reads,
+            milliseconds(stretches.explanation_micros),
+            milliseconds(stretches.after_held_micros),
+            milliseconds(stretches.capped_record_micros),
+            milliseconds(self.unattributed_micros),
         )
     }
+}
+
+/// #503 CYC-1 (register §1.526, ruling 1): the time from the host's cycle's start to the end of
+/// its capped record that none of the stretches the measurement names covers.
+fn unattributed_micros(measurement: &PolicyEvaluationMeasurement) -> u64 {
+    let stretches = &measurement.stretches;
+    [
+        stretches.before_gates_micros,
+        stretches.gates_wait_micros,
+        stretches.gates_held_micros,
+        measurement.projection_micros,
+        stretches.cycle_inputs_micros,
+        stretches.policy_lock_wait_micros,
+        stretches.evaluation_setup_micros,
+        measurement.elapsed_micros,
+        stretches.no_progress_micros,
+        stretches.detection_preview_micros,
+        measurement.clock_slots.micros,
+        stretches.explanation_micros,
+        measurement.held_observe_micros,
+        stretches.after_held_micros,
+        stretches.capped_record_micros,
+    ]
+    .into_iter()
+    .fold(measurement.until_capped_micros, u64::saturating_sub)
 }
 
 /// The driver's lines of its evaluated cycles: what woke it since the last evaluated cycle, and
@@ -186,8 +240,52 @@ impl PolicyCycleLines {
                 total_micros.saturating_sub(measurement.until_capped_micros),
             ),
             (&mut sums.total_micros, total_micros),
+            (
+                &mut sums.unattributed_micros,
+                unattributed_micros(measurement),
+            ),
         ] {
             *sum = sum.saturating_add(value);
+        }
+        // #503 CYC-1: the named stretches, summed as the members above.
+        let stretches = measurement.stretches;
+        let summed = &mut sums.stretches;
+        for (field, value) in [
+            (
+                &mut summed.before_gates_micros,
+                stretches.before_gates_micros,
+            ),
+            (&mut summed.gates_wait_micros, stretches.gates_wait_micros),
+            (&mut summed.gates_held_micros, stretches.gates_held_micros),
+            (
+                &mut summed.cycle_inputs_micros,
+                stretches.cycle_inputs_micros,
+            ),
+            (
+                &mut summed.policy_lock_wait_micros,
+                stretches.policy_lock_wait_micros,
+            ),
+            (
+                &mut summed.evaluation_setup_micros,
+                stretches.evaluation_setup_micros,
+            ),
+            (&mut summed.no_progress_micros, stretches.no_progress_micros),
+            (
+                &mut summed.detection_preview_micros,
+                stretches.detection_preview_micros,
+            ),
+            (
+                &mut summed.detection_preview_store_reads,
+                stretches.detection_preview_store_reads,
+            ),
+            (&mut summed.explanation_micros, stretches.explanation_micros),
+            (&mut summed.after_held_micros, stretches.after_held_micros),
+            (
+                &mut summed.capped_record_micros,
+                stretches.capped_record_micros,
+            ),
+        ] {
+            *field = field.saturating_add(value);
         }
         self.flush(now_ms)
     }

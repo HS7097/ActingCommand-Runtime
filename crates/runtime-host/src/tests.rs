@@ -271,6 +271,9 @@ mod gate_500_sv2;
 // opens a settling window and is answered `runtime_shutdown_settling` with `retry_after_ms`;
 // every other refusal is answered at once and opens none.
 mod gate_503_sd1;
+// #503 CYC-1 (0.12.84; register §1.526): every stretch of a policy cycle is timed, and the
+// detection preview asks the store nothing the host already knows the answer to.
+mod gate_503_cyc1;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.

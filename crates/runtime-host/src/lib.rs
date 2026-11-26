@@ -136,7 +136,7 @@ pub use planning::MaintenanceLedgerQuery;
 pub use policy_control::PolicyExecutionInput;
 pub use policy_host::{
     CatalogGeneration, CatalogPreview, CatalogPreviewPhases, CatalogPreviewRequest,
-    ClockSlotPreviewCost, PolicyAdmissionContext, PolicyCadence, PolicyCycle,
+    ClockSlotPreviewCost, PolicyAdmissionContext, PolicyCadence, PolicyCycle, PolicyCycleStretches,
     PolicyDispatchAdmission, PolicyEvaluationCost, PolicyEvaluationExecution,
     PolicyEvaluationMeasurement, PolicyRecomputeDirective, PolicyRecomputeKind,
     PolicyRecomputeReason, PolicyRunContext, PolicyTrigger, preview_policy_catalog_transition,
