@@ -3939,6 +3939,17 @@ impl RuntimeHost {
         lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?.remedy_window_ends_for_test()
     }
 
+    /// #503 CYC-3, test only: each run of the remedy journal by its decision, with the window end
+    /// the journal gives it and the one the run's catalog generation gives now.
+    #[cfg(test)]
+    pub(crate) fn remedy_journal_window_ends_for_test(
+        &self,
+    ) -> RuntimeHostResult<Vec<(String, u64, u64)>> {
+        let shared = self.shared_ref(HostLocation::EvaluatePolicyCycle)?;
+        lock(shared.policy()?, HostLocation::EvaluatePolicyCycle)?
+            .remedy_journal_window_ends_for_test()
+    }
+
     /// #503 CYC-2, test only: raises the policy driver's wake for a committed record of
     /// `event_type`, as every append point of the host does after its commit.
     #[cfg(test)]

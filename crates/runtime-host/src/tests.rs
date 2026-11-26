@@ -278,6 +278,10 @@ mod gate_503_cyc1;
 // journal reads a run's generation once, and a record of the performance thread that changes no
 // input of the evaluation wakes no cycle.
 mod gate_503_cyc2;
+// #503 CYC-3 (0.12.86; register §1.529): the admission record carries the end of the activity
+// window its run was admitted in, so the remedy journal reads no catalog generation for it after a
+// start; a run admitted before is read once, as in CYC-2.
+mod gate_503_cyc3;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.

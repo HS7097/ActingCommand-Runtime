@@ -21,6 +21,7 @@ use super::gate_411_b15h::{
     Fixture, MAIN_TASK, RESULT, catalog, facts, main_pack, next_eligible, sink_pack,
 };
 use super::*;
+use crate::policy_control::admit_without_window_end_for_test;
 use crate::policy_host::{
     CycleStretch, plan_cycle_stretch_delay_for_test, take_cycle_stretch_delay_for_test,
 };
@@ -32,17 +33,20 @@ use serde_json::{Value, json};
 use std::sync::Mutex;
 use std::time::Duration;
 
+// #503 CYC-3 (register §1.529): the delay, the fixture, its cycle and its later generations are
+// also that slice's gate's (`gate_503_cyc3.rs`), so they are visible to the test modules.
+
 /// The delay put into a call or a wait: longer than any call of these cycles takes by itself.
-const DELAY: Duration = Duration::from_secs(600);
-const DELAY_MICROS: u64 = 600_000_000;
+pub(super) const DELAY: Duration = Duration::from_secs(600);
+pub(super) const DELAY_MICROS: u64 = 600_000_000;
 
 /// The fixture with `main` declaring the remedy of `need_a` by `cap_x`, and `sink` providing it.
-fn remedy_fixture() -> Fixture {
+pub(super) fn remedy_fixture() -> Fixture {
     Fixture::new(&main_pack(&["cap_x"], Some(&["cap_x"])), &sink_pack())
 }
 
 /// One evaluated cycle at `at` on the fixture's facts, the Runtime clock moved there first.
-fn remedy_cycle(fixture: &Fixture, at: u64, seed: u64) -> PolicyCycle {
+pub(super) fn remedy_cycle(fixture: &Fixture, at: u64, seed: u64) -> PolicyCycle {
     advance_manual_clock_to(&fixture.clock, at);
     let cycle = fixture
         .host
@@ -62,7 +66,7 @@ fn remedy_cycle(fixture: &Fixture, at: u64, seed: u64) -> PolicyCycle {
 }
 
 /// The fixture's catalog as its version `version`: another generation of the same tasks.
-fn catalog_version(version: u64) -> CatalogSources {
+pub(super) fn catalog_version(version: u64) -> CatalogSources {
     let mut sources = catalog();
     for source in [
         &mut sources.tasks,
@@ -81,7 +85,11 @@ fn catalog_version(version: u64) -> CatalogSources {
 #[test]
 fn cyc2_h1_a_delay_put_into_a_setup_call_and_into_the_memo_wait_shows_under_its_name() {
     let fixture = remedy_fixture();
+    // #503 CYC-3 (register §1.529): the run is admitted as 0.12.85 admitted every run, with no
+    // window end in its record, so the journal still reads that end from the run's generation.
+    admit_without_window_end_for_test(true);
     let (_, _, ran) = fixture.evaluate_and_run(POLICY_NOW_UNIX_MS, 7, MAIN_TASK, RESULT);
+    admit_without_window_end_for_test(false);
 
     // The next cycle's remedy journal reads the run's window end from its generation, through the
     // memo's lock: a delay in the run slots' call and one in that wait.
@@ -149,7 +157,12 @@ fn cyc2_h2_the_remedy_journal_reads_a_runs_generation_once_and_no_cycle_reads_it
     // (Review of #1899: the first build ran a second run under the second generation, whose
     // admission needs an approval of that catalog; the fixture's one approval id names the first,
     // and the test stopped there on `approval_target_identity_conflict`.)
+    // #503 CYC-3 (register §1.529): the run is admitted as 0.12.85 admitted every run, with no
+    // window end in its record; one whose record carries it reads no generation at all
+    // (`gate_503_cyc3.rs`, t2).
+    admit_without_window_end_for_test(true);
     let (_, _, first) = fixture.evaluate_and_run(POLICY_NOW_UNIX_MS, 7, MAIN_TASK, RESULT);
+    admit_without_window_end_for_test(false);
     for version in [2, 3] {
         fixture
             .host

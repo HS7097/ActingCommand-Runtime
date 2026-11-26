@@ -10,7 +10,8 @@
 // Rp and I, beside the builds the plan meets: 0.12.73 and 0.12.74 declare `runtime-client`
 // [3, 12], 0.12.72 and older [3, 11]; every one of them `ledger` [3, 9] from 0.12.71 on,
 // `runtime-outcomes` [1, 1] and `install-control` [0, 0], as this build (no placed pack here, so
-// no `package` edge):
+// no `package` edge; #503 CYC-3, 0.12.86: this build's `ledger` is [3, 10] now, and the builds
+// below are given this build's own declaration, so the edges these cases compute are as before):
 // - the update from 0.12.74 passes every edge without `--accept-ledger-one-way`, whether the
 //   installer is the live build's (I [3, 12]) or this build's (I [12, 12]);
 // - the way back to 0.12.74 and to 0.12.73, by this build's installer, passes every edge too;

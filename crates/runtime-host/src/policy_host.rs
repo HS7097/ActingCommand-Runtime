@@ -3314,6 +3314,7 @@ pub(crate) fn pair_projection_for_test(
                 profile_id: "activity-synthetic".to_owned(),
                 local_day: 1,
                 window_id: "window-synthetic".to_owned(),
+                window_until_unix_ms: None,
                 admitted_at_unix_ms,
                 seed: 1,
                 interval_ms: 1_000,
@@ -5911,21 +5912,26 @@ impl PolicyHost {
     /// at every evaluation, for every run the journal holds; a generation the catalog store's memo
     /// did not hold (the memo keeps the active one and `standard_packs.cached_generations` more) was
     /// read from its files and compiled again each time. It is read once per run now: the run's
-    /// generation and admission never change, so neither does the end.
+    /// generation and admission never change, so neither does the end. #503 CYC-3 (register
+    /// §1.529, ruling 2): the end the run's admission record carries, when it carries one (every
+    /// admission since 0.12.86), with nothing read and nothing kept; only a run admitted before
+    /// has it read from its generation once and kept.
     fn remedy_window_end(
         &self,
         decision_id: &str,
         dispatch: &SeenDispatch,
         admission: &PolicyAdmissionRecord,
     ) -> RuntimeHostResult<u64> {
-        let known = self.lock_remedy_window_ends()?.get(decision_id).copied();
-        if let Some(end) = known {
-            return Ok(end);
-        }
-        let end = admitted_window_end(&self.store, dispatch, admission)?;
-        self.lock_remedy_window_ends()?
-            .insert(decision_id.to_owned(), end);
-        Ok(end)
+        recorded_window_end_or(admission, || {
+            let known = self.lock_remedy_window_ends()?.get(decision_id).copied();
+            if let Some(end) = known {
+                return Ok(end);
+            }
+            let end = admitted_window_end(&self.store, dispatch, admission)?;
+            self.lock_remedy_window_ends()?
+                .insert(decision_id.to_owned(), end);
+            Ok(end)
+        })
     }
 
     /// #503 CYC-2: the remedy journal's window ends, under their own lock (taken under the policy
@@ -5964,6 +5970,40 @@ impl PolicyHost {
                 Ok((decision_id, end, read))
             })
             .collect()
+    }
+
+    /// #503 CYC-3, tests: each run of the remedy journal by its decision, in the journal's order,
+    /// with the end of the activity window the journal gives it and the end the run's own catalog
+    /// generation gives now (read from the generation's files when the memo does not hold it).
+    #[cfg(test)]
+    pub(crate) fn remedy_journal_window_ends_for_test(
+        &self,
+    ) -> RuntimeHostResult<Vec<(String, u64, u64)>> {
+        let Some(table) = self.remedies.table() else {
+            return Ok(Vec::new());
+        };
+        let journals = self.remedy_journal(table)?;
+        let mut ends = Vec::new();
+        for run in journals.iter().flat_map(|journal| journal.runs.iter()) {
+            let dispatch = self.seen_dispatches.get(&run.decision_id).ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDispatchUnknown,
+                    HostLocation::EvaluatePolicyCycle,
+                )
+            })?;
+            let admission = dispatch.admission.as_ref().ok_or_else(|| {
+                fatal(
+                    HostCode::PolicyDispatchAdmissionMissing,
+                    HostLocation::EvaluatePolicyCycle,
+                )
+            })?;
+            ends.push((
+                run.decision_id.clone(),
+                run.activity_window_end_unix_ms,
+                admitted_window_end(&self.store, dispatch, admission)?,
+            ));
+        }
+        Ok(ends)
     }
 
     /// #503 CYC-2, tests: how many catalog generations the catalog store's memo keeps.
@@ -7333,7 +7373,8 @@ impl PolicyHost {
     /// committed in (`PolicyControlState::admission_window_end`, the end a condition of its run
     /// expires at), the window of its pair's count of failures at the entry (fix round 4, rulings 2
     /// and 3); `None` for a dispatch that is unknown, not admitted or already has its record, as
-    /// [`Self::entry_condition`].
+    /// [`Self::entry_condition`]. #503 CYC-3 (register §1.529, ruling 2): the end the admission
+    /// record carries, when it carries one, with no generation read.
     pub(crate) fn dispatch_window_end(&self, decision_id: &str) -> RuntimeHostResult<Option<u64>> {
         let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
             return Ok(None);
@@ -7345,16 +7386,18 @@ impl PolicyHost {
         ) else {
             return Ok(None);
         };
-        let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
-        let intent = control_intent(
-            &dispatch.data,
-            dispatch.expected_duration_ms,
-            &catalog.compiled,
-            admission,
-        )?;
-        self.control
-            .admission_window_end(&catalog.compiled, &intent, admission)
-            .map(Some)
+        recorded_window_end_or(admission, || {
+            let catalog = self.store.load_generation(&dispatch.data.catalog_hash)?;
+            let intent = control_intent(
+                &dispatch.data,
+                dispatch.expected_duration_ms,
+                &catalog.compiled,
+                admission,
+            )?;
+            self.control
+                .admission_window_end(&catalog.compiled, &intent, admission)
+        })
+        .map(Some)
     }
 
     /// Workflow #490 ENTRY-A fix round 4 (ruling 3): the `on_failure.escalation_threshold` of
@@ -7920,10 +7963,27 @@ pub(crate) fn remedy_settlement(
     }
 }
 
+/// #503 CYC-3 (register §1.529, ruling 2): the end of the activity window a dispatch was admitted
+/// in, for each reader that asks for it: the end its admission record `admission` carries (every
+/// admission since 0.12.86, ledger revision 10), else what `read` gives from the dispatch's own
+/// catalog generation, for a record written before. The two are one value: the admission resolved
+/// the window it records under that generation (the active one, which an admission must find its
+/// intent's), at its own time, by the profile it names.
+fn recorded_window_end_or(
+    admission: &PolicyAdmissionRecord,
+    read: impl FnOnce() -> RuntimeHostResult<u64>,
+) -> RuntimeHostResult<u64> {
+    match admission.activity.window_until_unix_ms {
+        Some(end) => Ok(end),
+        None => read(),
+    }
+}
+
 /// Workflow #411 B15 R4 (model-b15 §7.8): the end of the activity window `dispatch` was admitted
 /// in, read from its own catalog generation by the activity profile `admission` names. #503 CYC-2
 /// (register §1.528, ruling 2): read once per run of the remedy journal
-/// ([`PolicyHost::remedy_window_end`]).
+/// ([`PolicyHost::remedy_window_end`]); #503 CYC-3 (register §1.529): only for a run whose
+/// admission record carries no window end ([`recorded_window_end_or`]).
 fn admitted_window_end(
     store: &CatalogStore,
     dispatch: &SeenDispatch,

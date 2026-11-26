@@ -2922,6 +2922,14 @@ pub struct PolicyActivitySample {
     pub profile_id: String,
     pub local_day: i64,
     pub window_id: String,
+    /// #503 CYC-3 (register §1.529, ledger revision 10): the end of the activity window
+    /// `window_id` names, the window the run was admitted in, in Unix milliseconds, from the one
+    /// resolution of the window the admission makes; later than `admitted_at_unix_ms`. Every
+    /// admission since 0.12.86 records it; a record written before carries none (it serializes as
+    /// nothing at all), and its run's window end is read from its own catalog generation. The
+    /// public projection carries the admission without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_until_unix_ms: Option<u64>,
     pub admitted_at_unix_ms: u64,
     pub seed: u64,
     pub interval_ms: u64,
@@ -3024,6 +3032,18 @@ pub const POLICY_RUNTIME_BUDGET_EXCEEDED: crate::outcome::Code =
 pub struct PolicyAdmissionRecord {
     pub activity: PolicyActivitySample,
     pub budget: PolicyBudgetReceipt,
+}
+
+impl PolicyAdmissionRecord {
+    /// #503 CYC-3 (register §1.529): the admission as the public projection carries it, without
+    /// the window end, so that projection is byte for byte the one of a record written before
+    /// ledger revision 10 (as Workflow #463 CH-1 keeps its admission members out of it); the full
+    /// record carries the window end.
+    fn public_summary(&self) -> Self {
+        let mut admission = self.clone();
+        admission.activity.window_until_unix_ms = None;
+        admission
+    }
 }
 
 /// A failed run as the policy records it (Workflow #378 A2-P). `outcome` is the run's failure:
@@ -8247,10 +8267,16 @@ fn validate_policy_dispatch_fields(
 fn validate_policy_admission(value: &PolicyAdmissionRecord) -> Result<(), SanitizationError> {
     validate_policy_token(&value.activity.profile_id, "activity_profile_id")?;
     validate_policy_token(&value.activity.window_id, "activity_window_id")?;
+    // #503 CYC-3 (register §1.529, ruling 4): a window end the sample carries is later than the
+    // admission, which its window holds; a sample without one is checked as before.
     if value.activity.admitted_at_unix_ms == 0
         || value.activity.next_eligible_unix_ms < value.activity.admitted_at_unix_ms
         || value.activity.next_eligible_unix_ms - value.activity.admitted_at_unix_ms
             != value.activity.interval_ms
+        || value
+            .activity
+            .window_until_unix_ms
+            .is_some_and(|until| until <= value.activity.admitted_at_unix_ms)
     {
         return Err(SanitizationError::new(
             SanitizationCode::InvalidPolicyActivitySample,
@@ -13644,7 +13670,10 @@ impl EventPayload {
                     .clone()
                     .map(String::into_boxed_str)
             }),
-            policy_admission: policy_dispatch.and_then(|value| value.admission.clone()),
+            // #503 CYC-3 (register §1.529): the admission without its window end.
+            policy_admission: policy_dispatch
+                .and_then(|value| value.admission.as_deref())
+                .map(|recorded| Box::new(recorded.public_summary())),
             policy_execution_outcome: policy_execution
                 .map(|value| Box::new(value.policy_result.codes_only())),
             policy_signal_id: policy_signal.map(|value| value.signal_id.clone().into_boxed_str()),

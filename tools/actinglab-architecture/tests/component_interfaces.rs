@@ -122,7 +122,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   are still read, so [3, 8], one way. Workflow #463 CH-1 (0.12.71, register §1.455) raises
 ///   `max` to 9: the optional members `content_hash` and `variables` of the run's admission record
 ///   (`task.requested`, `PackageAdmitted`); revision-3 to revision-8 ledgers are still read, so
-///   [3, 9], one way.
+///   [3, 9], one way. #503 CYC-3 (0.12.86, register §1.529) raises `max` to 10: the optional
+///   member `window_until_unix_ms` of the policy admission record's activity sample
+///   (`PolicyActivitySample`, in `policy.dispatch_admitted` and `policy.dispatch_completed`);
+///   revision-3 to revision-9 ledgers are still read, so [3, 10], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -236,7 +239,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 35]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 9]),
+    ("ledger", [3, 10]),
     ("package", [3, 25]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),

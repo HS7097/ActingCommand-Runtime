@@ -122,6 +122,7 @@ pub(super) fn admission() -> PolicyAdmissionRecord {
             profile_id: "activity:fixture-a".to_owned(),
             local_day: 20_000,
             window_id: "activity:fixture-a:20000:0".to_owned(),
+            window_until_unix_ms: None,
             admitted_at_unix_ms: AT_MS,
             seed: 7,
             interval_ms: 60_000,
