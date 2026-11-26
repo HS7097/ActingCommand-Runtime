@@ -891,8 +891,9 @@ fn gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_l
         )
         .expect("the driver keeps the deferred trigger");
         clock.advance_to(due);
+        // #503 CYC-1: the driver's monotonic clock moved with the Runtime clock since its start.
         let (due_trigger, due_recomputes) = schedule
-            .take_due_work(due)
+            .take_due_work(due, due.saturating_sub(started))
             .expect("the driver's due work")
             .expect("the deferred trigger is due");
         assert_eq!(due_trigger, PolicyTrigger::FactsChanged);

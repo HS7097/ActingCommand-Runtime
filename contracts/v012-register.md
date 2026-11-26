@@ -49135,6 +49135,131 @@ package uses only what every Runtime that runs a select step reads, so it needs 
 `package fix-select` comes with the Lab of 0.12.83. In the release notes' language:
 录制里的选择步骤现在可以写 `wanted.fixed`（要找的那一项，或按先后顺序的几项），给只是找包自己那条路的步骤用：这样生成的包不再为这一步声明变量，目标页上也就不会出现它。原来按变量生成的包不用重录、也不碰设备：新命令 `actinglab package fix-select --package <内容目录> --variable <变量名>`（MCP 工具 `ac_package_fix_select`）只凭包里的文件就把这一步改成固定形式，默认固定成变量原来的默认值，也可以用 `--fixed` 按先后给几项；改不了的包会说明原因、一个文件也不写。录制还在、还能标注的包，也可以照旧在录制上把这一步再声明一次、改成 `fixed` 后 `record stop` 重新生成。转换时游戏根目录里 `goals.json` 对这个变量的摆放、`schedule.json` 规则里给它的值要在同一次改动里去掉，否则 `goals.json` 整份不生效、`schedule.json` 整份编排被拒。之前在那个变量名下存过的值留在原处，目标页把它列在没有条目显示的存值里，可以清掉。
 
+### 1.526 Slice #503 CYC-1 (0.12.84): every part of an evaluated policy cycle is timed, the detection preview asks the store nothing it already knows, and the driver no longer takes its own long cycle for a clock jump (board #503; the rulings 1 to 4 are the coordinator's of 11-26, no words of the owner's behind them; the owner approved the week's plan whose first day this stanching is; coordinator work order `rd-1123/brief-503-cyc1.md` after the read-only study `rd-1123/study-503-cycle.md`, its part 甲 and the coordinator's disposition at its end; on main `02e5b31b`, the code of v0.12.83)
+
+This section takes 1.526 (1.527 belongs to a slice built beside it). It ships in 0.12.84.
+[scheduling/README.md](scheduling/README.md) ("The policy driver's clock and the line of a cycle")
+is the contract. No setting, no outcome code, no record and no interface range is added.
+
+**The incident** (production, v0.12.83, 11-26). The daemon's line of each evaluated cycle (§1.524)
+read, for the first cycles after a start and for cycles 273 to 278 alike: `projection_ms` 197 to
+390, `evaluation_ms` 9 to 16, `clock_slots_ms` 78 to 110 (2 081 to 2 101 reads of the store),
+`held_ms` under 1, `after_capped_ms` under 1 (261 for the first cycle), `total_ms` 5 130 to 5 398.
+The cycle's time less its four timed parts was 4 809 to 4 953 ms, nearly constant from the second
+cycle of the process on, all of it between the start of the host's cycle and its capped record.
+In the same hour the process used 0.29 % of a processor and about 2 MB of I/O a second, the ledger
+committed 70 times a minute with 194 ms of write and sync in all, and the 2 081 reads of the clock
+slots' preview took 80 to 110 ms together (about 0.05 ms a warm read). Every cycle was woken by a
+clock jump, and the cycles followed one another without a pause (277 lines in 24 minutes): the
+driver took a wall-clock difference above `policy_cadence.clock_jump_threshold_ms` since its last
+look for a jump, and a cycle longer than the threshold made the next look one. The state store
+was 30.3 GB (28.9 GB the day before) with a 529 MB write-ahead log; the frame retention's passes
+ran 63 to 713 million query steps each, for 205 to 2 328 s. Six instances (one paused with its
+emulator off, one asleep), about 120 scheduled tasks, 226 instance facts, 1 923 runtime facts,
+6.5 million ledger events.
+
+**The rules as built.**
+- *Ruling 1, the line accounts for the whole cycle* (`crates/runtime-host/src/policy_host.rs`,
+  `PolicyCycleStretches`, `lap_instant`; `host/policy_dispatch.rs`,
+  `evaluate_policy_cycle_authoritative`, `lock_waited`; `apps/actingd/src/policy_cycle_line.rs`).
+  The measurement gains every stretch between the cycle's start and the end of its capped record
+  that no member timed, each from the end of the one before, on one lap clock: before the gates;
+  the waits for the detection write gate, the procedure manifest, the outcome gate, the policy lock
+  the outcome keys are read under and the fact write gate, apart from the work under them; the
+  cycle's other inputs; the wait for the evaluation's policy lock; the evaluation's setup (under
+  that lock, and the evaluation's own inputs before its timed part, which the work order's list did
+  not name); the no-progress capture; the detection preview with its reads of the store; the
+  explanation and the idle plan's inputs; what follows the held observation; the capped record.
+  The line prints them after `total_ms`, then `unattributed_ms`, the time up to the capped record
+  that none of the named parts covers (what is left is the call into the evaluation and its
+  return). The runs in flight are read before the no-progress capture instead of after the
+  detection preview, which change nothing they read, so no stretch is left between that preview
+  and the clock slots'. Members are only added; the line stays a daemon line.
+- *Ruling 2, the detection preview asks nothing it knows* (`preview_detection_planning_signals`,
+  `detection_signal_answer`, `DetectionQuotaState::ensure_loaded`, `ensure_staged`,
+  `PolicyHost::note_planning_signal_recorded`, called by `record_policy_planning_signal`). For
+  every suggestion it asked the store for the reservation's id, again for its quota window
+  whenever the store held no usage for it, and again for the same id once the budget was previewed.
+  Now each id is asked once per preview, and an id the last preview asked about is answered from
+  that answer: the store's planning signals are written by this host alone and never removed, so
+  an answer naming a signal stays true, and one naming none ends when the recorder records or
+  finds a signal of that id, which sets it. The memory holds the last preview's ids and is
+  replaced by each preview. A quota window with no usage is kept as one with none, which is what
+  every reader of the window takes it for, until this host records usage for it (its commit
+  replaces the entry). The preview's signals, their order, the records and every decision are
+  what asking the store each time gives.
+- *Ruling 3, a clock jump is the clocks disagreeing* (`apps/actingd/src/main.rs`,
+  `PolicyDriverSchedule::take_due_work`; `PolicyTrigger::ClockObserved { jumped }`;
+  `PolicyCadenceState::observe`). The driver keeps its monotonic reading with each look at the
+  wall clock; a jump is the wall clock having moved by more than the threshold more or less than
+  the monotonic clock since the last look, or having gone backwards. The trigger carries the
+  driver's word, and the cadence's full recompute for a jump reads it instead of judging the wall
+  clock's step itself, which a long cycle crossed too. The threshold is
+  `PolicyCadence::default`'s, 5 000 ms, which actingd's assembly uses: the manifest's
+  `policy_cadence.clock_jump_threshold_ms` is a value of the code with no file member, so
+  production runs with it; the driver looks every 2 500 ms while it waits. A time the driver
+  waited for gives `ClockObserved` without `jumped`, as before through the cool-down.
+- *Ruling 4.* No setting, no outcome code and no interface revision.
+
+**What the wait is.** Not settled by reading; the line of this version names it on production.
+What reading settles:
+- It is a wait, not work: with the processor idle, a stretch that computed for 4.8 s would show.
+- The cycle's store reads (`read_projection_entry`) take the one shared connection's lock, which
+  the ledger's writer holds for each commit; at 70 commits and 194 ms a minute, and with the clock
+  slots' 2 081 reads through the same lock at 0.05 ms each, nothing holds it for seconds. The frame
+  retention's statements run on a read-only connection of their own (`FrameQuery::open`), so no
+  read of the cycle queues behind them; with WAL a reader does not wait for them, and every other
+  connection the running Runtime opens to the file is read-only. Their long read transactions keep
+  the log from being reset, which makes the file larger, not the cycle's reads slower behind a
+  lock.
+- No sleep, poll or bounded wait lies on the cycle's path between its start and its capped record
+  (the 20 ms poll of `wait_policy_work` comes before the driver starts timing a cycle).
+- The detection preview's first read for each suggestion is of an id built from the fact
+  snapshot's id, which changes with nearly every cycle on production: a key never read before, at
+  a random place of the projection's index in a 30 GB file, where the clock slots' 2 081 ids are
+  the same every cycle. That is the one read of the path that is cold by construction; whether
+  their number makes 4.8 s, and whether the gates (written under by the runs' settlements and the
+  fact publications) are held meanwhile, is what `detection_preview_ms`,
+  `detection_preview_store_reads`, `gates_wait_ms` and `policy_lock_wait_ms` will say. This slice
+  removes the preview's repeated reads (a quota window with no usage, an id asked twice, an id the
+  last preview asked), not the first read of a new id: answering that one without the store needs
+  a change to the store or its connections, which the work order leaves to another slice.
+- Ruling 3 alone ends the cycles back to back: a cycle of 5.2 s is no longer a jump, so the driver
+  evaluates only when something wakes it.
+
+**Tests** (incident `#503 CYC-1`: `crates/runtime-host/src/tests/gate_503_cyc1.rs`, host gate map;
+`apps/actingd/src/gate_503_cyc1.rs`, apps gate map; a delay is put into a stretch by advancing the
+test thread's lap clock; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `cyc1_h1_a_delay_put_into_each_stretch_shows_in_its_member_and_in_no_other` (ruling 1) | 600 s put into each of the eleven new stretches in turn (the two older hooks for what precedes the gates and for the cycle's other inputs, the lap clock's seams for the rest) shows in that member and in no other; the named parts lie within the time up to the capped record, and what none covers is under a second |
+| `cyc1_h2_with_nothing_changed_the_detection_preview_asks_the_store_nothing_again` (ruling 2) | The first cycle reads the reservation's id and its window once each and reserves once; with nothing changed the second and third reserve nothing and read nothing; a new snapshot's reservation counts on the usage this host recorded (`dispatch_used` 2) and reads its own id alone; the budget spent, the exhausted record reads two ids, and the cycle after it reads nothing and hands the recorder the same record; the ledger holds three planning signals |
+| `cyc1_t1_the_line_prints_every_member_and_what_no_named_stretch_covers` (ruling 1) | The line with every member and, after `total_ms`, the stretches and `unattributed_ms` (1.5 ms of a 4.97 s cycle whose preview took 4.8 s); two cycles in a second summed; parts past the capped record's time leave none |
+| `cyc1_t3_a_long_cycle_is_no_clock_jump_and_a_wall_clock_set_forward_or_back_wakes_once` (ruling 3) | At 5 000 ms: two cycles of 5.2 s and a look five minutes late, both clocks agreeing, wake nothing (`wakes=none`); 4 s apart is none; the wall clock set forward 6 s, set back behind the last look, and moved 2 s against 9 s each give one jump and one `clock_jump` wake; a time waited for is `ClockObserved` without `jumped` |
+
+Adapted, because they pinned what a ruling changes: `asleep5_t7_one_line_per_evaluated_cycle_with_every_member_and_one_a_second_at_most`
+(ruling 1: its lines end with the new members, its measurement names no stretch, its clock trigger
+carries the word); `resident_schedule_has_bounded_idle_reconciliation_and_clock_jump_wakes` (ruling
+3: its jump is the wall clock 1 001 ms ahead of a monotonic clock that did not move);
+`policy_cadence_is_explicit_and_clock_jumps_force_full_recompute` (ruling 3: the trigger carries
+the driver's word); and, given the monotonic reading their wall times imply and nothing else
+changed, `formal_provenance_provider_uses_the_same_scheduled_owner_chain`,
+`iso_pe_a_skipped_evaluation_keeps_its_trigger_until_the_retry_and_the_driver_goes_on` and
+`gate_382_a4_g5_failed_runs_re_evaluates_at_once_and_defers_the_instance_its_ladder_holds`. No test
+leaves a gate map; no golden is re-recorded.
+
+**What is not changed.** The selection, every decision and its wake, the order of the deferrals,
+the cool-down, the debounce and the reconciliation; what the detection preview reserves and
+records; the threshold and its default; the store, its schema and its connections; the frame
+retention; every record. No game, package, instance or alias is named in code or contract.
+
+**At deploy.** Nothing to configure. On production, after the first cycles, read the line's
+`total_ms` and the new members: the stretch that holds the 4.8 s says what the cycle waits for
+(`detection_preview_ms` with `detection_preview_store_reads`, a `*_wait_ms` member, or
+`unattributed_ms`). `wakes` shows no `clock_jump` without a change of the clock, and the cycle
+counter advances only when something wakes the driver.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

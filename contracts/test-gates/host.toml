@@ -4857,3 +4857,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_sd1::sd1_7_a_retention_round_gives_way_while_a_window_is_open_and_not_after_it",
 ]
 incident = ["#503 SD-1"]
+
+# #503 CYC-1 (0.12.84; register §1.526; brief rd-1123/brief-503-cyc1.md, rulings 1 and 2, the tests of the measurement and of the preview; contracts/scheduling/README.md, "The policy driver's clock and the line of a cycle"), the host's half, on the detection fixture (one instance, a task whose trigger fact is unknown, a detection budget of two runs a window) with given evaluation times; a delay is put into a stretch by advancing the test thread's lap clock, no clock read and no sleep: a delay of 600 s put into each stretch of a cycle in turn (before the gates and after the cycle's inputs by the two older hooks, the gates' wait and the work under them, the wait for the evaluation's policy lock, the evaluation's setup, the no-progress capture, the detection preview, the explanation, what follows the held observation and the capped record by the lap clock's seams) shows in that stretch's member of the measurement and in no other, the named parts lie within the time up to the capped record and what none of them covers stays under a second (h1); the first cycle asks the store for the reservation's id and its window once each and records one reservation; with nothing changed the second and third cycles reserve nothing and ask the store nothing; a new snapshot's reservation counts on the usage this host recorded (dispatch_used 2, 20 000 ms) and asks its own id alone; the budget spent, the exhausted record asks the reservation's id and the exhausted id, and the cycle after it asks nothing and hands the recorder the same record; the ledger holds three planning signals (h2)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_cyc1::cyc1_h1_a_delay_put_into_each_stretch_shows_in_its_member_and_in_no_other",
+    "actingcommand-runtime-host::lib::tests::gate_503_cyc1::cyc1_h2_with_nothing_changed_the_detection_preview_asks_the_store_nothing_again",
+]
+incident = ["#503 CYC-1"]
