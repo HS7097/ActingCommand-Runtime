@@ -295,7 +295,10 @@ fn rr2_p1_each_word_of_a_records_value_at_its_cause_and_the_instance_s_bound() {
     );
 
     use GoalProblem as P;
-    let cases: Vec<(Value, P, Option<&str>, Option<(i64, i64)>)> = vec![
+    // A value, the word it is refused with, the pointer below the value and the range the answer
+    // names, when it names them.
+    type Case = (Value, P, Option<&'static str>, Option<(i64, i64)>);
+    let cases: Vec<Case> = vec![
         (json!({"key": "hero_a"}), P::WrongType, None, None),
         (json!([1]), P::WrongType, Some("/0"), None),
         (
