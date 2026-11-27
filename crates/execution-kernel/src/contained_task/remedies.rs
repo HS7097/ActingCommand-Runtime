@@ -15,7 +15,10 @@
 //! package declares as `session.dispatch.parameter.<name>` with its kind's type: a policy run the
 //! value its dispatch carries (`variable_values`), any other run the declared default
 //! ([`PreparedContainedTask::default_run_values`]), the Lab's scan replay a given value
-//! ([`PreparedContainedTask::given_variable_values`]).
+//! ([`PreparedContainedTask::given_variable_values`]). Workflow #455 TK-1 (register §1.532): a
+//! variable only a rule gives has no default, so a run reads it only when it is handed a value,
+//! and a run that holds none for it is refused before any input
+//! ([`PreparedContainedTask::refuse_missing_variable`], `contained_task_variable_value_missing`).
 
 use super::*;
 use actingcommand_contract::{
@@ -361,16 +364,51 @@ impl PreparedContainedTask {
 
     /// Workflow #463 V2: every variable the package declares, `(name, default)` with its kind's
     /// type ([`PackageVariable::fact_value`]), in declaration order; empty when it declares none.
+    /// Workflow #455 TK-1: a variable only a rule gives has no default and is not among them; a
+    /// run that reads these values alone is refused ([`Self::refuse_missing_variable`]).
     pub fn default_variable_values(&self) -> Vec<(String, FactValue)> {
         self.control
             .variables
             .iter()
             .filter_map(|variable| {
                 variable
-                    .fact_value(&variable.default_value())
+                    .fact_value(&variable.default_value()?)
                     .map(|value| (variable.name.clone(), value))
             })
             .collect()
+    }
+
+    /// Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): the run
+    /// of this package that reads `parameters` is refused, before any input, when they hold no
+    /// value of a variable the package declares only a rule gives (`given_by`): it has no default
+    /// to read. `contained_task_variable_value_missing` with the package and the first such
+    /// variable in declaration order (its values, and the detail `variable_name=<name>`, which an
+    /// offline run's refusal shows); `Ok` for every other run, a package without such a variable
+    /// included. Every way this kernel is run calls it before the run's first capture: the host's
+    /// runs (a policy run, a direct run, a run the host starts itself), the offline simulation
+    /// and the offline replays.
+    pub fn refuse_missing_variable(
+        &self,
+        parameters: &RunParameters,
+    ) -> Result<(), ContainedTaskError> {
+        let Some(missing) = self.control.variables.iter().find(|variable| {
+            variable.rule_given()
+                && !parameters
+                    .variables
+                    .iter()
+                    .any(|(name, _)| *name == variable.name)
+        }) else {
+            return Ok(());
+        };
+        let code = ExecutionKernelCode::ContainedTaskVariableValueMissing.code();
+        Err(
+            ContainedTaskError::with_detail(code, format!("variable_name={}", missing.name))
+                .with_values(
+                    Outcome::new(code)
+                        .package_id(self.control.package_id.as_str())
+                        .variable_name(missing.name.as_str()),
+                ),
+        )
     }
 
     /// Workflow #463 V2 (contracts/package-variables.md, "The run"): every variable the package
@@ -380,6 +418,8 @@ impl PreparedContainedTask {
     /// dispatch was resolved by, so a package changed since its dispatch is judged as it is
     /// now), else the declared default. A variable the reason does not name (its default too
     /// long for a reason) reads its default; a name the package does not declare is not read.
+    /// Workflow #455 TK-1: a variable only a rule gives reads the dispatched value or nothing (it
+    /// has no default); a run without it is refused ([`Self::refuse_missing_variable`]).
     pub fn dispatched_variable_values(
         &self,
         dispatched: &[(String, serde_json::Value)],
@@ -388,8 +428,8 @@ impl PreparedContainedTask {
             .variables
             .iter()
             .filter_map(|variable| {
-                let value = dispatched_value(variable, dispatched)
-                    .unwrap_or_else(|| variable.default_value());
+                let value =
+                    dispatched_value(variable, dispatched).or_else(|| variable.default_value())?;
                 variable
                     .fact_value(&value)
                     .map(|value| (variable.name.clone(), value))
@@ -424,7 +464,11 @@ impl PreparedContainedTask {
     /// each `(name, value)` of `given` replacing it as a dispatched value does. A name the package
     /// does not declare (a package that declares none declares no name), a value its declaration
     /// does not take exactly as given ([`PackageVariable::judge`] refuses it or would leave keys
-    /// out of it), and a name given twice are refused, never ignored.
+    /// out of it), and a name given twice are refused, never ignored. Workflow #455 TK-1: the one
+    /// way every offline run of the Lab (the scan replay, the whole replay, the dry run) is given
+    /// a value; the value is judged by the contract crate's one check of a value taken whole
+    /// ([`PackageVariable::takes_whole`]), and a variable only a rule gives reads the given value
+    /// or nothing (it has no default), its run then refused ([`Self::refuse_missing_variable`]).
     pub fn given_variable_values(
         &self,
         given: &[(String, serde_json::Value)],
@@ -446,22 +490,22 @@ impl PreparedContainedTask {
                 .find(|variable| variable.name == *name)
                 .ok_or_else(|| refused(GivenVariableProblem::Undeclared))?;
             let taken = variable
-                .judge(value)
+                .takes_whole(value)
                 .ok()
-                .filter(|judged| judged == value)
                 .and_then(|judged| variable.fact_value(&judged))
                 .ok_or_else(|| refused(GivenVariableProblem::Unfit))?;
             values.push((name.as_str(), taken));
         }
         Ok(self
-            .default_variable_values()
-            .into_iter()
-            .map(|(name, default)| {
-                let value = values
-                    .iter()
-                    .find(|(given, _)| *given == name)
-                    .map_or(default, |(_, value)| value.clone());
-                (name, value)
+            .control
+            .variables
+            .iter()
+            .filter_map(|variable| {
+                let value = match values.iter().find(|(given, _)| *given == variable.name) {
+                    Some((_, value)) => value.clone(),
+                    None => variable.fact_value(&variable.default_value()?)?,
+                };
+                Some((variable.name.clone(), value))
             })
             .collect())
     }

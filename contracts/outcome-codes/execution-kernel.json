@@ -1449,6 +1449,28 @@
       "common_causes": "TBD",
       "handling": "TBD"
     },
+    "contained_task_variable_value_missing": {
+      "category": "error",
+      "ladder_class": "declaration_error",
+      "owner": "execution-kernel",
+      "layer": "kernel",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.89",
+      "description": "Workflow #455 TK-1 (register section 1.532; contracts/package-variables.md, \"A variable a rule gives\"): the package package_id declares the variable variable_name with given_by rule, so it has no default, and the run holds no value of it: a policy run whose dispatch carries none (the package was changed between its dispatch and its run), a run the host starts itself, or an offline simulation or replay given no --variable for it. The kernel refuses the run before any input; the first such variable in declaration order is named, and the detail says variable_name=<name>. In the Runtime it settles as any failure of its class: rerun only, never accumulating; the next evaluation after the scheduler workbench reads the changed package holds the task back with goal_value_rule_missing.",
+      "common_causes": "A package replaced in place by one that declares a variable only a rule gives, before the scheduler workbench read it again; a package that declares one bound where no rule dispatches it; an offline run without the variable's --variable.",
+      "handling": "Give the value: for a scheduled run, make each rule of the package in schedule.json carry it (actinglab standard-pack check --root <game root> names the rule); for an offline run, add --variable <name>=<json>. A run the host starts itself cannot be given one: bind a package that declares no such variable."
+    },
     "contained_task_resource_reading_invalid": {
       "category": "error",
       "ladder_class": "declaration_error",

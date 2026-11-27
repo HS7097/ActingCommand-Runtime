@@ -203,6 +203,7 @@ against the root.
 | `goal_rule_unknown` | a `tier` entry's rule is not a rule of `schedule.json` | `/entries/<i>/governs/rules/<j>` |
 | `goal_tier_without_fixed_value` | that rule, its package passed, writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
 | `goal_variable_unknown` | Workflow #463 V1: a `variable` entry's name is no variable a package of `bundle.json` declares (every declared name counts, one the root check lets apply or not) | `/entries/<i>/name` |
+| `goal_variable_rule_given` | Workflow #455 TK-1 (since 0.12.89): a `variable` entry places a variable only a rule gives (its first declaration, in registry order, writes `given_by: "rule"`; [package-variables.md](package-variables.md), "A variable a rule gives"), which is no person's to set; judged after `goal_variable_unknown`, before the placed variable's packages and block. As for every problem of the file, it applies no entry and the root still runs | `/entries/<i>/name` |
 
 `goal_table_unknown`, the word of an `ordered` entry's table, stays registered and is no longer
 given: Workflow #463 V1 replaced the `ordered` entry, and no entry or variable takes a table until
@@ -345,7 +346,8 @@ places a bundle without it, it leaves an existing `goals.json` where it is. `led
 sixteen of the file, `goal_variable_unknown` the fifteenth since Workflow #463 V1 and
 `goal_version_retired` the sixteenth since its fix round 3, and `goal_undeclared`) are words of
 the existing vocabulary `standard_pack_problem` under the existing code
-`standard_pack_root_invalid`.
+`standard_pack_root_invalid`; so is Workflow #455 TK-1's `goal_variable_rule_given` (since 0.12.89),
+the file's seventeenth, which moves none of them either.
 
 **Version 2, `package` revision 14** (Workflow #463 V1 fix round 3, Runtime 0.12.61; register
 §1.378; [component-interfaces.md](component-interfaces.md), the `package` row 14). Release 0.12.60

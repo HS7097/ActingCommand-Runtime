@@ -246,6 +246,7 @@ pub fn simulate_contained_task(
         None,
         OfflineDraw::default(),
         RunTables::default(),
+        task.default_run_values(),
     )
 }
 
@@ -263,6 +264,7 @@ pub fn simulate_contained_task_at(
         Some(now_unix_ms),
         OfflineDraw::default(),
         RunTables::default(),
+        task.default_run_values(),
     )
 }
 
@@ -275,20 +277,32 @@ pub fn simulate_contained_task_drawn(
     now_unix_ms: Option<u64>,
     draw: OfflineDraw,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, now_unix_ms, draw, RunTables::default())
+    simulate(
+        task,
+        frames,
+        now_unix_ms,
+        draw,
+        RunTables::default(),
+        task.default_run_values(),
+    )
 }
 
 /// Workflow #357 DB-2 (TB7): [`simulate_contained_task_drawn`] whose select steps read the shared
 /// tables `tables`, bound from the dry run's root. Without them a document that declares a table
-/// fails `selection_evaluation_failed`.
+/// fails `selection_evaluation_failed`. Workflow #455 TK-1 (register §1.532): the run reads
+/// `parameters` (its package's parameters and variables, the defaults with each value the dry
+/// run is given, [`PreparedContainedTask::given_variable_values`]); a run that holds no value of
+/// a variable only a rule gives is refused before any input
+/// ([`PreparedContainedTask::refuse_missing_variable`]).
 pub fn simulate_contained_task_with_tables(
     task: &PreparedContainedTask,
     frames: Vec<Frame>,
     now_unix_ms: Option<u64>,
     draw: OfflineDraw,
     tables: RunTables,
+    parameters: RunParameters,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
-    simulate(task, frames, now_unix_ms, draw, tables)
+    simulate(task, frames, now_unix_ms, draw, tables, parameters)
 }
 
 fn simulate(
@@ -297,17 +311,27 @@ fn simulate(
     now_unix_ms: Option<u64>,
     draw: OfflineDraw,
     tables: RunTables,
+    parameters: RunParameters,
 ) -> Result<OfflineSimulationResult, OfflineSimulationError> {
+    // Workflow #455 TK-1: a run without a value of a variable only a rule gives is refused before
+    // any input; it has no default to read.
+    let missing = task.refuse_missing_variable(&parameters).err();
     let mut runtime = OfflineRuntime::new(
         frames,
         now_unix_ms,
         task.has_select_steps(),
-        // Workflow #463 V2: with every variable at its declared default.
-        task.default_run_values(),
+        // Workflow #463 V2: with every variable at its declared default, unless the caller gave
+        // it a value (Workflow #455 TK-1).
+        parameters,
         draw,
     );
     runtime.tables = tables;
-    let decision = if runtime.frames.is_empty() {
+    let decision = if let Some(error) = missing {
+        OfflineDecision::Refused {
+            code: error.code(),
+            detail: error.detail().map(str::to_string),
+        }
+    } else if runtime.frames.is_empty() {
         OfflineDecision::Refused {
             code: SharedCode::OfflineFixtureMissing.code().into(),
             detail: None,
@@ -858,21 +882,34 @@ pub fn replay_contained_task_drawn<I, E>(
 where
     I: Iterator<Item = Result<Frame, E>>,
 {
-    replay_contained_task_with_tables(task, frames, facts, draw, RunTables::default())
+    replay_contained_task_with_tables(
+        task,
+        frames,
+        facts,
+        draw,
+        RunTables::default(),
+        task.default_run_values(),
+    )
 }
 
 /// Workflow #357 DB-2 (TB7): [`replay_contained_task_drawn`] whose select steps read the shared
-/// tables `tables`, bound from the replay's root.
+/// tables `tables`, bound from the replay's root. Workflow #455 TK-1 (register §1.532): the run
+/// reads `parameters` (its package's parameters and variables, the defaults with each value the
+/// replay is given, [`PreparedContainedTask::given_variable_values`]); a run that holds no value
+/// of a variable only a rule gives is refused before its first capture
+/// ([`PreparedContainedTask::refuse_missing_variable`]).
 pub fn replay_contained_task_with_tables<I, E>(
     task: &PreparedContainedTask,
     frames: I,
     facts: OfflineReplayFacts,
     draw: OfflineDraw,
     tables: RunTables,
+    parameters: RunParameters,
 ) -> Result<OfflineReplayResult, OfflineReplayError<E>>
 where
     I: Iterator<Item = Result<Frame, E>>,
 {
+    let missing = task.refuse_missing_variable(&parameters).err();
     let mut runtime = ReplayRuntime {
         tables,
         task,
@@ -888,8 +925,13 @@ where
         readings: Vec::new(),
         fields: None,
         draw,
+        parameters,
     };
-    let end = match task.run(&mut runtime) {
+    let run = match missing {
+        Some(error) => Err(ContainedTaskRunError::Task(error)),
+        None => task.run(&mut runtime),
+    };
+    let end = match run {
         Ok(outcome) => OfflineReplayEnd::Completed {
             final_page: outcome.final_page,
             executed_steps: outcome.executed_steps,
@@ -964,6 +1006,10 @@ struct ReplayRuntime<'t, I> {
     draw: OfflineDraw,
     /// Workflow #357 DB-2: the shared tables bound from the replay's root.
     tables: RunTables,
+    /// Workflow #455 TK-1: what the replayed run reads as its parameters and variables (Workflow
+    /// #411 B15 R5 and #463 V2: the declared defaults, each value the replay is given replacing
+    /// its default).
+    parameters: RunParameters,
 }
 
 #[derive(Debug)]
@@ -1056,10 +1102,9 @@ where
             } => (snapshot.clone(), *read_at_unix_ms),
         };
         // Workflow #411 B15 R5: a replayed run has no dispatch; it reads the package's declared
-        // parameter defaults (Workflow #463 V2: and its variables' defaults).
-        self.task
-            .default_run_values()
-            .overlay(&mut snapshot, now_unix_ms);
+        // parameter defaults (Workflow #463 V2: and its variables' defaults; Workflow #455 TK-1:
+        // with each value the replay is given in its variable's place).
+        self.parameters.overlay(&mut snapshot, now_unix_ms);
         self.selection_now_unix_ms = Some(now_unix_ms);
         Ok(SelectionState::Snapshot {
             snapshot,

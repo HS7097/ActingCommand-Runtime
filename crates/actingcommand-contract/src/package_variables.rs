@@ -37,6 +37,13 @@
 //! packages that declare it, its declaration, and why it does not apply with the detail of the
 //! cause ([`RootVariableVerdict`]); `standard-pack check`, the Runtime's scheduler workbench and
 //! the Runtime's table without a composed standard pack all call it.
+//!
+//! Workflow #455 TK-1 (register §1.532; `contracts/package-variables.md`, "A variable a rule
+//! gives"): a declaration may say who gives the variable's value when that is not a person, the
+//! optional member `given_by` of the closed vocabulary [`GivenBy`] (its one word `rule`). Such a
+//! variable writes no `default` and no `default_origin`, so it has no default
+//! ([`PackageVariable::default_value`] answers none): its value is the one its dispatched task's
+//! rule carries, or the one a run nobody dispatched is given, and nothing else.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_catalog::{MAX_PACK_CATALOG_TITLE_BYTES, at};
@@ -62,6 +69,12 @@ pub const VARIABLES_POINTER: &str = "/variables";
 /// `[14, 14]` (`contracts/component-interfaces.md`, the `package` row 14; row 13 is Workflow #463
 /// K1's, a `linear_steps` task with a select step).
 pub const VARIABLES_PACKAGE_REVISION: u64 = 14;
+/// Workflow #455 TK-1 (register §1.532): the `package` interface revision a bundle whose packages
+/// declare a variable with `given_by` declares, `[26, 26]` (`contracts/component-interfaces.md`,
+/// the `package` row 26): every reader before it refuses the member at the declaration.
+pub const GIVEN_BY_PACKAGE_REVISION: u64 = 26;
+/// Workflow #455 TK-1: the member of a variable's declaration that says who gives its value.
+pub const GIVEN_BY_MEMBER: &str = "given_by";
 /// The most variables one package declares.
 pub const MAX_PACKAGE_VARIABLES: usize = 16;
 /// The most variable names of one game root: the entry rows an application's goal record keeps
@@ -239,8 +252,46 @@ const ORDERED_REQUIRED: &[&str] = &[
     "max_count",
     "default",
 ];
-const COMMON_OPTIONAL: &[&str] = &["block", "help", "default_origin"];
-const INTEGER_OPTIONAL: &[&str] = &["block", "help", "step", "unit", "default_origin"];
+const COMMON_OPTIONAL: &[&str] = &["block", "help", "default_origin", GIVEN_BY_MEMBER];
+const INTEGER_OPTIONAL: &[&str] = &[
+    "block",
+    "help",
+    "step",
+    "unit",
+    "default_origin",
+    GIVEN_BY_MEMBER,
+];
+/// Workflow #455 TK-1: the members a variable with `given_by` does not write: it has no default.
+const DEFAULT_MEMBER: &str = "default";
+const DEFAULT_ORIGIN_MEMBER: &str = "default_origin";
+
+/// Workflow #455 TK-1 (register §1.532; `contracts/package-variables.md`, "A variable a rule
+/// gives"): who gives a variable's value when that is not a person (`given_by`), a closed
+/// vocabulary; a later revision of `package` may add words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GivenBy {
+    /// The rule of `schedule.json` of the dispatched task (its member `variables`), and only it.
+    Rule,
+}
+
+impl GivenBy {
+    /// The words, in the contract's order.
+    pub const ALL: [Self; 1] = [Self::Rule];
+
+    /// The word in `control.json`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rule => "rule",
+        }
+    }
+
+    /// The word `word` names; `None` for any other word.
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|given_by| given_by.as_str() == word)
+    }
+}
 
 /// Who wrote a variable's default: the package's author (`pack`, no `default_origin`) or the
 /// model's export (`default_origin: "model"`). It decides nothing; only the provenance listing
@@ -273,6 +324,9 @@ pub struct PackageVariable {
     pub help: Option<GoalText>,
     pub kind: VariableKind,
     pub default_origin: DefaultOrigin,
+    /// Workflow #455 TK-1: who gives its value when not a person (`given_by`); `None` for a
+    /// variable a person may set, which has a default.
+    pub given_by: Option<GivenBy>,
     /// The entry of `variables` as written.
     pub declaration: Value,
 }
@@ -282,6 +336,13 @@ impl PackageVariable {
         self.kind.variable_type()
     }
 
+    /// Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): whether
+    /// only a rule gives its value (`given_by: "rule"`): it has no default, no value stored on an
+    /// application is read for it, and the goal page does not offer it.
+    pub const fn rule_given(&self) -> bool {
+        matches!(self.given_by, Some(GivenBy::Rule))
+    }
+
     /// The fact key a run reads the variable's value under (Workflow #463 V2), and a designated
     /// effect's cap names to read it: [`VARIABLE_FACT_KEY_PREFIX`] and the name.
     pub fn fact_key(&self) -> String {
@@ -289,16 +350,29 @@ impl PackageVariable {
     }
 
     /// Workflow #463 V2: the declared default as a JSON value: a string, an integer, a boolean
-    /// or a list of option values.
-    pub fn default_value(&self) -> Value {
+    /// or a list of option values. Workflow #455 TK-1: `None` for a variable a rule gives
+    /// (`given_by`), which writes no default: every reader of a default says what it does then.
+    pub fn default_value(&self) -> Option<Value> {
         match &self.kind {
-            VariableKind::Choice { default, .. } => Value::String(default.clone()),
-            VariableKind::Integer { default, .. } => Value::from(*default),
-            VariableKind::Switch { default } => Value::Bool(*default),
-            VariableKind::Ordered { default, .. } => {
-                Value::Array(default.iter().cloned().map(Value::String).collect())
-            }
+            VariableKind::Choice { default, .. } => default.clone().map(Value::String),
+            VariableKind::Integer { default, .. } => default.map(Value::from),
+            VariableKind::Switch { default } => default.map(Value::Bool),
+            VariableKind::Ordered { default, .. } => default
+                .as_ref()
+                .map(|default| Value::Array(default.iter().cloned().map(Value::String).collect())),
         }
+    }
+
+    /// Workflow #455 TK-1: `value` as [`Self::judge`] lets it through when it takes it whole, the
+    /// one check of a value handed to a run from outside that is taken only as given (a direct
+    /// run's, a rule's, an offline run's `--variable`): the judgement's word when it refuses it,
+    /// `keys_left_out` when it would leave keys of an `ordered` value out.
+    pub fn takes_whole(&self, value: &Value) -> Result<Value, VariableProblem> {
+        let read = self.judge(value)?;
+        if self.leaves_keys_out(value, &read) {
+            return Err(VariableProblem::KeysLeftOut);
+        }
+        Ok(read)
     }
 
     /// Workflow #463 V2: `sha256:<hex>` of the entry as written, in compact JSON: a changed
@@ -449,12 +523,13 @@ pub fn variable_value_json(value: &Value) -> String {
     value.to_string()
 }
 
-/// A variable's type with its members.
+/// A variable's type with its members. Workflow #455 TK-1: each `default` is `None` exactly for a
+/// variable a rule gives (`given_by`), which writes none; every other variable has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VariableKind {
     Choice {
         options: Vec<GoalOption>,
-        default: String,
+        default: Option<String>,
     },
     /// `min`, `max`, `step` (1 when the entry writes none), `unit` and `default`.
     Integer {
@@ -462,16 +537,16 @@ pub enum VariableKind {
         max: i64,
         step: i64,
         unit: Option<GoalUnit>,
-        default: i64,
+        default: Option<i64>,
     },
     Switch {
-        default: bool,
+        default: Option<bool>,
     },
     Ordered {
         options: Vec<GoalOption>,
         min_count: u64,
         max_count: u64,
-        default: Vec<String>,
+        default: Option<Vec<String>>,
     },
 }
 
@@ -535,7 +610,8 @@ impl VariablesViolation {
 ///   its type, a name outside `^[a-z][a-z0-9_]{0,63}$`, a type that is none of the four, a block
 ///   that is not the type's, a text, a range, a step, an option value outside the name's form or
 ///   written twice, a count, a default that is no value of the declaration, a `default_origin`
-///   other than `"model"`;
+///   other than `"model"`; Workflow #455 TK-1: a `given_by` other than `"rule"` (at it), and a
+///   `default` or a `default_origin` beside a `given_by` (at that member);
 /// - `variable_name_taken`, at `/variables/<i>/name`, once the entry reads: a name an earlier
 ///   variable or any parameter of `provides` has.
 pub fn parse_package_variables(
@@ -603,12 +679,33 @@ impl Check {
             self.malformed(at_type);
             return None;
         };
-        self.members(
-            object,
-            pointer,
-            variable_type.required(),
-            variable_type.optional(),
-        );
+        // Workflow #455 TK-1: who gives the value, read before the members, so that a word of
+        // another vocabulary is refused at the member itself; a variable a rule gives writes no
+        // `default` and no `default_origin`, which are then members it does not take.
+        let given_by = match object.get(GIVEN_BY_MEMBER) {
+            None => Some(None),
+            Some(written) => match written.as_str().and_then(GivenBy::from_word) {
+                Some(given_by) => Some(Some(given_by)),
+                None => {
+                    self.malformed(at(pointer, GIVEN_BY_MEMBER));
+                    None
+                }
+            },
+        };
+        let rule_given = matches!(given_by, Some(Some(_)));
+        let required = variable_type
+            .required()
+            .iter()
+            .copied()
+            .filter(|member| !rule_given || *member != DEFAULT_MEMBER)
+            .collect::<Vec<_>>();
+        let optional = variable_type
+            .optional()
+            .iter()
+            .copied()
+            .filter(|member| !rule_given || *member != DEFAULT_ORIGIN_MEMBER)
+            .collect::<Vec<_>>();
+        self.members(object, pointer, &required, &optional);
         let block = self
             .block(
                 object.get("block"),
@@ -617,7 +714,7 @@ impl Check {
             )
             .flatten();
         let texts = self.texts(object, pointer);
-        let kind = self.variable_kind(variable_type, object, pointer);
+        let kind = self.variable_kind(variable_type, object, pointer, rule_given);
         let default_origin = match object.get("default_origin") {
             None => Some(DefaultOrigin::Pack),
             Some(Value::String(word)) if word == DefaultOrigin::Model.as_str() => {
@@ -636,6 +733,7 @@ impl Check {
             help,
             kind: kind?,
             default_origin: default_origin?,
+            given_by: given_by?,
             declaration: value.clone(),
         })
     }
@@ -658,12 +756,15 @@ impl Check {
 
     /// The value-type members of a variable of `variable_type` (the code of the goal
     /// declaration's `integer`, `choice`, `switch` and `ordered` entries, moved here by Workflow
-    /// #463 V1 without `governs` and without `from_table`).
+    /// #463 V1 without `governs` and without `from_table`). Workflow #455 TK-1: a variable a rule
+    /// gives (`rule_given`) reads no default (the members' check refuses one it writes) and has
+    /// none; every other variable's default is read and judged as before.
     fn variable_kind(
         &mut self,
         variable_type: VariableType,
         object: &Map<String, Value>,
         pointer: &str,
+        rule_given: bool,
     ) -> Option<VariableKind> {
         match variable_type {
             VariableType::Choice => {
@@ -680,15 +781,22 @@ impl Check {
                         .map(|option| option.value.clone())
                         .collect::<Vec<_>>()
                 });
-                let default = self.one_of(object, pointer, values.as_deref());
+                let default = if rule_given {
+                    Some(None)
+                } else {
+                    self.one_of(object, pointer, values.as_deref()).map(Some)
+                };
                 Some(VariableKind::Choice {
                     options: options?,
                     default: default?,
                 })
             }
-            VariableType::Integer => self.integer_variable(object, pointer),
+            VariableType::Integer => self.integer_variable(object, pointer, rule_given),
+            VariableType::Switch if rule_given => Some(VariableKind::Switch { default: None }),
             VariableType::Switch => match object.get("default") {
-                Some(Value::Bool(default)) => Some(VariableKind::Switch { default: *default }),
+                Some(Value::Bool(default)) => Some(VariableKind::Switch {
+                    default: Some(*default),
+                }),
                 Some(_) => {
                     self.issue(
                         StandardPackProblem::GoalDefaultInvalid,
@@ -698,7 +806,7 @@ impl Check {
                 }
                 None => None,
             },
-            VariableType::Ordered => self.ordered_variable(object, pointer),
+            VariableType::Ordered => self.ordered_variable(object, pointer, rule_given),
         }
     }
 
@@ -706,6 +814,7 @@ impl Check {
         &mut self,
         object: &Map<String, Value>,
         pointer: &str,
+        rule_given: bool,
     ) -> Option<VariableKind> {
         let min = object
             .get("min")
@@ -736,13 +845,15 @@ impl Check {
             _ => None,
         };
         // The default is judged against a range that holds; a broken range is its own refusal.
-        let default = match (range, object.get("default")) {
-            (Some((min, max, step)), Some(default)) => match default.as_i64() {
+        // Workflow #455 TK-1: a variable a rule gives has none.
+        let default = match (rule_given, range, object.get("default")) {
+            (true, _, _) => Some(None),
+            (false, Some((min, max, step)), Some(default)) => match default.as_i64() {
                 Some(default)
                     if (min..=max).contains(&default)
                         && (i128::from(default) - i128::from(min)) % i128::from(step) == 0 =>
                 {
-                    Some(default)
+                    Some(Some(default))
                 }
                 _ => {
                     self.issue(
@@ -752,7 +863,7 @@ impl Check {
                     None
                 }
             },
-            _ => None,
+            (false, _, _) => None,
         };
         let (min, max, step) = range?;
         Some(VariableKind::Integer {
@@ -825,6 +936,7 @@ impl Check {
         &mut self,
         object: &Map<String, Value>,
         pointer: &str,
+        rule_given: bool,
     ) -> Option<VariableKind> {
         let options = object.get("options").and_then(|options| {
             self.variable_options(options, &at(pointer, "options"), (1, MAX_GOAL_LIST_VALUES))
@@ -858,11 +970,13 @@ impl Check {
             }
             _ => None,
         };
-        let default = match (counts, &options, object.get("default")) {
-            (Some(counts), Some(options), Some(default)) => {
-                self.ordered_default(default, &at(pointer, "default"), counts, options)
-            }
-            _ => None,
+        // Workflow #455 TK-1: a variable a rule gives has no default.
+        let default = match (rule_given, counts, &options, object.get("default")) {
+            (true, _, _, _) => Some(None),
+            (false, Some(counts), Some(options), Some(default)) => self
+                .ordered_default(default, &at(pointer, "default"), counts, options)
+                .map(Some),
+            (false, _, _, _) => None,
         };
         let (min_count, max_count) = counts?;
         Some(VariableKind::Ordered {
@@ -934,12 +1048,13 @@ pub struct RootVariableIssue {
 }
 
 /// A variable that applies in the game root: its name, every package that declares it (in
-/// registry order) and the origin of its default.
+/// registry order) and the origin of its default (Workflow #455 TK-1: `None` for a variable a
+/// rule gives, which has no default).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedVariable {
     pub name: String,
     pub packages: Vec<String>,
-    pub default_origin: DefaultOrigin,
+    pub default_origin: Option<DefaultOrigin>,
 }
 
 /// What the root check found: the variables that apply, each once in the order the root first
@@ -955,13 +1070,15 @@ pub struct RootVariables {
 
 impl RootVariables {
     /// The provenance listing of `standard-pack check`: each variable that applies by who wrote
-    /// its default, in the order of [`Self::applied`].
+    /// its default, in the order of [`Self::applied`]. Workflow #455 TK-1: a variable a rule
+    /// gives has no default and is in neither list.
     pub fn provenance(&self) -> VariableOrigins {
         let mut origins = VariableOrigins::default();
         for variable in &self.applied {
             match variable.default_origin {
-                DefaultOrigin::Pack => origins.pack.push(variable.name.clone()),
-                DefaultOrigin::Model => origins.model.push(variable.name.clone()),
+                Some(DefaultOrigin::Pack) => origins.pack.push(variable.name.clone()),
+                Some(DefaultOrigin::Model) => origins.model.push(variable.name.clone()),
+                None => {}
             }
         }
         origins
@@ -1019,7 +1136,7 @@ pub fn check_root_variables(
                     .iter()
                     .map(|(package, _)| packages[*package].package_id.clone())
                     .collect(),
-                default_origin: first.default_origin,
+                default_origin: (!first.rule_given()).then_some(first.default_origin),
             });
             continue;
         };
@@ -1396,6 +1513,7 @@ pub fn goal_variables(packages: &[RootPackageVariables]) -> BTreeMap<String, Goa
                 .entry(variable.name.clone())
                 .or_insert_with(|| GoalVariable {
                     block: variable.block,
+                    rule_given: variable.rule_given(),
                     packages: Vec::new(),
                 })
                 .packages

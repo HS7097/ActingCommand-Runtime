@@ -109,6 +109,11 @@ crate::outcome_vocabulary! {
         /// of the game is one the application can target), and nothing is stored; asking again
         /// does not help until the game root holds `schedule.json`.
         NoSchedule => "no_schedule",
+        /// Workflow #455 TK-1 (since 0.12.89): the name is a variable only a rule gives
+        /// (`given_by: "rule"` in its declaration): no person sets it, so a `set` stores nothing;
+        /// a `clear` answers it only when the application stores no value under the name (a value
+        /// stored before the variable became this kind is an orphan, which `clear` removes).
+        RuleGiven => "rule_given",
     }
 }
 

@@ -1105,9 +1105,10 @@ fn sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below(
     // of a shared read's name boxes, Workflow #428 S168-LK (register §1.500) to [3, 22], a
     // linear step's list reading, Workflow #455 G-SLx (register §1.501) to [3, 23], a pack's
     // variables beside an irreversible capability, Workflow #477 CV-1 (register §1.507) to [3, 24],
-    // a bundle that carries a version 2 package declaration, and Workflow #477 LR-1 (register
-    // §1.513) to [3, 25], a linear press step's count; [20, 20] stays within it.
-    assert_eq!(own, [3, 25]);
+    // a bundle that carries a version 2 package declaration, Workflow #477 LR-1 (register
+    // §1.513) to [3, 25], a linear press step's count, and Workflow #455 TK-1 (register §1.532)
+    // to [3, 26], a variable only a rule gives; [20, 20] stays within it.
+    assert_eq!(own, [3, 26]);
     assert!(package_edge_holds(own, [20, 20]));
     assert!(!package_edge_holds([3, 19], [20, 20]));
 }

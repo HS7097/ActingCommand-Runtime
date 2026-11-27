@@ -319,6 +319,10 @@ mod gate_477_cv1;
 // 25, and nothing else so.
 #[path = "gate_477_lr1.rs"]
 mod gate_477_lr1;
+// Workflow #455 TK-1: the revision table counts a variable's `given_by` as `package` 26, and an
+// installer of the earlier range refuses such a zip at its edge.
+#[path = "gate_455_tk1.rs"]
+mod gate_455_tk1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

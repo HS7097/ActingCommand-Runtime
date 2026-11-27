@@ -369,8 +369,17 @@ composed; the composer's judgement, `judge_rule_variable_value`, run again at ea
 `variable_name` and `variable_problem`, the first such variable in declaration order), held as
 above, every candidate of the pair, with no wake of its own and no time for the idle plan;
 nothing is dispatched; repairing the package (read again at the workbench's next check) ends it.
-Neither code is a gate the clock-slot planning records of Workflow #372 K2 name (below), so a due
-clock slot either holds writes no clock-slot record;
+Workflow #455 TK-1 (since 0.12.89, register §1.532; package-variables.md, "A variable a rule
+gives"), first of all at this position: the declaration in force of the candidate's package
+declares a variable only a rule gives (`given_by: "rule"`) and the task's rule carries no value for
+it (a package changed since the generation in force was composed, whose composition is then
+refused): `goal_value_rule_missing` (warning, values `instance_id`, `task_id`, `package_id` and
+`variable_name`, the first such variable in declaration order), held as above, every candidate of
+the pair, with no wake of its own and no time for the idle plan; nothing is dispatched; the
+workbench's next check that reads a package without such a variable, or a generation whose rule
+carries the value, ends it. A stored value never excludes a rule by such a variable (no stored
+value is read for it). None of the three codes is a gate the clock-slot planning records of
+Workflow #372 K2 name (below), so a due clock slot any of them holds writes no clock-slot record;
 
 6. performance pacing pauses the instance or its run interval has not passed
    (`perf_scheduling_paused`, `perf_pacing_gap`, Workflow #385), an owed rerun waits for the

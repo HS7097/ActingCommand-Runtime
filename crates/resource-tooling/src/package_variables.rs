@@ -26,16 +26,21 @@ pub fn package_variables(package: &Path) -> LabResult<Value> {
         Instant::now() + PACK_DEADLINE,
     )
     .map_err(|error| LabError::package_invalid(format!("{}: {error}", package.display())))?;
+    // Workflow #455 TK-1 (register §1.532): a variable only a rule gives carries its declaration
+    // as written, `given_by` in it, and no `default_json`: it has no default.
     let variables = read
         .variables
         .iter()
         .map(|variable| {
-            json!({
+            let mut listed = json!({
                 "name": variable.name,
                 "type": variable.variable_type().as_str(),
-                "default_json": variable_value_json(&variable.default_value()),
-                "declaration": variable.declaration,
-            })
+            });
+            if let Some(default) = variable.default_value() {
+                listed["default_json"] = json!(variable_value_json(&default));
+            }
+            listed["declaration"] = variable.declaration.clone();
+            listed
         })
         .collect::<Vec<_>>();
     let parameters = read

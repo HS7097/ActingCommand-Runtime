@@ -2079,11 +2079,35 @@ fn hold_back_with_no_time(
 /// changing the set value is a change of facts, which wakes the evaluation. `None` for every other
 /// candidate, the fact refresh's included. #486 ASLEEP-4: read for the pair (`task_id` on
 /// `instance_id`), so the look ahead before a candidate's time asks it as the closure does.
+/// Workflow #455 TK-1 (register §1.532; `package-variables.md`, "A variable a rule gives"), first
+/// of all: a variable the package's declaration in force says only a rule gives and the task's
+/// rule carries no value for (`plan`'s `rule_value_missing`, a package changed since the
+/// generation in force was composed): the warning `goal_value_rule_missing` naming the
+/// application, the task, the package and the variable, with no wake of its own; the workbench's
+/// next check that reads a mended package or a rule that carries the value lifts it.
 pub(crate) fn rule_value_deferral(
     plan: &actingcommand_policy::VariablePlan,
     task_id: &str,
     instance_id: &str,
 ) -> Option<CandidateEligibility> {
+    if let Some(missing) = plan.rule_value_missing(task_id, instance_id) {
+        let outcome = Outcome::new(crate::codes::GoalValueCode::RuleMissing)
+            .instance_id(instance_id)
+            .task_id(task_id)
+            .package_id(missing.package_id.as_str())
+            .variable_name(missing.variable_name.as_str());
+        return Some(CandidateEligibility::Deferred {
+            reason: DecisionReason {
+                outcome,
+                detail: format!(
+                    "the declaration in force of the package {} declares {}, which only a rule \
+                     gives, and this task's rule carries no value for it",
+                    missing.package_id, missing.variable_name
+                ),
+            },
+            next_wake_unix_ms: None,
+        });
+    }
     if let Some(refused) = plan.rule_value_refused(task_id, instance_id) {
         let mut outcome = Outcome::new(crate::codes::GoalValueCode::RuleRefused)
             .instance_id(instance_id)

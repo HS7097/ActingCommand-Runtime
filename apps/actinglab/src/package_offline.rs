@@ -103,6 +103,17 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         )
     })?;
     let package_label = prepared.package_label().to_owned();
+    // Workflow #455 TK-1 (register §1.532): the package's parameters and variables at their
+    // defaults, each `--variable` replacing its variable's (the replay's one reading of the flag),
+    // judged before any fixture is read; without `--variable` what it read before.
+    let parameters =
+        prepared
+            .default_run_parameters()
+            .with_variables(crate::replay_cli::given_variable_values(
+                &prepared,
+                &args.variables,
+                "package dry-run",
+            )?);
     let fixture = load_fixture_sequence(&args.fixtures)?;
     // Workflow #406 T4: the run draws its points as the Runtime draws a run's, from the seed
     // (`--seed`, else 0) with the touch keys of the root configuration.
@@ -115,6 +126,7 @@ pub(super) fn run_dry_run(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcom
         Some(now_unix_ms),
         draw,
         tables,
+        parameters,
     )
     .map_err(map_simulation_error)?;
     let refusal = match &simulation.decision {
@@ -188,6 +200,9 @@ struct PackageDryRunArgs {
     seed: Option<u64>,
     /// Workflow #357 DB-2: the standard-pack root a select step's shared tables are read from.
     standard_pack_root: Option<PathBuf>,
+    /// Workflow #455 TK-1: the `--variable <name>=<json>` given, in order, read with the replay's
+    /// one parser.
+    variables: Vec<(String, serde_json::Value)>,
 }
 
 impl PackageDryRunArgs {
@@ -229,6 +244,7 @@ impl PackageDryRunArgs {
                         | "--out"
                         | "--fixture"
                         | "--seed"
+                        | "--variable"
                         | crate::lab_tables::STANDARD_PACK_ROOT_FLAG
                 )
             })
@@ -296,6 +312,7 @@ impl PackageDryRunArgs {
             fixtures,
             out,
             seed: crate::lab_draw::seed_flag(flags)?,
+            variables: crate::replay_cli::given_variables(flags, "package dry-run")?,
         })
     }
 }

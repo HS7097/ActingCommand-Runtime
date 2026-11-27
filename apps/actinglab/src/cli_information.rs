@@ -123,7 +123,8 @@ pub(super) fn help_data() -> Value {
                 "--fixture <recorded.png> (repeatable, one per frame)",
                 "--out <the result file>",
                 "--seed <unsigned 64-bit integer: the run's draws, 0 without it>",
-                "--standard-pack-root <the root of the game directories: the shared tables a select step reads>"
+                "--standard-pack-root <the root of the game directories: the shared tables a select step reads>",
+                "--variable <name>=<json> (repeatable, once per variable the package declares; replaces that variable's default, and gives a variable only a rule gives, which has none: without it such a run is refused)"
             ],
             "operation validate": ["--repo <repository root>", "--operation-dir <repository-relative operation directory>"],
             "lab watch": crate::runtime_debug::watch_options(),
@@ -152,6 +153,7 @@ pub(super) fn help_data() -> Value {
                 "--select <operation id of a select step: replays its scan over the frames, with --scan>",
                 "--scan <the step's scan declaration, a JSON file, with --select>",
                 "--parameter <name>=<value> (with --select; repeatable, once per parameter the package declares; replaces that parameter's declared default)",
+                "--variable <name>=<json> (with or without --select; repeatable, once per variable the package declares; replaces that variable's default, and gives a variable only a rule gives, which has none: without it such a run is refused)",
                 "--standard-pack-root <the root of the game directories: the shared tables a select step reads>"
             ],
             "package bundle": [

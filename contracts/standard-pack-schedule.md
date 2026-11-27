@@ -361,6 +361,17 @@ among any tasks:
   rules' values judged by no declaration here, and the offline pack rows (`actingctl packs`) and
   `standard-pack catalog --cut`, which read no variables, judge none either: the run's admission
   judges every dispatched value again under the package it prepares.
+- **A variable only a rule gives** (Workflow #455 TK-1, since 0.12.89, register §1.532;
+  [package-variables.md](package-variables.md), "A variable a rule gives"): when the package's
+  declaration (as read there) declares a variable with `given_by: "rule"`, every rule of that
+  package must carry a value for it. After the values above, rule by rule, a rule that carries none
+  for such a variable (with another variable's value only, or with no member at all) refuses the
+  file `schedule_invalid` at `/rules/<i>/variables`, the developer text naming the package, the
+  variable and the rule; the first such variable in declaration order. So `standard-pack check`
+  exits 2 and `package bundle --schedule` refuses the bundle. At each evaluation a candidate whose
+  rule carries no value the declaration in force asks for (the package changed since the
+  generation in force was composed) is held back first at position 5a, `goal_value_rule_missing`.
+  A root none of whose packages declares such a variable composes byte for byte as before.
 - **The composed task** carries the member as written (a V2 task member, `variables`;
   [scheduling/v2/README.md](scheduling/v2/README.md)), which the compiler holds to its form. A rule
   that carries no `variables` composes byte for byte as before: the same documents, compiled

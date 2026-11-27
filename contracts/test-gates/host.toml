@@ -4920,3 +4920,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_goal1::goal1_t6_a_composed_record_that_does_not_read_back_is_refused_and_the_runtime_goes_on",
 ]
 incident = ["#503 GOAL-1"]
+
+# Workflow #455 TK-1 (0.12.89; register §1.532; brief rd-1123/brief-455-tk1.md with the coordinator's rulings 6a and 6b; contracts/package-variables.md, "A variable a rule gives"; contracts/scheduling-blackout.md, "Order of the deferrals", position 5a), the host half, written as gate_500_sv2 is: in composer mode over one game root whose package declares pick (a choice of item_a, item_b and item_c), a person's variable with the default item_c or one only a rule gives (given_by rule), converted in place, no clock read: both rules carrying pick, a value stored while pick was a person's holds neither back once only a rule gives it, the first runs with its own item_b (source rule, no setter), the page lists no pick and shows the stored value as an orphan, goals set is refused goal_value_invalid rule_given, goals clear removes the orphan and a second clear answers rule_given (h1); the first rule carrying nothing and the second item_a, pick converted while the generation in force stays (the refusal seam): the first waits goal_value_rule_missing (a warning: the instance, the task, the package, pick), deferred, no wake of its own, not dispatched, while the second runs with item_a; the package mended, the first is dispatched again (h2); the same hold lifted by the rule: schedule.json rewritten so the first rule carries item_b, it is dispatched and its run reads item_b, source rule (h3); a direct run of the converted package given no value is Denied run_variable_missing (the package, pick), nothing pressed; given item_a it completes, reads item_a and its admission record lists it (h4); the package converted between a dispatch and its run: the run fails contained_task_variable_value_missing with nothing pressed, and the next evaluation after the workbench's check holds the pair goal_value_rule_missing and does not dispatch it (h5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_tk1::tk1_h1_an_orphan_stored_before_the_conversion_blocks_no_rule_and_clear_removes_it",
+    "actingcommand-runtime-host::lib::tests::gate_455_tk1::tk1_h2_a_rule_without_the_value_is_held_and_the_mended_package_lifts_it",
+    "actingcommand-runtime-host::lib::tests::gate_455_tk1::tk1_h3_the_hold_lifts_when_the_rule_carries_the_value",
+    "actingcommand-runtime-host::lib::tests::gate_455_tk1::tk1_h4_a_direct_run_without_the_value_is_refused_and_one_with_it_records_it",
+    "actingcommand-runtime-host::lib::tests::gate_455_tk1::tk1_h5_a_run_without_the_value_is_refused_before_any_input_and_its_pair_is_held",
+]
+incident = ["#455 TK-1"]

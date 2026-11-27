@@ -73,6 +73,7 @@ fn owned(ids: &[&str]) -> Vec<String> {
 fn variable(block: GoalBlock, packages: &[&str]) -> GoalVariable {
     GoalVariable {
         block,
+        rule_given: false,
         packages: owned(packages),
     }
 }

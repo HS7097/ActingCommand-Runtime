@@ -8021,6 +8021,12 @@ impl HostShared {
     /// with its word. Each is Denied with the package and the name. A request without values passes
     /// unchanged and reads nothing. Fix round of the 0.12.68 train: a judgement that gives neither
     /// the value nor a word, which cannot happen, is `run_variable_unjudged`, Denied as the others.
+    /// Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): first, a
+    /// variable the package declares that only a rule gives and the request gives no value for is
+    /// `run_variable_missing` (the first in declaration order), Denied with the package and the
+    /// name: it has no default to read. A given value of such a variable is judged whole by the
+    /// contract crate's one check (`PackageVariable::takes_whole`), no stored value being read for
+    /// it.
     fn check_run_variables(
         &self,
         request: &ValidatedRuntimeRequest<'_>,
@@ -8029,6 +8035,18 @@ impl HostShared {
         prepared: &PreparedContainedTask,
     ) -> Result<(), RequestFailure> {
         let given = task_request.variables();
+        if let Some(missing) = prepared
+            .declared_variables()
+            .iter()
+            .find(|variable| variable.rule_given() && !given.contains_key(&variable.name))
+        {
+            return Err(run_variable_refused(
+                HostCode::RunVariableMissing,
+                prepared.package_label(),
+                &missing.name,
+                None,
+            ));
+        }
         if given.is_empty() {
             return Ok(());
         }
@@ -8093,7 +8111,22 @@ impl HostShared {
                 value: value.clone(),
                 set_by: Some(set_by),
             };
-            let resolved = actingcommand_policy::resolve_variable(variable, Some(&entry), None);
+            // Workflow #455 TK-1: a variable only a rule gives resolves to nothing (no stored
+            // value is read for it); its given value is judged whole by the contract crate's one
+            // check, which is what the resolution judges a stored value by.
+            let Some(resolved) =
+                actingcommand_policy::resolve_variable(variable, Some(&entry), None)
+            else {
+                if let Err(problem) = variable.takes_whole(value) {
+                    return Err(run_variable_refused(
+                        HostCode::RunVariableValueRefused,
+                        package_id,
+                        name,
+                        Some(problem),
+                    ));
+                }
+                continue;
+            };
             match (resolved.source, resolved.problem) {
                 (actingcommand_contract::VariableSource::Set, None) => {}
                 // Not taken, or taken only in part (`keys_left_out`): the judgement's word.
@@ -9341,6 +9374,12 @@ impl HostShared {
             .and_then(|()| runtime.note_unlisted_entry())
         {
             Err(ContainedTaskRunError::Boundary(failure))
+        } else if let Err(error) = prepared.refuse_missing_variable(&runtime.run_parameters) {
+            // Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"):
+            // a run that holds no value of a variable its package declares only a rule gives
+            // (a package changed since its dispatch, or a run the host starts itself) has no
+            // default to read: the kernel refuses it before any input, a task failure of its own.
+            Err(ContainedTaskRunError::Task(error))
         } else if !prerequisites.is_empty() {
             // Workflow #336 L2b: a package with prerequisite packages runs through their gate;
             // Workflow #373 NAV-3a, a page-graph package that declares one included (its entry
