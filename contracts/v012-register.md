@@ -50090,6 +50090,203 @@ the other instance's do not; an other target by a copy's id is refused `wrong_ty
 and the Runtime goes on. A `resource_targets_record_invalid` line in the daemon's log no longer
 precedes a `runtime_stopped`.
 
+### 1.532 Slice #455 TK-1 (0.12.89): a package variable that only a rule gives: not offered on the goal page, never read from a default, and a run without it refused (board #455; the rulings are the coordinator's of 11-28, after the owner's words on the board that the goal page offers only what is a person's to say; rulings 6a and 6b are the coordinator's of the same day, after the implementer's stop; coordinator work order `rd-1123/brief-455-tk1.md`; on main `410d1636`, v0.12.88)
+
+It ships in 0.12.89. [package-variables.md](package-variables.md) ("A variable a rule gives", the
+declaration's table, the refusals, "Runs without a dispatch", "Interface"),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("A rule's variable values"),
+[standard-pack-goals.md](standard-pack-goals.md) ("The checks"),
+[scheduling-blackout.md](scheduling-blackout.md) (position 5a),
+[runtime-interface.md](runtime-interface.md) ("The variable values of a contained run"),
+[scheduling/README.md](scheduling/README.md) (the fact refresh's "Dispatch"),
+[component-interfaces.md](component-interfaces.md) (the `package` row 26),
+[resource-verify.md](resource-verify.md) ("The `package` revision"), the rows `goals set`, `goals
+clear`, `package variables` and `replay` of [lab-operations.json](lab-operations.json), and the
+outcome fragments of the kernel and the host and the catalog's vocabularies are the contract.
+
+**What it is for.** A package's parameter is a person's (offered on the goal page), the package's
+own (fixed, no variable), or a rule's: which item a shop package buys, when the schedule has one
+rule for each item and the evaluation picks the rule whose pool is short. Until 0.12.88 the third
+kind did not exist: such a parameter was an ordinary variable, on the goal page for a person to
+change, with a default the run read when nothing was given, and a value a person stored let through
+only the rules that carried it. Since 0.12.81 a rule can carry its package's values (§1.511); this
+slice adds the declaration that says only a rule gives the value, and what follows from it.
+
+**The rulings, as built.**
+- *1, the declaration* (`crates/actingcommand-contract/src/package_variables.rs`, `GivenBy`,
+  `Check::variable`). The optional member `given_by`, a closed vocabulary of the one word `rule`;
+  with it the entry writes no `default` and no `default_origin`, each refused `variables_invalid` at
+  that member, as is any other word at `given_by` itself. A kind's default is `None` exactly for such
+  a variable (`VariableKind`'s `default` members are options), and `PackageVariable::default_value`
+  answers none for it. `package` 26 (`GIVEN_BY_PACKAGE_REVISION`; the revision table's row
+  `given_by` under `variables`); no `requires` name.
+- *2, one source* (`crates/policy/src/variables.rs`). `resolve_variable`, the one function of the
+  order of sources, answers no value for such a variable (`Option`): no stored value is read, there
+  is no default, and a stored value excludes no rule by it (`excluded_by` skips it). A rule's value
+  is handed as before, source `rule`, naming no setter.
+- *3, offline* (`crates/policy/src/compose.rs`, `refused_rule_variables`). A rule of a package that
+  declares such a variable and carries no value for it refuses the file `schedule_invalid` at
+  `/rules/<i>/variables`, the text naming the package, the variable and the rule; the composer the
+  Runtime, `standard-pack check` (exit 2) and `package bundle --schedule` call. A `goals.json`
+  placement of such a variable is `goal_variable_rule_given` at its `name`
+  (`check_standard_pack_goal_references`; `GoalVariable::rule_given`); the file applies no entry and
+  the root runs.
+- *4, at every evaluation* (`crates/runtime-host/src/policy_host.rs`, `rule_value_deferral`). First
+  at position 5a, a candidate whose rule carries no value the declaration in force asks for waits
+  `goal_value_rule_missing` (the plan's `rule_value_missing`): warning, no wake, not dispatched, no
+  failure, no count; the idle plan reads its no-wake mark as a hold with no time
+  (`hold_back_untimed`, the reader of 5a's answers, unchanged). It lifts when the workbench reads a
+  package without the variable or a generation whose rule carries it.
+- *5, at the run's entry* (`crates/execution-kernel/src/contained_task/remedies.rs`,
+  `refuse_missing_variable`). The kernel refuses a run that holds no value of such a variable before
+  any input, `contained_task_variable_value_missing` (`declaration_error`; `package_id`,
+  `variable_name`, detail `variable_name=<name>`); the host calls it after the run's start gates and
+  before any capture or input (`execute_contained_task_with_lease`), the offline simulation, the
+  whole replay and the scan replay before their first capture. *No loop:* the refusal settles as
+  any failure of its class does: rerun only, never accumulating (policy-suspension.md, "Which
+  failures accumulate"), so an immediate rerun (R22) may meet it again, bounded by the retry round's
+  budgets, until the workbench's next check reads the changed package (at most
+  `standard_packs.check_interval_ms` after it changed, at the start of a cycle); from that
+  evaluation on, ruling 4 holds the pair with no wake, so nothing is rerun at once on this refusal
+  for ever (shown by `tk1_h5`).
+- *6, a run nobody dispatched* (`crates/runtime-host/src/host/contained_task.rs`,
+  `check_run_variables`). A direct run without the value is Denied `run_variable_missing` before any
+  record, claim or lease; a given value is judged whole by `PackageVariable::takes_whole`, the one
+  check `judge_rule_variable_value` and the kernel's `given_variable_values` call too.
+- *6a, every way a package is run offline can be given the value* (the coordinator's ruling after
+  the stop). `actinglab replay --package --frames` takes `--variable` in its whole-package mode (the
+  `conflicting` lifted), and `package dry-run` takes the same `--variable`: the same parser
+  (`lab_ops::core_ops::parse_variables`, through `replay_cli::given_variables`) and the same
+  judgement (`replay_cli::given_variable_values`, the kernel's `given_variable_values`, a value taken
+  whole); without it both read what they read before. The other offline ways: the scan replay took
+  `--variable` already; `standard-pack trial` takes it and refuses, in its plan, such a variable not
+  given (`--variable` `value_missing`); a regression case of `resource regression` and of
+  `standard-pack adopt` runs only the recognition engine and reads no variable; `standard-pack check`
+  and `package bundle` run no package. None of them is a declaration file that cannot give a value,
+  so no case is left refused for want of a member. The Lab's recording trial runs stay as they are:
+  they run only what `record stop` generates in memory, which never writes `given_by`.
+- *6b, the fact refresh.* The reader's qualification (`recognition_incompatibility`) refuses a bound
+  package that declares such a variable with the new `reader_problem` word `rule_given_variable` (a
+  refresh run has no rule, so it could never be given the value): `check-config` refuses the
+  binding (`fact_reader_binding_invalid`). A configuration already in place whose package gains one:
+  a start reads marks only and keeps the binding; each refresh run checks the qualification before
+  any input and fails `fact_reader_binding_invalid` with that word, one of the refresh's failures,
+  spaced by its backoff and its rest: a refusal that names its cause, never a loop. The word is the
+  existing vocabulary's, one cause beside the four qualifications it already names.
+- *7, what a person and an agent see* (`crates/runtime-host/src/goals.rs`). The goal page and
+  `GoalView` do not list the variable (`page_variables` skips it by the declaration's member); `goals
+  set` of its name is `goal_value_invalid` `rule_given`; `goals clear` removes a value still stored
+  under the name (an orphan of the view, untouched until then) and otherwise answers `rule_given`.
+  The Lab's `package variables` lists it with its declaration, `given_by` in it, and no
+  `default_json` (`crates/resource-tooling/src/package_variables.rs`).
+- *8, one code, one cause.* The table below.
+- *9, nothing else moves.* No setting; `ledger`, `runtime-client`, `runtime-outcomes` and
+  `actingd-config` stay; a root without such a variable composes, hashes, dispatches and records
+  byte for byte as before. The Runtime computes no value.
+
+| Code or word | Component | The one cause | Refuses or warns |
+|---|---|---|---|
+| `goal_value_rule_missing` | runtime-host | a candidate's rule carries no value of a variable the declaration in force says only a rule gives | warns (a hold at 5a, ladder `none`) |
+| `run_variable_missing` | runtime-host | a direct run's request gives no value of such a variable | refuses (Denied, error, ladder `none`) |
+| `contained_task_variable_value_missing` | execution-kernel | a run reaches the kernel holding no value of such a variable | refuses (the run fails before any input, error, `declaration_error`) |
+| `goal_variable_rule_given` (`standard_pack_problem`) | contract | a `goals.json` placement of such a variable | refuses the file (`standard_pack_root_invalid`, a warning of `standard-pack check`; the root runs) |
+| `rule_given` (`goal_problem`) | contract, given by runtime-host | an `EditGoal` of such a variable's name (a set; a clear with nothing stored) | refuses (Denied `goal_value_invalid`) |
+| `rule_given_variable` (`reader_problem`) | contract, given by the kernel's qualification | a recognition maintenance package that declares such a variable | refuses the binding (`check-config`) or the refresh run (`fact_reader_binding_invalid`) |
+
+**Every place that read a variable's default, and what it does now.** `PackageVariable::default_value`
+(none for such a variable); the kernel's `default_variable_values` (leaves it out) and its callers
+`default_run_values`, `given_variable_values` and `given_run_parameters`; `dispatched_variable_values`
+(the dispatched value or nothing); `resolve_variable` (no value, so the plan, the goal page, `EditGoal`
+and the direct run's judgement each say what they do: hand the rule's value or hold the pair, list
+nothing, refuse `rule_given`, judge with `takes_whole`); the goal page's `variable_entry` (no
+`default_json` when there is none; it lists no such variable); the Lab's `package variables` (no
+`default_json`); `standard-pack trial`'s plan (refuses `value_missing`); the provenance listing
+(names it in neither list). The runs that read `default_run_values` are each refused before any input
+by `refuse_missing_variable` when the variable is missing: the host's run (a direct run with no
+values, a run the host starts itself), the offline simulation (`package dry-run`), the whole replay;
+the scan replay builds its values by `given_variable_values` and is refused alike. The Lab's recording
+trial runs (`select::decide`, `scan::offline_entry`, the cross-check's simulation) read
+`default_run_values` of a package `record stop` generates, which holds no such variable.
+
+**Tests** (incident `#455 TK-1`; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `tk1_the_reader_takes_given_by_without_a_default_and_refuses_it_beside_one` (contract) | each kind with `given_by: "rule"` reads, no default, its declaration as written; beside a `default` or a `default_origin`, and a word other than `rule`, `variables_invalid` at the member; the root check applies it, the provenance names it in neither list |
+| `tk1_a_placement_of_a_variable_a_rule_gives_is_refused_at_its_name` (contract) | the references know it; a placement is `goal_variable_rule_given` at its `name` |
+| `tk1_t1_two_rules_each_carrying_its_own_value_are_both_candidates_with_nothing_stored` (policy) | each pair hands its rule's value, source `rule`; an orphan stored under the name holds neither back and is not read; while a person's variable, the same value holds the other back |
+| `tk1_t2_a_rule_that_carries_no_value_for_it_is_refused_at_its_variables` (policy) | `schedule_invalid` at `/rules/<i>/variables`, with another variable only or no member |
+| `tk1_t3_a_rule_without_the_value_the_declaration_in_force_asks_is_held_back` (policy) | composed under a person's variable, the package replaced: the rule without the value is `rule_value_missing`, the other not |
+| `tk1_k1_a_run_without_the_value_is_refused_and_one_with_it_reads_it` (kernel) | the defaults and a dispatch without the value or with one not taken are refused with the code; a dispatched or given value is read |
+| `tk1_k2_an_offline_run_without_the_value_is_refused_before_its_first_capture` (kernel) | the simulation and the whole replay are refused, no frame captured or read; given the value, not refused with the code |
+| `tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses_it` (Lab) | the revision table counts 26; this build's range is [3, 26]; an installer of [3, 25] refuses the zip at its edge |
+| `tk1_h1_an_orphan_stored_before_the_conversion_blocks_no_rule_and_clear_removes_it` (host) | after the conversion in place neither rule is held back by the stored value, the first runs with its own value; the page lists no variable and shows the orphan; set refused `rule_given`, clear removes it, a second clear `rule_given` |
+| `tk1_h2_a_rule_without_the_value_is_held_and_the_mended_package_lifts_it` (host) | `goal_value_rule_missing` (warning, its four values), no wake, no dispatch, the other rule runs; the package mended, the first is dispatched again |
+| `tk1_h3_the_hold_lifts_when_the_rule_carries_the_value` (host) | the rule mended in `schedule.json`: dispatched, its run reads the rule's value |
+| `tk1_h4_a_direct_run_without_the_value_is_refused_and_one_with_it_records_it` (host) | Denied `run_variable_missing`, nothing pressed; with the value it runs and its admission record lists it |
+| `tk1_h5_a_run_without_the_value_is_refused_before_any_input_and_its_pair_is_held` (host) | the package converted between dispatch and run: the run fails with the kernel's code, nothing pressed; the next evaluation after the check holds the pair |
+| `tk1_h6_a_default_dispatched_before_the_conversion_is_no_value_of_the_run` (host; fix round 1) | the dispatch carries the variable's default, the package converted before its run: the run does not read it and fails with the kernel's code, nothing pressed |
+
+A root without such a variable: bytes and identities as before; the gates that hold it, unchanged:
+`gate_500_sv2` (policy: `sv2_t9`'s golden tasks and compiled task; host: every rule-value path),
+`gate_463_v2` (both halves: the defaults, the records and the warnings of a person's variable),
+`gate_463_v3` (the page and the edits), `gate_463_ch1` (the admission record's bytes),
+`gate_463_s38` (a direct run's judgement), `gate_455_gslx` and `gate_477_lr1` (the revision table
+below 26). Adapted, each because this slice deliberately changes what it pinned: the six tests that
+pin the shipped `package` range (to [3, 26]: `gate_463_kp1`, `gate_463_sel2l`, the rescue module's
+`gate_463_v1`, the Lab's `gate_463_sel2l_rows`, actinglab-architecture's `component_interfaces`,
+`gate_477_cv1`); `gate_463_v2_replay` (the whole replay no longer refuses `--variable`
+`conflicting`); the contract crate's `v1_each_kind_reads_with_its_members` and the `GoalVariable`
+literals of `v1_a_placement_is_held_to_the_variables_the_root_declares` and of
+`standard_pack_goals_tests` (the new members); the policy's `gate_463_v2` (its defaults read through
+the option).
+
+**Not proven by a test.** That an asleep instance stays asleep for this hold: the composer-mode
+fixture has no instance an idle action puts to sleep (as #486 ASLEEP-4's r13 says of SV-2's holds);
+the hold gives the same no-wake mark the idle plan reads for them. The fact refresh's refusal of such
+a package (`rule_given_variable`) is the qualification's existing path with one more word, not run
+here. `package dry-run --variable` on the command line (its values are the kernel's
+`given_variable_values`, which `tk1_k1` drives, and its run is `tk1_k2`'s simulation).
+
+**What is not changed, and what is left.** No setting, member, request, answer or persisted shape;
+`GoalView` gains nothing (the read-only listing of what each rule passes, for a console, is a later
+slice with `runtime-client`'s revision). A value that comes from a stored record, one run for each
+record, is a later design; nothing here closes it off: `given_by` is a closed vocabulary that a
+later `package` revision may widen, the overlay key is `session.dispatch.parameter.<name>` whoever
+gives the value, `type` and `given_by` are independent, and each missing value has its code by its
+source. A host-started run (a startup package, a ladder's package) of a package that declares such a
+variable is refused at the kernel's entry; no offline check refuses such a binding in this slice.
+
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found one
+way a run could still act on a value no rule gave, and it is closed: **a dispatched value that no
+rule gave is no value of a variable only a rule gives.** A dispatch planned while the package
+declared the variable a person's carries its default or its stored value; with the package changed
+before that run, the kernel judged the dispatched value by the new declaration, took it, and the
+entry's refusal let the run through. The host now hands a run, of a variable its prepared package
+says only a rule gives, only a dispatched value whose record's source is `rule`
+(`fact_refresh.rs`: `DispatchedParameters::rule_variables`, read from the records'
+`variable_source`, and `for_run_of`, called once in `execute_contained_task_with_lease` before the
+admission record and the run's parameters are made), so the run holds none and is refused at its
+entry; `tk1_h6` drives it with a default. A direct run's given value is not a dispatched one and
+is read as before. From the review also, in the contract's words now: the entry's refusal is a
+failure of a started run
+(its lease held, its initial configuration recorded, a handset's start gate passed), not a refused
+request; each rerun spends what a dispatch spends until the workbench's check; a rule that pauses
+its pair when its retries are used up pauses it on this failure as on any other; and the kernel's
+one code says the run holds no value, however that came about. The first build also failed on two
+things no reader caught: the host gate called a helper its module does not import, and three
+operations' help texts in the Lab's table had grown past the table's 160 bytes (the added sentences
+are in the rows' notes now). The catalog's text of `run_variable_missing` no longer names
+`standard-pack trial`, which refuses in its plan. Left, as the review lists: the refusal placed
+before a handset's start gate; a startup or ladder package that declares such a variable refused
+offline; and, not proven by a test, the rerun's spending and a stored value (not a default) carried
+by the dispatch, which takes the same path.
+
+**At deploy.** Nothing to configure. A bundle whose packs declare `given_by` declares `package`
+[26, 26]; an installer of 0.12.88 refuses it. On production nothing changes until a root holds such
+a package; then its rules each carry the value, its goal page shows no such variable, and a stored
+value of it appears among the orphans.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -464,6 +464,16 @@ pub struct NotAppliedValue {
     pub problem: VariableProblem,
 }
 
+/// Workflow #455 TK-1 (register §1.532; `contracts/package-variables.md`, "A variable a rule
+/// gives"): a variable only a rule gives (`given_by: "rule"`) that the declaration in force of the
+/// pair's package declares and the pair's task carries no value for: a package changed since the
+/// generation in force was composed. The task's candidate is held back; nothing is handed to a run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingRuleValue {
+    pub package_id: String,
+    pub variable_name: String,
+}
+
 /// The variables of one (task, instance) pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PairVariables {
@@ -482,6 +492,9 @@ struct PairVariables {
     /// Workflow #500 SV-2 fix round 1: the first variable, in declaration order, the pair's task
     /// carries a value for that the package's declaration in force does not take.
     refused: Option<RefusedRuleValue>,
+    /// Workflow #455 TK-1: the first variable, in declaration order, that only a rule gives and
+    /// that the pair's task carries no value for.
+    missing: Option<MissingRuleValue>,
 }
 
 /// Workflow #500 SV-2 fix round 1 (register §1.511; `contracts/package-variables.md`, "Carried by
@@ -555,6 +568,20 @@ impl VariablePlan {
         self.pairs
             .get(&(task_id.to_owned(), instance_id.to_owned()))
             .and_then(|pair| pair.refused.as_ref())
+    }
+
+    /// Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): the first
+    /// variable, in declaration order, that the declaration in force of the package of `task_id`
+    /// says only a rule gives and that the task carries no value for: the task's candidate on
+    /// `instance_id` is held back. `None` when the task carries every such value.
+    pub fn rule_value_missing(
+        &self,
+        task_id: &str,
+        instance_id: &str,
+    ) -> Option<&MissingRuleValue> {
+        self.pairs
+            .get(&(task_id.to_owned(), instance_id.to_owned()))
+            .and_then(|pair| pair.missing.as_ref())
     }
 
     /// Workflow #500 SV-2: the names of the variables that a task of a pair of `instance_id`
@@ -644,20 +671,27 @@ pub(crate) fn plan_with_entries(
                 carried: BTreeSet::new(),
                 excluded_by: None,
                 refused: None,
+                missing: None,
             };
             for declared_variable in &declared.variables {
                 let variable = &declared_variable.variable;
                 let root = table.root_word(&instance.game_id, &variable.name);
                 let entry = stored.get(&variable.name);
+                // Workflow #455 TK-1: `None` for a variable only a rule gives, of which no stored
+                // value is read and which has no default: the rule's value is its one source.
                 let resolved = resolve_variable(variable, entry, root);
                 // Workflow #500 SV-2: the value the task's rule carries for the variable, if any.
-                match task
-                    .variables
-                    .as_ref()
-                    .and_then(|rule_values| rule_values.get(&variable.name))
-                {
-                    Some(rule_value) => {
+                match (
+                    task.variables
+                        .as_ref()
+                        .and_then(|rule_values| rule_values.get(&variable.name)),
+                    resolved,
+                ) {
+                    (Some(rule_value), resolved) => {
+                        // Workflow #455 TK-1: a stored value decides nothing of a variable only a
+                        // rule gives: no stored value is read for it.
                         if variables.excluded_by.is_none()
+                            && !variable.rule_given()
                             && entry.is_some_and(|held| held.value != *rule_value)
                         {
                             variables.excluded_by = Some(variable.name.clone());
@@ -679,11 +713,12 @@ pub(crate) fn plan_with_entries(
                             variable_name: variable.name.clone(),
                             value: rule_value.clone(),
                             source: VariableSource::Rule,
-                            set_by: resolved.set_by,
+                            set_by: resolved.as_ref().and_then(|resolved| resolved.set_by),
                             problem: None,
                         });
+                        variables.resolved.extend(resolved);
                     }
-                    None => {
+                    (None, Some(resolved)) => {
                         if let (Some(problem), Some(entry)) = (resolved.not_applied(), entry) {
                             variables.not_applied.push(NotAppliedValue {
                                 package_id: declared.package_id.clone(),
@@ -694,9 +729,19 @@ pub(crate) fn plan_with_entries(
                             });
                         }
                         variables.values.push(resolved.clone());
+                        variables.resolved.push(resolved);
+                    }
+                    // Workflow #455 TK-1: a variable only a rule gives that the task's rule
+                    // carries no value for: nothing is handed, and the pair is held back.
+                    (None, None) => {
+                        if variables.missing.is_none() {
+                            variables.missing = Some(MissingRuleValue {
+                                package_id: declared.package_id.clone(),
+                                variable_name: variable.name.clone(),
+                            });
+                        }
                     }
                 }
-                variables.resolved.push(resolved);
             }
             plan.pairs.insert(pair, variables);
         }
@@ -730,21 +775,32 @@ fn text_sha256(text: &str) -> String {
 ///   judgement's word.
 ///
 /// A record that holds a value names who set it, applied or not.
+///
+/// Workflow #455 TK-1 (register §1.532; `contracts/package-variables.md`, "A variable a rule
+/// gives"): `None` for a variable only a rule gives (`given_by: "rule"`), which has no default and
+/// of which no stored value is read, whatever `entry` and `root` say: its one source is the
+/// dispatched task's rule (or the value a run nobody dispatched is given), which each caller
+/// reads itself.
 pub fn resolve_variable(
     variable: &PackageVariable,
     entry: Option<&StoredEntry>,
     root: Option<VariableProblem>,
-) -> ResolvedVariable {
+) -> Option<ResolvedVariable> {
+    if variable.rule_given() {
+        return None;
+    }
+    // Every variable a person may set has a default (the reader requires one).
+    let default_value = variable.default_value()?;
     let set_by = entry.and_then(|entry| entry.set_by);
     let default = |problem| ResolvedVariable {
         variable_name: variable.name.clone(),
-        value: variable.default_value(),
+        value: default_value.clone(),
         source: VariableSource::Default,
         set_by,
         problem,
     };
     let Some(entry) = entry else {
-        return default(None);
+        return Some(default(None));
     };
     let judged = match (root, entry.set_by) {
         (Some(problem), _) => Err(problem),
@@ -753,7 +809,7 @@ pub fn resolve_variable(
         (None, None) => Err(VariableProblem::EntryUnreadable),
         (None, Some(_)) => variable.judge(&entry.value),
     };
-    match judged {
+    Some(match judged {
         Ok(value) => {
             // Fix round 1: an `ordered` value applied in part is marked; it was applied.
             let problem = variable
@@ -768,7 +824,7 @@ pub fn resolve_variable(
             }
         }
         Err(problem) => default(Some(problem)),
-    }
+    })
 }
 
 /// Workflow #500 SV-2 (register §1.511; `contracts/standard-pack-schedule.md`, "A rule's variable
@@ -786,13 +842,8 @@ pub fn judge_rule_variable_value(
     variable: &PackageVariable,
     value: &serde_json::Value,
 ) -> Result<(), Option<VariableProblem>> {
-    match variable.judge(value) {
-        Ok(read) if variable.leaves_keys_out(value, &read) => {
-            return Err(Some(VariableProblem::KeysLeftOut));
-        }
-        Ok(_) => {}
-        Err(problem) => return Err(Some(problem)),
-    }
+    // Workflow #455 TK-1: the contract crate's one check of a value taken whole.
+    variable.takes_whole(value).map_err(Some)?;
     if goal_entry_value_fits(value).is_err() {
         return Err(None);
     }

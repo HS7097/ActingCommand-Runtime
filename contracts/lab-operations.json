@@ -1198,7 +1198,7 @@
       "new": "#463 V3, #455 G-R2b (EditGoal)",
       "slice": "463-V3",
       "status": "planned",
-      "notes": "Workflow #463 V3: a value the page does not take is goal_value_invalid with goal_problem; a run in progress is not stopped; nothing is recomposed"
+      "notes": "Workflow #463 V3: a value the page does not take is goal_value_invalid with goal_problem; a run in progress is not stopped; nothing is recomposed. Workflow #455 TK-1 (0.12.89): a variable only a rule gives (given_by rule) is no person's to set and is goal_value_invalid with goal_problem rule_given"
     },
     {
       "name": "goals clear",
@@ -1219,7 +1219,7 @@
       "new": "#463 V3, #455 G-R2b (EditGoal)",
       "slice": "463-V3",
       "status": "planned",
-      "notes": "Workflow #463 V3: a name that holds no stored value is goal_value_invalid with goal_problem value_not_set"
+      "notes": "Workflow #463 V3: a name that holds no stored value is goal_value_invalid with goal_problem value_not_set. Workflow #455 TK-1 (0.12.89): for a variable only a rule gives that holds no stored value, goal_problem rule_given; a value stored under its name before it became one, which has no default to fall back to, is removed as an orphan"
     },
     {
       "name": "crash-log",
@@ -2564,7 +2564,7 @@
         {"name": "package", "form": "option", "type": "dir", "required": true, "note": "a package's content directory"}
       ],
       "help": "Reads the variables one package's control declaration declares, with their defaults, and its remedy parameters, as the Runtime reads them.",
-      "output": "package, package_id, variables (each name, type, default_json and declaration) and parameters (each capability, irreversible, parameter_name, options, default_option)",
+      "output": "package, package_id, variables (each name, type, default_json and declaration; a variable only a rule gives, given_by in its declaration, has no default_json) and parameters (each capability, irreversible, parameter_name, options, default_option)",
       "writes": false,
       "irreversible": false,
       "runtime": "offline",
@@ -3072,7 +3072,7 @@
         {"name": "select", "form": "option", "type": "string", "required": false},
         {"name": "scan", "form": "option", "type": "file", "required": false},
         {"name": "parameter", "form": "option", "type": "key_value", "required": false, "repeat": true},
-        {"name": "variable", "form": "option", "type": "key_value", "required": false, "repeat": true},
+        {"name": "variable", "form": "option", "type": "key_value", "required": false, "repeat": true, "note": "Workflow #455 TK-1: read by the whole replay and the scan replay alike; replaces the variable's default, and gives a variable only a rule gives, which has none: without it the run of a package that declares one is refused before its first capture"},
         {"name": "seed", "form": "option", "type": "unsigned", "required": false},
         {"name": "standard_pack_root", "form": "option", "type": "dir", "required": false}
       ],

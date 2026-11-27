@@ -92,6 +92,10 @@ actingcommand_contract::outcome_codes! {
         // Workflow #390 OUT-2: a designated effect's cap names an instance fact that gave no cap
         // (keys `pack_operation_id`, `fact_key`; `unknown_reason`, or `count` and `limit_count`).
         ContainedTaskDesignatedEffectCapUnresolved => "contained_task_designated_effect_cap_unresolved": error / declaration_error,
+        // Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): a run
+        // holds no value of a variable its package declares only a rule gives, which has no
+        // default (keys `package_id`, `variable_name`); refused before any input.
+        ContainedTaskVariableValueMissing => "contained_task_variable_value_missing": error / declaration_error,
         ContainedTaskResourceReadingInvalid => "contained_task_resource_reading_invalid": error / declaration_error,
         ContainedTaskLinearInvalid => "contained_task_linear_invalid": error / declaration_error,
         ContainedTaskSelectInvalid => "contained_task_select_invalid": error / declaration_error,

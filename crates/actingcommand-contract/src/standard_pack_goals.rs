@@ -408,10 +408,12 @@ pub struct GoalRule {
 
 /// Workflow #463 V1: a variable of the game root as the references hold it: the block its kind is
 /// shown with (the first declaration's, in registry order) and every package that declares it, in
-/// registry order.
+/// registry order. Workflow #455 TK-1: and whether only a rule gives its value (the first
+/// declaration's `given_by`), which no placement may place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalVariable {
     pub block: GoalBlock,
+    pub rule_given: bool,
     pub packages: Vec<String>,
 }
 
@@ -665,7 +667,9 @@ pub fn parse_standard_pack_goals(
 ///   `fixed_value_milli`;
 /// - Workflow #463 V1: `goal_variable_unknown` (a placement names no variable a package of the
 ///   root declares, at its `name`) and `goal_block_mismatch` (a placement's `block` is not the
-///   placed variable's, at its `block`).
+///   placed variable's, at its `block`);
+/// - Workflow #455 TK-1: `goal_variable_rule_given` (a placement places a variable only a rule
+///   gives, `given_by`, which is no person's to set, at its `name`).
 ///
 /// Workflow #455 G-SLx (register §1.501): `goal_governs_irreversible`, which until 0.12.77 an
 /// entry got that governed, reached or followed a package that can do something irreversible, is
@@ -719,7 +723,9 @@ pub fn check_standard_pack_goal_references(
                     check.issue(StandardPackProblem::GoalVariableUnknown, at_name);
                     continue;
                 };
-                if !variable
+                if variable.rule_given {
+                    check.issue(StandardPackProblem::GoalVariableRuleGiven, at_name);
+                } else if !variable
                     .packages
                     .iter()
                     .all(|package_id| references.knows(package_id))

@@ -217,6 +217,9 @@ mod tests {
     // write it, and the same record gives the instance's pool for one instance and for two.
     mod gate_503_goal1;
 
+    // #455 TK-1 (0.12.89; register §1.532): a package variable only a rule gives.
+    mod gate_455_tk1;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

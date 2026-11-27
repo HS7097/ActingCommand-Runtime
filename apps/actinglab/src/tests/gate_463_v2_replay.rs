@@ -8,7 +8,8 @@
 // `argument_problem`, never ignored: a name the package does not declare (a package that declares
 // none declares no name), a value the declaration does not take (an option it does not offer,
 // another type) and a value that is not `<name>=<json>` are `not_recognised`, a name given twice
-// is `repeated`, and `--variable` on a whole replay, which does not read it, is `conflicting`. A
+// is `repeated`; until Workflow #455 TK-1 (0.12.89, register §1.532) `--variable` on a whole
+// replay was `conflicting`, and since it the whole replay reads it by the same parser and check. A
 // value the declaration takes passes the argument check. Packages and frames are synthetic and
 // neutral (`gate_lab_rp`'s, with a variable in place of the parameter), and no Runtime or device
 // is involved.
@@ -354,16 +355,30 @@ fn v2_replay_refuses_an_undeclared_or_unfit_variable_and_takes_a_fit_one() {
         );
     }
 
-    // A whole replay does not read `--variable`: it is refused, never ignored.
+    // Workflow #455 TK-1 (register §1.532; the ruling changes what this pinned): a whole replay
+    // reads `--variable` by the same parser and check, so an option the declaration does not
+    // offer is refused there too, and a value it takes is no refusal of `--variable`.
     variable_refused(
         &replay(
             &declaring,
             &frames,
-            &["--variable".to_string(), "pick=\"opt_1\"".to_string()],
+            &["--variable".to_string(), "pick=\"opt_3\"".to_string()],
         ),
-        "conflicting",
-        "a variable given to a whole replay",
+        "not_recognised",
+        "an option not offered, given to a whole replay",
     );
+    let whole = replay(
+        &declaring,
+        &frames,
+        &["--variable".to_string(), "pick=\"opt_1\"".to_string()],
+    );
+    if let Some((code, details)) = error_of(&whole) {
+        assert!(
+            code != "validation_failed" || details["argument"] != "--variable",
+            "{}",
+            whole.envelope_json()
+        );
+    }
 
     // A value the declaration takes passes the argument check: whatever the scan replay then
     // answers, it is not a refusal of `--variable`.

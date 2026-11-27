@@ -1974,19 +1974,21 @@ fn read_game(
 /// `/rules/<i>/variables/<name>`. A package whose variables `irreversible` does not hold (its
 /// declaration could not be read, its reader read no variables) has its rules' values judged by
 /// no declaration here: the run's own admission judges each again
-/// (`contracts/package-variables.md`, "The overlay"). `None` when every rule's values are taken.
+/// (`contracts/package-variables.md`, "The overlay"). Workflow #455 TK-1 (register §1.532): then,
+/// for a rule whose package's declaration is read, with or without the member, the first variable
+/// in declaration order that only a rule gives (`given_by: "rule"`) and that the rule carries no
+/// value for, at `/rules/<i>/variables`, the text naming the variable. `None` when every rule's
+/// values are taken and every rule carries each value its package asks of a rule.
 fn refused_rule_variables(
     schedule: &StandardPackSchedule,
     irreversible: &IrreversiblePackages,
 ) -> Option<(String, String)> {
     for (index, rule) in schedule.rules.iter().enumerate() {
-        let Some(carried) = rule.body.get(SCHEDULE_RULE_VARIABLES_MEMBER) else {
-            continue;
-        };
         let pointer = format!("/rules/{index}/{SCHEDULE_RULE_VARIABLES_MEMBER}");
-        let values = match carried {
-            Value::Object(object) if !object.is_empty() => object,
-            _ => {
+        let values = match rule.body.get(SCHEDULE_RULE_VARIABLES_MEMBER) {
+            None => None,
+            Some(Value::Object(object)) if !object.is_empty() => Some(object),
+            Some(_) => {
                 return Some((
                     pointer,
                     format!(
@@ -2000,7 +2002,7 @@ fn refused_rule_variables(
         let Some(declared) = irreversible.package_variables(&rule.package_id) else {
             continue;
         };
-        for (name, value) in values {
+        for (name, value) in values.into_iter().flatten() {
             let at = format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1"));
             let Some(variable) = declared.iter().find(|variable| variable.name == *name) else {
                 return Some((
@@ -2026,6 +2028,21 @@ fn refused_rule_variables(
                     ),
                 ));
             }
+        }
+        // Workflow #455 TK-1: a variable only a rule gives has no default and no stored value is
+        // read for it, so a rule of its package that carries none could never run.
+        if let Some(missing) = declared.iter().find(|variable| {
+            variable.rule_given()
+                && !values.is_some_and(|values| values.contains_key(&variable.name))
+        }) {
+            return Some((
+                pointer,
+                format!(
+                    "the package {} declares {}, which only a rule gives, and the rule {} carries \
+                     no value for it",
+                    rule.package_id, missing.name, rule.id
+                ),
+            ));
         }
     }
     None

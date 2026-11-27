@@ -351,6 +351,10 @@ crate::outcome_vocabulary! {
         /// `package` interface maximum below 14. Refused by the installer's `place` at
         /// `interfaces.json`, as `goal_undeclared` is.
         VariableUndeclared => "variable_undeclared",
+        /// Workflow #455 TK-1 (since 0.12.89): a `variable` entry of `goals.json` places a
+        /// variable only a rule gives (`given_by: "rule"` in its declaration), which is no
+        /// person's to set, at the entry's `name`.
+        GoalVariableRuleGiven => "goal_variable_rule_given",
     }
 }
 

@@ -137,6 +137,19 @@ impl GoalPage {
             .is_some_and(|declared| declared.kind == DeclaredGoalKind::Variable);
         self.variable(name).is_none() && (placed || self.root.contains_key(name))
     }
+
+    /// Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): whether
+    /// `name` is a variable only a rule gives (`given_by: "rule"`), by the first declaration of a
+    /// bound package, else by the root's first declaration: no person sets it (`rule_given`).
+    fn rule_given(&self, name: &str) -> bool {
+        match self.variable(name) {
+            Some(variable) => variable.rule_given(),
+            None => self
+                .root
+                .get(name)
+                .is_some_and(|verdict| verdict.declaration.rule_given()),
+        }
+    }
 }
 
 /// Why an `EditGoal` was refused: the word, and the values that locate it (`json_pointer` within
@@ -280,15 +293,17 @@ pub(crate) fn check_edit(
 ///    (`holds_no_value`); a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
 ///    its pool, as an other target does (below); a `variable` placement is the variable of its
 ///    name (2);
-/// 2. a variable of a bound package: one that does not apply is `variable_not_applying` with its
+/// 2. Workflow #455 TK-1: a variable only a rule gives, of a bound package or of the root:
+///    `rule_given`, before its value is judged;
+/// 3. a variable of a bound package: one that does not apply is `variable_not_applying` with its
 ///    `variable_problem`; else its value is judged by the dispatch's own function
 ///    ([`judge_value`]) and held to the store's bound;
-/// 3. a remedy parameter of a bound package: `remedy_parameter`;
-/// 4. fix round 1: a name the game root declares (a placement, or a variable of a package of the
+/// 4. a remedy parameter of a bound package: `remedy_parameter`;
+/// 5. fix round 1: a name the game root declares (a placement, or a variable of a package of the
 ///    root) that no bound package declares: `not_offered`, the word the view lists it with;
-/// 5. an other target: the value `{resource, at_least}` on a targetable pool, as [`check_target`]
+/// 6. an other target: the value `{resource, at_least}` on a targetable pool, as [`check_target`]
 ///    judges it;
-/// 6. else `name_unknown`.
+/// 7. else `name_unknown`.
 fn check_set(
     page: &GoalPage,
     name: &str,
@@ -312,6 +327,9 @@ fn check_set(
             });
         }
         Some(DeclaredGoalKind::Variable) | None => {}
+    }
+    if page.rule_given(name) {
+        return Err(GoalRefusal::new(GoalProblem::RuleGiven));
     }
     if let Some(variable) = page.variable(name) {
         if let Some(problem) = page.not_applying.get(name) {
@@ -351,7 +369,9 @@ fn check_set(
 /// name's own word answers: `holds_no_value` for a heading or a note, `tier_not_built` for a tier,
 /// `value_not_set` for a resource entry or a variable of a bound package, `remedy_parameter`,
 /// `not_offered` for a name the root declares that no bound package declares, else
-/// `name_unknown`.
+/// `name_unknown`. Workflow #455 TK-1: a variable only a rule gives answers `rule_given` when
+/// nothing is stored under its name; a value stored before it became one (an orphan) is removed
+/// as any stored row is.
 fn check_clear(
     page: &GoalPage,
     stored: &StoredGoalRecord,
@@ -380,6 +400,7 @@ fn check_clear(
         Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => GoalProblem::HoldsNoValue,
         Some(DeclaredGoalKind::Tier { .. }) => GoalProblem::TierNotBuilt,
         Some(DeclaredGoalKind::Resource { .. }) => GoalProblem::ValueNotSet,
+        Some(DeclaredGoalKind::Variable) | None if page.rule_given(name) => GoalProblem::RuleGiven,
         Some(DeclaredGoalKind::Variable) | None if page.variable(name).is_some() => {
             GoalProblem::ValueNotSet
         }
@@ -416,7 +437,11 @@ fn judge_value(
         value: value.clone(),
         set_by: Some(set_by),
     };
-    let resolved = resolve_variable(variable, Some(&entry), None);
+    // Workflow #455 TK-1: a variable only a rule gives resolves to nothing; `check_set` refuses
+    // it `rule_given` before it judges a value, so this answers the same word.
+    let Some(resolved) = resolve_variable(variable, Some(&entry), None) else {
+        return Err(GoalRefusal::new(GoalProblem::RuleGiven));
+    };
     match (resolved.source, resolved.problem) {
         (VariableSource::Set, None) => Ok(()),
         (_, problem) => Err(write_refusal(variable, value, problem)),
@@ -594,7 +619,9 @@ pub(crate) struct PageVariable<'a> {
 
 /// The variables of `page`, each once, in the order the bound packages first declare them, each
 /// with `resolved`'s value of the first package's task that declares it (`resolved` gives the
-/// resolved values of a task, in declaration order).
+/// resolved values of a task, in declaration order). Workflow #455 TK-1: a variable only a rule
+/// gives (its declaration's `given_by`) is no person's to set, so the page does not list it; a
+/// value still stored under its name is an orphan of the view.
 pub(crate) fn page_variables<'a>(
     page: &'a GoalPage,
     resolved: &dyn Fn(&str) -> Option<&'a [ResolvedVariable]>,
@@ -602,7 +629,11 @@ pub(crate) fn page_variables<'a>(
     let mut rows: Vec<PageVariable<'a>> = Vec::new();
     for package in &page.packages {
         let values = resolved(&package.task_id);
-        for variable in &package.variables {
+        for variable in package
+            .variables
+            .iter()
+            .filter(|variable| !variable.rule_given())
+        {
             match rows
                 .iter()
                 .position(|row| row.variable.name == variable.name)
@@ -858,15 +889,17 @@ fn variable_entry(
             .cloned()
             .collect();
     }
+    // Workflow #455 TK-1: a listed variable has a default (the page lists no variable a rule
+    // gives, which has none); without one the entry names no default and no value.
     let default = variable.default_value();
-    entry.default_json = Some(variable_value_json(&default));
+    entry.default_json = default.as_ref().map(variable_value_json);
     if let Some(stored) = stored {
         entry.value_json = Some(stored.value_json.clone());
         entry.set = Some(set_by(stored.set));
     }
     let (effective, source, problem) = match row.resolved {
         Some(resolved) => (
-            resolved.value.clone(),
+            Some(resolved.value.clone()),
             resolved.source,
             resolved.problem.or(not_applying),
         ),
@@ -886,7 +919,11 @@ fn variable_entry(
     if let (VariableKind::Ordered { .. }, Some(stored), VariableSource::Set) =
         (&variable.kind, stored, source)
     {
-        let read = effective.as_array().map(Vec::as_slice).unwrap_or_default();
+        let read = effective
+            .as_ref()
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         entry.removed_keys = stored
             .value
             .as_array()
@@ -897,9 +934,11 @@ fn variable_entry(
             .map(str::to_owned)
             .collect();
     }
-    if shown.is_some() {
-        entry.display = display(variable, &effective);
-        entry.effective_json = Some(variable_value_json(&effective));
+    if shown.is_some()
+        && let Some(effective) = &effective
+    {
+        entry.display = display(variable, effective);
+        entry.effective_json = Some(variable_value_json(effective));
     }
     entry.variable_problem = problem.map(|problem| problem.as_str().to_owned());
     // The root's detail, when the word the run gives is the root's own (not `root_unchecked`,

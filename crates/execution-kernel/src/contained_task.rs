@@ -130,6 +130,10 @@ mod gate_463_v1;
 // Workflow #463 V2: a run reads its package's variables with their kinds' types.
 #[cfg(test)]
 mod gate_463_v2;
+// Workflow #455 TK-1: a run without a value of a variable only a rule gives is refused before
+// any input.
+#[cfg(test)]
+mod gate_455_tk1;
 // Workflow #469 K2: a page-graph step's end and a guard's refusal say why.
 #[cfg(test)]
 mod gate_469_k2;
@@ -3765,7 +3769,10 @@ impl PreparedContainedTask {
     /// Workflow #384 D2-S2 (model §3.2, qualifications 1-3): the first declaration that keeps
     /// the package from being a recognition maintenance package, or `None`. A reader only
     /// navigates and reads: it is no `recognize_only` package, declares no stability
-    /// termination and no designated operation, and carries at least one reading mark.
+    /// termination and no designated operation, and carries at least one reading mark. Workflow
+    /// #455 TK-1 (register §1.532): last, it declares no variable only a rule gives
+    /// (`rule_given_variable`): a fact refresh runs it with no rule, so such a variable could never
+    /// be given its value, and it has no default.
     pub fn recognition_incompatibility(&self) -> Option<actingcommand_contract::ReaderProblem> {
         use actingcommand_contract::ReaderProblem;
         if self.control.execution_mode == "recognize_only" {
@@ -3782,6 +3789,13 @@ impl PreparedContainedTask {
             Some(ReaderProblem::DesignatedOperation)
         } else if self.program.resource_readings.is_none() {
             Some(ReaderProblem::NoMarks)
+        } else if self
+            .control
+            .variables
+            .iter()
+            .any(actingcommand_contract::PackageVariable::rule_given)
+        {
+            Some(ReaderProblem::RuleGivenVariable)
         } else {
             None
         }

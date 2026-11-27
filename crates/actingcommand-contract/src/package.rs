@@ -263,6 +263,10 @@ crate::outcome_vocabulary! {
         IntervalExceedsFreshness => "interval_exceeds_freshness",
         /// Workflow #384 D2-S2: the bound package cannot be read or admitted.
         PackageUnreadable => "package_unreadable",
+        /// Workflow #455 TK-1 (since 0.12.89): the bound package declares a variable only a rule
+        /// gives (`given_by: "rule"`); a fact refresh runs it with no rule, so the variable could
+        /// never be given a value and it has no default.
+        RuleGivenVariable => "rule_given_variable",
     }
 }
 

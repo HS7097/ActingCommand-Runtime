@@ -997,3 +997,12 @@ tests = [
     "actingcommand-contract::lib::event::tests::gate_503_cyc3::cyc3_t4_the_public_projection_carries_the_admission_without_its_window_end",
 ]
 incident = ["#503 CYC-3"]
+
+# Workflow #455 TK-1 (0.12.89; register §1.532; brief rd-1123/brief-455-tk1.md; contracts/package-variables.md, "A variable a rule gives"; contracts/standard-pack-goals.md, "The checks"): the reader takes given_by rule on a variable of each kind without a default (its default none, its declaration as written, a value judged whole as any variable's), a switch beside it keeping its default; it refuses the member beside a default or a default_origin at that member, and a word other than rule (another text, a boolean) at the member itself, each variables_invalid; the root check applies such a variable and the provenance listing names it in neither list; the references know it as one, and a goals.json placement of it is goal_variable_rule_given at its name, another variable of the same package placed as before. Adapted, the type of a default moving: package_variables::tests::v1_each_kind_reads_with_its_members (each kind's default Some), v1_a_placement_is_held_to_the_variables_the_root_declares and standard_pack_goals' variable helper (GoalVariable's rule_given false)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::package_variables::tests::tk1_the_reader_takes_given_by_without_a_default_and_refuses_it_beside_one",
+    "actingcommand-contract::lib::package_variables::tests::tk1_a_placement_of_a_variable_a_rule_gives_is_refused_at_its_name",
+]
+incident = ["#455 TK-1"]

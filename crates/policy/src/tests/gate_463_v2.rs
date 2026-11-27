@@ -344,7 +344,14 @@ fn v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word() {
     let declared_variables = variables(&declared);
     let defaults = declared_variables
         .iter()
-        .map(|variable| (variable.name.clone(), variable.default_value()))
+        .map(|variable| {
+            (
+                variable.name.clone(),
+                variable
+                    .default_value()
+                    .expect("a variable a person may set has a default"),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     let table = VariableTable::build(&[task(
         VAR,
