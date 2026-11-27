@@ -433,7 +433,9 @@ impl Scene {
 
     // The outcomes of the failed terminals of the host's ledger, in order.
     fn failed_terminals(&self) -> Vec<String> {
-        all_events(&self.host)
+        let mut events = super::instance_workers::all_events(&self.host);
+        events.sort_by_key(PersistedEvent::sequence);
+        events
             .iter()
             .filter(|event| event.event_type() == EventType::TaskFailed)
             .filter_map(|event| match event.payload() {
