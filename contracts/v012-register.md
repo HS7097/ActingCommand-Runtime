@@ -49721,6 +49721,145 @@ read once); runs admitted by 0.12.86 add none, and once the journal holds no run
 keeps up to 64 per pair, back to the pair's last root blocked run) a start's first cycle names no
 `catalog_reads` for the journal.
 
+### 1.530 Slice #503 HALT-1 (0.12.87): a lease that lapsed while one instance's session was being closed under a held key fences that instance and no longer stops the Runtime; the watchdog's process probe has a second way and every tick whose probe fails writes its line (board #503; the rulings below are the coordinator's of 11-27, which replaced the work order's rulings 1 to 3 after the implementer's first report; coordinator work order `rd-1123/brief-503-halt1.md`; on main `c3ce3d21`, v0.12.86)
+
+It ships in 0.12.87. [read-session-resource-close.md](read-session-resource-close.md) (the closes
+under a held key), [runtime-outcomes.md](runtime-outcomes.md) ("Device and kernel failures") and
+[runtime-watchdog.md](runtime-watchdog.md) ("Observation" item 5, "Decision" rows 7b and 7f and
+the sentence on a failed probe, "Gap grace", "Files") are the contract. No setting, no outcome code,
+no record type and no interface revision is added; no rule of how leases are granted, renewed or
+expired changes.
+
+**What happened** (production, v0.12.86, 11-27, read by the coordinator from the ledger, the
+daemon's log and the watchdog's log). Since 11-26 every instance's idle action stops its emulator,
+so idle wakes start emulators many times a day. At 10:20:04 JST the idle wake's emulator start of
+one instance (`lease.granted` seq 6824844, `lease.renewed` 6824848, `command.received` 6824849)
+started the emulator and bound it at 10:20:16 (`command.validated` 6824850,
+`runtime.instance_bound` 6824851); then the request wrote nothing for 970 s, in its connection
+preparation. At 10:36:26 the preparation's backend observations (6824994, 6824999) and two
+`runtime.failed` records of the instance followed: `lease_expired` at
+`begin_destructive_resource_close`, stage `runtime_lifecycle_session_close` (6825001), and
+`instance_resources_fenced` caused by it (6825002). The lease transitions went on for a second, then
+the daemon latched `lease_expired` at `begin_destructive_resource_close` and stopped. The watchdog's
+tick of 10:36:53 could not read its process probe within 60 s (`watchdog_start_failed` caused by
+`process_probe_failed`, `timeout_ms` 60000); the 73 ticks after it wrote nothing and started
+nothing; the tick of 11:50:53 started the Runtime (`method` `wmi`). Production was down from 10:36
+to 11:52.
+
+**The causes, established by reading.**
+- *The stop.* After the emulator's Start the preparation (`prepare_connection_attempt` on the
+  control's held key) opened the instance's backends and, the instance being outside the
+  multi-Nemu gate, closed the session after the self-check under that key, whose lease had lapsed
+  while the opens waited. `begin_resource_close` refused the close (`lease_expired`), and the close
+  path builds that refusal as a poison, fatal (`retire_instance_resources`; `RequestFailure::poison`
+  makes its error fatal). The preparation handed it on with `?`, so the start's drive failed with
+  the poison, unrecorded. The control's failed end (`end_failed_emulator_control`,
+  `cleanup_composite_failure`) then ended the key as a backend failure's end: that close met the
+  lapsed lease again and was isolated as Workflow #461 isolates it (the two records above, the
+  key released, the session closed under the session close ahead). But the clean-up returned the
+  first poison; the autostart claim returned it to the instance's worker, whose fatal mark latched
+  it, and actingd's monitor and driver end on a latched condition (the closeout's
+  `policy_closeout_driver` was that condition, the host close's `runtime_lifecycle_shutdown_join`
+  the worker thread's returned error). `contracts/read-session-resource-close.md` had named this
+  close as left fatal "to a later slice of Workflow #475"; this slice is that slice.
+- *The lapse.* The key was renewed before the provider's Start to the Start's bound plus the
+  operator margin (225 s), from about 10:20:04; the renewal before the preparation renews only when
+  less than its own bound (35 s) remains, and about 213 s did, so it did not renew; the opens then
+  waited about 970 s. The preparation's opens have no bound on the host's side
+  (`open_instance_backends_until` with no deadline); a native call inside them keeps its own. So
+  the lease ran out about three and a half minutes into the preparation, long before its close.
+  Reported only, not changed here: a renewal while the opens wait, or a bound on them, is the
+  missing piece, left to a slice of its own.
+- *The watchdog's silence.* A tick whose process probe fails decides `watchdog_start_failed`
+  before it changes any state but the last decision; every later tick decides again. A tick that
+  can read P and sees no Runtime starts it, and one that sees one writes its own line, so the 73
+  silent ticks were ticks whose probe failed again (or did not reach a decision): the log-on-change
+  compares a decision's code and values, the values of a probe failure are only
+  `failure_code=process_probe_failed`, and so every repeat was held back. The coordinator's
+  questions answered: no state of the failed tick blocks the next, and the Runtime's own stop is
+  not read as a person's (rows 5 and 5′ read the terminal outcome's category; the latched error is
+  an error, so a start was considered).
+
+**The rulings, as built.**
+- *Ruling A, the Runtime* (`crates/runtime-host/src/host/resource_close.rs`,
+  `emulator_instance.rs`, `lease.rs`). #475's model, the same refusal on the same kind of close:
+  `expiry_close_refused` recognises it (`lease_expired` at `begin_destructive_resource_close`, not
+  during shutdown); the refusal is recorded once, fences the instance with `lease_expired` as its
+  cause and is owed under the key (`fence_expired_close_of`); the key's end, whichever it is, makes
+  the close under the session close ahead; the caller answers a refusal of its own that is not
+  fatal (`lapsed_key_refusal`: the scheduler's `lease_expired` naming the key's lease, at the
+  caller's close).
+
+  | Place | What its caller now answers |
+  |---|---|
+  | A connection preparation's close under a held key (`prepare_connection_attempt`, `close_preparation_session`): the retained session's close before the opens, and the close after a failed open or outside the multi-Nemu gate; a person's self-check, an emulator control, the recovery ladder, the emulator watch, a backend switch's candidate and restored backends | The preparation opens and closes nothing more; its self-check fails with `lease_expired` (at `close_prepared_instance_session`, the attempt's failure), so no passing self-check lifts the fence; the instance stays unavailable. Its caller goes on as after any failed preparation: a person's self-check is denied by its release (the lapsed key), an emulator control's start ends its hold, whose hand-off and release the lapsed key refuses, and its failed end ends the key and makes the close |
+  | An emulator control's close of the retained session under its own key before its provider step (`ready_control_phase`) | The control fails `lease_expired` at `close_emulator_device_session`, recorded as its failure (`command.rejected`, `runtime.failed`), before its provider step; its failed end ends the key |
+  | An explicit release whose close meets the lease lapsed after the release's validation (`release_lease`, `release_lease_to_claim`; `LeaseDeviceEnd::Release`, as `Keep` but for this refusal) | The release ends nothing and is denied `lease_expired` at `close_execution_session`, as a release that met the lapse at its validation is refused; the holder's clean-up (a backend failure's end) or the sweep's expiry ends the lease and makes the close. Its callers: `release_host_key` records the refusal and goes on (the sweep then ends the lease), a run's release fails into the run's failed lease end, an emulator control's hold end into its failed end, a client's `ReleaseLease` is answered denied |
+
+  Unchanged: during shutdown, where no fence may take the instance, and for a failure of the
+  Runtime itself (the refusal's record, a lock, the owner's journal), the refusal keeps its
+  fatality; a dedicated preparation lease's close keeps it too (it is granted for the close). Every
+  other error of the same path that would have stopped the Runtime the same way stays as it is:
+  the preparation's other `?` (its records, the kernel's session registry, an identifier), the
+  control's records, a poisoned lock.
+- *Ruling B, the watchdog* (`crates/watchdog/src/observe.rs`, `lib.rs`;
+  `crates/lab-ops/src/process_probe.rs`; `crates/host-metrics/src/lib.rs`, `windows.rs`).
+  1. P has a second way that uses no WMI: the operating system's process list
+     (`actingcommand_host_metrics::processes_named`, the Toolhelp snapshot the process sampler
+     takes, with each match's image path read by a limited query), used when the CIM query fails
+     or times out (`observe::probe_with_second_way`). A process with the daemon's name whose path
+     cannot be read counts as under the root; one under another root does not; the second way
+     reads no boot time. A tick is `process_probe_failed` only when both ways fail: the first
+     way's failure, with the second's as its `secondary` link.
+  2. Every tick whose probe fails writes its line. Of the two ways the ruling offered, exempting
+     this failure from the de-duplication is the smaller (one condition in `record_decision`; a
+     `watchdog_start_failed` that no start wrote arises only from a failed probe); its values are
+     unchanged.
+  3. The start methods, read, not changed: a task tick spawns the fixed entry by CreateProcess
+     with breakaway from the task's job, which uses no WMI, and falls back to WMI only when the
+     job denies breakaway (os error 5); a manual run uses WMI only. The start of 11:50:53 said
+     `method=wmi`, so on that machine the task's job denies breakaway and every start goes through
+     WMI: a start that works without WMI there is the next gap, not built.
+  4. Rows 7b and 7f and the sentence on a failed probe say so, with the rule that nothing is
+     started while either way may see a process that is this root's daemon.
+
+**Tests** (incident `#503 HALT-1`; the host's in `crates/runtime-host/src/tests/gate_458_close_isolates.rs`,
+host gate map, on its fixture and its hook that lets a lease lapse right before the next close that
+finds a session; the watchdog's in `crates/watchdog/src/gate_503_halt1.rs`, apps gate map, whole
+ticks over `gate_382_a4`'s root on a scripted machine; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `halt1_a_preparations_close_under_a_lapsed_key_fences_only_its_instance_and_the_runtime_runs` (A) | The incident's close: a person's self-check, a connection preparation on its own held key, opens X's session and its close after the self-check meets the lapsed key; the self-check is denied `lease_expired`, not fatal; nothing latched; X alone fenced; the refusal recorded once under the self-check's request at the session close naming the key's lease; after a sweep tick the lease ended once, handed to no one, and X's session closed once after it; another instance's direct run is admitted and completes |
+| `halt1_with_the_slices_off_the_same_close_stops_the_runtime_as_0_12_86_did` (A) | The same with the slices turned off by the test-only switch: the Runtime latches `lease_expired` at `begin_destructive_resource_close`, fatal and Global, the daemon's first line of 11-27; nothing is fenced |
+| `halt1_a_record_that_cannot_be_appended_at_a_preparations_close_still_stops_the_runtime` (A) | A fault fatal by its class in the same path, the refusal's record that cannot be appended: `ledger_failure` at `fence_instance_resources` latched, fatal and Global; nothing is fenced |
+| `halt1_an_explicit_release_whose_lease_lapses_at_its_close_fences_only_its_instance` (A) | A client's release whose lease lapses inside its close, after its validation: denied `lease_expired`, not fatal; X alone fenced, the refusal recorded once naming the lease; after a sweep tick the lease ended once, handed to no one, X's session closed once after it; Y's run completes |
+| `halt1_b1_a_first_way_that_fails_is_followed_by_the_process_list_and_both_failing_fails` (B1) | The composition: after a failed first way, a daemon without a path and one under the root count, one under another root does not, no boot time; an empty list is no process; both failing is the first way's failure with the second's as its `secondary` link; a first way that answers is the answer and the list is not taken |
+| `halt1_b1_a_daemon_the_second_way_sees_is_running_and_nothing_starts_beside_it` (B1, B4) | A tick whose first way fails and whose second sees the daemon's name without a path: `watchdog_runtime_process_present`, nothing spawned |
+| `halt1_b2_every_tick_that_cannot_probe_writes_its_line_and_the_first_that_can_starts` (B2, ruling 3) | Two ticks whose both ways fail: each `watchdog_start_failed` caused by `process_probe_failed`, each with its ERROR line (until 0.12.87 the second wrote none), nothing spawned; the next tick, which reads P empty, starts the Runtime |
+| `halt1_after_a_start_that_failed_the_next_tick_that_sees_no_runtime_starts_it` (ruling 3) | After a start whose process exited first, the next tick starts the Runtime |
+| `halt1_after_a_tick_that_could_not_probe_a_hold_or_the_grace_still_forbids_a_start` (ruling 3) | After a tick that could not probe, the installer's writer lock held is `watchdog_installer_busy` and a task tick after a five-minute gap is `watchdog_grace`; nothing is spawned |
+
+No existing test changes its assertions; `gate_382_a4.rs`'s root builder is visible to the new
+watchdog gate. The emulator control's close and the policy driver's own loop are not driven by a
+test: the first test's host stands for the driver (actingd's monitor and driver end only on a
+latched condition, which the test shows absent, and another instance's run is admitted and
+completed), and the emulator control's close shares the recognition, the fence and the owed close
+with the tested ones.
+
+**What is not changed.** How leases are granted, renewed and expired; the end grace of a run; the
+renewal before a preparation and the opens' bound (reported above); the A64 path of a run in its
+end phase; every outcome code, setting, record type and interface revision; the watchdog's
+decision rows other than 7b and 7f, its budget, its grace, its start methods; actingctl's
+installer probe (`crates/lab-rescue`). No game, package, instance or alias is named in code or
+contract.
+
+**At deploy.** Nothing to configure. On production: a lapse in a preparation shows as the
+instance's `lease_expired` record at the session close and its fence, the request's failure not
+fatal, and the Runtime running on; the fence is lifted by the instance's next passing self-check.
+In `watchdog.log` every tick whose process probe failed has its ERROR line; one whose first way
+failed and whose second answered writes none of its own and decides as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -25,6 +25,32 @@ pub(super) enum LeaseDeviceEnd {
     /// its key to its ladder (`hand_off_to_ladder`), which then hand the device to no one.
     HolderEnd,
     Expiry,
+    /// #503 HALT-1: a holder's explicit release of its held lease (`release_lease`,
+    /// `release_lease_to_claim`), after its validation. As `Keep`, except that a close the lapsed
+    /// lease refuses (`expiry_close_refused`; the lease lapsed between the validation and the
+    /// close) is recorded once, fences the instance and is owed (`fence_expired_lease_close`), and
+    /// the release answers a refusal of its own that is not fatal (`lapsed_key_refusal`): the
+    /// lease's end (the holder's clean-up, or the sweep's expiry) makes the close.
+    Release,
+}
+
+/// #503 HALT-1 (#475's model): the refusal of its own, not fatal, that a caller answers when a
+/// close it made at `operation` under `token`'s key was refused by the key's lapsed lease, and
+/// that refusal was recorded, fenced and owed (`fence_expired_close_of`): the scheduler's
+/// `lease_expired` naming the key's lease, as a lapsed key at a later step is refused.
+pub(super) fn lapsed_key_refusal(operation: HostLocation, token: &LeaseToken) -> RuntimeHostError {
+    RuntimeHostError::scheduler(operation, &SchedulerError::LeaseExpired)
+        .naming_lease(token.lease_id())
+}
+
+/// #503 HALT-1: how a connection preparation's close under its lease went
+/// ([`HostShared::close_preparation_session`]).
+enum PreparationClose {
+    /// The close ran, or there was nothing to close: its result.
+    Ran(Result<(), ExecutionKernelError>),
+    /// The held key's lapsed lease refused it before it began: recorded once, the instance fenced
+    /// and the close owed; the preparation's refusal of its own.
+    Lapsed(RuntimeHostError),
 }
 
 enum ResourceCloseTarget {
@@ -362,10 +388,26 @@ impl HostShared {
                 // Workflow #458: any other lease's expiry whose close its lapsed lease refused;
                 // Workflow #461: so a holder's own end of its lapsed lease (a client's disconnect,
                 // a backend failure's end), before the sweep met it.
-                if end != LeaseDeviceEnd::Keep && self.expiry_close_refused(&failure.error) {
+                if matches!(end, LeaseDeviceEnd::HolderEnd | LeaseDeviceEnd::Expiry)
+                    && self.expiry_close_refused(&failure.error)
+                {
                     return self
                         .fence_expired_lease_close(token, *failure.error, links)
                         .map_err(RequestFailure::poison_without_terminal);
+                }
+                // #503 HALT-1: an explicit release whose lease lapsed after its validation. The
+                // refusal is fenced and owed as above; the release ends nothing and answers a
+                // refusal of its own that is not fatal, as a release that met the lapse at its
+                // validation is refused, and the lease's end (its holder's clean-up or the sweep's
+                // expiry) makes the close. Until 0.12.86 it was returned as a poison.
+                if end == LeaseDeviceEnd::Release && self.expiry_close_refused(&failure.error) {
+                    self.fence_expired_lease_close(token, *failure.error, links)
+                        .map_err(RequestFailure::poison_without_terminal)?;
+                    return Err(RequestFailure::request(
+                        lapsed_key_refusal(HostLocation::CloseExecutionSession, token),
+                        RuntimeReceiptState::Denied,
+                        None,
+                    ));
                 }
                 // ISO-5a (#419, ISO-M row B18): a holder's own end that finds its lease already
                 // ended has nothing of it to close.
@@ -2509,15 +2551,30 @@ impl HostShared {
         // earlier lease kept (Workflow #191 H) is closed first through the fenced close path, so
         // the opens below are complete and the self-check covers every required entry: a
         // reconnect is a disconnect and a connect. A failed close skips the opens and ends the
-        // phase as a failed final close does.
+        // phase as a failed final close does. #503 HALT-1: a close under a held key whose lease
+        // lapsed is refused before it began; it is recorded once, fences the instance and is owed
+        // (`close_preparation_session`), and the preparation then opens and closes nothing more
+        // and fails with that refusal (`lapsed`), not fatal.
+        let mut lapsed = None;
         let retained_close = if self
             .execution()?
             .has_session(instance_id)
             .map_err(|error| {
                 RuntimeHostError::execution(HostLocation::InspectRetainedSession, &error)
             })? {
-            self.close_instance_resources_result(&token, connection_id, links.clone())
-                .map_err(|failure| *failure.error)?
+            match self.close_preparation_session(
+                &token,
+                instance_id,
+                connection_id,
+                held,
+                &links,
+            )? {
+                PreparationClose::Ran(closed) => closed,
+                PreparationClose::Lapsed(refusal) => {
+                    lapsed = Some(refusal);
+                    Ok(())
+                }
+            }
         } else {
             Ok(())
         };
@@ -2528,7 +2585,7 @@ impl HostShared {
         let mut status_failure = None;
         let mut asleep = false;
         let opened = match &retained_close {
-            Ok(()) => {
+            Ok(()) if lapsed.is_none() => {
                 self.invalidate_backend_selfcheck_facts(instance_id)?;
                 match self.read_emulator_status_first(status, instance_id, &links)? {
                     Some(end) => {
@@ -2545,7 +2602,7 @@ impl HostShared {
                     )),
                 }
             }
-            Err(_) => None,
+            _ => None,
         };
         let open_failed = matches!(opened, Some(Err(_)));
         // Device acquisition errors can be fatal to that backend without being owner/ledger
@@ -2616,10 +2673,24 @@ impl HostShared {
         // for every dedicated close lease; its queue is empty (checked at the grant, and the
         // admission guard is held).
         let closed = match retained_close {
+            // #503 HALT-1: the retained close met the lapsed key; its close is owed.
+            Ok(()) if lapsed.is_some() => Ok(()),
             Ok(()) if !open_failed && self.keeps_device_session(instance_id)? => Ok(()),
-            Ok(()) => self
-                .close_instance_resources_result(&token, connection_id, links.clone())
-                .map_err(|failure| *failure.error)?,
+            Ok(()) => {
+                match self.close_preparation_session(
+                    &token,
+                    instance_id,
+                    connection_id,
+                    held,
+                    &links,
+                )? {
+                    PreparationClose::Ran(closed) => closed,
+                    PreparationClose::Lapsed(refusal) => {
+                        lapsed = Some(refusal);
+                        Ok(())
+                    }
+                }
+            }
             Err(close_error) => Err(close_error),
         };
         let confirmed = closed
@@ -2653,6 +2724,12 @@ impl HostShared {
                 .into_fatal());
             }
             failure_code = failure_code.or(Some(close_error.code().as_str()));
+        }
+        // #503 HALT-1: a close the lapsed key refused fails the self-check with that refusal, so no
+        // passing self-check lifts the fence it set.
+        if let Some(refusal) = &lapsed {
+            failure_code = failure_code.or(Some(refusal.code()));
+            open_failure = open_failure.or_else(|| Some(refusal.outcome()));
         }
         // An open failure is already a `failed` self-check; any other failing step (a failed
         // open without reports, a failed close) still leaves the instance unavailable. Workflow
@@ -2729,6 +2806,38 @@ impl HostShared {
             failure,
             generation,
         })
+    }
+
+    /// #503 HALT-1 (the later slice of Workflow #475 that `contracts/read-session-resource-close.md`
+    /// named; #475's model): a connection preparation's close of `instance_id`'s session under
+    /// `token`. On a `held` key (a person's self-check, an emulator control, the recovery ladder,
+    /// the emulator watch, a backend switch's candidate and restored backends) whose lease lapsed
+    /// meanwhile, the close is refused before it began (`expiry_close_refused`): the refusal is
+    /// recorded once, fences the instance with `lease_expired` as its cause and is owed under the
+    /// key (`fence_expired_close_of`), and the preparation answers a refusal of its own that is not
+    /// fatal (`PreparationClose::Lapsed`); the key's end makes the close under the session close
+    /// ahead. A dedicated preparation lease, a refusal during shutdown or where no fence may take
+    /// the instance, and a failure of the Runtime itself (the refusal's record among them) keep
+    /// their fatality, as before.
+    fn close_preparation_session(
+        &self,
+        token: &LeaseToken,
+        instance_id: InstanceId,
+        connection_id: ConnectionId,
+        held: bool,
+        links: &EventLinksDraft,
+    ) -> RuntimeHostResult<PreparationClose> {
+        match self.close_instance_resources_result(token, connection_id, links.clone()) {
+            Ok(closed) => Ok(PreparationClose::Ran(closed)),
+            Err(refused) if held && self.expiry_close_refused(&refused.error) => {
+                self.fence_expired_close_of(token, instance_id, *refused.error, links.clone())?;
+                Ok(PreparationClose::Lapsed(lapsed_key_refusal(
+                    HostLocation::ClosePreparedInstanceSession,
+                    token,
+                )))
+            }
+            Err(failure) => Err(*failure.error),
+        }
     }
 
     /// A preparation step other than an open failed without being fatal (the preparation lease
@@ -2853,7 +2962,9 @@ impl RuntimeHost {
     /// a refused close at a lease's expiry, at a holder's own end, in a failed input's clean-up,
     /// after a capture failure or on #475's five paths under a lapsed key (its hand-over to its
     /// ladder, a pre-emption's hand-over, an application command's preparation, a backend switch,
-    /// a member switch's close) ends the Runtime, as before.
+    /// a member switch's close) ends the Runtime, as before; so do #503 HALT-1's (a connection
+    /// preparation's close under a held key, an emulator control's, an explicit release's), as in
+    /// 0.12.86.
     pub(crate) fn close_isolates_off_for_test(&self, off: bool) -> RuntimeHostResult<()> {
         let location = crate::codes::test_spellings::TestLocation::CloseIsolatesOffForTest;
         self.shared_ref(location)?

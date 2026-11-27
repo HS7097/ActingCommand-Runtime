@@ -46,12 +46,12 @@ use windows_sys::Win32::System::SystemInformation::{
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, GetProcessInformation, GetProcessIoCounters,
-    GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess,
+    GetProcessTimes, GetSystemTimes, IO_COUNTERS, OpenProcess, PROCESS_NAME_WIN32,
     PROCESS_PROTECTION_LEVEL_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     PROTECTION_LEVEL_ANTIMALWARE_LIGHT, PROTECTION_LEVEL_AUTHENTICODE,
     PROTECTION_LEVEL_CODEGEN_LIGHT, PROTECTION_LEVEL_LSA_LIGHT, PROTECTION_LEVEL_PPL_APP,
     PROTECTION_LEVEL_WINDOWS, PROTECTION_LEVEL_WINDOWS_LIGHT, PROTECTION_LEVEL_WINTCB,
-    PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo,
+    PROTECTION_LEVEL_WINTCB_LIGHT, ProcessProtectionLevelInfo, QueryFullProcessImageNameW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
@@ -626,6 +626,57 @@ pub(super) fn probe_process_creation(pid: u32) -> super::ProcessCreationProbe {
         },
         _ => ProcessCreationProbe::Unknown(HostMetricsCode::ProcessCreationTimeInvalid.code()),
     }
+}
+
+/// The longest image path `QueryFullProcessImageNameW` is asked for, in UTF-16 units (the
+/// extended path limit).
+const MAX_IMAGE_PATH_UNITS: usize = 32_768;
+
+/// #503 HALT-1: [`super::processes_named`] on the Toolhelp snapshot the process sampler takes,
+/// each match's image path read with a limited query (`process_image_path`).
+pub(super) fn processes_named(image_name: &str) -> Result<Vec<super::NamedProcess>, Code> {
+    let mut enumerator = ToolhelpProcessEnumerator::open()?;
+    let mut found = Vec::new();
+    loop {
+        let entry = enumerator.current();
+        if process_name(&entry.szExeFile).eq_ignore_ascii_case(image_name) {
+            found.push(super::NamedProcess {
+                pid: entry.th32ProcessID,
+                image_path: process_image_path(entry.th32ProcessID),
+            });
+        }
+        if !enumerator.advance()? {
+            return Ok(found);
+        }
+    }
+}
+
+/// The full Win32 image path of the process `pid`, when it can be opened for a limited query and
+/// its path read; `None` otherwise (an exited, protected or refused process).
+fn process_image_path(pid: u32) -> Option<String> {
+    // SAFETY: OpenProcess takes no pointers; a non-null handle is closed by OwnedHandle.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let handle = OwnedHandle(handle);
+    let mut buffer = vec![0u16; MAX_IMAGE_PATH_UNITS];
+    let mut length = u32::try_from(buffer.len()).ok()?;
+    // SAFETY: the handle is live, the buffer holds `length` units and both out pointers are valid
+    // for the call.
+    let read = unsafe {
+        QueryFullProcessImageNameW(
+            handle.0,
+            PROCESS_NAME_WIN32,
+            buffer.as_mut_ptr(),
+            &mut length,
+        )
+    };
+    if read == 0 {
+        return None;
+    }
+    let length = usize::try_from(length).ok()?;
+    buffer.get(..length).map(String::from_utf16_lossy)
 }
 
 /// Workflow #71 FLK-10: `GetComputerNameExW` with `ComputerNameDnsHostname`, asked once for the

@@ -92,6 +92,31 @@ pub fn probe_process(pid: u32) -> ProcessProbe {
     }
 }
 
+/// #503 HALT-1 (the watchdog's second process probe, which uses no WMI): one process the operating
+/// system's process list shows with a given executable name: its id, and its full image path when
+/// a limited query can read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedProcess {
+    pub pid: u32,
+    pub image_path: Option<String>,
+}
+
+/// #503 HALT-1: the processes whose executable name is `image_name`, compared ignoring ASCII case,
+/// from the operating system's process list now (on Windows the Toolhelp snapshot the process
+/// sampler takes); a process whose path cannot be read keeps none. A list that cannot be taken is
+/// its code; an operating system other than Windows answers `process_probe_unsupported`.
+pub fn processes_named(image_name: &str) -> Result<Vec<NamedProcess>, Code> {
+    #[cfg(windows)]
+    {
+        windows::processes_named(image_name)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = image_name;
+        Err(HostMetricsCode::ProcessProbeUnsupported.code())
+    }
+}
+
 /// Workflow #71 FLK-10: one process id's creation time exactly as the operating system keeps it,
 /// read with the same limited query, the same exit check and the same codes as
 /// [`probe_process`]. The Lab's environment-detection lock names its holder's start with it.

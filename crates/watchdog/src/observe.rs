@@ -13,8 +13,9 @@ use super::state::WatchdogState;
 use super::{io_failure, json_failure, powershell};
 use crate::codes::ActingctlCode;
 use crate::packs::ROOT_CONFIG_FILE;
+use crate::process_probe::NamedProcess;
 use actingcommand_contract::codes::ContractCode;
-use actingcommand_contract::outcome::{IoOp, Outcome, OutcomeEnvelope, RawSource};
+use actingcommand_contract::outcome::{CauseRelation, IoOp, Outcome, OutcomeEnvelope, RawSource};
 use actingcommand_contract::{InstalledProcess, OWNER_JOURNAL_LIMIT, RUNTIME_INFO_FILE};
 use actingcommand_lab_ops::front;
 use actingcommand_lab_ops::initiator::Initiator;
@@ -853,10 +854,72 @@ pub struct HostProbe {
     pub boot_unix_ms: Option<u64>,
 }
 
-/// Every failure is `process_probe_failed`: caused by PowerShell's failure, or by
-/// `foreign_data_error` when its output is not JSON; output without `boot_unix_ms`, or a
-/// process row without a pid, is the code alone.
+/// #503 HALT-1 (`contracts/runtime-watchdog.md`, "Observation" item 5): P read the first way
+/// (the CIM query, `cim_host_probe`) and, when that fails or times out, the second way, which
+/// uses no WMI: the operating system's process list (`process_probe::processes_named`). The tick
+/// is `process_probe_failed` only when both fail.
 pub fn host_probe(root_plain: &Path) -> Result<HostProbe, Outcome> {
+    probe_with_second_way(
+        cim_host_probe(root_plain),
+        || crate::process_probe::processes_named(RUNTIME_IMAGE),
+        root_plain,
+    )
+}
+
+/// #503 HALT-1: `first`, the CIM query's answer, and when it failed the process list `second`
+/// gives, as P. A listed process whose image path is under the root, or whose path cannot be read,
+/// is a Runtime process of this root (no start beside it); one under another root is not. The
+/// second way reads no boot time, so its answer has none (the gap grace then opens on the gap
+/// alone). When both fail, the first way's failure is the answer, with the second's as its
+/// `secondary` link.
+pub fn probe_with_second_way(
+    first: Result<HostProbe, Outcome>,
+    second: impl FnOnce() -> Result<Vec<NamedProcess>, Outcome>,
+    root_plain: &Path,
+) -> Result<HostProbe, Outcome> {
+    let failure = match first {
+        Ok(probe) => return Ok(probe),
+        Err(failure) => failure,
+    };
+    match second() {
+        Ok(listed) => Ok(HostProbe {
+            processes: listed
+                .into_iter()
+                .filter(|process| {
+                    process
+                        .image_path
+                        .as_deref()
+                        .is_none_or(|path| under_root(path, root_plain))
+                })
+                .map(|process| RuntimeProcess {
+                    pid: process.pid,
+                    path: process.image_path,
+                })
+                .collect(),
+            boot_unix_ms: None,
+        }),
+        Err(second_failure) => Err(failure.link(CauseRelation::Secondary, second_failure)),
+    }
+}
+
+/// Whether the executable `path` lies under `root_plain`, compared case-insensitively.
+fn under_root(path: &str, root_plain: &Path) -> bool {
+    let prefix = format!(
+        "{}\\",
+        root_plain
+            .display()
+            .to_string()
+            .trim_end_matches('\\')
+            .to_lowercase()
+    );
+    path.to_lowercase().starts_with(&prefix)
+}
+
+/// P the first way, the CIM query in a hidden Windows PowerShell. Every failure is
+/// `process_probe_failed`: caused by PowerShell's failure, or by `foreign_data_error` when its
+/// output is not JSON; output without `boot_unix_ms`, or a process row without a pid, is the code
+/// alone.
+fn cim_host_probe(root_plain: &Path) -> Result<HostProbe, Outcome> {
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'\n\
         $ProgressPreference = 'SilentlyContinue'\n\
         $found = @(Get-CimInstance -ClassName Win32_Process -Filter \"Name='actingcommand-actingd.exe'\" | ForEach-Object { [pscustomobject]@{ pid = [uint32]$_.ProcessId; path = $_.ExecutablePath } })\n\
@@ -891,14 +954,6 @@ pub fn parse_processes(value: &Value, root_plain: &Path) -> Result<Vec<RuntimePr
         Value::Null => Vec::new(),
         row => vec![row.clone()],
     };
-    let prefix = format!(
-        "{}\\",
-        root_plain
-            .display()
-            .to_string()
-            .trim_end_matches('\\')
-            .to_lowercase()
-    );
     rows.iter()
         .filter_map(|row| {
             let pid = row["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
@@ -907,8 +962,7 @@ pub fn parse_processes(value: &Value, root_plain: &Path) -> Result<Vec<RuntimePr
                 (None, _) => Some(Err(Outcome::new(ActingctlCode::ProcessProbeFailed))),
                 (Some(pid), None) => Some(Ok(RuntimeProcess { pid, path: None })),
                 (Some(pid), Some(path)) => {
-                    let under_root = path.to_lowercase().starts_with(&prefix);
-                    under_root.then_some(Ok(RuntimeProcess {
+                    under_root(&path, root_plain).then_some(Ok(RuntimeProcess {
                         pid,
                         path: Some(path),
                     }))

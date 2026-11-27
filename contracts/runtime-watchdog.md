@@ -157,7 +157,13 @@ installer update or rollback (or its undo), a tick that would consider a start a
    - **P**, processes named `actingcommand-actingd.exe` whose executable path is under
      `<root>\` (case-insensitive), or whose path cannot be read, through a CIM query
      in a hidden Windows PowerShell. The same query reads the last boot time
-     (`Win32_OperatingSystem.LastBootUpTime`) for the gap grace.
+     (`Win32_OperatingSystem.LastBootUpTime`) for the gap grace. #503 HALT-1 (0.12.87): when
+     that query fails or times out (60 s), P is read a second way that uses no WMI, the
+     operating system's process list (`CreateToolhelp32Snapshot`: names and pids, and the image
+     path where a limited query can read it); a process with the daemon's name whose path
+     cannot be read counts as under the root. The second way reads no boot time, so that tick's
+     gap grace opens on the gap alone. P is unknown (`process_probe_failed`) only when both ways
+     fail.
 
 ## Decision
 
@@ -181,12 +187,12 @@ Each decision is one registered code; its category sets the exit (Workflow #378 
 | 7a | W held | `watchdog_installer_busy` | 0 | INFO |
 | 7a′ | selection changed | `watchdog_selection_changed` | 0 | INFO |
 | 7a″ | U present: an unfinished installer update or rollback (Workflow #421 INST-1), or any unfinished kind off the pass list (U above) | `watchdog_installer_unfinished` (warning; `install_operation_id` when U names one) | 0 | WARN |
-| 7b | P present, under 10 minutes | `watchdog_runtime_process_present` | 0 | INFO |
+| 7b | P present, under 10 minutes: a process that may be this root's daemon, seen by either way of P | `watchdog_runtime_process_present` | 0 | INFO |
 | 7b′ | P present for 10 minutes or more | `watchdog_runtime_process_without_owner` | 1 | ERROR |
 | 7c | exhaustion recorded | `watchdog_budget_exhausted` or `panic_unrecovered` (see "Budget") | 1 or 2 | ERROR |
 | 7d | task tick inside the gap grace | `watchdog_grace` | 0 | INFO |
 | 7e | 3 starts in the last 30 minutes | as row 7c, recorded | 1 or 2 | ERROR |
-| 7f | otherwise (J active: a crash, a closed window, Task Manager, a reboot) | start: `watchdog_started_runtime` or `watchdog_start_failed` | 0 or 1 | WARN `watchdog_started_runtime` or ERROR `watchdog_start_failed`, every attempt |
+| 7f | otherwise (J active: a crash, a closed window, Task Manager, a reboot), P read by either way and empty | start: `watchdog_started_runtime` or `watchdog_start_failed` | 0 or 1 | WARN `watchdog_started_runtime` or ERROR `watchdog_start_failed`, every attempt, and every tick whose P is unknown (both ways failed) |
 
 Row 5 precedes row 6 because a stop by a condition also writes `active=false`. A
 refusal before the owner lock was taken leaves J untouched and is still newer than it.
@@ -213,8 +219,16 @@ A held start whose shutdown was accepted ended in `runtime_stopped` too, with
 `install_startup_shut_down` (info, Workflow #378 A7-R) as its link, and actingd exited
 0: a formal close (row 6) that the watchdog never restarts. Since Workflow #434 LAB-6S4a
 (0.12.63) no start is held and a starting Runtime refuses a shutdown request as busy, so
-nothing raises that code any more (retired); a log of 0.12.61 that carries it reads as before. A process probe that fails
-is `watchdog_start_failed` caused by `process_probe_failed`.
+nothing raises that code any more (retired); a log of 0.12.61 that carries it reads as before.
+A process probe whose two ways both fail is `watchdog_start_failed` caused by
+`process_probe_failed` (the first way's failure, with the second's as its `secondary` link), and
+nothing is started: while either way may see a process that is this root's daemon, nothing is
+started beside it. Such a tick leaves no state behind (#503 HALT-1, 0.12.87): the next tick
+decides again from what it reads, and starts the Runtime once P is read empty and nothing else
+forbids it (an installer's hold, row 7a to 7a″; the budget, rows 7c and 7e; the gap grace, row
+7d). Each such tick writes its ERROR line, whatever the last line was: on 11-27 one tick could
+not read P within 60 s and the 73 ticks after it, whose probes failed the same way, wrote
+nothing, as the log-on-change held their repeats back.
 
 ### Upgrade-state close (Workflow #389 U-4; not before v0.12.x)
 
@@ -270,7 +284,8 @@ and a half tick periods: a logon, a resume), or ended before the current boot (a
 reboot; a scheduled reboot leaves gaps of only about 100-180 s), holds starts for
 300 s, so that a logon starter can start the Runtime itself first: a logon script
 that waits up to 180 s for readiness, acsetup's autostart. The boot time comes from
-the same hidden query as P. The first tick ever has no grace, and a manual `run-once`
+the same hidden query as P (none when P was read the second way, #503 HALT-1: the grace
+then opens on the gap alone). The first tick ever has no grace, and a manual `run-once`
 has none. In grace the watchdog still observes, and a Runtime process under the root
 (row 7b) or an owner lock (row 2) keeps it standing aside after the grace too.
 
@@ -437,7 +452,7 @@ Without the product, a registered task fails every minute (the launcher is gone,
 
 | File | Content |
 |---|---|
-| `watchdog.log` | UTF-8 lines `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`, written on a decision change, a start, an error; a decision line's fields are its outcome's values and one `cause` field per link, then developer fields (Workflow #378 A5). The launcher's own failures and the tick's stderr land here too; a task tick prints no per-tick summary there, and repeats a misconfiguration only when the last structured line is a different one. A quiet day writes nothing. |
+| `watchdog.log` | UTF-8 lines `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`, written on a decision change, a start, an error; a decision line's fields are its outcome's values and one `cause` field per link, then developer fields (Workflow #378 A5). The launcher's own failures and the tick's stderr land here too; a task tick prints no per-tick summary there, and repeats a misconfiguration only when the last structured line is a different one; a tick whose process probe failed (`watchdog_start_failed` caused by `process_probe_failed`) writes its line every time (#503 HALT-1). A quiet day writes nothing. |
 | `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v2` (Workflow #378 A5): `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (`{code, values}`, the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `start_result` `{code, values}`: `watchdog_start_pending` until the start ends, then `watchdog_started_runtime`, `start_timeout` or the failure's code; `generation`, absent for a single-location root; `actingd_pid`, `owner_epoch`). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. `run-once` and `install` rename a document of another schema version (version 1 included) `state.json.other-schema-<ms>` with a WARN `watchdog_state_reset` line and replace it by a fresh state, so the budget restarts; a corrupt document is `watchdog_state_unreadable` (row 1). |
 | `actingd-<unix_ms>.log` | stdout and stderr of each start. |
 | `run.lock` | Held exclusively by a tick; a second concurrent tick answers `watchdog_run_in_progress` (exit 0). `actingctl start` and `restart` hold it through their start (Workflow #389 MCP-10). |

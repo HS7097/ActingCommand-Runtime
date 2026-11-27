@@ -40,6 +40,10 @@ mod gate_382_a4;
 // Test-only: Workflow #434 LAB-6S2-B1, the probe binds `lab` with its caller's word.
 #[cfg(test)]
 mod gate_434_lab6s2b1;
+// Test-only: #503 HALT-1, the watchdog tries again (the process probe's second way, a failed
+// probe's line on every tick).
+#[cfg(test)]
+mod gate_503_halt1;
 // Test-only: Workflow #390 WD-1, the watchdog of a single-location root.
 #[cfg(test)]
 mod gate_wd1;
@@ -990,7 +994,10 @@ fn start_runtime(
     Ok(decision)
 }
 
-/// Log on change: one line when the decision's code or values differ from the last tick's.
+/// Log on change: one line when the decision's code or values differ from the last tick's. #503
+/// HALT-1 (ruling B2): a tick whose process probe failed (`watchdog_start_failed` that no start
+/// wrote, row 7f) writes its line every time, as every attempt does; until 0.12.87 the repeats of
+/// one failure were left out, and 73 ticks in a row wrote nothing.
 fn record_decision(
     directory: &Path,
     state: &mut WatchdogState,
@@ -1001,7 +1008,8 @@ fn record_decision(
 ) -> Result<(), Outcome> {
     let outcome = decision.outcome();
     let current = Recorded::of(&outcome);
-    if previous.as_ref() == Some(&current) && !logged {
+    let probe_failed = matches!(decision, Decision::StartFailed(_));
+    if previous.as_ref() == Some(&current) && !logged && !probe_failed {
         return Ok(());
     }
     state.last_decision = Some(current);

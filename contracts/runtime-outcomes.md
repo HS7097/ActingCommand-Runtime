@@ -377,8 +377,11 @@ its boundary's, and keeps the kernel's code and severity. A kernel code on the G
   sweep meets it at a client's disconnect, at a backend failure's lease end and in a failed
   input's clean-up (Workflow #461, Runtime 0.12.66), and at a failed run's hand-over of its key
   to its ladder, at a pre-emption's hand-over or end of the lease, in an application command's
-  preparation, in a backend switch and in a member switch (Workflow #475, Runtime 0.12.67), and
-  after a capture failure, its close
+  preparation, in a backend switch and in a member switch (Workflow #475, Runtime 0.12.67), in a
+  connection preparation's close under a held key, in an emulator control's close of the retained
+  session under its own key and in an explicit release whose close meets the lease lapsed after
+  its validation (#503 HALT-1, Runtime 0.12.87; each answers `lease_expired` of its own, not
+  fatal), and after a capture failure, its close
   lease refused by the takeover cooldown, a queued claim the routine gate holds back or a lapsed
   lease (Workflow #456; [read-session-resource-close.md](read-session-resource-close.md)). A
   failure of the Runtime itself in those paths (a record, a lock, the owner's journal) stays
