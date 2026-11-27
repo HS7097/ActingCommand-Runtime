@@ -373,6 +373,8 @@ fn in_effect_on_a_alone(scene: &Scene, target_id: &str, at: u64) {
     assert_eq!(active.targets[0]["id"], json!(target_id));
     assert_eq!(active.conditions.len(), 1, "{active:?}");
     assert_eq!(active.conditions[0].target_id, target_id);
+    // Fix round 1 (the coordinator's ruling): the condition names its pool as the target does.
+    assert_eq!(active.conditions[0].resource, POOL_A, "the file's id");
     assert!(
         matches!(
             active.conditions[0].state,

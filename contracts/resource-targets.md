@@ -243,8 +243,10 @@ comes of how many instances the installation has, is not what a person said, and
 
 For one instance, the pool a target's `resource` names is the catalog pool of that id whose scope
 covers the instance, else the instance's copy `<id>@<alias>`, else the first catalog pool the files
-name so (whose scope then refuses it, `resource_out_of_scope`); a text that is no scheduling
-identifier, a copy's id among them, names no pool (`unknown_resource`). It is the rule the lines
+name so (which is then refused as every pool is judged: `resource_not_observable` where its
+observation is none a target reads, else, its scope not covering the instance,
+`resource_out_of_scope`); a text that is no scheduling identifier, a copy's id among them, names no
+pool (`unknown_resource`). It is the rule the lines
 given for one instance read a pool by ([scheduling/README.md](scheduling/README.md), "Lines for one
 instance"). One function of the policy crate gives that pool, and every reader of a target's
 `resource` takes it from there: a document's check, the targetable lists below, the conditions of
@@ -257,14 +259,21 @@ second is added, and the other way round; the record's format does not change.
 A copy's id is no scheduling identifier, so no record can hold one, and a document that names one
 is refused `unknown_resource` @ `/targets/i/resource`. Until 0.12.88 a v2 or v3 document that named
 the instance's own copy was taken and left a record its reader refuses (`malformed_rows`), and one
-that named another instance's copy was `resource_out_of_scope`. A target's `tasks` name the
+that named another instance's copy was `resource_out_of_scope`. Where such a record stands, the
+instance's evaluation weighs no target, both views and the goal page refuse it, and so does every
+`EditGoal` of the instance, a clear by name among them; a new document through
+`ApplyResourceTargets`, a withdrawal among them, replaces it. A target's `tasks` name the
 catalog's task ids, as before; a copy's id there is no identifier either and is refused
 `unknown_task` @ `/targets/i/tasks/j` (naming a rule as the file writes it is not built, register
-§1.531). A condition (of the view's `active`, of a v1 or v2 receipt) names, as before, the catalog
-pool its target resolved to: on a game with two instances that is the instance's copy. On a game
-with one instance every stored byte and every evaluation is as before, and so is every answer but
-one: an `EditGoal` value whose `resource` is no identifier is `wrong_type` at `/resource`, where it
-was `pool_not_targetable` ("One value by name").
+§1.531). A condition (of the view's `active`, of a receipt) names its pool as its target does, the
+file's id: a composed copy's id is in no answer of the two views or of the two requests' receipts
+(fix round 1). What an evaluation says of a candidate (its `resource_targets` items, a pool line's
+values) names the catalog pool, as before: on a game with two instances that is the instance's copy.
+On a game with one instance every stored byte and every evaluation is as before, and so is every
+answer but two: an `EditGoal` value whose `resource` is no identifier is `wrong_type` at
+`/resource`, where it was `pool_not_targetable` ("One value by name"); and, in an installation that
+also has a game with two instances, a `not_targetable` list names each pool of that other game once,
+by the file's id, where it named each copy.
 
 ## Document `actingcommand.resource-targets.v2`
 

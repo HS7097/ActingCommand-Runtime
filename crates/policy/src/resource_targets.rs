@@ -618,7 +618,9 @@ pub fn check_resource_targets_with_readings(
             let TargetCondition::AtLeast { amount } = target.condition;
             ResourceTargetCondition {
                 target_id: target.id.clone(),
-                resource: resolved.pool.id.clone(),
+                // #503 GOAL-1 (fix round 1, the coordinator's ruling): an answer about a target
+                // names its pool as the target does, the file's id, never a composed copy's id.
+                resource: target.resource.clone(),
                 fact_key: resolved.fact_key.clone(),
                 state: match observe_target(
                     &projected,
@@ -713,7 +715,8 @@ fn check_resource_targets_v2(
             let TargetCondition::AtLeast { amount } = target.condition;
             ResourceTargetCondition {
                 target_id: target.id.clone(),
-                resource: pool.id.clone(),
+                // #503 GOAL-1 (fix round 1): the target's own name of its pool, as in the v1 check.
+                resource: target.resource.clone(),
                 fact_key: fact_key.clone(),
                 state: match observe_target(&projected, given, instance, pool, fact_key, time) {
                     TargetObservation::Known {
@@ -2214,7 +2217,9 @@ pub fn active_resource_targets(
             };
             conditions.push(ResourceTargetCondition {
                 target_id: target_id.clone(),
-                resource: pool.id.clone(),
+                // #503 GOAL-1 (fix round 1): the stored target's own name of its pool, the file's
+                // id, as the view's `targets` and its targetable lists name it.
+                resource: resource.clone(),
                 fact_key,
                 state,
             });

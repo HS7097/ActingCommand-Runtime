@@ -328,9 +328,11 @@ fn goal1_t4_the_same_rows_give_the_instances_pool_for_one_instance_and_for_two()
         };
         assert_eq!(
             policy.conditions,
+            // Fix round 1 (the coordinator's ruling): a condition names its pool as the target
+            // does, the file's id, for one instance and for two.
             [ResourceTargetCondition {
                 target_id: GOAL.to_owned(),
-                resource: on(POOL, A, copies),
+                resource: POOL.to_owned(),
                 fact_key: READING.to_owned(),
                 state: ResourceTargetConditionState::Computed {
                     current: 10,
@@ -421,7 +423,8 @@ fn goal1_t5_a_document_names_the_files_id_and_a_copy_id_is_refused() {
             .iter()
             .map(|condition| (condition.target_id.as_str(), condition.resource.clone()))
             .collect::<Vec<_>>(),
-        [("floor", on(POOL, A, true))]
+        // Fix round 1: the receipt's condition names the pool as the document does.
+        [("floor", POOL.to_owned())]
     );
 
     for refused in [on(POOL, A, true), on(POOL, B, true)] {

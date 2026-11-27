@@ -453,7 +453,8 @@ fn target_condition(
     let TargetCondition::AtLeast { amount } = target.condition;
     ResourceTargetCondition {
         target_id: target.id.clone(),
-        resource: pool.id.clone(),
+        // #503 GOAL-1 (fix round 1): the target's own name of its pool, as in the v1 and v2 checks.
+        resource: target.resource.clone(),
         fact_key: fact_key.to_owned(),
         state: match observe_target(projected, given, instance, pool, fact_key, time) {
             TargetObservation::Known {
