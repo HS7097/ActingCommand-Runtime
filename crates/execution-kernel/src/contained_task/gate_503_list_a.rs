@@ -26,7 +26,7 @@
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
-use actingcommand_contract::{FactScalar, ScanUnknownCause};
+use actingcommand_contract::FactScalar;
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
     NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
@@ -655,7 +655,8 @@ fn list_a_no_wanted_card_writes_the_empty_list() {
 // `zulu` on the second; the cards after it are passed over on every read. The list is unread
 // (`list_position_unread`, count 1, no `selection_scan_identity_mismatch`: the second read names no
 // key), and the one position the offline entry could not read is card 2, first read on viewport 0,
-// `contradicted`, keeping the key it read.
+// keeping the key it read, with the cause `partly_passed_over` (Workflow #503 LIST-A3, ruling 5:
+// before it the offline entry said `contradicted`, the word of a column that changed).
 #[test]
 fn list_a_a_position_known_in_one_viewport_and_passed_over_in_another_is_unread() {
     let cards = |second: usize| {
@@ -685,7 +686,7 @@ fn list_a_a_position_known_in_one_viewport_and_passed_over_in_another_is_unread(
             position.cause,
             position.identity.as_deref()
         ),
-        (2, 0, ScanUnknownCause::Contradicted, Some(MEMBERS[2]))
+        (2, 0, ListUnreadCause::PartlyPassedOver, Some(MEMBERS[2]))
     );
 }
 

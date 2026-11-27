@@ -57,6 +57,9 @@ pub(super) use select::{
     record_bound, result_blocked,
 };
 
+use super::list_reading::{
+    ListDryRunPosition, ListPositionAnswer, ListPositionRead, ListUnreadCause,
+};
 use super::{ClickRect, ContainedTaskError, ContainedTaskRunError};
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::{
@@ -65,7 +68,7 @@ use actingcommand_contract::{
     TaskSelectionUnknownCheck,
 };
 use actingcommand_recognition::color_digest::{self, ColorDigest};
-use actingcommand_recognition_pack::CandidateLayout;
+use actingcommand_recognition_pack::{CandidateLayout, CandidateNameMark, CandidateNameReading};
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, FieldDomain, ScalarValue, SelectionDecision, SelectionFactSnapshot,
     SelectionOutcome, SelectionPolicy, SelectionTables, SortDirection, TieBreakKey, UpperBound,
@@ -327,6 +330,8 @@ actingcommand_contract::outcome_vocabulary! {
 /// features (none when it is not actionable). Workflow #503 LIST-A: and whether the identity
 /// mapping marked its identity feature none of the wanted keys, which only the source of a list
 /// reading that declares `others: pass_over` asks (`false` everywhere else).
+/// Workflow #503 LIST-A3: and the read of its identity feature's name as the identity mapping
+/// judged it, which only the source of a list reading's dry run keeps (`None` everywhere else).
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ScanReadInstance {
     pub(super) rect: CandidateRect,
@@ -334,6 +339,17 @@ pub(super) struct ScanReadInstance {
     pub(super) actionable: bool,
     pub(super) features: CandidateFeatureMap,
     pub(super) passed_over: bool,
+    pub(super) name_read: Option<ScanNameRead>,
+}
+
+/// Workflow #503 LIST-A3 (`contracts/resource-readings.md`, "List readings", "Offline"): one read
+/// of an instance's name as the identity mapping judged it: the read's mark
+/// (`CandidateLayout::name_mark`) and the mapping's reading of each OCR sample the projection mapped
+/// it from (`CandidateLayout::name_readings`). Kept in memory by a list reading's dry run only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ScanNameRead {
+    pub(super) mark: CandidateNameMark,
+    pub(super) samples: Vec<CandidateNameReading>,
 }
 
 /// A settled viewport frame, read once: its instances, the start and end checks, and the frame's
@@ -751,6 +767,8 @@ struct TrackedInstance {
     features: CandidateFeatureMap,
     /// Workflow #503 LIST-A: the mapping marked this viewport's read none of the wanted keys.
     passed_over: bool,
+    /// Workflow #503 LIST-A3: the read of its name, where the source kept it.
+    name_read: Option<ScanNameRead>,
 }
 
 /// One instance an alignment pairs against, in content coordinates: a tracked instance of a
@@ -826,6 +844,9 @@ struct Position {
     /// keys, and some was not.
     none_of_the_keys: bool,
     read_otherwise: bool,
+    /// Workflow #503 LIST-A3: the reads of its name the source kept, one per coverage viewport
+    /// that read it, in order (a list reading's dry run keeps them; every other session none).
+    reads: Vec<ListPositionRead>,
 }
 
 /// Workflow #503 LIST-A (`contracts/resource-readings.md`, "List readings", "A list of the wanted
@@ -1274,6 +1295,63 @@ impl<'a> ScanSession<'a> {
         }
     }
 
+    /// Workflow #503 LIST-A3 (`contracts/resource-readings.md`, "List readings", "Offline"):
+    /// every position a list reading read at least once, in first-seen order, as its dry run
+    /// answers it: where it stands, the reads of its name the source kept, and what it gives the
+    /// list by the one judgement the rows are built by ([`Self::list_position`]): its known key,
+    /// passed over, or unread with its cause ([`Self::unread_cause`]).
+    pub(super) fn list_positions(&self) -> Vec<ListDryRunPosition> {
+        self.positions
+            .iter()
+            .filter_map(|position| {
+                let first_read_viewport = position.first_read_viewport?;
+                let answer = match self.list_position(position) {
+                    ListPosition::Row(features) => ListPositionAnswer::Known {
+                        key: match features.get(&self.scan.identity_feature) {
+                            Some(CandidateFeature::Identity { value, .. }) => value.clone(),
+                            // Not reached: a position is fixed only by a complete reading, whose
+                            // identity is Known (`Self::complete`).
+                            _ => position.identity.clone().unwrap_or_default(),
+                        },
+                    },
+                    ListPosition::PassedOver => ListPositionAnswer::PassedOver,
+                    ListPosition::Unread => ListPositionAnswer::Unread {
+                        cause: self.unread_cause(position),
+                        identity: position.identity.clone(),
+                        identity_unknown: position
+                            .identity
+                            .is_none()
+                            .then_some(position.identity_unknown)
+                            .flatten(),
+                    },
+                };
+                Some(ListDryRunPosition {
+                    position_index: position.index,
+                    content_axis_px: position.rect.axis,
+                    cross_px: position.rect.cross,
+                    first_seen_viewport: position.first_seen_viewport,
+                    first_read_viewport,
+                    answer,
+                    reads: position.reads.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Workflow #503 LIST-A3: why the unread position `position` of a list reading gives no row,
+    /// the first that holds: a later Known reading of a column differed (`contradicted`); in a list
+    /// that passes over, one of its reads was marked none of the wanted keys and another not
+    /// (`partly_passed_over`, which LIST-A's offline entry called `contradicted` too); its identity
+    /// was Known and no reading complete (`feature_unread`); else its identity was never Known.
+    fn unread_cause(&self, position: &Position) -> ListUnreadCause {
+        match &position.state {
+            PositionState::Contradicted => ListUnreadCause::Contradicted,
+            _ if self.pass_over && position.none_of_the_keys => ListUnreadCause::PartlyPassedOver,
+            _ if position.identity.is_some() => ListUnreadCause::FeatureUnread,
+            _ => ListUnreadCause::IdentityUnread,
+        }
+    }
+
     /// The layout feature whose identity identifies a position.
     pub(super) fn identity_feature(&self) -> &str {
         &self.scan.identity_feature
@@ -1705,6 +1783,7 @@ impl<'a> ScanSession<'a> {
                     actionable: instance.actionable,
                     features: instance.features.clone(),
                     passed_over: instance.passed_over,
+                    name_read: instance.name_read.clone(),
                 })
             })
             .collect()
@@ -2099,6 +2178,7 @@ impl<'a> ScanSession<'a> {
             state: PositionState::Unread,
             none_of_the_keys: false,
             read_otherwise: false,
+            reads: Vec::new(),
         });
         self.positions.len() - 1
     }
@@ -2139,6 +2219,15 @@ impl<'a> ScanSession<'a> {
             entry.none_of_the_keys = true;
         } else {
             entry.read_otherwise = true;
+        }
+        // Workflow #503 LIST-A3: the read of its name, where the source kept one (a list reading's
+        // dry run); it judges nothing.
+        if let Some(name) = &instance.name_read {
+            entry.reads.push(ListPositionRead {
+                viewport,
+                mark: name.mark,
+                samples: name.samples.clone(),
+            });
         }
         match instance.features.get(identity_feature) {
             Some(CandidateFeature::Identity { value, .. }) => match &entry.identity {
@@ -2570,19 +2659,15 @@ impl<'a> ScanSession<'a> {
                     ..
                 } => gated_out.push(position.identity.clone().unwrap_or_default()),
                 PositionState::Unread => {}
-                // Workflow #428 S168-LK: a list reading evaluates nothing, so a fixed position is
-                // one of its rows, not unknown; its unknown positions are those it could not read.
-                // Workflow #503 LIST-A: a position it passed over is neither.
-                _ if self.policy.is_none()
-                    && !matches!(self.list_position(position), ListPosition::Unread) => {}
+                // Workflow #428 S168-LK: a list reading evaluates nothing, so it has neither a
+                // member nor an unknown position of a select. Workflow #503 LIST-A3: it answers
+                // every position it read itself (`Self::list_positions`), the ones it could not
+                // read with a cause of the dry run's own, which tells a column that changed from a
+                // read passed over beside one that was not.
+                _ if self.policy.is_none() => {}
                 state => {
                     let cause = match state {
                         PositionState::Contradicted => ScanUnknownCause::Contradicted,
-                        // Workflow #503 LIST-A: the mapping marked one of its reads none of the
-                        // wanted keys and another not.
-                        _ if self.pass_over && position.none_of_the_keys => {
-                            ScanUnknownCause::Contradicted
-                        }
                         PositionState::Fixed {
                             verdict: Some(Verdict::UnknownDropped),
                             ..

@@ -36,8 +36,8 @@
 //! (`dry_run_list_reading`) calls and answers ([`ListReadingDryRun`]).
 
 use super::scan::{
-    ListPosition, RuntimeScanSource, ScanDeclaration, ScanDryRunUnknown, ScanDryRunViewport,
-    ScanEnd, ScanSession, ScanSource,
+    ListPosition, RuntimeScanSource, ScanDeclaration, ScanDryRunViewport, ScanEnd, ScanSession,
+    ScanSource,
 };
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
@@ -48,14 +48,15 @@ use super::{
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    CandidateFeature, CandidateLayoutKind, FactScalar, MAX_FACT_TTL_MS, MAX_LIST_READING_COLUMNS,
-    MAX_LIST_READINGS, MIN_FACT_TTL_MS, TaskSchema, list_reading_column_valid,
-    list_reading_fact_key_valid,
+    CandidateFeature, CandidateLayoutKind, CandidateUnknownReason, FactScalar, MAX_FACT_TTL_MS,
+    MAX_LIST_READING_COLUMNS, MAX_LIST_READINGS, MIN_FACT_TTL_MS, TaskSchema,
+    list_reading_column_valid, list_reading_fact_key_valid,
 };
 use actingcommand_recognition_pack::{
-    CandidateFeatureValue, RecognitionEvaluator, UnknownIdentityHandling,
+    CandidateFeatureValue, CandidateIdentityDeclaration, CandidateNameMark, CandidateNameReading,
+    RecognitionEvaluator, UnknownIdentityHandling,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
@@ -238,12 +239,183 @@ pub(super) enum ListRead {
 /// not read whole, in first-seen order, each as a select's dry run lists its unknown positions, so
 /// that a self-check can name the place that was not read; empty for a list read whole, and for
 /// `list_position_unread` the positions its count counts. In memory only.
+///
+/// Workflow #503 LIST-A3 (`contracts/resource-readings.md`, "List readings", "Offline"; register
+/// §1.534): beside them, `positions`, every position the scan read, in first-seen order, each with
+/// where it stands, the reads of its name and what it gives the list (its known key; passed over;
+/// unread with its cause), and `summary`, what the list holds of the wanted keys. `unknown` is the
+/// unread ones of `positions`, with the same cause: an unread position's cause is a word of the dry
+/// run's own ([`ListUnreadCause`]), which tells a column that changed (`contradicted`) from a read
+/// passed over beside one that was not (`partly_passed_over`). A name's text is in `positions`
+/// only: the dry run returns it to its caller and records it nowhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListReadingDryRun {
     pub declaration: ListReadingDeclaration,
     pub viewports: Vec<ScanDryRunViewport>,
     pub list: Result<ListReadingRows, ListReadingMiss>,
-    pub unknown: Vec<ScanDryRunUnknown>,
+    pub unknown: Vec<ListDryRunUnknown>,
+    pub positions: Vec<ListDryRunPosition>,
+    pub summary: ListDryRunSummary,
+}
+
+/// Workflow #503 LIST-A3 (`contracts/resource-readings.md`, "List readings", "Offline"): why a
+/// position a list reading read gives no row, a word of the dry run's answer that no record
+/// carries. When several hold, the first in this order is given: `contradicted`, then
+/// `partly_passed_over`, then `feature_unread`, then `identity_unread`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListUnreadCause {
+    /// No read of its identity was Known.
+    IdentityUnread,
+    /// Its identity was Known, and no reading of it was complete.
+    FeatureUnread,
+    /// A later Known reading of one of the list's columns differed from the fixed one.
+    Contradicted,
+    /// In a list that declares `others: pass_over`, the identity mapping marked one read of it
+    /// none of the wanted keys and another not (a known key, or an unread read): LIST-A's
+    /// offline entry gave it `contradicted`.
+    PartlyPassedOver,
+}
+
+/// Workflow #503 LIST-A3: what one position gives the list, as the scan session's one judgement of
+/// a list's positions gives it (`ScanSession::list_position`, which the rows are built by too): a
+/// row of its known key, passed over, or unread with its cause, the identity it kept and, when it
+/// kept none, why its identity read Unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ListPositionAnswer {
+    Known {
+        key: String,
+    },
+    PassedOver,
+    Unread {
+        cause: ListUnreadCause,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        identity: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        identity_unknown: Option<CandidateUnknownReason>,
+    },
+}
+
+/// Workflow #503 LIST-A3: one read of a position's name, which only the dry run keeps: the
+/// coverage viewport that read it, the read's mark as the identity mapping gave it
+/// (`CandidateLayout::name_mark`, the one a list that passes over judges by), and the mapping's
+/// reading of each OCR sample the projection mapped it from (`CandidateLayout::name_readings`: the
+/// text as read, its confidence, why it names no key, the nearest wanted key and alias, the
+/// distance and the limit it had to exceed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListPositionRead {
+    pub viewport: u32,
+    pub mark: CandidateNameMark,
+    pub samples: Vec<CandidateNameReading>,
+}
+
+/// Workflow #503 LIST-A3: one position a list reading read, as its dry run answers it. Where it
+/// stands is what the scan tracks a position by: its index in first-seen order, its place in
+/// content coordinates (the start of its instance rectangle along the scan's axis and across it),
+/// the coverage viewport that first saw it and the one that first read it; `reads` are the reads
+/// of its name, one per coverage viewport that read it, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListDryRunPosition {
+    pub position_index: u32,
+    pub content_axis_px: i64,
+    pub cross_px: i64,
+    pub first_seen_viewport: u32,
+    pub first_read_viewport: u32,
+    pub answer: ListPositionAnswer,
+    pub reads: Vec<ListPositionRead>,
+}
+
+impl ListDryRunPosition {
+    /// The position as the dry run's `unknown` lists it, when it is unread.
+    fn unknown(&self) -> Option<ListDryRunUnknown> {
+        match &self.answer {
+            ListPositionAnswer::Unread {
+                cause,
+                identity,
+                identity_unknown,
+            } => Some(ListDryRunUnknown {
+                position_index: self.position_index,
+                content_axis_px: self.content_axis_px,
+                cross_px: self.cross_px,
+                first_read_viewport: self.first_read_viewport,
+                cause: *cause,
+                identity: identity.clone(),
+                identity_unknown: *identity_unknown,
+            }),
+            ListPositionAnswer::Known { .. } | ListPositionAnswer::PassedOver => None,
+        }
+    }
+}
+
+/// Workflow #428 S168-LK (round 2), the cause its own since Workflow #503 LIST-A3: one position a
+/// list reading read but could not read whole: its index in first-seen order, its place in
+/// content coordinates, the coverage viewport that first read it, why ([`ListUnreadCause`]), the
+/// Known identity it kept, if any, and, when it kept none, why its identity read Unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListDryRunUnknown {
+    pub position_index: u32,
+    pub content_axis_px: i64,
+    pub cross_px: i64,
+    pub first_read_viewport: u32,
+    pub cause: ListUnreadCause,
+    pub identity: Option<String>,
+    pub identity_unknown: Option<CandidateUnknownReason>,
+}
+
+/// Workflow #503 LIST-A3: what a list reading's dry run found of the list as a whole: whether the
+/// list is whole, how many positions the scan read and how many of them were passed over (0 for
+/// a list that declares no `others`) and unread, and which of the wanted keys (the entries of the
+/// key feature's identity) a card showed, read Known on some viewport by some position, and which
+/// none showed, each in ascending byte order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListDryRunSummary {
+    pub whole: bool,
+    pub positions: u32,
+    pub passed_over: u32,
+    pub unread: u32,
+    pub wanted_shown: Vec<String>,
+    pub wanted_not_shown: Vec<String>,
+}
+
+impl ListDryRunSummary {
+    /// The summary of a list whose positions are `positions`, whole or not as `whole` says, whose
+    /// wanted keys are `wanted` (its identity's domain).
+    fn of(positions: &[ListDryRunPosition], whole: bool, wanted: &[String]) -> Self {
+        let counted = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
+        let passed_over = positions
+            .iter()
+            .filter(|position| matches!(position.answer, ListPositionAnswer::PassedOver))
+            .count();
+        let unread = positions
+            .iter()
+            .filter(|position| matches!(position.answer, ListPositionAnswer::Unread { .. }))
+            .count();
+        let shown = positions
+            .iter()
+            .filter_map(|position| match &position.answer {
+                ListPositionAnswer::Known { key } => Some(key.as_str()),
+                ListPositionAnswer::Unread { identity, .. } => identity.as_deref(),
+                ListPositionAnswer::PassedOver => None,
+            })
+            .collect::<BTreeSet<_>>();
+        Self {
+            whole,
+            positions: counted(positions.len()),
+            passed_over: counted(passed_over),
+            unread: counted(unread),
+            wanted_shown: wanted
+                .iter()
+                .filter(|key| shown.contains(key.as_str()))
+                .cloned()
+                .collect(),
+            wanted_not_shown: wanted
+                .iter()
+                .filter(|key| !shown.contains(key.as_str()))
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 impl ListReadingDryRun {
@@ -266,10 +438,14 @@ pub(super) struct ScannedList {
     pub(super) captured_at: SystemTime,
     pub(super) list: Result<ListReadingRows, ListReadingMiss>,
     pub(super) viewports: Vec<ScanDryRunViewport>,
-    pub(super) unknown: Vec<ScanDryRunUnknown>,
+    pub(super) unknown: Vec<ListDryRunUnknown>,
     /// Workflow #503 LIST-A: the positions a list that passes over passed over; `None` for a
     /// reading that declares no `others`.
     pub(super) passed_over: Option<u32>,
+    /// Workflow #503 LIST-A3: every position the scan read, as the dry run answers it (the reads
+    /// of a name only where the source kept them: in the dry run), and the list's summary.
+    pub(super) positions: Vec<ListDryRunPosition>,
+    pub(super) summary: ListDryRunSummary,
 }
 
 /// `contained_task_resource_reading_invalid` of the operation `operation_id`, refused at `member`
@@ -661,6 +837,26 @@ impl PreparedContainedTask {
         self.program.declares_list_readings() || self.program.declares_field_lists()
     }
 
+    /// Workflow #503 LIST-A3: the operation ids of the task's `read_list` steps, in declaration
+    /// order, each of which `dry_run_list_reading` takes.
+    pub fn list_reading_steps(&self) -> Vec<&str> {
+        self.program
+            .operations
+            .iter()
+            .filter(|operation| operation.prepared_list.is_some())
+            .map(|operation| operation.id.as_str())
+            .collect()
+    }
+
+    /// Workflow #503 LIST-A3: whether the task declares an operation of the id `operation_id`,
+    /// a list reading or not.
+    pub fn declares_operation(&self, operation_id: &str) -> bool {
+        self.program
+            .operations
+            .iter()
+            .any(|operation| operation.id == operation_id)
+    }
+
     /// One `read_list` step, whose `StepStarted` (index `step_index`) is written, from its
     /// dispatched frame `first` within `timing`'s deadline (its scan's `max_ms`, capped by the
     /// task's). The list, whole or its miss, is recorded as one [`ContainedTaskTrace::
@@ -734,6 +930,8 @@ impl PreparedContainedTask {
             session.passing_over();
         }
         let draw = step_point_draw(runtime, step_index, &operation.id)?;
+        // Workflow #503 LIST-A3: the dry run over saved viewports (`replay`) keeps each read of a
+        // name with what the identity mapping says of it; a run keeps none.
         let mut source = RuntimeScanSource::new(
             self,
             runtime,
@@ -744,7 +942,7 @@ impl PreparedContainedTask {
             (step_index, timing, deadline, draw),
             replay,
         )
-        .reading_list(prepared.pass_over);
+        .reading_list(prepared.pass_over, replay);
         let read = session.read_list(&mut source, &prepared.key_column, &prepared.columns);
         let end_captured_at = source.end_captured_at();
         let (latest, _) = source.into_parts();
@@ -766,14 +964,31 @@ impl PreparedContainedTask {
             ),
             ListRead::Missed(miss) => (last.captured_at, Err(miss)),
         };
-        let summary = session.summary(None);
+        let viewports = session.summary(None).viewports;
+        // Workflow #503 LIST-A3: every position read, its unread ones as `unknown`, and what the
+        // list holds of the wanted keys (the entries of its key feature's identity).
+        let positions = session.list_positions();
+        let unknown = positions
+            .iter()
+            .filter_map(ListDryRunPosition::unknown)
+            .collect();
+        let wanted = layout
+            .features
+            .iter()
+            .find(|feature| feature.name == prepared.scan.identity_feature())
+            .and_then(|feature| feature.identity.as_ref())
+            .map(CandidateIdentityDeclaration::domain)
+            .unwrap_or_default();
+        let summary = ListDryRunSummary::of(&positions, list.is_ok(), &wanted);
         Ok(ScannedList {
             last,
             captured_at,
             list,
-            viewports: summary.viewports,
-            unknown: summary.unknown,
+            viewports,
+            unknown,
             passed_over: session.passed_over(),
+            positions,
+            summary,
         })
     }
 }

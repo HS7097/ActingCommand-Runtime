@@ -35,7 +35,7 @@ pub(crate) enum Line {
 
 /// The command of every row actinglab's own command serves: the row's name, the command's words
 /// and how the row's command line reaches it.
-pub(crate) const COMMANDS: [(&str, &[&str], Line); 76] = [
+pub(crate) const COMMANDS: [(&str, &[&str], Line); 77] = [
     ("app launch", &["session", "app", "launch"], Line::Declared),
     (
         "app restart",
@@ -135,6 +135,12 @@ pub(crate) const COMMANDS: [(&str, &[&str], Line); 76] = [
     (
         "package variables",
         &["package", "variables"],
+        Line::AsWritten,
+    ),
+    // Workflow #503 LIST-A3: a list reading checked over saved frames; it only reads.
+    (
+        "package list-check",
+        &["package", "list-check"],
         Line::AsWritten,
     ),
     (

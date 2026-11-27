@@ -28,7 +28,7 @@
 
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
-use actingcommand_contract::{FactScalar, ScanUnknownCause};
+use actingcommand_contract::FactScalar;
 use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
     NnProviderRequest, NnProviderResult, OcrProviderRequest, OcrProviderResult,
@@ -1112,6 +1112,6 @@ fn lk_the_offline_entry_names_each_position_it_could_not_read() {
             position.cause,
             position.identity.as_deref()
         ),
-        (1, 0, ScanUnknownCause::IdentityUnread, None)
+        (1, 0, ListUnreadCause::IdentityUnread, None)
     );
 }

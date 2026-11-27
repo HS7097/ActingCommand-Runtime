@@ -50489,6 +50489,174 @@ root is placed from such a bundle. A field list's run that goes back into its gr
 now `frame_after_list_end` where it was `runtime_invariant`. In the release notes' language:
 列表读数（`read_list`）可以写 `others: "pass_over"`：只要身份字典里声明的那些键，屏幕上别的卡一律略过，不再让整张表读不成。略过的判定只在身份映射一处：名字读出来了、置信度不低于身份的下限、离每个别名的距离都大于 `max_distance + minimum_margin`，并且同一位置在每个视口上都这么判，才算略过；空、低置信、离某个名字近却没认上、歧义、一个视口认出另一个视口略过，都照旧算没读成，整张表不写。扫到声明的终点、没有没读成的位置，就算整表；没出现的想要的键没有行，池按 `list_rows` 记 0；全被略过就写空表。每次运行在任务诊断里记一行 `contained_task_resource_reading_passed_over`，写明略过了几个位置（不写卡上的字）。代价：想要的卡名每次都被高置信地读成离所有别名都远的别的字，就每次都记 0，下一次读数纠正不了；办法是对存下的帧做离线检查，给这个误读加一个别名；Runtime 不因为读到 0 暂停、按住或压低任何东西。包的修订升到 27：带这个成员的包要本版以上的 Runtime，旧版安装器在 `package` 边上就拒，旧版 Runtime 每次准入都拒（`UnknownField`）。字段表在定案之后又收到同组一帧，`state_problem` 改为 `frame_after_list_end`（包的路线问题，原来是 `runtime_invariant`），离线回放也照这个名字答。Lab 的离线自检（列出每个被略过位置的文字和到最近别名的距离）这一版还没有。
 
+### 1.534 Slice #503 LIST-A3 (0.12.91): the Lab's offline check of a list reading answers, over saved frames, every position its scan read with the text it was read as and its distance to the nearest wanted name (board #503; the rulings 1 to 6 are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-list-a3.md`, the check §1.533's ruling 4 left; on LIST-A's branch `0c0f7dd0`, which merges first)
+
+This section takes 1.534. It ships in 0.12.91 and takes no interface revision. Another slice of the
+same days (#455 RR1, 0.12.92, §1.535, `package` 28) merges after it; nothing of goals is touched.
+[resource-readings.md](resource-readings.md) ("A list of the wanted keys only", the cost; "Offline",
+what the dry run answers), [business-identity-consensus.md](business-identity-consensus.md)
+("Identity and readable attributes", the nearest name), [lab-operations.json](lab-operations.json)
+(the row `package list-check`), [lab-two-entries.md](lab-two-entries.md) (the rows a child
+serves), [actinglab-capabilities.md](actinglab-capabilities.md),
+[actinglab-dry-run.md](actinglab-dry-run.md), the MCP manual and the outcome fragment of the Lab
+(`package_list_check_not_whole`) are the contract.
+
+**The problem** (§1.533's review, taken as given). A list reading with `others: pass_over` takes a
+card for none of the wanted keys when its name was read with confidence and far from every wanted
+name. If a wanted card's name is read wrong in that way every time, its item reads 0 every time and
+nothing corrects it. A run writes only a count of the positions passed over, never a card's text
+(a card's name is what the account holds), and with the count alone nobody finds such a
+misreading.
+
+**What it rests on** (read in the code at `0c0f7dd0`; none of the work order's four stop conditions
+holds).
+- *What a position was read as can be kept.* The projection's recognition evidence holds every OCR
+  sample of a candidate's identity feature (its text and confidence), which LIST-A's mark already
+  reads (`CandidateLayout::name_mark`). The scan's source hands it to the session beside the mark,
+  in memory, and only when the dry run asks: a run's source keeps nothing more, records nothing
+  more and publishes nothing more.
+- *The frames replay as a scan.* `dry_run_list_reading` takes the package and the frames: the scan
+  declaration is the step's own (unlike a select's `replay --scan`), and the OCR provider is the
+  Lab's, as for `replay`. No other file is needed.
+- *No interface and no request kind.* The operation is offline; the operation table's schema does not
+  change for a row, and no interface names the Lab's rows.
+- *Rule 1 holds.* The mapping gave a distance bounded at `max_distance + minimum_margin`; its own
+  distance function with a bound no two names can reach (the longer one's length) is the true
+  distance, computed there and nowhere else.
+
+**The rulings, as built.**
+- *Ruling 1, one place judges* (`crates/recognition-pack/src/candidate_identity.rs`,
+  `CandidateIdentityDeclaration::nearest_ocr`, `read_ocr`, `CandidateNearestName`,
+  `CandidateNameReading`, `unbounded_edit_distance`; `candidate_layout.rs`,
+  `CandidateLayout::name_readings`). The nearest wanted name of a read is the entry and alias at the
+  smallest edit distance from its normalized text (the first in declaration order among equals),
+  with the true distance and the limit; none for a text that normalizes to nothing and none from an
+  icon identity. `read_ocr` gives a read with its mark (`mark_ocr`), why it names no key
+  (`map_ocr_with_cause`) and the nearest name; the layout hands the mapping the projection's
+  evidence of each sample, from the evidence `name_mark` reads. The kernel and the Lab compute no
+  distance.
+- *Ruling 2, what the dry run answers* (`crates/execution-kernel/src/contained_task/list_reading.rs`,
+  `ListReadingDryRun::positions` and `summary`, `ListDryRunPosition`, `ListPositionAnswer`,
+  `ListPositionRead`, `ListUnreadCause`, `ListDryRunSummary`, `ListDryRunUnknown`,
+  `PreparedContainedTask::list_reading_steps`, `declares_operation`; `scan.rs`,
+  `ScanReadInstance::name_read`, `ScanNameRead`, `Position::reads`, `ScanSession::list_positions`,
+  `unread_cause`; `scan/online.rs`, `RuntimeScanSource::reading_list(pass_over, keep_names)`). For
+  every position the scan read, on a list with the member and on one without: where it stands, which
+  is what the scan tracks a position by (its index in first-seen order, its place in content
+  coordinates, the coverage viewport that first saw it and the one that first read it); the reads of
+  its name, one per coverage viewport that read it (the viewport, the read's mark, and each sample's
+  text, confidence, mark, cause and nearest name); and what it gives the list by the one judgement the
+  rows are built by (`list_position`): its known key, passed over, or unread with its cause, the
+  identity it kept and, when it kept none, why its identity read Unknown. For the list: whether it is
+  whole, the positions read, passed over and unread, the wanted keys a card showed (read Known by
+  some position) and those none showed. `unknown` is the unread positions, built from `positions`.
+- *Ruling 3, the Lab's operation* (`apps/actinglab/src/list_check_cli.rs`; the row in
+  `contracts/lab-operations.json`; `engine::COMMANDS`, `own_flags`, `words::BUILT_SLICES`, the MCP
+  server's `ACTINGLAB_SLICES`, the capability, the dry-run declaration, the help's options and the
+  command inventory). Named `package list-check` by the table's conventions: a row's name is its
+  command-line words, a group and a word; the offline checks of one package stand in the group
+  `package` (`package check`, `package preflight`, `package fix-select`), a hyphen joins the words of
+  one verb (`fix-select`), and the MCP tool follows from the name (`ac_package_list_check`).
+  `--package` and `--frames` are read as `replay` reads them (`replay_cli::admit_with`, the one
+  recognition set-up with the OCR provider as a parameter, and `frame_paths`), `--step` names one
+  `read_list` step, and without it every one of the task is checked over the same frames. The answer
+  is each step's in the Lab's JSON; without `--json` the command line prints it as text for a person
+  (`list_check_cli::people`, beside `help`'s own). Exits: every list whole, success (0);
+  a list not whole, `package_list_check_not_whole` with the whole answer in its details; a scan that
+  failed before its end, the kernel's own code (the first such step's, its outcome in
+  `details.outcome`); a usage error before any frame is read. Each failure is 1 on actinglab's own
+  line and 2 on a `--via` line, as `replay`'s. Served to the command line by actinglab's own command
+  and to MCP by a `serve` child, as every row of the group is.
+- *Ruling 4, printed here, kept nowhere.* A card's text goes to the answer this process prints and to
+  nothing else: no ledger record, no log, no file; the run's source keeps no name. The one
+  convention that writes an answer to a file is the MCP server's for a success over its answer
+  budget (a file under the user's temporary folder, as for every row); a refusal over the budget is
+  `output_budget_exceeded` there. The command line prints it whole.
+- *Ruling 5, the word that covered two causes.* `contradicted` stays the word of a position whose
+  column changed between viewports; a position known on one viewport and passed over on another is
+  `partly_passed_over`. The dry run's causes are its own vocabulary (`ListUnreadCause`), so the
+  selection record's `ScanUnknownCause`, a ledger word list, does not move; a select's dry run keeps
+  it. The order when several hold: `contradicted`, `partly_passed_over`, `feature_unread`,
+  `identity_unread`.
+- *Ruling 6, nothing else moves.* A run's scan, records, publication and count note are as before;
+  no `package` revision, no ledger shape, no client interface, no setting.
+
+**Decided here** (each the smallest choice the rulings leave).
+- Every `read_list` step, without `--step`, is checked over the same frames, each by a new reading of
+  them; a step whose page the frames do not show answers the kernel's refusal for that step.
+- The read's mark is shown for a list without the member too: it is the mapping's, and says what the
+  member would do with the card.
+- A usage error names its argument: `--step` `not_recognised` for an operation the task does not
+  declare, `--step` `unusable` for one that is no `read_list` step, `--package` `unusable` for a task
+  without one.
+- The fixtures' names are made up; none names an application.
+
+**Codes and words.**
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `package_list_check_not_whole` (code, error, `ladder_class` none, no values) | `package list-check` ran, and the scan of a list reading it checked reached the list's end with the list not whole (each step's `reading_problem` and `count` in the details) | refuses, with the whole answer in its details | 1 on actinglab's own line, 2 on a `--via` line |
+| `partly_passed_over` (word of the dry run's answer, `ListUnreadCause`; in no outcome and no record) | in a list that passes over, a position the mapping marked none of the wanted keys on one read and not on another | neither: a cause in the answer | none |
+
+The outcome index is regenerated with the fragment and the catalog's new domain `package_list_check_`
+(the Lab's).
+
+**Tests** (exec gate map row "#503 LIST-A3", apps gate map row "#503 LIST-A3"; the kernel's on
+LIST-A's synthetic step plan, defined again with a flag column; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `candidate_identity::tests::list_a3_the_nearest_wanted_name_is_the_true_distance_and_none_for_an_empty_text_or_icons` (1) | `alpha` at 0 and known; `alpzz` at 2 from `alpha`, unread `beyond_distance`; `cxxxxxe` at 5 from `charlie`, above the 3 the mark's distance stops at, none of the keys; an empty text and an icon identity have none |
+| `gate_503_list_a3::list_a3_each_position_of_a_mixed_screen_is_answered_with_its_reads_and_the_wanted_keys` (2) | `alpha`, `zulu`, `cxxxxxe`, `yankee`: each position where it stands, `member-a` known, the others passed over, `zulu` nearest `member-a` at 5, the misread card's text and nearest `member-c` by `charlie` at 5, the summary with `member-b`, `member-c` not shown; without the member the same reads and three `identity_unread` |
+| `gate_503_list_a3::list_a3_a_near_miss_is_unread_with_its_text_and_its_distance` (3) | `alpzz` unread `identity_unread`, its read `unread`, `beyond_distance`, at 2 from `alpha` with the limit 2 |
+| `gate_503_list_a3::list_a3_partly_passed_over_and_a_changed_column_are_two_causes` (4) | over two viewports, `charlie` then `zulu` is `partly_passed_over`, `bravo` whose flag turns is `contradicted`; `unknown` lists both with those causes |
+| `apps/actinglab` `gate_503_list_a3::list_a3_the_check_answers_one_step_and_every_step_as_json_and_as_text_and_writes_nothing` (5) | `--step read_members` whole, its positions and text lines; every step adds `read_every` (no member), not whole, so `package_list_check_not_whole` with both steps and its text; every file under the directory of the package and the frames unchanged and none added |
+| `apps/actinglab` `gate_503_list_a3::list_a3_a_step_that_is_no_list_reading_and_a_missing_directory_are_usage_errors` (6) | `--step close` `unusable`, `--step missing_step` `not_recognised`, a missing frames directory `replay_frames_unreadable`, exit 2 on the envelope |
+| `apps/actinglab-mcp` `gate_503_list_a3::list_a3_the_list_check_is_offered_as_ac_package_list_check` (7) | the tool offered, served by a child, read-only, not destructive, listed with the authoring module only, its schema `package`, `frames`, `step`, the first two required |
+
+Adapted, the requirement moving what they pin (ruling 5): LIST-A's
+`gate_503_list_a::list_a_a_position_known_in_one_viewport_and_passed_over_in_another_is_unread` (the
+cause `partly_passed_over` where it was `contradicted`) and S168-LK's
+`gate_428_s168_lk::lk_the_offline_entry_names_each_position_it_could_not_read` (the same word
+`identity_unread`, of the dry run's own type). Mechanical, pinning what they pinned: the scan test
+sources of `gate_308_l3`, `gate_308_l3b`, `gate_308_l4b` and `gate_428_s168_4` write the new member
+`name_read: None`. Every other gate of LIST-A and of the offline replay is as it was. No golden
+re-recorded; no test leaves the gate maps.
+
+**What is not changed.** A run of any package: its scan, its marks, its rows, its count note, every
+record and publication. The projection, `CandidateFeature`, `CandidateUnknownReason`,
+`ScanUnknownCause` and a select's dry run. `replay` answers as before (its admission and its frames'
+reading are now functions the check shares). Every interface range, the ledger, every setting.
+
+**What was left.** A selection step that reads the same mark (the shop); the end of a field list on
+a page outside its capture, or an empty field list; a single reading that takes "no card" for zero
+(all §1.533's, open). A check of a field list. A frame sequence per step for a task whose list
+readings read different pages (today every step is checked over the one directory). Not proven by a
+test: a grid of several columns, a consensus of several samples per read (the evidence's every
+sample is shown; the fixtures have one), the scan failure's exit through the check, the text form on
+a real terminal, and the MCP face's answer over a child (its tool is tested, not a call).
+
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found nothing
+that must change, and that a run writes, computes, compares and publishes what it did, byte for
+byte: the text a position was read as is kept only when the scan is a dry run's (`keep_names`,
+false on a run's path), the mark's judgement is untouched, and the unbounded distance is the same
+banded computation with its band opened, so "farther than the limit" in the check's answer and the
+run's "none of the wanted keys" cannot disagree for one read. Changed after it: the first build's
+one failure (a lint: a clone made only to build a one-element slice in a kernel test); the
+catalog's text of the count's code, which still said the check was owed, now names the operation;
+the contract's list of the dry run's causes gains `partly_passed_over`, and "the middle two" is
+"the first two"; a blank line that broke the interface table between rows 26 and 27, left by the
+merge of the two slices before. Left, as the review lists: a run computes the positions' summary
+too and drops it (microseconds, no record; a later slice may compute it for a dry run only); over
+MCP a refusal for a list that is not whole answers `output_budget_exceeded` when it is over 24 KiB,
+as every refusal does, so the command line is where a long list is read; an icon identity's
+position prints no line saying that no text was read.
+
+**At deploy.** Nothing to configure, and nothing changes for a run. The operation needs the Lab's OCR
+model as `replay` does. In the release notes' language: 新增 Lab 离线操作 `package list-check`（MCP
+`ac_package_list_check`）：拿一个包和一个存下的帧目录（同 `replay` 的读法），对一个或全部
+`read_list` 步做列表读数的离线试读，逐个位置列出它在哪、每次读到的文字和置信度、身份映射给的标记、离最近的想要名字（键和别名）的距离和必须超过的界限，以及它在表里算什么（认出的键、略过、没读成及原因），再列出哪些想要的键有卡、哪些没卡。卡上的字只打印在本机这次的回答里，不进账本、不写日志、不落文件。列表没读成整表时答 `package_list_check_not_whole`。离线试读给"一个视口认出、另一个视口略过"的位置一个新词 `partly_passed_over`，`contradicted` 只留给列值前后不一致。运行本身不变。
+
 ### 1.535 Slice #455 RR1 (0.12.92): a training goal's two files: a records entry in a root's goals.json (version 3) and the root's table of game rules (goal-tables.json), read, checked, bundled and installed; nothing is stored or computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr1.md`; on main `0137eb22`, v0.12.89, merged with main `f117d883`, which brought §1.533 and the package revision 27; §1.534, a slice merged before this one, is not in its tree, and the coordinator joins it at the merge)
 
 It ships in 0.12.92. [standard-pack-goal-tables.md](standard-pack-goal-tables.md) (new: the file,

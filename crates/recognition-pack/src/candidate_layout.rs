@@ -26,15 +26,15 @@
 use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
 use crate::{
     CandidateConsensus, CandidateIdentityDeclaration, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, CandidateNameMark, CandidateSampleVariant, OcrEvaluation,
-    OcrLocateBlocks, OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence, OcrProviderBlocks,
-    OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect, PackRegion,
-    RecognitionEvaluator, RecognitionPack, RecognitionPackError, RecognitionPackErrorCode,
-    RecognitionPackResult, RecognitionTarget, SCHEMA_0_7, SceneEvaluation, TargetEvaluation,
-    TargetKind, TemplateEvaluation, UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict,
-    primitive_error, provider_error, provider_region, rect_is_within, reject_unknown_fields,
-    target_region, template_message, validate_ocr_result, validate_rect_shape,
-    validate_region_within_coordinate_space,
+    CandidateIdentityTemplate, CandidateNameMark, CandidateNameReading, CandidateSampleVariant,
+    OcrEvaluation, OcrLocateBlocks, OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence,
+    OcrProviderBlocks, OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect,
+    PackRegion, RecognitionEvaluator, RecognitionPack, RecognitionPackError,
+    RecognitionPackErrorCode, RecognitionPackResult, RecognitionTarget, SCHEMA_0_7,
+    SceneEvaluation, TargetEvaluation, TargetKind, TemplateEvaluation,
+    UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict, primitive_error, provider_error,
+    provider_region, rect_is_within, reject_unknown_fields, target_region, template_message,
+    validate_ocr_result, validate_rect_shape, validate_region_within_coordinate_space,
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
@@ -2297,6 +2297,49 @@ impl CandidateLayout {
         } else {
             CandidateNameMark::Unread
         }
+    }
+
+    /// Workflow #503 LIST-A3 (`contracts/resource-readings.md`, "List readings", "Offline"): what
+    /// the identity mapping says of each OCR sample the projection mapped the identity feature
+    /// `feature` of the candidate `candidate_id` of `projection` from
+    /// ([`CandidateIdentityDeclaration::read_ocr`], on the text and the confidence the projection's
+    /// evidence keeps of that read: its mark, why it names no key, the nearest wanted name and its
+    /// distance), in the evidence's order, from the evidence [`Self::name_mark`] reads; none for a
+    /// feature without an identity, a candidate without evidence, or an icon or scalar sample. The
+    /// mapping judges; this only hands it the reads it already mapped.
+    pub fn name_readings(
+        &self,
+        projection: &CandidateProjection,
+        candidate_id: &str,
+        feature: &str,
+    ) -> Vec<CandidateNameReading> {
+        let Some(identity) = self
+            .features
+            .iter()
+            .find(|declared| declared.name == feature)
+            .and_then(|declared| declared.identity.as_ref())
+        else {
+            return Vec::new();
+        };
+        projection
+            .recognition_evidence()
+            .iter()
+            .find(|evidence| evidence.candidate_id == candidate_id && evidence.feature == feature)
+            .map(|evidence| {
+                evidence
+                    .samples
+                    .iter()
+                    .filter_map(|sample| match &sample.input {
+                        CandidateRecognitionInput::Ocr {
+                            text,
+                            confidence_milli,
+                        } => Some(identity.read_ocr(text, *confidence_milli)),
+                        CandidateRecognitionInput::Icons { .. }
+                        | CandidateRecognitionInput::Scalar { .. } => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// One privacy per candidate: the strictest privacy of the targets its features read. A

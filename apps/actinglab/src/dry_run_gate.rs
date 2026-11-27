@@ -305,6 +305,12 @@ const DECLARATIONS: &[(&str, Mode)] = &[
     // Both forms only read: the whole package (SEL-L6a) and one select step's scan with
     // `--select <operation> --scan <file>` (Workflow #308 SEL-L6b).
     ("replay", Mode::Refused("offline_device_scope_forbidden")),
+    // Workflow #503 LIST-A3: it reads a package and saved frames only, and refuses actinglab's
+    // global Runtime and execution flags as `replay` does.
+    (
+        "package list-check",
+        Mode::Refused("offline_device_scope_forbidden"),
+    ),
     (
         "recognition-regression",
         Mode::Refused("offline_device_scope_forbidden"),

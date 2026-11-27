@@ -100,7 +100,9 @@ pub(crate) fn instructions(budget_s: u64) -> String {
 /// child.
 /// #463 SEL-F (`463-SELF`): its row `package fix-select` (`ac_package_fix_select`), through a
 /// `serve` child.
-pub(crate) const ACTINGLAB_SLICES: [&str; 20] = [
+/// Workflow #503 LIST-A3 (`503-LIST-A3`): its row `package list-check` (`ac_package_list_check`),
+/// through a `serve` child.
+pub(crate) const ACTINGLAB_SLICES: [&str; 21] = [
     "392-DAL0",
     "463-RC1",
     "463-S2-13",
@@ -111,6 +113,7 @@ pub(crate) const ACTINGLAB_SLICES: [&str; 20] = [
     "463-V3",
     "464-P3",
     "477-PC1",
+    "503-LIST-A3",
     "LAB-1",
     "LAB-1b",
     "LAB-2",

@@ -22,9 +22,9 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3969 |
+| active | 3970 |
 | retired | 90 |
-| all | 4059 |
+| all | 4060 |
 
 ## Active codes by category
 
@@ -33,19 +33,19 @@ here.
 | success | 124 |
 | info | 226 |
 | warning | 192 |
-| error | 3412 |
+| error | 3413 |
 | fatal | 15 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 816 |
+| `common_causes` and `handling` both written | 817 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3149 |
 | `settled` | 154 |
-| `pending` | 3815 |
-| all active codes | 3969 |
+| `pending` | 3816 |
+| all active codes | 3970 |
 
 ## By owner
 
@@ -53,7 +53,7 @@ here.
 |---|---:|---:|---:|---:|
 | [actingctl](actingctl.md) | 209 | 204 | 41 | 8 |
 | [actingd](actingd.md) | 156 | 154 | 99 | 85 |
-| [actinglab](actinglab.md) | 46 | 45 | 45 | 0 |
+| [actinglab](actinglab.md) | 47 | 46 | 46 | 0 |
 | [actinglab-mcp](actinglab-mcp.md) | 3 | 2 | 2 | 0 |
 | [actingledger](actingledger.md) | 4 | 4 | 0 | 0 |
 | [artifact-store](artifact-store.md) | 77 | 77 | 2 | 0 |
@@ -81,4 +81,4 @@ here.
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4059 | 3969 | 816 | 154 |
+| all | 4060 | 3970 | 817 | 154 |

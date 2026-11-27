@@ -46,6 +46,14 @@ actingcommand_contract::outcome_codes! {
         /// Error. The `--scan` file is not one scan declaration of a select step.
         ReplayScanInvalid => "replay_scan_invalid": error / none,
         // ---- end of SEL-L6b
+        // ---- Workflow #503 LIST-A3: `actinglab package list-check` (contracts/resource-readings.md,
+        // "List readings", "Offline").
+        /// Error. The check ran over the frames and the scan of a list reading it checked reached
+        /// the list's end with the list not whole: a position unread, two positions of one key or a
+        /// position past the list's bound (each step's miss in the details, with every position
+        /// it read). A scan that failed before the end answers its own code instead.
+        PackageListCheckNotWhole => "package_list_check_not_whole": error / none,
+        // ---- end of LIST-A3
         // ---- Workflow #331 RSU-1 (pending): `actinglab recognition-regression`.
         /// Error. An `--evidence` file could not be opened or read.
         RecognitionRegressionEvidenceUnreadable => "recognition_regression_evidence_unreadable": error / none,

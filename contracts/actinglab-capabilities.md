@@ -93,6 +93,18 @@ wanted item is a package variable into the fixed form from the package's own fil
 package admitted in memory before the files it changed are written as `package edit` writes them;
 a refusal (`record_select_invalid` with its `select_problem`) writes nothing.
 
+Workflow #503 LIST-A3 (0.12.91; [resource-readings.md](resource-readings.md), "List readings",
+"Offline"): `package list-check --package <path> --frames <directory> [--step <operation id>]`
+(MCP `ac_package_list_check`), a row of the authoring module, needs `offline` and `read_only`, is
+`available` and declares `refused` with `offline_device_scope_forbidden`, as `replay` does: it reads
+its package and its frames as `replay` does and writes nothing. For one `read_list` step, or every
+one of the task, it answers the kernel's dry run of the list reading over the frames: every
+position the scan read with the reads of its name (the text, its confidence, the mark, the nearest
+wanted key and alias, the distance and the limit) and what it gives the list, and the wanted keys a
+card showed and those none showed; without `--json` it prints that as text for a person. A list
+not whole is `package_list_check_not_whole`; every option is given once, and the line refuses a
+flag off its list and any positional.
+
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with
 `dry_run_refusal_code`, `dry_run_forms` or `dry_run_marker` as that mode requires

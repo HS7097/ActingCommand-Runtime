@@ -46,17 +46,18 @@ use crate::flag_args::reads::FlagReads;
 use crate::resource_runtime_support::resource_declarations;
 use crate::{
     cli_information, drive_cli, env_detection, lab_package_control, lab_run, lab2_cli, layout_cli,
-    maa_task_graph, package_build, package_cli, package_tool, readonly_cli, recognition_regression,
-    replay_cli, resource_restore, resource_runtime_support, resource_verify, runtime_debug,
-    runtime_session_adapter, runtime_stream_adapter, scheduling_cli, session_management,
-    signature_cli, standard_pack_cli,
+    list_check_cli, maa_task_graph, package_build, package_cli, package_tool, readonly_cli,
+    recognition_regression, replay_cli, resource_restore, resource_runtime_support,
+    resource_verify, runtime_debug, runtime_session_adapter, runtime_stream_adapter,
+    scheduling_cli, session_management, signature_cli, standard_pack_cli,
 };
 
 /// The strict rows: [`accepted`] answers for each of them and, beside them, for the rows of
 /// [`CORE_STRICT_ROWS`] only. Workflow #464 P2: `standard-pack build`, checked against its list
 /// as `resource verify` is. Workflow #463 S3-14: `standard-pack status`, against its list. #463
 /// RC-1: `resource regression` the same. #463 SEL-F: `package fix-select`, as `package edit`.
-pub(crate) const STRICT_ROWS: [&str; 37] = [
+/// Workflow #503 LIST-A3: `package list-check`, against its list as `replay` is.
+pub(crate) const STRICT_ROWS: [&str; 38] = [
     "tap",
     "swipe",
     "long-tap",
@@ -80,6 +81,8 @@ pub(crate) const STRICT_ROWS: [&str; 37] = [
     "package edit",
     // #463 SEL-F.
     "package fix-select",
+    // Workflow #503 LIST-A3.
+    "package list-check",
     "resource catalog",
     "resource validate",
     "resource verify",
@@ -379,6 +382,8 @@ pub(crate) fn accepted(row: &str) -> Option<Accepted> {
         "package fix-select" => {
             from_lists(package_tool::FIX_SELECT_FLAGS.iter().copied(), &[], none)
         }
+        // Workflow #503 LIST-A3.
+        "package list-check" => from_lists(list_check_cli::LIST_CHECK_FLAGS, &[], none),
         "resource catalog" => from_lists(
             resource_runtime_support::CATALOG_FLAGS,
             &[],
@@ -526,8 +531,8 @@ pub(crate) const UNROWED_READS: [&FlagReads; 4] = [
 /// Workflow #464 P2: `standard-pack build`, against its strict list. Workflow #463 S3-14:
 /// `standard-pack status`, against its strict list. #463 RC-1: `resource regression` the same.
 /// Workflow #392 DA-L0: `layout probe`, by its read list. #463 SEL-F: `package fix-select`, against
-/// its strict list.
-pub(crate) const REFUSING_COMMANDS: [&str; 71] = [
+/// its strict list. Workflow #503 LIST-A3: `package list-check`, against its strict list.
+pub(crate) const REFUSING_COMMANDS: [&str; 72] = [
     "schema",
     "touch-probe",
     "tap",
@@ -571,6 +576,8 @@ pub(crate) const REFUSING_COMMANDS: [&str; 71] = [
     "package variables",
     // #463 SEL-F: refuses every flag off its strict list and any positional, as `edit` does.
     "package fix-select",
+    // Workflow #503 LIST-A3: refuses every flag off its strict list and any positional.
+    "package list-check",
     "operation validate",
     "operation inspect",
     "operation explain",

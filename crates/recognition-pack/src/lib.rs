@@ -86,6 +86,9 @@ pub use candidate_identity::CandidateUnreadCause;
 // Workflow #503 LIST-A: the mark the mapping gives a read of a name (known, unread, none of the
 // wanted keys).
 pub use candidate_identity::CandidateNameMark;
+// Workflow #503 LIST-A3: the nearest wanted name of a read of a name, and the read with what the
+// mapping says of it, for the dry run of a list reading.
+pub use candidate_identity::{CandidateNameReading, CandidateNearestName};
 
 pub use codes::{
     RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget, ValueOp,

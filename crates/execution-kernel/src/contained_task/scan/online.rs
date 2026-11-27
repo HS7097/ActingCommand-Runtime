@@ -17,7 +17,7 @@
 use super::select::not_a_member;
 use super::{
     ScanDeclaration, ScanDrag, ScanDragMotion, ScanDryRun, ScanDryRunDecided, ScanInput,
-    ScanReadInstance, ScanReading, ScanSession, ScanSource, bound_inputs, u32_of,
+    ScanNameRead, ScanReadInstance, ScanReading, ScanSession, ScanSource, bound_inputs, u32_of,
 };
 use crate::codes::{ExecutionKernelCode, ExecutionKernelLocation};
 use crate::contained_task::RunTables;
@@ -91,15 +91,26 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     /// Workflow #503 LIST-A: the list reading declares `others: pass_over`, so each viewport asks
     /// the identity mapping's mark of every instance (`CandidateLayout::name_mark`).
     pass_over: bool,
+    /// Workflow #503 LIST-A3: the dry run of a list reading keeps each instance's read of its
+    /// name, its mark and the mapping's reading of each sample (`CandidateLayout::name_readings`);
+    /// a run keeps none.
+    keep_names: bool,
 }
 
 impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
     /// Workflow #428 S168-4: the source of a `read_list` step, which records the frame its end
     /// check passed on. Workflow #503 LIST-A: with `pass_over`, each of its viewports marks the
-    /// instances the identity mapping marks none of the wanted keys.
-    pub(in crate::contained_task) fn reading_list(mut self, pass_over: bool) -> Self {
+    /// instances the identity mapping marks none of the wanted keys. Workflow #503 LIST-A3: with
+    /// `keep_names` (the dry run only), each of its viewports keeps every instance's read of its
+    /// name.
+    pub(in crate::contained_task) fn reading_list(
+        mut self,
+        pass_over: bool,
+        keep_names: bool,
+    ) -> Self {
         self.list_reading = true;
         self.pass_over = pass_over;
+        self.keep_names = keep_names;
         self
     }
 
@@ -140,6 +151,7 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
             list_reading: false,
             end_captured_at: None,
             pass_over: false,
+            keep_names: false,
         }
     }
 
@@ -375,21 +387,32 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             Some(end) => self.check(&observation.scene, &end.check)?,
             None => false,
         };
+        let identity_feature = self.scan.identity_feature.as_str();
         let instances = projection
             .candidates()
             .iter()
-            .map(|candidate| ScanReadInstance {
-                rect: candidate.rect,
-                signature: self.signature(&observation.scene, candidate.rect),
-                actionable: candidate.actionable,
-                features: candidate.features.clone(),
-                // Workflow #503 LIST-A: the mapping's mark, asked only by a list that passes over.
-                passed_over: self.pass_over
-                    && self.layout.name_mark(
-                        &projection,
-                        &candidate.id,
-                        &self.scan.identity_feature,
-                    ) == CandidateNameMark::NoneOfTheKeys,
+            .map(|candidate| {
+                // Workflow #503 LIST-A: the mapping's mark, asked only by a list that passes over
+                // and (Workflow #503 LIST-A3) by a list reading's dry run, which keeps it.
+                let mark = (self.pass_over || self.keep_names).then(|| {
+                    self.layout
+                        .name_mark(&projection, &candidate.id, identity_feature)
+                });
+                ScanReadInstance {
+                    rect: candidate.rect,
+                    signature: self.signature(&observation.scene, candidate.rect),
+                    actionable: candidate.actionable,
+                    features: candidate.features.clone(),
+                    passed_over: self.pass_over && mark == Some(CandidateNameMark::NoneOfTheKeys),
+                    name_read: mark.filter(|_| self.keep_names).map(|mark| ScanNameRead {
+                        mark,
+                        samples: self.layout.name_readings(
+                            &projection,
+                            &candidate.id,
+                            identity_feature,
+                        ),
+                    }),
+                }
             })
             .collect();
         let frame_id = observation
@@ -892,6 +915,12 @@ pub fn dry_run_scan_decide(
 /// error, with the stage `read_list`, as it ends a run; a move backward or a capture past the last
 /// frame is `selection_scan_replay_frame_missing`, never a list. An operation that declares no list
 /// reading is `contained_task_resource_reading_invalid`, `<operation id>:read_list`.
+///
+/// Workflow #503 LIST-A3 (register §1.534): the answer also holds every position the scan read
+/// with the reads of its name the source kept (each with its mark, the text, the confidence and
+/// the nearest wanted name the identity mapping gives it) and what it gives the list, and the
+/// list's summary of the wanted keys; the unread positions' cause is the dry run's own word
+/// (`ListUnreadCause`). A run's scan keeps no name.
 pub fn dry_run_list_reading(
     task: &PreparedContainedTask,
     operation_id: &str,
@@ -952,6 +981,8 @@ pub fn dry_run_list_reading(
         viewports: scanned.viewports,
         list: scanned.list,
         unknown: scanned.unknown,
+        positions: scanned.positions,
+        summary: scanned.summary,
     })
 }
 

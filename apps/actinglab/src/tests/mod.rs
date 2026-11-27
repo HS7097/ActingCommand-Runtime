@@ -327,6 +327,11 @@ mod gate_455_tk1;
 // pack of either mode, and nothing else so.
 #[path = "gate_503_list_a.rs"]
 mod gate_503_list_a;
+// Workflow #503 LIST-A3: `package list-check` checks a list reading over saved frames, offline,
+// and answers every position it read as JSON and as text, writing nothing.
+#[path = "gate_503_list_a3.rs"]
+mod gate_503_list_a3;
+
 // Workflow #455 RR1: `resource verify` checks, carries and declares a repository's
 // `goal-tables.json` with the one check, `standard-pack check` names a refused one with its
 // pointer, and the revision table counts both goal files as `package` 28.
