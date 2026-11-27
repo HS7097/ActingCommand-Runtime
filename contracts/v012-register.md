@@ -50913,7 +50913,7 @@ resource side prepares every root's version 3 file, checks it offline with this 
 and places it at once. On production the workbench's records show
 `standard_pack_goals_not_applied` with `goal_version_retired` for such a root until then.
 
-### 1.537 Slice #455 RR2 (0.12.94): a records entry's value is stored: the goal edit of a records entry writes the instance's records into the instance fact `session.goal_records`, a fact reader reads them back, the goal page keeps one version over both records, and nothing is computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr2.md`; on RR1's branch `df39227a`, which merges first; §1.536, a slice merged before this one, is not in its tree, and the coordinator joins it at the merge)
+### 1.537 Slice #455 RR2 (0.12.94): a records entry's value is stored: the goal edit of a records entry writes the instance's records into the instance fact `session.goal_records`, a fact reader reads them back, the goal page keeps one version over both records, and nothing is computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr2.md`; on RR1's branch `df39227a`, merged with main `a2673bac`, v0.12.92, which holds RR1; §1.536, a slice merged before this one, is not in its tree, and the coordinator joins it at the merge)
 
 It ships in 0.12.94. [instance-fact-store.md](instance-fact-store.md) ("Goal records facts", the
 capacity ledger's row), [standard-pack-goals.md](standard-pack-goals.md) ("The records entry": its
