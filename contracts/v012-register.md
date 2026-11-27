@@ -50287,7 +50287,209 @@ by the dispatch, which takes the same path.
 a package; then its rules each carry the value, its goal page shows no such variable, and a stored
 value of it appears among the orphans.
 
-### 1.535 Slice #455 RR1 (0.12.92): a training goal's two files: a records entry in a root's goals.json (version 3) and the root's table of game rules (goal-tables.json), read, checked, bundled and installed; nothing is stored or computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr1.md`; on main `0137eb22`, v0.12.89; §1.533 and §1.534, two slices merged before this one, are not in its tree, and the coordinator joins them at the merge)
+### 1.533 Slice #503 LIST-A (0.12.90): a list reading that wants only the keys it declares passes over every other card of the grid, and a wanted item held at zero, which has no card, reads 0 (board #503; the rulings 1 to 8 are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-list-a.md` after the read-only study `rd-1123/study-list-absent-zero.md`, its shape A; on main `410d1636`, v0.12.88)
+
+This section takes 1.533 (1.532 belongs to another slice of 0.12.89, #455 TK-1, which takes `package`
+26 and merges before it). It ships in 0.12.90 and takes `package` 27, written as "revision 26 plus"
+over a row 26 this branch does not hold. [resource-readings.md](resource-readings.md) ("List
+readings": the Declaration table's `others`, "A list of the wanted keys only", "Offline",
+"Evidence"; "Lists from fields", "When the list is whole", rule 2),
+[business-identity-consensus.md](business-identity-consensus.md) ("Identity and readable
+attributes", the mark), [scheduling/README.md](scheduling/README.md) ("A pool read from rows of a
+list", the cross-reference), [component-interfaces.md](component-interfaces.md) (the `package` row
+27), [resource-verify.md](resource-verify.md) (row 27) and the outcome fragments (the code
+`contained_task_resource_reading_passed_over`, the `state_problem` word `frame_after_list_end`) are
+the contract.
+
+**The problem** (found on a device on 11-28, taken as given). An inventory screen is a grid of cards
+and an item held at zero has no card. A reading that looks for one card finds nothing and its fact
+stays missing, so a goal on that item waits for ever exactly when the lack is greatest. A list read
+whole already counts a key it does not hold as 0, but `read_list` asked that every card of the screen
+be recognised, and such a screen has dozens of cards nobody wants; the same wall has kept a shop
+package shelved since 11-22. Besides, a field list whose route came back to a page of its group after
+its end was refused `contained_task_state_invalid` / `runtime_invariant`, though the cause is the
+package's route, and the offline replay said no more.
+
+**What it rests on** (read in the code at main `410d1636`; none of the work order's four stop
+conditions holds).
+- *The mark in one place.* The OCR mapping already computed every entry's distance bounded at
+  `max_distance + minimum_margin` (`edit_distance`'s `limit`); one above it is exactly "further than
+  that from every alias". The mapping now gives that fact beside its feature, in the same function
+  (`judge_ocr`, which `map_ocr` and `mark_ocr` both call), and its one reader, the scan's source, asks
+  the mapping again on the text and the confidence the projection itself recorded as the read's
+  evidence (`CandidateLayout::name_mark`). No reader computes a distance or sorts the Unknown reasons.
+  The feature, the projection, its hash and its records do not change, so no ledger word moves
+  (`CandidateUnknownReason` and `CandidateFeature` are kept as they are).
+- *A grid aligns.* A scan pairs instances by their cross coordinate and signature
+  (`align`), groups positions into rows by their axis start (`rows`) and checks every row but the last
+  holds `spacing.columns` (`decide_coverage`); S168-4's own gate reads a list of three columns
+  (`gate_428_s168_4`, `grid_view`), and the selection contract's example declares six.
+- *The count needs no member.* A miss is already a task diagnostic row of the existing shape; the
+  host writes the count as one more such row, whose outcome is a new info code, as it writes an
+  adjustment's `fact_adjustment_skipped` (info) on the same kind of row. No record type, member or
+  client interface moves; the count rides to the host in memory on the run's `ListReading` record.
+- *No other revision.* `ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` stay.
+
+**The rulings, as built.**
+- *Ruling 1, the declaration* (`crates/execution-kernel/src/contained_task/list_reading.rs`,
+  `TaskReadList::others`, `TaskListOthers`, `PreparedListReading::pass_over`;
+  `crates/pack-containment/src/source/declarations.rs`, `READ_LIST_OTHERS`, `READ_LIST_DECLARED`).
+  `read_list` takes the optional `others`, the one word `pass_over`; `null` is absent. The gate refuses
+  another word (`InvalidValue`) and another type (`InvalidType`) at `…/read_list/others`; the source
+  parser keeps the member as declared. Without it the session, the source, the rows and every record
+  are as before.
+- *Ruling 2, one judgement* (`crates/recognition-pack/src/candidate_identity.rs`, `CandidateNameMark`,
+  `mark_ocr`; `candidate_layout.rs`, `CandidateLayout::name_mark`;
+  `crates/execution-kernel/src/contained_task/scan.rs`, `ScanReadInstance::passed_over`,
+  `Position::none_of_the_keys`, `read_otherwise`, `ListPosition`, `list_position`; `scan/online.rs`,
+  `RuntimeScanSource::reading_list(pass_over)`). The mark is `NoneOfTheKeys` only for a text that
+  normalizes to something, a confidence at the identity's floor or above, and every entry further
+  than `max_distance + minimum_margin`; an icon identity gives it to no read. The source of a list
+  that passes over marks each instance of each viewport; the session records, per position, whether
+  some read was so marked and whether some was not. A position is passed over only when every read
+  was; one known (or unread) in one viewport and passed over in another is unread, whatever it fixed,
+  and the offline entry names it `contradicted`.
+- *Ruling 3, whole and zero* (`list_rows_of`). A passed-over position makes no row and is not unread;
+  the list is whole when the scan reached its end with no unread position; one whose every position
+  was passed over is the empty list at 1000. A wanted key no card showed has no row, which a pool's
+  `list_rows` counts 0 by #455 P2's rule.
+- *Ruling 4, what a person can check* (`ListReadingDeclaration::passed_over`, `passed_over_outcome`;
+  `crates/runtime-host/src/host/contained_task.rs`, the `ListReading` arm). The run says how many
+  positions it passed over, whole list or miss, 0 included, on the frame the list is observed on: the
+  info row `contained_task_resource_reading_passed_over` (`reading_id`, `fact_key`, `count`), before a
+  miss's warning row. No card's text is in it. The offline entry's declaration carries the same count.
+  **A3, the Lab's offline check, is left**: it needs more than a command over what the offline list
+  reading computes. Named: (1) the dry run (`dry_run_list_reading`) to give each passed-over position
+  with the text it was read as and its distance to the nearest wanted alias, which needs the scan's
+  source to keep each instance's read (the projection's recognition evidence holds it) and the
+  mapping an unbounded nearest distance (today's is bounded at the margin); (2) a Lab entry: no Lab
+  operation calls `dry_run_list_reading`, and `replay` replays only a select's scan from a `--scan`
+  file, so it needs a row of [lab-operations.json](lab-operations.json), its command line and MCP
+  faces, and its contract, printing on this machine only.
+- *Ruling 5, the cost.* Written in [resource-readings.md](resource-readings.md) in the ruling's words:
+  a wanted card whose name is read wrong, far from every alias, with confidence, every time, reads 0
+  every time, and the next reading does not correct it; the remedy is an alias for the misreading,
+  found by the offline check of saved frames; nothing of the Runtime is paused, held or lowered on a
+  reading of zero. No code of this slice pauses, holds or lowers anything.
+- *Ruling 6, the field list's refusal* (`crates/actingcommand-contract/src/outcome/vocabulary.rs`,
+  `StateProblem::FrameAfterListEnd`; `field_list.rs`, `judge_field_list_frame`). A frame of the group
+  collected after the list was decided is `contained_task_state_invalid` with `state_problem`
+  `frame_after_list_end`, its detail as before; the offline replay's refused end carries the run's
+  outcome with its values, so it answers the same name (no change to `offline.rs` was needed). Nothing
+  else of field lists changes.
+- *Ruling 7.* Not built and not closed off: a selection step that reads the same mark; the end of a
+  field list on a page outside its capture, or an empty field list; a single reading that takes "no
+  card" for zero.
+- *Ruling 8.* `package` 27 (below) and nothing else. **The `requires` name is not added** (the
+  question first in the implementer's report): a member of a package's `task.json` has no `requires`
+  to list it in; `requires` is a `schedule.json` member, and no `schedule.json` writes `others`. A
+  build that does not know the member refuses the package at its gate (`UnknownField`), and an
+  installer that does not know revision 27 refuses its bundle at the `package` edge, which is what a
+  `requires` name does for a schedule; a name in `config.subsystems` that no file could list would
+  stand for nothing.
+
+**Decided here** (each the smallest choice the rulings leave).
+- The note is one info code with the keys of the miss's warning, written on every run of a list
+  that declares the member, its count 0 included, and never for one that does not.
+- The 1025th position read still ends the scan, passed over or not: the bound counts what the scan
+  read, as before.
+- A list's viewports in the dry run count a passed-over position as no unknown instance.
+- The fixture's names are made up; none names an application.
+
+**Codes and words.**
+
+| Word | The one situation | Refuses or warns | Exit |
+|---|---|---|---|
+| `contained_task_resource_reading_passed_over` (code, info, `ladder_class` none; keys `reading_id`, `fact_key`, `count`, all required) | a list reading that declares `others: pass_over` passed over `count` positions | neither: a note on a task diagnostic row; the run goes on | none of its own (a run's row; a process that printed it as its top outcome would exit 0) |
+| `frame_after_list_end` (`state_problem` word) | a frame of a field list's group was collected after the list was decided | refuses: the run fails `contained_task_state_invalid` as before | as `contained_task_state_invalid` (error, 1 where a process ends on it) |
+
+The outcome index is regenerated with the fragments.
+
+**The `package` revision.** A Runtime before this one (0.12.88, read on main `410d1636`) refuses the
+member at its declaration gate (`resource_declaration_invalid`, `UnknownField` at
+`/operations/<i>/read_list/others`), before `PackageAdmitted` and any input, at every run, in a package
+of either mode; its installer, whose range ends below 27, refuses a bundle that declares 27 at its
+`package` edge. This build declares [3, 27]; `standard-pack build` computes 27 for a zip whose pack
+has a `read_list` that declares `others`, whatever it holds, and keeps every other zip's revision.
+
+**Tests** (exec gate map row "#503 LIST-A", host gate map row "#503 LIST-A"; the kernel's on
+S168-LK's synthetic step plan with a scripted OCR provider that reads a card's name and its
+confidence from a patch beside its signature; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `candidate_identity::tests::list_a_a_name_far_from_every_alias_is_none_of_the_keys_and_a_near_empty_or_low_one_unread` (1) | `alpha` and `alphx` known as `member-a`; `zulu` at 950 none of the keys, its feature the Unknown `low_confidence` of before; `alpzz` (2 from `alpha`), an empty text, 799 and no confidence unread; an icon identity unread |
+| `gate_503_list_a::list_a_wanted_and_other_cards_mixed_give_the_wanted_keys_only_and_a_whole_list` (2) | `alpha`, `zulu`, `charlie`, `yankee`: whole, `member-a` and `member-c` at 990, 2 passed over, nothing unknown, no warning; without the member `list_position_unread` count 2 and no count |
+| `gate_503_list_a::list_a_a_wanted_card_read_low_or_near_leaves_the_list_unread` (3) | `bravo` at 500 and `alpzz` beside `alpha` and `zulu`: `list_position_unread` count 2, 1 passed over; a name that reads as nothing beside `zulu`: count 1 |
+| `gate_503_list_a::list_a_no_wanted_card_writes_the_empty_list` (4) | `zulu` and `yankee`: whole, no row, 1000, 2 passed over |
+| `gate_503_list_a::list_a_a_position_known_in_one_viewport_and_passed_over_in_another_is_unread` (5) | two viewports, card 2 `charlie` then `zulu`: `list_position_unread` count 1, 3 passed over, its unknown position 2, first read on viewport 0, `contradicted`, keeping `member-c` |
+| `gate_503_list_a::list_a_the_run_says_how_many_positions_it_passed_over` (6) | the run records the whole list once with 2 passed over, the dry run the same declaration and list, the note `contained_task_resource_reading_passed_over` (`read_members`, the key, 2) naming no card; without the member the miss, no count and no note |
+| `gate_503_list_a::list_a_the_declaration_gate_takes_others_only_as_pass_over` (7) | `keep`: `InvalidValue`, `7`: `InvalidType`, each at `/operations/1/read_list/others`; `pass_over` and `null` admitted |
+| `gate_450_fl1::list_a_the_offline_replay_answers_a_frame_after_the_lists_end_by_its_own_problem` (8) | FL-1b's task that goes back to an item after `last`, replayed over saved frames: refused `contained_task_state_invalid`, `state_problem` `frame_after_list_end` |
+| `apps/actinglab` `gate_503_list_a::list_a_a_list_readings_others_needs_revision_27_and_nothing_else_does` (9) | `others` (the word, and `null`) needs 27 in a page-graph and in a `linear_steps` pack; without it 8 and 22 |
+| `crates/runtime-host` `gate_503_list_a::list_a_a_pool_of_three_rows_sums_the_two_the_list_holds_and_counts_the_absent_one_0` (host) | rows `member-a` 5 and `member-c` 9, the pool reading `member-a`, `member-b` and `member-c`: 14, observed and expiring as the list |
+
+Adapted, the requirement moving what they pin: `gate_450_fl1::field_list_frame_after_end_fails_run`
+and `gate_450_fl2::field_list_failed_or_cancelled_run_publishes_nothing` (`frame_after_list_end`
+where they pinned `runtime_invariant`, ruling 6); the shipped range [3, 25] to [3, 27] in
+`gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision`
+(`KEY_REVISION + 10`), `gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range`
+(`SHARED_READ_REVISION + 7`), the rescue module's `gate_463_v1::v1_the_build_declares_package_through_revision_14`,
+the Lab's `gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below`,
+`gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16`
+and actinglab-architecture's `component_interfaces::the_runtime_declares_each_v0120_interface_revision_once`
+(the coordinator joins them with row 26 at the merge). Mechanical, pinning what they pinned: the scan
+test sources of `gate_308_l3`, `gate_308_l3b`, `gate_308_l4b` and `gate_428_s168_4` write the new
+member `passed_over: false`, and the declarations of `gate_428_s168_4`, `gate_428_s168_lk` and
+`gate_450_fl1` `passed_over: None`. No golden re-recorded; no test leaves the gate maps.
+
+**What is not changed.** A package without the member: its bytes, its sealed task, its identity, its
+admission, every run and every record. The projection and its hash, `CandidateFeature`,
+`CandidateUnknownReason`, the scan's alignment and checks, a select step, field lists but ruling 6's
+word, the host's publication and staleness of lists, the pool's `list_rows` rule; every setting,
+every interface range but `package` (to 27), the ledger, `runtime-client`, `actingd-config` and
+`runtime-outcomes`.
+
+**What later slices owe.** A3 (ruling 4, above); a selection step that reads the same mark (the shop);
+the end of a field list on a page outside its capture, or an empty field list; a single reading that
+takes "no card" for zero; the recording tools' writing of the member (a person or an agent writes it
+by hand or with `actinglab package edit`).
+
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found nothing
+that must change: the four conditions of the mark are each tested with the mapping's own distance,
+every alias of every entry and a strict comparison; a reader's second question of the mapping is
+asked of the same text and confidence; a position not passed over on every viewport is unread; an
+empty list is written only where the scan covered its end; no new path turns "not read" into 0.
+Changed after it, text only: the contract says that with the member a screen of unwanted cards
+only is an empty list, so the start and end checks must be specific to the tab and the filter the
+wanted cards show under (on another tab both may pass and every wanted key reads 0); the contract
+and the catalog's text of the count say that until A3 is built the count is the only sign of the
+cost of ruling 5 and a person has to compare it with a frame; a comment of the declaration gate
+that said a `read_list` holds exactly its required members. The coordinator's rulings on the
+implementer's questions: no `requires` name and no `config.subsystems` name (the member is in a
+package's task file, and a package's member has always been announced by its `package` revision,
+as rows 13, 17, 22 and 25 were; an older build refuses it at its declaration gate); the count's
+row is written at every run, 0 included; a passed-over position counts toward the scan's bound.
+Joined with #455 TK-1 at the merge: row 26 before row 27 in every table, the revision table's 53
+rows, the six tests that pin the range at [3, 27]. Not proven by a test, as the review lists: the
+host's writing of the count's row, the mark under a consensus of several samples and under a shared
+read, a grid of several columns (the fixtures have one), two list readings in one task, and how
+many frames the offline replay's test takes. Left, beside A3: the offline word `contradicted`
+covers two causes (a column's value that changed, and a known key on one viewport passed over on
+another), which a later slice may tell apart.
+
+**At deploy.** Nothing to configure, and nothing changes for an installation until a package declares
+the member: none in production does, and every other package is read and run as before. A package
+with it is adopted only once this build is live; it then writes the list of its wanted keys whatever
+other cards its screen shows, and each run writes one `contained_task_resource_reading_passed_over`
+row with its count. A rollback to 0.12.88 or 0.12.89 meets such a package as an older Runtime does: its
+installer refuses a bundle that declares 27 at the `package` edge, and a placed one is refused at every
+admission (`UnknownField` at `/operations/<i>/read_list/others`), so the rollback stays open while no
+root is placed from such a bundle. A field list's run that goes back into its group after its end is
+now `frame_after_list_end` where it was `runtime_invariant`. In the release notes' language:
+列表读数（`read_list`）可以写 `others: "pass_over"`：只要身份字典里声明的那些键，屏幕上别的卡一律略过，不再让整张表读不成。略过的判定只在身份映射一处：名字读出来了、置信度不低于身份的下限、离每个别名的距离都大于 `max_distance + minimum_margin`，并且同一位置在每个视口上都这么判，才算略过；空、低置信、离某个名字近却没认上、歧义、一个视口认出另一个视口略过，都照旧算没读成，整张表不写。扫到声明的终点、没有没读成的位置，就算整表；没出现的想要的键没有行，池按 `list_rows` 记 0；全被略过就写空表。每次运行在任务诊断里记一行 `contained_task_resource_reading_passed_over`，写明略过了几个位置（不写卡上的字）。代价：想要的卡名每次都被高置信地读成离所有别名都远的别的字，就每次都记 0，下一次读数纠正不了；办法是对存下的帧做离线检查，给这个误读加一个别名；Runtime 不因为读到 0 暂停、按住或压低任何东西。包的修订升到 27：带这个成员的包要本版以上的 Runtime，旧版安装器在 `package` 边上就拒，旧版 Runtime 每次准入都拒（`UnknownField`）。字段表在定案之后又收到同组一帧，`state_problem` 改为 `frame_after_list_end`（包的路线问题，原来是 `runtime_invariant`），离线回放也照这个名字答。Lab 的离线自检（列出每个被略过位置的文字和到最近别名的距离）这一版还没有。
+
+### 1.535 Slice #455 RR1 (0.12.92): a training goal's two files: a records entry in a root's goals.json (version 3) and the root's table of game rules (goal-tables.json), read, checked, bundled and installed; nothing is stored or computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr1.md`; on main `0137eb22`, v0.12.89, merged with main `f117d883`, which brought §1.533 and the package revision 27; §1.534, a slice merged before this one, is not in its tree, and the coordinator joins it at the merge)
 
 It ships in 0.12.92. [standard-pack-goal-tables.md](standard-pack-goal-tables.md) (new: the file,
 its members and limits, every refusal at its pointer, the two examples, who reads it, what a

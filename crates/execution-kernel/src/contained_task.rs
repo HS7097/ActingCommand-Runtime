@@ -101,6 +101,9 @@ mod gate_428_s168_4;
 // Workflow #428 S168-LK: a step of a linear plan reads a list.
 #[cfg(test)]
 mod gate_428_s168_lk;
+// Workflow #503 LIST-A: a list reading that wants only the keys it declares passes over the rest.
+#[cfg(test)]
+mod gate_503_list_a;
 // Workflow #450 FL-1a and FL-1b: a list grouped from fields read one position per frame.
 mod field_list;
 // Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.

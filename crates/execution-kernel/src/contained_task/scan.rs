@@ -324,13 +324,16 @@ actingcommand_contract::outcome_vocabulary! {
 
 /// One instance of a viewport's G7 projection: its instance rectangle in frame coordinates, its
 /// signature when the signature rectangle lies in the frame, whether it is actionable, and its
-/// features (none when it is not actionable).
+/// features (none when it is not actionable). Workflow #503 LIST-A: and whether the identity
+/// mapping marked its identity feature none of the wanted keys, which only the source of a list
+/// reading that declares `others: pass_over` asks (`false` everywhere else).
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ScanReadInstance {
     pub(super) rect: CandidateRect,
     pub(super) signature: Option<ColorDigest>,
     pub(super) actionable: bool,
     pub(super) features: CandidateFeatureMap,
+    pub(super) passed_over: bool,
 }
 
 /// A settled viewport frame, read once: its instances, the start and end checks, and the frame's
@@ -746,6 +749,8 @@ struct TrackedInstance {
     identity: Option<String>,
     actionable: bool,
     features: CandidateFeatureMap,
+    /// Workflow #503 LIST-A: the mapping marked this viewport's read none of the wanted keys.
+    passed_over: bool,
 }
 
 /// One instance an alignment pairs against, in content coordinates: a tracked instance of a
@@ -817,6 +822,25 @@ struct Position {
     /// Why the identity read Unknown, while no Known identity was read.
     identity_unknown: Option<CandidateUnknownReason>,
     state: PositionState,
+    /// Workflow #503 LIST-A: some actionable read of the position was marked none of the wanted
+    /// keys, and some was not.
+    none_of_the_keys: bool,
+    read_otherwise: bool,
+}
+
+/// Workflow #503 LIST-A (`contracts/resource-readings.md`, "List readings", "A list of the wanted
+/// keys only"): what one position a list reading read at least once gives its list.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ListPosition<'a> {
+    /// Its fixed reading: one row.
+    Row(&'a CandidateFeatureMap),
+    /// No fixed reading: never complete, contradicted later, or, in a list that passes over, a
+    /// position whose reads the mapping marked none of the wanted keys in one viewport and not in
+    /// another. The list is not read whole.
+    Unread,
+    /// In a list that declares `others: pass_over`: every read of the position was marked none of
+    /// the wanted keys. It makes no row and leaves the list whole.
+    PassedOver,
 }
 
 /// One coverage viewport (start, forward or corrective).
@@ -1035,6 +1059,9 @@ pub(super) struct ScanSession<'a> {
     /// Workflow #428 S168-4: the most positions a list reading may read; reading one more ends
     /// the scan with [`ScanEnd::RowsExceeded`]. `None` for a select step.
     row_limit: Option<usize>,
+    /// Workflow #503 LIST-A: the list reading declares `others: pass_over`; `false` for every other
+    /// session, which reads every position as before.
+    pass_over: bool,
     /// Workflow #357 DB-2: the shared tables `policy` declares, fixed for the attempt.
     tables: &'a SelectionTables,
     facts: &'a SelectionFactSnapshot,
@@ -1201,16 +1228,50 @@ impl<'a> ScanSession<'a> {
     }
 
     /// Workflow #428 S168-4: every position read at least once, in first-seen order: the
-    /// features of its fixed reading, or `None` when it holds none (never complete, or
-    /// contradicted later).
-    pub(super) fn read_positions(&self) -> impl Iterator<Item = Option<&CandidateFeatureMap>> {
+    /// features of its fixed reading, or unread when it holds none (never complete, or
+    /// contradicted later). Workflow #503 LIST-A: in a list that passes over, a position every
+    /// read of which was marked none of the wanted keys is passed over.
+    pub(super) fn read_positions(&self) -> impl Iterator<Item = ListPosition<'_>> {
         self.positions
             .iter()
             .filter(|position| position.first_read_viewport.is_some())
-            .map(|position| match &position.state {
-                PositionState::Fixed { features, .. } => Some(features),
-                _ => None,
-            })
+            .map(|position| self.list_position(position))
+    }
+
+    /// Workflow #503 LIST-A: a list reading that declares `others: pass_over` passes over a
+    /// position every read of which the identity mapping marked none of the wanted keys.
+    pub(super) fn passing_over(&mut self) {
+        self.pass_over = true;
+    }
+
+    /// Workflow #503 LIST-A: how many positions a list reading that passes over passed over, as
+    /// its run says it; `None` for every other session.
+    pub(super) fn passed_over(&self) -> Option<u32> {
+        self.pass_over.then(|| {
+            u32_of(
+                self.read_positions()
+                    .filter(|position| matches!(position, ListPosition::PassedOver))
+                    .count(),
+            )
+        })
+    }
+
+    /// What the position `position` gives a list reading: its fixed reading is a row, and a
+    /// position without one is unread; Workflow #503 LIST-A: in a list that passes over, a
+    /// position the mapping marked none of the wanted keys on every read is passed over, and one
+    /// it marked so on one read and not on another is unread whatever it fixed.
+    fn list_position<'p>(&self, position: &'p Position) -> ListPosition<'p> {
+        if self.pass_over && position.none_of_the_keys {
+            return if position.read_otherwise {
+                ListPosition::Unread
+            } else {
+                ListPosition::PassedOver
+            };
+        }
+        match &position.state {
+            PositionState::Fixed { features, .. } => ListPosition::Row(features),
+            _ => ListPosition::Unread,
+        }
     }
 
     /// The layout feature whose identity identifies a position.
@@ -1321,6 +1382,7 @@ impl<'a> ScanSession<'a> {
             frame,
             policy,
             row_limit: None,
+            pass_over: false,
             tables,
             facts,
             now_unix_ms,
@@ -1642,6 +1704,7 @@ impl<'a> ScanSession<'a> {
                     identity,
                     actionable: instance.actionable,
                     features: instance.features.clone(),
+                    passed_over: instance.passed_over,
                 })
             })
             .collect()
@@ -1981,18 +2044,22 @@ impl<'a> ScanSession<'a> {
         let list_reading = self.policy.is_none();
         let unknown = read
             .iter()
-            .filter(|&&position| match &self.positions[position].state {
-                // A list reading evaluates nothing: a read position is unknown until it is fixed.
-                PositionState::Fixed { .. } if list_reading => false,
-                state => !matches!(
-                    state,
+            .filter(|&&position| {
+                let entry = &self.positions[position];
+                // A list reading evaluates nothing: a read position is unknown until it is fixed
+                // (Workflow #503 LIST-A: or, in a list that passes over, passed over).
+                if list_reading {
+                    return matches!(self.list_position(entry), ListPosition::Unread);
+                }
+                !matches!(
+                    entry.state,
                     PositionState::Fixed {
                         verdict: Some(
                             Verdict::Member { .. } | Verdict::GatedOut | Verdict::StaticTableDrop
                         ),
                         ..
                     }
-                ),
+                )
             })
             .count();
         if let Some(viewport) = self.viewports.last_mut() {
@@ -2030,6 +2097,8 @@ impl<'a> ScanSession<'a> {
             identity: None,
             identity_unknown: None,
             state: PositionState::Unread,
+            none_of_the_keys: false,
+            read_otherwise: false,
         });
         self.positions.len() - 1
     }
@@ -2064,6 +2133,13 @@ impl<'a> ScanSession<'a> {
         let read_fields = &self.read_fields;
         let entry = &mut self.positions[position];
         entry.first_read_viewport.get_or_insert(viewport);
+        // Workflow #503 LIST-A: the mark of this read, which a list that passes over judges the
+        // position by (`list_position`); every other session reads it as before.
+        if instance.passed_over {
+            entry.none_of_the_keys = true;
+        } else {
+            entry.read_otherwise = true;
+        }
         match instance.features.get(identity_feature) {
             Some(CandidateFeature::Identity { value, .. }) => match &entry.identity {
                 Some(kept) if kept != value => {
@@ -2496,10 +2572,17 @@ impl<'a> ScanSession<'a> {
                 PositionState::Unread => {}
                 // Workflow #428 S168-LK: a list reading evaluates nothing, so a fixed position is
                 // one of its rows, not unknown; its unknown positions are those it could not read.
-                PositionState::Fixed { .. } if self.policy.is_none() => {}
+                // Workflow #503 LIST-A: a position it passed over is neither.
+                _ if self.policy.is_none()
+                    && !matches!(self.list_position(position), ListPosition::Unread) => {}
                 state => {
                     let cause = match state {
                         PositionState::Contradicted => ScanUnknownCause::Contradicted,
+                        // Workflow #503 LIST-A: the mapping marked one of its reads none of the
+                        // wanted keys and another not.
+                        _ if self.pass_over && position.none_of_the_keys => {
+                            ScanUnknownCause::Contradicted
+                        }
                         PositionState::Fixed {
                             verdict: Some(Verdict::UnknownDropped),
                             ..

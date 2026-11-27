@@ -623,6 +623,7 @@ fn declaration() -> ListReadingDeclaration {
         fact_key: LIST_KEY.to_owned(),
         valid_for_ms: VALID_FOR_MS,
         frame_indices: Vec::new(),
+        passed_over: None,
     }
 }
 

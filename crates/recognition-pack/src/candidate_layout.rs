@@ -26,8 +26,8 @@
 use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
 use crate::{
     CandidateConsensus, CandidateIdentityDeclaration, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, CandidateSampleVariant, OcrEvaluation, OcrLocateBlocks,
-    OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence, OcrProviderBlocks,
+    CandidateIdentityTemplate, CandidateNameMark, CandidateSampleVariant, OcrEvaluation,
+    OcrLocateBlocks, OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence, OcrProviderBlocks,
     OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect, PackRegion,
     RecognitionEvaluator, RecognitionPack, RecognitionPackError, RecognitionPackErrorCode,
     RecognitionPackResult, RecognitionTarget, SCHEMA_0_7, SceneEvaluation, TargetEvaluation,
@@ -2247,6 +2247,58 @@ fn sample_key(
 }
 
 impl CandidateLayout {
+    /// Workflow #503 LIST-A (`contracts/resource-readings.md`, "List readings", "A list of the
+    /// wanted keys only"): the mark the identity mapping gives the identity feature `feature` of
+    /// the candidate `candidate_id` of `projection`, a projection of this layout.
+    /// [`CandidateNameMark::Known`] when the feature names an identity;
+    /// [`CandidateNameMark::NoneOfTheKeys`] when every sample the projection mapped it from is an
+    /// OCR read the mapping marks so ([`CandidateIdentityDeclaration::mark_ocr`], on the text and
+    /// the confidence the projection's evidence keeps of that read); [`CandidateNameMark::Unread`]
+    /// otherwise (no such feature or sample, an icon identity, or a sample it marks otherwise).
+    /// The mapping judges; this only hands it the reads it already mapped.
+    pub fn name_mark(
+        &self,
+        projection: &CandidateProjection,
+        candidate_id: &str,
+        feature: &str,
+    ) -> CandidateNameMark {
+        let Some(identity) = self
+            .features
+            .iter()
+            .find(|declared| declared.name == feature)
+            .and_then(|declared| declared.identity.as_ref())
+        else {
+            return CandidateNameMark::Unread;
+        };
+        let read = projection
+            .candidate(candidate_id)
+            .and_then(|candidate| candidate.features.get(feature));
+        if matches!(read, Some(CandidateFeature::Identity { .. })) {
+            return CandidateNameMark::Known;
+        }
+        let Some(evidence) = projection
+            .recognition_evidence()
+            .iter()
+            .find(|evidence| evidence.candidate_id == candidate_id && evidence.feature == feature)
+        else {
+            return CandidateNameMark::Unread;
+        };
+        let none_of_the_keys = !evidence.samples.is_empty()
+            && evidence.samples.iter().all(|sample| match &sample.input {
+                CandidateRecognitionInput::Ocr {
+                    text,
+                    confidence_milli,
+                } => identity.mark_ocr(text, *confidence_milli) == CandidateNameMark::NoneOfTheKeys,
+                CandidateRecognitionInput::Icons { .. }
+                | CandidateRecognitionInput::Scalar { .. } => false,
+            });
+        if none_of_the_keys {
+            CandidateNameMark::NoneOfTheKeys
+        } else {
+            CandidateNameMark::Unread
+        }
+    }
+
     /// One privacy per candidate: the strictest privacy of the targets its features read. A
     /// `fixed_slots` candidate reads its slot's targets, so the result has one entry per slot;
     /// every instance of a `repeated_anchor` layout reads the same targets, so the result

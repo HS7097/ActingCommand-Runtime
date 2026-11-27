@@ -610,7 +610,10 @@ before 0.12.50 refuses a package that declares one (`UnknownField` at
 §1.500): a step of a `linear_steps` task may read a list too, declared, read, ended and published
 as here ([linear-steps.md](linear-steps.md), "List reading steps"), `package` revision 22; a
 Runtime before 0.12.78 refuses such a step at admission (`contained_task_linear_invalid`,
-`reason=read_list`).
+`reason=read_list`). Workflow #503 LIST-A (Runtime 0.12.90, [v012-register.md](v012-register.md)
+§1.533): a reading may want only the keys its identity declares (`others: pass_over`, section "A
+list of the wanted keys only" below), `package` revision 27; a Runtime before 0.12.90 refuses the
+member at its declaration gate (`UnknownField` at `/operations/<i>/read_list/others`).
 
 ### Declaration
 
@@ -643,6 +646,7 @@ only; the numbers and names are neutral examples, not values:
 | `valid_for_ms` | `1..=31_536_000_000` | `…/read_list/valid_for_ms` |
 | `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read; so its `end` is required, which a select step's scan may leave out beside `early_stop` since Workflow #463 K-c (0.12.70); a `null` `end` is a missing one, as in a select step's scan (its fix round 1) | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; no `end`, or a `null` one: `MissingField` @ `…/scan/end`; the static checks as a select step's |
 | `guard` | required, any guard a select step takes; judged on every viewport | `MissingField` @ `/operations/<i>/guard` |
+| `others` | optional (Workflow #503 LIST-A, since 0.12.90, `package` revision 27): the one word `pass_over` of a closed vocabulary, `null` being an absent member; a card the identity mapping marks none of the wanted keys then makes no row and does not make the list unread (section "A list of the wanted keys only" below). Without it every rule of this section is as before, byte for byte | another word: `InvalidValue` @ `…/read_list/others`; another type: `InvalidType` @ `…/read_list/others`; a Runtime before 0.12.90: `UnknownField` @ `…/read_list/others` |
 | the operation's other members | as the table "Members of a `read_list` step" below says | as that table says |
 | any other member of `read_list` | none | `UnknownField` @ `…/read_list/<member>` |
 
@@ -772,6 +776,71 @@ At this step a layout whose anchor template matches nothing on the page cannot b
 list that is really empty: both read zero positions and, when both checks pass, publish an empty
 list. A package must therefore make its start and end checks specific to the list page, so that
 they do not both pass where the list does not show.
+
+### A list of the wanted keys only (Workflow #503 LIST-A, since 0.12.90)
+
+[v012-register.md](v012-register.md) §1.533; the coordinator's rulings on board #503. An inventory
+screen is often a grid of cards, and an item held at zero has no card: a reading that looks for
+one card finds nothing, and its fact stays missing. A list read whole counts a key it does not
+hold as 0 ([scheduling/README.md](scheduling/README.md), "A pool read from rows of a list"), but
+a list reading reads every card of its screen, and such a screen shows many cards nobody wants.
+The member `others: pass_over` lets a list want only the keys its key feature's identity declares
+(its entries, [business-identity-consensus.md](business-identity-consensus.md), "Identity and
+readable attributes"); a grid of cards in rows and columns is read as any list, its rows by the
+scan's `spacing.columns`.
+
+- **The mark, one judgement.** Whether a card is none of the wanted keys is a mark the identity
+  mapping of the recognition pack gives each read of its name, beside the known key and the
+  unread reading (`CandidateIdentityDeclaration::mark_ocr`, read on the text and the confidence
+  the projection mapped, `CandidateLayout::name_mark`). A read is *none of the wanted keys* only
+  when all of these hold: its text is not empty; its confidence is at least the identity's
+  `minimum_confidence_milli`; and its distance to every alias of every entry is greater than
+  `max_distance + minimum_margin`. Anything else is the read it was: an empty text, a confidence
+  missing or below the floor, a read near a wanted name that does not match it, an ambiguous one,
+  and every read of an icon identity, which has no text. The feature, its records and the
+  decisions taken on it do not change: a read so marked keeps its Unknown `low_confidence`
+  feature. Readers take the mark; none sorts the feature's reasons itself.
+- **The position, one judgement across viewports.** A position is *passed over* when the mapping
+  marked every read of it none of the wanted keys, on every viewport that read it. A position
+  passed over makes no row and does not make the list unread. A position the mapping marked so on
+  one viewport and not on another (a known key on one, or an unread read) is unread, whatever it
+  fixed: `list_position_unread`, and nothing is written.
+- **Whole, and zero.** The list is whole when the scan reached its declared end and no position is
+  unread: its rows are the wanted keys a card showed, in ascending byte order. A wanted key no card
+  showed has no row, and a pool that reads its row counts it 0 by the rule that exists. A scan in
+  which every card was passed over writes the empty list, at the confidence 1000 an empty list
+  carries, where the rules above write one. Every other rule of this section holds as written:
+  both checks, every miss and its order, the 1025th position read (passed over or not, the scan's
+  bound counts every position it read), the bytes, the publication and its staleness. Fix round 1
+  (the independent review): with the member, a screen that shows only cards nobody wants is an
+  empty list where it was `list_position_unread`. So the rule above, that a package makes its start
+  and end checks specific to the list page, reaches further for such a list: the checks must be
+  specific to the tab and the filter the wanted cards show under too, since on another tab of the
+  same page, or under a filter that hides them, both checks may pass, every card is passed over,
+  and every wanted key reads 0.
+- **What the run says.** A list that declares the member says how many positions it passed over,
+  whole or not: a task diagnostic row of the existing shape (a recognition error row of the
+  post-admission phase, without a target), whose outcome is the info code
+  `contained_task_resource_reading_passed_over` with `reading_id` the operation's id, `fact_key`
+  and `count` (0 included), on the frame the list is observed on (for a miss, before its warning
+  row on the same frame). No card's text is written: a card's name is what the account holds. The
+  run's `ListReading` record carries the count in memory (`ListReadingDeclaration::passed_over`,
+  `None` for a list without the member and for a field list).
+- **The cost.** A wanted card whose name is read wrong, far from every alias, with confidence,
+  every time, reads 0 every time, and the next reading does not correct it. The remedy is an
+  alias for the misreading in the identity's entries. Fix round 1, said as it is: until the Lab's
+  check that prints each passed-over position's text and its distance to the nearest wanted alias
+  on this machine is built (owed, register §1.533; the kernel's dry run of a list reading, "Offline"
+  below, answers the list and the count, and no Lab operation calls it yet), the count in the run's
+  row is the only sign: a count larger than the cards of other items a frame of the step shows
+  means a wanted card was passed over, and a person has to compare the two. Nothing of the Runtime is
+  paused, held or lowered on a reading of zero: a pool read 0 is read, and its goal and its lines
+  take it as any reading.
+
+A list without the member reads every card as before: an unwanted card is
+`list_position_unread`, and the run writes no count. A selection step that reads the same mark,
+the end of a field list on a page outside its capture, and a single reading that takes "no card"
+for zero are not part of Workflow #503 LIST-A.
 
 ### Rows (S168-LB1a, since 0.12.55)
 
@@ -907,6 +976,9 @@ or of a field list ("Lists from fields" below). The
 The list's evidence is the run's own records: the fact record names the run and the viewport;
 every viewport is a capture with its recognition records and every move a `task.effect_intent`
 with its input, as a scan's; a miss is its warning row. No record type and no member is added.
+Workflow #503 LIST-A: a list that passes over adds its count of positions passed over, a task
+diagnostic row of the existing shape whose outcome is `contained_task_resource_reading_passed_over`
+("A list of the wanted keys only" above).
 The rows are account data: they stay in the instance fact store and the ledger, and no Runtime
 path writes them anywhere else. Offline, `package dry-run` reads no list and reports the task's
 post-admission reading as `pending_real_execution`, as for a task with marks.
@@ -934,7 +1006,11 @@ read whole, in first-seen order, each as a select's dry run lists an unknown pos
 first-seen order, its place in content coordinates, the viewport that first read it, its cause
 `identity_unread`, `feature_unread` or `contradicted`, and the identity it kept, if any), so that
 a self-check can name the place that was not read: none for a list read whole, and for
-`list_position_unread` exactly the positions its `count` counts; a run records none of them. A
+`list_position_unread` exactly the positions its `count` counts; a run records none of them.
+Workflow #503 LIST-A: a position a list that passes over passed over is not among them, and one the
+identity mapping marked none of the wanted keys on one viewport and not on another is, with the
+cause `contradicted`; the declaration carries the count of positions passed over, as the run's
+does. A
 failure of the scan is the error, with the stage `read_list`, as it ends a run; a move backward (a
 rewind or a corrective) or a capture past the last frame is `selection_scan_replay_frame_missing`,
 never a list. An operation that declares no list reading is
@@ -1041,10 +1117,15 @@ report and its projection do not change.
    rule judges it. Otherwise the list's miss is `list_start_unseen`.
 2. **End.** The first frame that meets `end` ends the list, and the list is decided on that frame.
    The end pages are terminal pages, where the run ends. A frame of the group collected after the
-   list was decided fails the run (`contained_task_state_invalid`, `runtime_invariant`), so a list
-   is never published with a frame after its end. A successful run that collected frames of the
-   group and met no `end` is `list_end_unseen`; so is a run whose end page lay past `max_frames`
-   and was not collected.
+   list was decided fails the run (`contained_task_state_invalid`), so a list is never published
+   with a frame after its end. Workflow #503 LIST-A (since 0.12.90): the refusal's `state_problem`
+   is `frame_after_list_end`, a cause of its own: the package's route brought the run back to a
+   page of the group after the list's end (a stage of a phased route that goes on past the end
+   page, for example), an authoring error of the package and no invariant of the Runtime; before
+   0.12.90 it was `runtime_invariant`. The offline replay answers it by the same name (its refused
+   end's outcome carries the value). A successful run that collected frames of the group and met
+   no `end` is `list_end_unseen`; so is a run whose end page lay past `max_frames` and was not
+   collected.
 3. **A frame's reading.** The key and every column are `resolved` ([ocr-fields.md](ocr-fields.md))
    and each observation's confidence (`ocr_confidence_milli`) is present and at least
    `minimum_confidence_milli`. Otherwise the frame is unresolved: `list_position_unread`. A

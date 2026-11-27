@@ -56,7 +56,20 @@ with no separate score or margin.
 Best/runner-up comparison is between different business IDs. Multiple aliases or templates
 of one ID are not competitors. An equally good unresolved variant of the winning ID is
 ambiguous. Missing, out-of-domain, low-confidence and ambiguous readings are typed `unknown`
-features. A known `identity` feature carries `value` (business ID), `variant`, `source`,
+features.
+
+Workflow #503 LIST-A (since 0.12.90, `v012-register.md` §1.533). Beside the known identity and the
+unread reading, the OCR mapping gives each read one more mark, *none of the wanted keys*, in the
+same judgement (`CandidateIdentityDeclaration::mark_ocr`): its normalized text is not empty, its
+confidence is at least `minimum_confidence_milli`, and its distance to every alias of every entry
+is greater than `max_distance + minimum_margin` (the distances the mapping bounds at that limit,
+plus one). Every other unknown read is *unread*: empty, missing or below the confidence floor,
+within `max_distance + minimum_margin` of an alias without matching one, ambiguous; an icon
+identity reads no text and gives the mark to no read. The mark changes no feature, hash, record
+or decision: a read so marked keeps its `low_confidence` feature. A list reading that declares
+`others: pass_over` takes it ([resource-readings.md](resource-readings.md), "A list of the wanted
+keys only"), from the projection's own recognition evidence of the read (`CandidateLayout::
+name_mark`); no reader judges a distance or sorts the unknown reasons itself. A known `identity` feature carries `value` (business ID), `variant`, `source`,
 `distance` and `confidence`; selection-policy consumes `value` through its existing
 `enum_string` field and inline lookup. Its declared enum must equal the identity domain, so
 the policy's enumerated-member limit is 1024 as well. A large domain reads per-identity values

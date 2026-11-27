@@ -42,9 +42,9 @@ fn own_package_range() -> [u64; 2] {
 }
 
 /// A version 2 catalog needs 24 and a version 1 catalog 16; this build declares [3, 28] (Workflow
-/// #477 LR-1, register §1.513, raises it to 25, Workflow #455 TK-1, register §1.532, to 26, and
-/// Workflow #455 RR1, register §1.535, to 28) and places both; an installer of [3, 23] refuses the
-/// zip of 24 at its edge and places the zip of 16.
+/// #477 LR-1, register §1.513, raised it to 25, Workflow #455 TK-1, register §1.532, to 26,
+/// Workflow #503 LIST-A, register §1.533, to 27, and Workflow #455 RR1, register §1.535, to 28) and
+/// places both; an installer of [3, 23] refuses the zip of 24 at its edge and places the zip of 16.
 #[test]
 fn cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16() {
     let version_1 =

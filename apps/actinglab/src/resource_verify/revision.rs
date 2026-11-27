@@ -68,6 +68,8 @@
 //!   [`ROWS`].
 //! - **A variable a rule gives**, 26 (Workflow #455 TK-1, register §1.532): the member `given_by`
 //!   of an entry of a pack's `control.json` `variables`, whatever it holds, a row of [`ROWS`].
+//! - **A list reading of the wanted keys only**, 27 (Workflow #503 LIST-A, register §1.533): the
+//!   member `others` of an operation's `read_list`, in a pack of either mode, a row of [`ROWS`].
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -154,6 +156,9 @@ const IRREVERSIBLE_VARIABLES_REVISION: u64 = 23;
 /// Revision 25: a `linear_steps` press step's count (Workflow #477 LR-1), the member `presses` of
 /// an operation (a row of [`ROWS`]).
 const PRESSES_REVISION: u64 = 25;
+/// Revision 27: a list reading that wants only its declared keys (Workflow #503 LIST-A), the
+/// member `others` of an operation's `read_list` (a row of [`ROWS`]).
+const LIST_OTHERS_REVISION: u64 = 27;
 const VARIABLES: &str = "variables";
 const PROVIDES: &str = "provides";
 const IRREVERSIBLE: &str = "irreversible";
@@ -282,11 +287,12 @@ const fn when(
 }
 
 /// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
-/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22 and (Workflow #477
-/// LR-1) 25 and the register sections they cite, and the B train's sections, put into a revision:
-/// each with its file, its place, what it holds, its condition and its revision
-/// (`contracts/resource-verify.md`, "The `package` revision", lists them with their sources).
-const ROWS: [Row; 52] = [
+/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22, (Workflow #477 LR-1) 25,
+/// (Workflow #455 TK-1) 26 and (Workflow #503 LIST-A) 27 and the register sections they cite, and
+/// the B train's sections, put into a revision: each with its file, its place, what it holds, its
+/// condition and its revision (`contracts/resource-verify.md`, "The `package` revision", lists
+/// them with their sources).
+const ROWS: [Row; 53] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -543,6 +549,17 @@ const ROWS: [Row; 52] = [
         GIVEN_BY_MEMBER,
         Place::Under(VARIABLES),
         GIVEN_BY_PACKAGE_REVISION,
+    ),
+    // 27, Workflow #503 LIST-A (§1.533; contracts/resource-readings.md, "List readings", "A list
+    // of the wanted keys only"): a list reading's `others`, the member of the object an
+    // operation's `read_list` holds, whatever it holds and in a pack of either mode: every Runtime
+    // before it refuses the member's name at its declaration gate (`UnknownField` at
+    // `/operations/<i>/read_list/others`), whose `read_list` object denies unknown members.
+    row(
+        TASK,
+        "others",
+        Place::Under("read_list"),
+        LIST_OTHERS_REVISION,
     ),
 ];
 

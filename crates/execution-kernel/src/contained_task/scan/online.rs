@@ -40,7 +40,7 @@ use actingcommand_device::Frame;
 use actingcommand_recognition::color_digest::{ColorDigest, ColorDigestGrid};
 use actingcommand_recognition::{Rect, Scene};
 use actingcommand_recognition_pack::{
-    CandidateLayout, RecognitionPackCode, RecognitionPackLocation, TargetSearch,
+    CandidateLayout, CandidateNameMark, RecognitionPackCode, RecognitionPackLocation, TargetSearch,
 };
 use actingcommand_selection_policy::{SelectionFactSnapshot, SelectionOutcome, SelectionPolicy};
 use std::time::{Duration, Instant, SystemTime};
@@ -88,13 +88,18 @@ pub(in crate::contained_task) struct RuntimeScanSource<'s, R: ContainedTaskRunti
     /// recorded as `ListReadingFrame` and kept in `end_captured_at`.
     list_reading: bool,
     end_captured_at: Option<SystemTime>,
+    /// Workflow #503 LIST-A: the list reading declares `others: pass_over`, so each viewport asks
+    /// the identity mapping's mark of every instance (`CandidateLayout::name_mark`).
+    pass_over: bool,
 }
 
 impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
     /// Workflow #428 S168-4: the source of a `read_list` step, which records the frame its end
-    /// check passed on.
-    pub(in crate::contained_task) fn reading_list(mut self) -> Self {
+    /// check passed on. Workflow #503 LIST-A: with `pass_over`, each of its viewports marks the
+    /// instances the identity mapping marks none of the wanted keys.
+    pub(in crate::contained_task) fn reading_list(mut self, pass_over: bool) -> Self {
         self.list_reading = true;
+        self.pass_over = pass_over;
         self
     }
 
@@ -134,6 +139,7 @@ impl<'s, R: ContainedTaskRuntime> RuntimeScanSource<'s, R> {
             replay,
             list_reading: false,
             end_captured_at: None,
+            pass_over: false,
         }
     }
 
@@ -377,6 +383,13 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
                 signature: self.signature(&observation.scene, candidate.rect),
                 actionable: candidate.actionable,
                 features: candidate.features.clone(),
+                // Workflow #503 LIST-A: the mapping's mark, asked only by a list that passes over.
+                passed_over: self.pass_over
+                    && self.layout.name_mark(
+                        &projection,
+                        &candidate.id,
+                        &self.scan.identity_feature,
+                    ) == CandidateNameMark::NoneOfTheKeys,
             })
             .collect();
         let frame_id = observation
@@ -935,7 +948,7 @@ pub fn dry_run_list_reading(
         .scan_list(&mut runtime, operation, prepared, &first, (0, timing), true)
         .map_err(replay_error)?;
     Ok(ListReadingDryRun {
-        declaration: prepared.declaration(operation_id),
+        declaration: prepared.declaration(operation_id, scanned.passed_over),
         viewports: scanned.viewports,
         list: scanned.list,
         unknown: scanned.unknown,
