@@ -159,12 +159,12 @@ use actingcommand_contract::{
     SCHEDULE_RULE_FIXED_VALUE_ORIGIN_MEMBER, SCHEDULE_RULE_MAINTENANCE_MEMBER,
     SCHEDULE_RULE_REALIZATION_MEMBER, SCHEDULE_VALUE_ORIGIN_MODEL, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_CATALOG_SCHEMA_VERSION_V2, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_SCHEDULE_VERSION, ScheduleItem, ScheduleRule,
-    StandardPackClassification, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
-    StandardPackRootIssue, StandardPackSchedule, canonical_json_bytes,
-    package_id_names_one_path_segment, parse_standard_pack_interrupts,
+    STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
+    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_SCHEDULE_VERSION,
+    ScheduleItem, ScheduleRule, StandardPackClassification, StandardPackProblem,
+    StandardPackRegistry, StandardPackRoot, StandardPackRootIssue, StandardPackSchedule,
+    canonical_json_bytes, package_id_names_one_path_segment, parse_standard_pack_interrupts,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     reserved_package_id, standard_pack_maintenance_packages,
 };
@@ -5672,6 +5672,7 @@ fn check_tree(inputs: &CheckInputs<'_>, stages: &mut Stages<'_>) -> LabResult<Ch
                 .is_ok_and(|metadata| metadata.is_dir())
                 .then_some(notices),
             goals: present(STANDARD_PACK_GOALS_FILE),
+            goal_tables: present(STANDARD_PACK_GOAL_TABLES_FILE),
         },
     })
     .map_err(|error| composed(error, &tree))?;

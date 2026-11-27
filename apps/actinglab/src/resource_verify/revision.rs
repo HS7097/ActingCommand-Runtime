@@ -14,8 +14,10 @@
 //!
 //! - **The root**: the notices directory, 10 (Workflow #444); `goals.json`, 14 (Workflow #455
 //!   G-R1 brought it at 12; Workflow #463 V1 fix round 3, the row 14, brought version 2, the one
-//!   version the Tools read): by its presence, as the installer's `place` reads it, whatever
-//!   version it holds (a version 1 file is the check's `goal_version_retired`, not the table's);
+//!   version the Tools read; 28 since Workflow #455 RR1, the row 28, which brought version 3):
+//!   by its presence, as the installer's `place` reads it, whatever version it holds (a version 1
+//!   or 2 file is the check's `goal_version_retired`, not the table's); `goal-tables.json`, 28
+//!   (Workflow #455 RR1), by its presence the same way;
 //!   `interrupts.json`'s `limit_cause` and `result`, 6 (Workflow #411 B43, UPD-1a), and an entry
 //!   without handlers or with the `result` `environment_reset`, 19 (Workflow #463 INT-1);
 //!   `pack-catalog.json`, 16 (Workflow #477 PC-1 fix round 1), by its presence, and 24 when it is
@@ -72,8 +74,9 @@
 
 use super::bundle::PACKAGE_REVISION;
 use actingcommand_contract::{
-    GIVEN_BY_MEMBER, GIVEN_BY_PACKAGE_REVISION, GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION,
-    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    GIVEN_BY_MEMBER, GIVEN_BY_PACKAGE_REVISION, GOAL_TABLES_PACKAGE_REVISION,
+    GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     TaskSchema, VARIABLES_PACKAGE_REVISION, catalog_package_revision, notice_relative_path,
 };
 use serde_json::{Map, Value};
@@ -673,11 +676,16 @@ fn entry_revision(
     if notice_relative_path(name).is_some() {
         return NOTICES_PACKAGE_REVISION;
     }
-    // `goals.json`, 14 since Workflow #463 V1 fix round 3 (`GOALS_PACKAGE_REVISION`): its name at
-    // the zip's root, as the installer's `place` reads it (`check_goals_declared`), whatever
-    // version it holds; a version 1 file is refused by the check (`goal_version_retired`).
+    // `goals.json`, 14 since Workflow #463 V1 fix round 3, 28 since Workflow #455 RR1
+    // (`GOALS_PACKAGE_REVISION`): its name at the zip's root, as the installer's `place` reads it
+    // (`check_goals_declared`), whatever version it holds; a version 1 or 2 file is refused by the
+    // check (`goal_version_retired`). Workflow #455 RR1: `goal-tables.json` 28 the same way
+    // (`GOAL_TABLES_PACKAGE_REVISION`).
     if name == STANDARD_PACK_GOALS_FILE {
         return GOALS_PACKAGE_REVISION;
+    }
+    if name == STANDARD_PACK_GOAL_TABLES_FILE {
+        return GOAL_TABLES_PACKAGE_REVISION;
     }
     // Workflow #477 PC-1 fix round 1: `pack-catalog.json`, 16 (`CATALOG_PACKAGE_REVISION`), by its
     // name at the zip's root, so that an installer that knows no such root file refuses the zip at

@@ -33,7 +33,9 @@ crate::outcome_vocabulary! {
         /// resource target `{resource, at_least}`; for a `clear`, no stored value and no target
         /// has the name.
         NameUnknown => "name_unknown",
-        /// The name is a `heading` or a `note` entry of `goals.json`, which holds no value.
+        /// The name is a `heading` or a `note` entry of `goals.json`, which holds no value;
+        /// Workflow #455 RR1 (since 0.12.92): or a `records` entry, which holds none until the
+        /// slice that stores records (the page does not list it).
         HoldsNoValue => "holds_no_value",
         /// The name is a `tier` entry of `goals.json`: no reader of this build reads a tier's
         /// value (Workflow #455 G-R5 builds it), so none is stored.

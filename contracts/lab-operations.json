@@ -2463,7 +2463,8 @@
         {"name": "display_layout", "form": "option", "type": "file", "required": false},
         {"name": "loading", "form": "option", "type": "file", "required": false},
         {"name": "notices", "form": "option", "type": "dir", "required": false},
-        {"name": "goals", "form": "option", "type": "file", "required": false}
+        {"name": "goals", "form": "option", "type": "file", "required": false},
+        {"name": "goal_tables", "form": "option", "type": "file", "required": false, "note": "a game's goal-tables.json"}
       ],
       "help": "Lays out a bundle of standard packs from an applications file and a packs directory in a new directory, checking its root files.",
       "output": "as today's command",
@@ -2474,7 +2475,8 @@
       "requests": [],
       "source": ["actinglab package bundle"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "Workflow #455 RR1 (0.12.92; contracts/standard-pack-goal-tables.md): goal_tables names the game's goal-tables.json, read after the composition with goals by the one goal check (its items' pools held to the bundle's, its tables the ones a records entry of goals names) and laid beside bundle.json byte for byte; a refused file refuses the bundle as a refused goals.json does (standard_pack_root_invalid with its first problem), goals.json's refusal first"
     },
     {
       "name": "package loading",
@@ -2674,7 +2676,8 @@
       "requests": [],
       "source": ["actinglab resource verify"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "Workflow #455 RR1 (0.12.92; contracts/standard-pack-goal-tables.md): a repository's goal-tables.json is a read path of the checkout and is checked, carried and counted in the bundle step as goals.json is (counts goal_tables: game, path and entries {tables, items}; a refused file fails the step with every problem, no zip); a zip that carries it or goals.json of version 3 declares package 28; goals' entries count records only when the file holds one"
     },
     {
       "name": "resource regression",
@@ -2797,7 +2800,8 @@
       "requests": [],
       "source": ["actinglab standard-pack check"],
       "slice": "LAB-2",
-      "status": "planned"
+      "status": "planned",
+      "notes": "Workflow #455 RR1 (0.12.92; contracts/standard-pack-goal-tables.md): a root that holds goal-tables.json lists it in root_files after goals.json, reads it with goals.json by the one goal check, and gives each of its problems as one standard_pack_root_invalid warning naming the file and the pointer, after goals.json's; the root is checked as without the file, a refused file applying no records entry; a root without it answers as before"
     },
     {
       "name": "standard-pack compose",

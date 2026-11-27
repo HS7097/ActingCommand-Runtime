@@ -78,7 +78,7 @@ fn place_game_root(packs: &Path) {
     write_package(&game.join(TASK), TASK, None, None);
     write_json(
         &game.join("goals.json"),
-        &json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A, "entries": [
+        &json!({"schema_version": "actingcommand.goals.v3", "game": GAME_A, "entries": [
             {"name": ENTRY, "type": "resource", "governs": {"pool": POOL_A},
              "title": {"en": "Stock"}}
         ]}),

@@ -3105,3 +3105,12 @@ tests = [
     "actingcommand-watchdog::lib::gate_503_halt1::halt1_fix1_starts_that_spawned_no_process_use_no_budget_and_the_first_that_spawns_starts",
 ]
 incident = ["#503 HALT-1"]
+
+# Workflow #455 RR1 (0.12.92; register §1.535; brief rd-1123/brief-455-rr1.md; contracts/standard-pack-goal-tables.md, "Who reads it"; contracts/component-interfaces.md, the package row 28), the rescue module's place, on the fake host of fixture.rs: a bundle that carries goal-tables.json and goals.json and declares [28, 28] is planned with both new, goal-tables.json before goals.json, placed byte for byte with the journal's plan declaring [28, 28]; a later bundle without them plans goals.json then goal-tables.json retire, sets both aside as <file>.old-<ms> and keeps them, and undo puts goal-tables.json back (1); an installer of [3, 27] refuses a bundle that carries goal-tables.json and declares [28, 28] interface_edge at its interfaces.json, and this build's installer refuses one that declares [3, 27] pack_invalid caused by goal_tables_undeclared and one that carries goals.json of version 3 and declares [14, 14] caused by goal_undeclared, each at interfaces.json, the pointer empty, in the plan: no pause, no journal, nothing in the game root (2). Adapted, the requirement moving the shipped package range to [3, 28] and goals.json to version 3 at 28: gate_463_v1::v1_the_build_declares_package_through_revision_14 ([3, 28]) and gate_463_v1::v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared (its installer [3, 28], the planned bundle [28, 28], names kept), and gate_455_gr1's fixture (version 3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-lab-rescue::lib::install::gate_455_rr1::rr1_goal_tables_file_is_placed_before_goals_and_retired_when_a_later_bundle_carries_none",
+    "actingcommand-lab-rescue::lib::install::gate_455_rr1::rr1_a_bundle_below_28_with_either_file_is_refused_in_the_plan",
+]
+incident = ["#455 RR1"]

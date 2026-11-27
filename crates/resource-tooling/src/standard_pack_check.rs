@@ -87,7 +87,10 @@
 //! `goals.json` lists it in `root_files`, and after the composition the file is read and its
 //! references held to the root (`standard_pack_goals`). Each problem of a refused file is one
 //! `standard_pack_root_invalid` warning, in file order, after the other warnings: the root is
-//! checked as without the file, and the answer is otherwise what it is without it.
+//! checked as without the file, and the answer is otherwise what it is without it. Workflow #455
+//! RR1 (register §1.535; contracts/standard-pack-goal-tables.md): so is `goal-tables.json`, listed
+//! after `goals.json` in `root_files`, checked with it and warned of after it; a root without it
+//! answers as before.
 //!
 //! Workflow #463 V1 (register §1.378; contracts/package-variables.md): before the goal
 //! declaration, the root check of the variables the packages' control declarations declare: each
@@ -116,7 +119,8 @@ use crate::notices_directory::game_root_notices;
 use crate::package_directory::{PACK_DEADLINE, packs_empty};
 use crate::package_loading::{check_loading, stale_copies};
 use crate::standard_pack_goals::{
-    goal_issues, goal_warnings, read_goals_file, root_irreversibility, variable_report,
+    GoalFiles, goal_issues, goal_warnings, read_goal_tables_file, read_goals_file,
+    root_irreversibility, variable_report,
 };
 use crate::standard_pack_schedule::{report_schedule, switched_catalog};
 use crate::{
@@ -129,12 +133,12 @@ use actingcommand_contract::{
     BundleIndex, CatalogScheduleFacts, InterruptThen, LabError, LabErrorClass, LabResult,
     NavigationProblem, NavigationRole, ProvidedCapability, RuntimeErrorCode,
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE,
-    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
-    StandardPackRootIssue, catalog_display_outcome, parse_standard_pack_catalog_with,
-    parse_standard_pack_schedule, read_standard_pack_root, retired_ui_outcome,
-    standard_pack_catalog_differences,
+    STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem,
+    StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue, catalog_display_outcome,
+    parse_standard_pack_catalog_with, parse_standard_pack_schedule, read_standard_pack_root,
+    retired_ui_outcome, standard_pack_catalog_differences,
 };
 use actingcommand_execution_kernel::{
     ContainedTaskError, NavigationPackageDescriptor, PreparedContainedTask, RemedyDeclarations,
@@ -178,6 +182,8 @@ pub(crate) struct RootFileInputs {
     /// Workflow #455 G-R1: `goals.json`, which no root reader reads: checked after the composition
     /// (`standard_pack_goals`) and laid beside `bundle.json`.
     goals: Option<RootFile>,
+    /// Workflow #455 RR1: `goal-tables.json`, checked with `goals.json` and laid beside it.
+    goal_tables: Option<RootFile>,
 }
 
 impl RootFileInputs {
@@ -206,6 +212,7 @@ impl RootFileInputs {
             display_layout: read(files.display_layout.as_ref())?,
             loading: files.loading.clone(),
             goals: read(files.goals.as_ref())?,
+            goal_tables: read(files.goal_tables.as_ref())?,
         })
     }
 
@@ -222,6 +229,7 @@ impl RootFileInputs {
             && self.schedule.is_none()
             && self.display_layout.is_none()
             && self.goals.is_none()
+            && self.goal_tables.is_none()
     }
 
     /// ROUT-L RL-1a: the `schedule.json` given, if any.
@@ -234,6 +242,11 @@ impl RootFileInputs {
         self.goals.as_ref()
     }
 
+    /// Workflow #455 RR1: the `goal-tables.json` given, if any.
+    pub(crate) fn goal_tables(&self) -> Option<&RootFile> {
+        self.goal_tables.as_ref()
+    }
+
     /// Each given file under its root file name, in the order a game root lists them.
     pub(crate) fn files(&self) -> impl Iterator<Item = (&'static str, &RootFile)> {
         [
@@ -244,6 +257,8 @@ impl RootFileInputs {
             (STANDARD_PACK_DISPLAY_LAYOUT_FILE, &self.display_layout),
             // Workflow #455 G-R1.
             (STANDARD_PACK_GOALS_FILE, &self.goals),
+            // Workflow #455 RR1.
+            (STANDARD_PACK_GOAL_TABLES_FILE, &self.goal_tables),
         ]
         .into_iter()
         .filter_map(|(name, file)| file.as_ref().map(|file| (name, file)))
@@ -349,6 +364,11 @@ pub(crate) fn check_standard_pack_root_with_catalog(
     let goals = read_goals_file(&root.join(STANDARD_PACK_GOALS_FILE))?;
     if goals.is_some() {
         present.push(STANDARD_PACK_GOALS_FILE);
+    }
+    // Workflow #455 RR1: and the table of rules for raising beside it, through its own bound.
+    let goal_tables = read_goal_tables_file(&root.join(STANDARD_PACK_GOAL_TABLES_FILE))?;
+    if goal_tables.is_some() {
+        present.push(STANDARD_PACK_GOAL_TABLES_FILE);
     }
     let bytes = |name: &str| files.get(name).map(Vec::as_slice);
     let checked = read_standard_pack_root(
@@ -479,8 +499,9 @@ pub(crate) fn check_standard_pack_root_with_catalog(
     warnings.extend(variable_warnings);
     // Workflow #455 G-R1 (register §1.356): the goal declaration, after the composition. Each
     // problem of a refused file is one `standard_pack_root_invalid` warning, in file order; the
-    // root stays as valid as it is without the file.
-    if let Some(goals) = &goals {
+    // root stays as valid as it is without the file. Workflow #455 RR1 (register §1.535): and the
+    // table of rules for raising, checked with it, its warnings after the declaration's.
+    if goals.is_some() || goal_tables.is_some() {
         let schedule_path = root.join(STANDARD_PACK_SCHEDULE_FILE);
         // Workflow #477 CV-2: a file that names `catalog_business` is held with its rules'
         // business part, the root's `pack-catalog.json`'s.
@@ -493,13 +514,21 @@ pub(crate) fn check_standard_pack_root_with_catalog(
             &checked,
             bytes(STANDARD_PACK_SCHEDULE_FILE).map(|schedule| (schedule, schedule_path.as_path())),
             catalog.as_deref(),
-            goals,
+            GoalFiles {
+                goals: goals.as_deref(),
+                tables: goal_tables.as_deref(),
+            },
             &|directory: &str| root.join(directory),
         )?;
         warnings.extend(goal_warnings(
             &game,
             &root.join(STANDARD_PACK_GOALS_FILE),
-            &issues,
+            &issues.goals,
+        ));
+        warnings.extend(goal_warnings(
+            &game,
+            &root.join(STANDARD_PACK_GOAL_TABLES_FILE),
+            &issues.tables,
         ));
     }
     // Workflow #477 PC-1 (register §1.438): the package declaration, last; a wrong business part

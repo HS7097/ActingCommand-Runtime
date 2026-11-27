@@ -323,6 +323,11 @@ mod gate_477_lr1;
 // installer of the earlier range refuses such a zip at its edge.
 #[path = "gate_455_tk1.rs"]
 mod gate_455_tk1;
+// Workflow #455 RR1: `resource verify` checks, carries and declares a repository's
+// `goal-tables.json` with the one check, `standard-pack check` names a refused one with its
+// pointer, and the revision table counts both goal files as `package` 28.
+#[path = "gate_455_rr1.rs"]
+mod gate_455_rr1;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

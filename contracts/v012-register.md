@@ -50287,6 +50287,183 @@ by the dispatch, which takes the same path.
 a package; then its rules each carry the value, its goal page shows no such variable, and a stored
 value of it appears among the orphans.
 
+### 1.535 Slice #455 RR1 (0.12.92): a training goal's two files: a records entry in a root's goals.json (version 3) and the root's table of game rules (goal-tables.json), read, checked, bundled and installed; nothing is stored or computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr1.md`; on main `0137eb22`, v0.12.89; §1.533 and §1.534, two slices merged before this one, are not in its tree, and the coordinator joins them at the merge)
+
+It ships in 0.12.92. [standard-pack-goal-tables.md](standard-pack-goal-tables.md) (new: the file,
+its members and limits, every refusal at its pointer, the two examples, who reads it, what a
+refused file does, what arrives later, "Interface"), [standard-pack-goals.md](standard-pack-goals.md)
+(version 3, "The records entry", the retired version 2, "The checks", "Who reads it", "Interface"),
+[component-interfaces.md](component-interfaces.md) (the `package` row 28),
+[package-reference.md](package-reference.md) (the bundle's and the root's files),
+[install-cli.md](install-cli.md) (`place`'s root files and its edge table),
+[resource-verify.md](resource-verify.md) (the inputs, the checkout's read paths, the bundle step's
+counts, the revision table's row 28), the rows `package bundle`, `resource verify` and
+`standard-pack check` of [lab-operations.json](lab-operations.json), and the catalog's vocabularies
+`standard_pack_problem` and `goal_problem` and the host fragment's `standard_pack_goals_not_applied`
+are the contract.
+
+**What it is for.** A person says which character to raise and to which grade; nobody types how
+many of each material that takes. The Runtime will compute, at every evaluation, each material
+pool's need from those records, a table of the game's rules and the account's readings (the later
+slices). This slice builds what that rests on: the two files of a game root that declare the
+records and carry the rules, their readers, their checks, their place in a bundle and in an
+installation, and the Runtime's reading of them. After it the resource side can write both files
+and have every tool check them offline. No value is stored, nothing is computed, and no evaluation
+changes.
+
+**The rulings, as built.**
+- *1, `goals.json` version 3* (`crates/actingcommand-contract/src/standard_pack_goals.rs`). Version
+  2 with one more type; `STANDARD_PACK_GOALS_SCHEMA_VERSION` is `actingcommand.goals.v3` and
+  `STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSIONS` holds versions 1 and 2, each `goal_version_retired`
+  at `/schema_version`, the file read no further, applying no entry; the root runs. One reader, of
+  version 3 only. A version 3 file without a `records` entry reads to the entries its version 2 form
+  read to (the neutral example and every fixture of the workspace only changed their version word).
+- *2, the records entry*. `{name, type: "records", title, help?, block?, table, max_records}`
+  (`GoalType::Records`, `DeclaredGoalKind::Records`, base block `record_list`): `table` of an entry
+  name's form, `max_records` 1 to 128 (`MAX_GOAL_RECORDS`; `goal_out_of_limits` outside, `malformed`
+  for no whole number). The references hold the table to the tables of the root's accepted
+  `goal-tables.json` (`GoalReferences::tables`: the accepted file's, none for a root without it, so
+  `goal_table_unknown` at `/entries/<i>/table`, the registered word used at last; not judged while
+  that file is refused, whose own problems say why).
+- *3, `goal-tables.json`* (`crates/actingcommand-contract/src/standard_pack_goal_tables.rs`,
+  `actingcommand.goal-tables.v1`, `parse_standard_pack_goal_tables`). The members, limits and words
+  of the study's answer, with its changes: an item carries no tier and no mark of how it is
+  obtained, and its recipe decides (an item with a recipe is taken apart, one without is where taking
+  apart stops); a prerequisite may carry `from`, a position of its own column, from which on it is
+  asked; an item with a recipe names a pool. The two examples, with made-up names and amounts, are
+  the contract's and the tests'. Bounds taken as the study proposed them; the reader adds, where the
+  study left a choice: a column of `per: "sub"` writes `subs` instead of `read` and is never a
+  prerequisite's column (it has no one ladder); a key's member for a column of `per: "class"` is
+  `{steps: {<index>: step}}`; no column is named `class` or `own`; at most one progress list of a
+  table writes `held_by: true`; an item's name never begins with `@`, the prefix of a role; a list's
+  column names take a list reading's column form.
+- *4, what is checked, and against what*. The file alone: forms, limits, names unique
+  (`table_name_duplicate`, `table_reading_column_duplicate`), every name used declared
+  (`table_item_unknown`, `table_role_unknown`, `table_class_unknown`, `table_column_unknown`),
+  ladders well formed (`table_ladder_invalid`: two positions at least, distinct, of the column's
+  width, one step fewer), the recipes and the prerequisites free of cycles (`table_recipe_cycle`,
+  `table_requires_cycle`, at every item or column on one), an item with a recipe names a pool
+  (`table_recipe_without_pool`), a prerequisite's position and its `from` positions of the ladders
+  they speak of, held only for the classes and keys with steps in the requiring column
+  (`table_requires_invalid`), a list's fact key of its form only (`table_list_key_invalid`). Against
+  the composed root (`check_standard_pack_goal_table_references`, the same `GoalReferences` the goal
+  check holds `goals.json` to): an item's pool a pool of the root (`table_pool_unknown`); the pool of
+  an item without a recipe one a target can be put on, by the judgement the goal check already makes
+  of a `resource` entry's pool (the map `GoalReferences::pools`, filled once in the resource tooling's
+  `goal_issues`; no second judgement) (`table_pool_unvalued`); the pool of an item with a recipe
+  need only be a pool of the root (every pool of `schedule.json` declares its reading); an item
+  without a recipe and without a pool is read and weighs nothing.
+- *5, who checks* (one function for each file, in the contract crate). `standard-pack check` (the
+  file read through its bound, listed in `root_files` after `goals.json`, each problem one
+  `standard_pack_root_invalid` warning naming the file and the pointer after `goals.json`'s; the
+  check exits as for a refused `goals.json`), `package bundle --goal-tables` (`goals.json`'s
+  refusal first), `resource verify` and `standard-pack build` (`check_bundle_goals`, which takes
+  both files now), `standard-pack adopt` (which bundles the repository's file), the readiness item
+  I2 (`BundleRevisionNeed::GoalTables`), the installer (`ROOT_FILES` places it after `schedule.json`
+  and before `goals.json`, `RETIRED_WHEN_ABSENT` sets it aside after `goals.json`), and the
+  Runtime's workbench (`RootGoalTables`, read in `read_declarations` beside `goals.json`, marked in
+  `GameMarks`, kept in `StandardPackGoalRoot::goal_tables` for the generation in force with its
+  sha256, parsed only when the bytes' sha256 is not that of what it keeps; a refused or unreadable
+  file is `standard_pack_goals_not_applied` with `path` the file, once per sha256 or until it reads
+  again). A refused file applies no records entry; the root runs and every other entry of
+  `goals.json` applies as before. The workbench holds the tables to no references (as `goals.json`):
+  the composition's pools are the tools' to judge.
+- *6, nothing of the later slices*. No instance key, no change of `EditGoal`'s store, no input to the
+  evaluation. A records entry's name is declared and not settable: `goals set` and `goals clear` of
+  it answer `goal_value_invalid` with the existing word `holds_no_value` (its text widened), no word
+  added.
+- *7, what a client sees*. `GoalView` and the page list no records entry (`view_entries` passes it
+  over), so a client of `runtime-client` 14 reads the page as without it: no member, no type word.
+  A root without a records entry and without the tables file: every answer, hash and identity as
+  before.
+- *8, nothing else moves*. `package` 28 (`GOALS_PACKAGE_REVISION` and
+  `GOAL_TABLES_PACKAGE_REVISION`; the revision table's row 28; `resource verify`'s rule); this build
+  declares [3, 28]; an installer before it refuses such a bundle at its `package` edge, and this
+  one refuses a bundle that carries either file and declares less (`goal_undeclared`,
+  `goal_tables_undeclared`). The new words enter `standard_pack_problem` under
+  `standard_pack_root_invalid`. No ledger shape, no client interface, no setting.
+
+| Word | The one cause | Refuses or warns |
+|---|---|---|
+| `table_out_of_limits` | a bound of `goal-tables.json` broken (the file, a list, a map, a name, an amount of 0) | refuses the file (a warning of `standard-pack check`; the root runs) |
+| `table_name_duplicate` | a table or a column named like an earlier one of its list | as above |
+| `table_item_unknown` | a recipe, a step or a key's `own` names an undeclared item | as above |
+| `table_role_unknown` | a step's `@<role>` that a key taking the step does not declare | as above |
+| `table_class_unknown` | a key's class is no class of its table | as above |
+| `table_column_unknown` | a column, a reading column or a sub the table does not declare | as above |
+| `table_ladder_invalid` | a ladder that is not well formed, or written where its column takes none, or an override of a ladder or step its class lacks | as above |
+| `table_recipe_cycle` | an item reaches itself through the recipes | as above |
+| `table_requires_cycle` | a column reaches itself through its prerequisites | as above |
+| `table_requires_invalid` | a prerequisite the table cannot hold (a sub column; a position or `from` a class or key with steps in the column does not hold) | as above |
+| `table_recipe_without_pool` | an item with a recipe names no pool | as above |
+| `table_list_key_invalid` | a progress list's fact key is no list reading's | as above |
+| `table_reading_column_duplicate` | a reading column listed twice | as above |
+| `table_pool_unknown` | an item's pool is no pool of the composed root | as above |
+| `table_pool_unvalued` | the pool of an item without a recipe takes no goal | as above |
+| `goal_tables_undeclared` | a zip carries `goal-tables.json` and declares less than 28 | refuses the placement (`pack_invalid`, in the plan) |
+| `goal_table_unknown` (given again) | a records entry's table is no table of the root's accepted tables | refuses `goals.json` (a warning of `standard-pack check`) |
+| `holds_no_value` (text widened) | an edit of a records entry's name | refuses (Denied `goal_value_invalid`) |
+
+**Tests** (incident `#455 RR1`; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `rr1_the_two_examples_read_to_their_tables` (contract) | both examples read to their items, tables, columns, classes, ladders, keys, overrides, subs and roles; `ladders_of`; their pools held |
+| `rr1_each_form_and_limit_is_refused_at_its_pointer` (contract) | thirty-odd cases, each one problem at its pointer, the study's `tier` member among them; over 4 MiB, no JSON, a repeated member first |
+| `rr1_what_the_file_says_of_itself_is_held` (contract) | an item with a recipe and no pool, an unknown item of a recipe, both cycles at each member, a prerequisite of an unknown or a sub column, a role at each step once, positions a key or a class does not hold, a `from` that is no position; with and without `from` held; a class without the requiring column's ladder not held |
+| `rr1_the_pools_are_held_to_the_composed_root` (contract) | an item without pool or recipe taken; an undeclared pool; the pool of an item without a recipe that takes no goal; the pool of an item with a recipe that only has a reading taken |
+| `rr1_a_records_entry_reads_and_is_held_to_the_root_s_tables` (contract) | the entry's members and bounds at their pointers; its table unknown without the file and for another table, passed for one of them, not judged while the file is refused |
+| `rr1_version_2_is_retired_and_version_3_reads_its_entries` (contract) | version 2 retired, its game not judged; version 3 reads the entries |
+| `rr1_lab_a_repository_with_both_files_is_verified_carried_and_declared_28` (Lab) | verified, both files read paths (13), named, counted (`records` among the goal types; tables and items), zipped byte for byte, [28, 28], within this build's range, installed and checked |
+| `rr1_lab_a_refused_tables_file_is_named_at_its_pointer_and_fails_the_bundle` (Lab) | the one problem at its pointer naming the file, no zip; `standard-pack check` names it and exits as for a refused `goals.json`; `package bundle --goal-tables` refuses it, `--out` not written |
+| `rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused` (Lab) | the revision table's 28 for both files; [3, 28]; the edge of [3, 27]; a declaration below 28 declares neither file |
+| `rr1_goal_tables_file_is_placed_before_goals_and_retired_when_a_later_bundle_carries_none` (rescue) | planned and placed in its order, set aside after `goals.json` by a later bundle, put back by `undo` |
+| `rr1_a_bundle_below_28_with_either_file_is_refused_in_the_plan` (rescue) | `interface_edge` on [3, 27]; `goal_tables_undeclared` and `goal_undeclared` on this build's installer; nothing held or written |
+| `rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_applies_no_records` (host) | the same parse kept across a read of the same content, another content parsed again, a refused file kept at its pointer and recorded once, the root running and `goals.json` applying |
+| `rr1_h2_the_page_lists_no_records_entry_and_a_set_of_its_name_holds_no_value` (host) | no records entry listed; set and clear `holds_no_value`, nothing stored; the page as without the entry |
+
+**Nothing moved.** A root without either file: the reader of `goals.json` is untouched for it, the
+tools read no tables file, the installer plans nothing more, the workbench keeps `Absent`, and the
+page, its hashes and the dispatch are as before; the gates that hold it, unchanged:
+`gate_455_goals_pack`'s tests 1 and 5 (a repository without the file verified, bundled and declared
+[3, 3] byte for byte), `gate_455_gr1` of the resource tooling (the check answers alike with and
+without a valid file), `gate_463_v2` and `gate_463_v3` of the host (the variables, the page and the
+edits), `gate_500_sv2`, `gate_463_ch1`. A root whose `goals.json` only changed its version word: the
+fixtures of `gate_455_b3p`, `gate_455_p2`, `gate_463_s38`, `gate_463_v2`, `gate_463_v3` and
+`gate_503_goal1` (host), the policy's `gate_463_v2`, the Lab's `gate_463_self`, the resource
+tooling's `gate_455_gr1`, `gate_455_gr2s` and `gate_463_v1`, the rescue module's `gate_455_gr1` and
+the contract crate's tests were relabelled to version 3 and assert what they asserted. Adapted, each
+because this slice deliberately changes what it pinned: the seven tests that pin the shipped
+`package` range, to [3, 28] (`gate_463_kp1`, `gate_463_sel2l`, the rescue module's `gate_463_v1`,
+the Lab's `gate_463_sel2l_rows`, actinglab-architecture's `component_interfaces`, `gate_477_cv1`,
+`gate_455_tk1`); the revision of `goals.json`, 14 to 28 (`gate_464_p2`'s
+`p2_notices_give_package_10_and_goals_give_14` and `p2_revision_14_goals_json`, the rescue module's
+`gate_463_v1`'s `v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared`,
+names kept); the contract crate's `goals_each_type_reads_its_members` (a records entry among the six
+types) and `goals_reader_is_strict` (the later version is version 4); and `gate_455_gr2s`'s helper,
+which calls the check's new form.
+
+**Not proven by a test.** The offline readers (check-config and `actingd suspended`) read the tables
+with no kept copy; that path is the workbench's reader and is not run here. The real tables of the
+resource side, which are within every bound (436 keys, 6 classes, 220 positions, 4 items in a step,
+89 items, 473 KB, as the work order states), are not read here: no resource repository is.
+
+**What is not changed, and what is left.** No value is stored for a records entry and nothing reads
+the tables in an evaluation (the later slices: storing records, computing needs, the view of
+`runtime-client` 15, a package parameter that is a record's key). A variable named like a records
+entry is `variable_conflict` as for any entry name of the file, and its cause in `GoalView`
+(`variable_cause`) then names the type word `records`, a text member a client of today's revision
+reads as text; no root is known to do so. The revision table counts `goals.json` as 28 whatever
+version it holds, as it counted 14: the check, not the table, refuses a retired version.
+
+**At deploy.** Nothing to configure. A bundle that carries `goals.json` or `goal-tables.json`
+declares `package` [28, 28]; an installer of 0.12.91 or earlier refuses it. A root that still holds
+a version 2 `goals.json` applies no entry of it after this release is installed (its goal page
+lists none of them; the stored goals stay in effect) until its version 3 file is placed: the
+resource side prepares every root's version 3 file, checks it offline with this release's tools,
+and places it at once. On production the workbench's records show
+`standard_pack_goals_not_applied` with `goal_version_retired` for such a root until then.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

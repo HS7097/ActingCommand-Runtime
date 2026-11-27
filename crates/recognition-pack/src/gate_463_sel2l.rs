@@ -810,9 +810,10 @@ fn sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_ran
     // list reading, Workflow #455 G-SLx (register §1.501) to 23, a pack's variables beside an
     // irreversible capability, Workflow #477 CV-1 (register §1.507) to 24, a bundle that carries
     // a version 2 package declaration, Workflow #477 LR-1 (register §1.513) to 25, a linear
-    // press step's count, and Workflow #455 TK-1 (register §1.532) to 26, a variable only a rule
-    // gives; 20 stays within it.
-    assert_eq!(own, [3, SHARED_READ_REVISION + 6]);
+    // press step's count, Workflow #455 TK-1 (register §1.532) to 26, a variable only a rule
+    // gives, and Workflow #455 RR1 (register §1.535) to 28, a `goals.json` of version 3 and a
+    // root's `goal-tables.json`; 20 stays within it.
+    assert_eq!(own, [3, SHARED_READ_REVISION + 8]);
     assert!(package_edge_holds(own, needs));
     assert!(!package_edge_holds([3, SHARED_READ_REVISION - 1], needs));
     assert!(package_edge_holds(own, [3, SHARED_READ_REVISION - 1]));

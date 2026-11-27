@@ -20,6 +20,17 @@ reader of version 1 stays. A version 2 file that writes one of the four types is
 `goal_type_unknown` at it. What a Runtime, an installer and a Lab of 0.12.60 do with a version 2
 file is in "Interface".
 
+**Workflow #455 RR1** (Runtime 0.12.92; [v012-register.md](v012-register.md) §1.535;
+[standard-pack-goal-tables.md](standard-pack-goal-tables.md)): the file is **version 3**
+(`actingcommand.goals.v3`), version 2 with one more type, `records`: the records of whom to raise
+and to which grade, each a key of a table of the root's `goal-tables.json` ("The records entry").
+Releases 0.12.61 to 0.12.91 read version 2, and a released format does not change its shape in
+place, so version 2 is retired as version 1 is: a version 2 file is `goal_version_retired` at
+`/schema_version`, applies no entry and is read no further, and the root still runs. There is one
+reader, of version 3 only. A version 3 file without a `records` entry reads to exactly the entries
+its version 2 form read to; the only change for such a file is its version word and the `package`
+revision its bundle declares, 28 ("Interface").
+
 **No value is read here.** The values a person or an agent sets, the requests that set and read
 them, the run fact a governed package reads and the scheduler's reading of a resource goal are
 later slices' (G-R2a to G-R5); a game root without the file is exactly what it was before G-R1.
@@ -32,9 +43,9 @@ unit text and no option title. They are data for the console.
 
 `goals.json` is an optional root file of the game root, `<standard_packs.root>/<game>/goals.json`,
 beside `bundle.json`, by the root-file rule ([package-reference.md](package-reference.md),
-"Standard package root", "Naming"): `schema_version` `actingcommand.goals.v2` (Workflow #463 V1
-fix round 3; version 1, `actingcommand.goals.v1`, is what release 0.12.60 read) and `game` equal
-to the directory's name.
+"Standard package root", "Naming"): `schema_version` `actingcommand.goals.v3` (Workflow #455 RR1;
+version 2, `actingcommand.goals.v2`, is what releases 0.12.61 to 0.12.91 read, and version 1,
+`actingcommand.goals.v1`, what release 0.12.60 read) and `game` equal to the directory's name.
 
 - It is not `ui.json` (since Workflow #477 PC-1, the display part of `pack-catalog.json`,
   [pack-catalog.md](pack-catalog.md)): the Runtime must enforce types and ranges, and that file is
@@ -43,10 +54,11 @@ to the directory's name.
   would refuse the whole schedule.
 
 ```text
-{schema_version: "actingcommand.goals.v2", game,
+{schema_version: "actingcommand.goals.v3", game,
  entries: [{name, type, block?, title: {<locale>: text}, help?: {<locale>: text}, governs?,
             <the type's members>}
-         | {name, type: "variable", block?}]}
+         | {name, type: "variable", block?}
+         | {name, type: "records", block?, title, help?, table, max_records}]}
 
 governs:  {pool: <pool id of schedule.json>}            type resource
         | {rules: [<rule id of schedule.json>, ...]}     type tier
@@ -60,7 +72,7 @@ The document has exactly the members `schema_version`, `game` and `entries`.
   the stable name the Lab uses; a `variable` entry's name is the name of the variable it places.
   Renaming an entry is removing it and adding another.
 - **Position**: the file's order, one page from top to bottom. Nothing numbers an entry.
-- **Type** (`type`, required): one of the five of version 2 (below).
+- **Type** (`type`, required): one of the six of version 3 (below).
 - **Block** (`block`, optional): how a reader shows the entry (below); absent, the type's base
   block, and for a `variable` entry the placed variable's.
 - **Texts**: `title` (required) and `help` (optional), each a text per locale; a `variable` entry
@@ -78,10 +90,11 @@ The document has exactly the members `schema_version`, `game` and `entries`.
 
 Every other member is refused.
 
-### The five types of version 2
+### The five types of version 2, and `records` of version 3
 
 Version 1, which release 0.12.60 read, had eight: these five without `variable`, and `integer`,
-`choice`, `switch` and `ordered`, which governed packages (Workflow #463 V1 fix round 3).
+`choice`, `switch` and `ordered`, which governed packages (Workflow #463 V1 fix round 3). Version
+3 (Workflow #455 RR1) has the five and `records` (the last row; "The records entry").
 
 | `type` | Members besides `name`, `type`, `block`, `title`, `help` | Its value (later slices) |
 |---|---|---|
@@ -90,6 +103,7 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
 | `resource` | `governs: {pool}`; `rate?: {floor_milli_per_day, ceiling_milli_per_day}` | `{at_least, by_unix_ms?}` |
 | `tier` | `governs: {rules}`; `options: [{value, title, scale_milli}]` (2 to 32), `default` | one option value |
 | `variable` | none; it writes neither `title` nor `help`, only `name`, `type` and an optional `block` | the placed variable's ([package-variables.md](package-variables.md)) |
+| `records` | `table`: a table of the root's `goal-tables.json`; `max_records`: 1 to 128 | records of keys of the table and their targets (a later slice's; none is stored in 0.12.92) |
 
 - **`rate`** (a `resource` entry): the pool's net income per day, times 1000, signed, at its low end
   (`floor_milli_per_day`) and at its high end (`ceiling_milli_per_day`), written by the resource
@@ -108,10 +122,31 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
   package-variables.md, without `governs` (the governed package is the declaring one) and, until a
   later slice, without `from_table`.
 
+### The records entry
+
+Workflow #455 RR1 (since 0.12.92). `{name, type: "records", title, help?, block?, table,
+max_records}`: a person says which character to raise and to which grade, and the game's rules for
+what that takes are the root's `goal-tables.json` ([standard-pack-goal-tables.md](standard-pack-goal-tables.md)).
+
+- **`table`**: the name of a table of that file, of an entry name's form; the references hold it to
+  the tables of the root's accepted file (`goal_table_unknown` at `/entries/<i>/table`, a root
+  without the file too). While that file is refused the table is not judged: the file's own
+  problems say why, and it applies no records entry.
+- **`max_records`**: the most records the entry keeps, 1 to 128 (`goal_out_of_limits` outside;
+  `malformed` when it is no whole number).
+- Its place on the page, its name, its texts and its block (`record_list`, its base block, or none
+  written) are as every other type's.
+- **Until the slice that stores records**, the entry's name is declared and not settable: `goals
+  set` and `goals clear` of it are refused `goal_value_invalid` with the existing word
+  `holds_no_value`; the goal page and `GoalView` do not list it, so a client of today's
+  `runtime-client` revision reads the page as it reads it without the entry (no member, no type
+  word added). Nothing computes from it yet ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
+  "What arrives later").
+
 ### Neutral example
 
 ```json
-{"schema_version": "actingcommand.goals.v2", "game": "neutral",
+{"schema_version": "actingcommand.goals.v3", "game": "neutral",
  "entries": [
   {"name": "stock", "type": "heading", "title": {"en": "Stock", "zh-Hans": "储备"}},
   {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
@@ -121,7 +156,10 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
 ```
 
 The third entry places the variable `route` a package of the root declares (Workflow #463 V1; in
-version 1 it was a `choice` entry that governed `neutral.collect`).
+version 1 it was a `choice` entry that governed `neutral.collect`). The example has no `records`
+entry: it reads to the entries it read to as version 2 (Workflow #455 RR1). A `records` entry, its
+table the first example of [standard-pack-goal-tables.md](standard-pack-goal-tables.md):
+`{"name": "raise", "type": "records", "table": "heroes", "max_records": 16, "title": {"en": "Whom to raise"}}`.
 
 ## Blocks
 
@@ -136,6 +174,7 @@ Version 2 has the seven blocks of version 1, one for each type or variable kind,
 | `choice` | `tier`, a `choice` variable | one of a few options: side by side up to four, a drop-down above |
 | `switch` | a `switch` variable | on or off |
 | `ordered_list` | an `ordered` variable | values in an order a person sets, with search when the list is long |
+| `record_list` | `records` (Workflow #455 RR1, version 3) | the records of whom to raise and to which grade (not shown before the slice that stores records) |
 
 `block` may be left out or name the type's base block; any other word is `goal_block_mismatch`. A
 `variable` entry may leave it out or name one of the four blocks a variable is shown with, which
@@ -171,6 +210,7 @@ a `scale_milli` outside its range is what the entry declares as its values (`goa
 | `options` | 2 to 32 (`tier`) |
 | an option value | 1 to 64 bytes |
 | `scale_milli` | 1 to 1,000,000 |
+| `max_records` | 1 to 128 (`records`, Workflow #455 RR1) |
 | an integer | a safe integer, at most 2^53 - 1 in magnitude |
 
 ## The checks
@@ -187,12 +227,12 @@ against the root.
 
 | `standard_pack_problem` | When | `json_pointer` |
 |---|---|---|
-| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too; a `title` or `help` a `variable` entry writes); a `schema_version` that is neither version 2's nor version 1's (a version this build does not know yet, a later one included); a name, an option value or an id outside its form; a `governs` id named twice | the member (empty for the whole document) |
-| `goal_version_retired` | Workflow #463 V1 fix round 3: `schema_version` is `actingcommand.goals.v1`, version 1, which release 0.12.60 read and this build reads no more. The file is read no further: after the members repeated in one object and the document's own members unknown or missing, it is the file's only problem | `/schema_version` |
-| `goal_out_of_limits` | the file is larger than 1 MiB; a list, a map or a text's locales of a count outside its limit; a name, an option value, an id, a locale or a text of a length outside its limit (the "Limits" table; an empty one too). G-R1 fix round 1 | what exceeds: the list, the map, the text or the member (empty for the whole file) |
+| `malformed` | the file is no JSON or no object (a file that begins with a byte-order mark too: the reader takes the bytes as they are); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too; a `title` or `help` a `variable` entry writes); a `schema_version` that is none of version 3's, version 2's and version 1's (a version this build does not know yet, a later one included); a name, an option value or an id outside its form (a `records` entry's `table` too); a `governs` id named twice | the member (empty for the whole document) |
+| `goal_version_retired` | Workflow #463 V1 fix round 3: `schema_version` is `actingcommand.goals.v1`, version 1, which release 0.12.60 read and this build reads no more; Workflow #455 RR1: or `actingcommand.goals.v2`, version 2, which releases 0.12.61 to 0.12.91 read. The file is read no further: after the members repeated in one object and the document's own members unknown or missing, it is the file's only problem | `/schema_version` |
+| `goal_out_of_limits` | the file is larger than 1 MiB; a list, a map or a text's locales of a count outside its limit; a name, an option value, an id, a locale or a text of a length outside its limit (the "Limits" table; an empty one too); Workflow #455 RR1: a `records` entry's `max_records` outside 1 to 128. G-R1 fix round 1 | what exceeds: the list, the map, the text or the member (empty for the whole file) |
 | `game_mismatch` | `game` is not the directory's | `/game` |
 | `goal_name_duplicate` | a name an earlier entry has | `/entries/<i>/name`, the later |
-| `goal_type_unknown` | `type` is none of the five of version 2, a later version's type included, and (Workflow #463 V1) the four types `variable` replaced, `integer`, `choice`, `switch` and `ordered`; the entry is read no further | `/entries/<i>/type` |
+| `goal_type_unknown` | `type` is none of the six of version 3, a later version's type included, and (Workflow #463 V1) the four types `variable` replaced, `integer`, `choice`, `switch` and `ordered`; the entry is read no further | `/entries/<i>/type` |
 | `goal_block_mismatch` | `block` is not the type's base block; Workflow #463 V1: a `variable` entry's `block` that is none of the four a variable is shown with (by the reader), or not the placed variable's base block (by the references) | `/entries/<i>/block` |
 | `goal_range_invalid` | what the entry declares as its values cannot hold one: an option value written twice (at the later `value`); a tier's `scale_milli` outside 1 to 1,000,000 (at it; one that is no safe integer is `malformed`, as every integer member of the file) | the member named |
 | `goal_default_invalid` | a `tier`'s `default` is not one of its option values, judged once its options hold | `/entries/<i>/default` |
@@ -204,10 +244,11 @@ against the root.
 | `goal_tier_without_fixed_value` | that rule, its package passed, writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
 | `goal_variable_unknown` | Workflow #463 V1: a `variable` entry's name is no variable a package of `bundle.json` declares (every declared name counts, one the root check lets apply or not) | `/entries/<i>/name` |
 | `goal_variable_rule_given` | Workflow #455 TK-1 (since 0.12.89): a `variable` entry places a variable only a rule gives (its first declaration, in registry order, writes `given_by: "rule"`; [package-variables.md](package-variables.md), "A variable a rule gives"), which is no person's to set; judged after `goal_variable_unknown`, before the placed variable's packages and block. As for every problem of the file, it applies no entry and the root still runs | `/entries/<i>/name` |
+| `goal_table_unknown` | Workflow #455 RR1 (since 0.12.92): a `records` entry's `table` is no table of the root's `goal-tables.json` that its reader and its references accept (a root without the file too); judged after the reader, while that file is not refused (a refused one's own problems say why, and it applies no records entry) | `/entries/<i>/table` |
 
-`goal_table_unknown`, the word of an `ordered` entry's table, stays registered and is no longer
-given: Workflow #463 V1 replaced the `ordered` entry, and no entry or variable takes a table until
-a later slice brings `from_table` to a variable.
+`goal_table_unknown` was the word of an `ordered` entry's table, which Workflow #463 V1 replaced,
+and no build gave it from 0.12.61 to 0.12.91; since Workflow #455 RR1 it is a `records` entry's
+(the row above).
 
 `goal_governs_irreversible` stays registered and is no longer given (Workflow #455 G-SLx, Runtime
 0.12.78, register [v012-register.md](v012-register.md) §1.501): until 0.12.77 the check refused at
@@ -226,6 +267,12 @@ told of is never passed (`goal_package_unknown`).
 for that game, and a reader of the declaration says why.
 
 ## Who reads it
+
+Workflow #455 RR1: every reader below reads `goal-tables.json` where it reads this file, by the
+same goal check, and gives a records entry's table to it ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
+"Who reads it"); a bundle that carries a version 3 file declares `package` 28 ("Interface"); the
+goal page lists no records entry and an edit of its name is `holds_no_value` ("The records entry").
+Every version 2 word below reads version 3 since.
 
 - **`actinglab standard-pack check --root <game root>`** reads the file beside the other root files
   and lists it in `root_files` (after `display-layout.json`, before `loading.json`). After the
@@ -328,6 +375,24 @@ for that game, and a reader of the declaration says why.
   could read, `no_schedule` for a game without `schedule.json`).
 
 ## Interface
+
+**Version 3, `package` revision 28** (Workflow #455 RR1, Runtime 0.12.92; register §1.535;
+[component-interfaces.md](component-interfaces.md), the `package` row 28, with
+`goal-tables.json`). A bundle whose root holds `goals.json` (every file is version 3 since: the
+installer reads the file's name only) declares `package` [28, 28] (`GOALS_PACKAGE_REVISION` is 28),
+and this build's installer refuses a zip that carries it and declares a maximum below 28
+(`goal_undeclared`, as below for 12 and 14); the installer of an earlier build (its range ending
+below 28) refuses such a bundle through its `package` edge (`interface_edge`), in the plan, before
+the hold and any write. What an earlier Runtime does with a version 3 file: its reader takes the
+file as `malformed` at `/schema_version` (`standard_pack_goals_not_applied`) and the root runs as
+without it. A rollback is not refused for it: no released bundle carries version 3, and an earlier
+installer refuses a bundle that declares 28. `ledger`, `runtime-client`, `actingd-config` and
+`runtime-outcomes` do not move: the records type and its block are no word of `GoalView`, which
+lists no records entry, and every new word is `standard_pack_problem`'s. Between the installation
+of this Runtime and the placement of a root's version 3 file, that root's version 2 file applies
+no entry (its goal page lists none of them; the stored goals stay in effect), so the resource side
+prepares each root's version 3 file, checks it offline, and places it as soon as this release is
+installed.
 
 `package` revision 12 ([component-interfaces.md](component-interfaces.md)): a bundle that carries
 `goals.json` version 1 declares `package` [12, 12] (the contract crate's `GOALS_PACKAGE_REVISION`

@@ -767,7 +767,7 @@ fn v2_fix2_the_root_judgement_gives_each_name_its_word_and_its_cause() {
     ];
     let goals = parse_standard_pack_goals(
         &serde_json::to_vec(&json!({
-            "schema_version": "actingcommand.goals.v2",
+            "schema_version": "actingcommand.goals.v3",
             "game": "neutral",
             "entries": [{"name": "floor", "type": "heading", "title": {"en": "Floor"}}]
         }))

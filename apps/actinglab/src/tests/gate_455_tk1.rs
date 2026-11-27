@@ -45,7 +45,8 @@ fn own_package_range() -> [u64; 2] {
 
 /// Ruling 1: a pack whose variable writes `given_by` needs 26, whatever the member holds; the same
 /// pack without the member needs 14, as before. This build's range is [3, 26] and holds both; an
-/// installer of [3, 25] refuses the zip of 26 at its edge and places the zip of 14.
+/// installer of [3, 25] refuses the zip of 26 at its edge and places the zip of 14. Workflow #455
+/// RR1 (register §1.535) raises this build's range to [3, 28], 26 within it.
 #[test]
 fn tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses_it() {
     let choice = |given_by: Option<Value>| {
@@ -71,7 +72,7 @@ fn tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses
     assert_eq!(revision_of(&choice(None)), VARIABLES_PACKAGE_REVISION);
 
     let own = own_package_range();
-    assert_eq!(own, [3, 26]);
+    assert_eq!(own, [3, 28]);
     let earlier = [3, GIVEN_BY_PACKAGE_REVISION - 1];
     let rule_given = [GIVEN_BY_PACKAGE_REVISION, GIVEN_BY_PACKAGE_REVISION];
     let person_s = [VARIABLES_PACKAGE_REVISION, VARIABLES_PACKAGE_REVISION];

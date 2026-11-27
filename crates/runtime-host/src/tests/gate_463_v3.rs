@@ -95,7 +95,7 @@ fn goals_entries() -> Value {
 }
 
 fn goals() -> StandardPackGoals {
-    let document = json!({"schema_version": "actingcommand.goals.v2", "game": GAME,
+    let document = json!({"schema_version": "actingcommand.goals.v3", "game": GAME,
                           "entries": goals_entries()});
     parse_standard_pack_goals(&serde_json::to_vec(&document).expect("goals bytes"), GAME)
         .unwrap_or_else(|issues| panic!("the fixture goals.json reads: {issues:?}"))
@@ -1636,7 +1636,7 @@ fn v3_host_a_pack_update_leaves_each_stored_value_as_the_design_says() {
 /// The accepted `goals.json` of the fix round's scene: a heading, a resource entry on pool A, the
 /// placement of `pick` and the placement of `missing`, which no package declares.
 fn accepted_goals() -> Value {
-    json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A, "entries": [
+    json!({"schema_version": "actingcommand.goals.v3", "game": GAME_A, "entries": [
         {"name": "group_a", "type": "heading", "title": {"en": "Group A"}},
         {"name": "stock", "type": "resource", "governs": {"pool": POOL_A},
          "title": {"en": "Stock"}},

@@ -213,10 +213,10 @@ fn goal_page(targetable: Vec<TargetableResource>) -> GoalPage {
     }
 }
 
-/// The game's `goals.json`, version 2: one `resource` entry on [`LACKING`] and one on [`POINTS`],
-/// neither carrying a number.
+/// The game's `goals.json`, version 3 since Workflow #455 RR1 (version 2 before it): one
+/// `resource` entry on [`LACKING`] and one on [`POINTS`], neither carrying a number.
 fn declaration() -> StandardPackGoals {
-    let document = json!({"schema_version": "actingcommand.goals.v2", "game": GAME, "entries": [
+    let document = json!({"schema_version": "actingcommand.goals.v3", "game": GAME, "entries": [
         {"name": "lacking", "type": "resource", "governs": {"pool": LACKING},
          "title": {"en": "Material"}},
         {"name": "points", "type": "resource", "governs": {"pool": POINTS},

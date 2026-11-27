@@ -307,8 +307,9 @@ crate::outcome_vocabulary! {
         /// G-R1: an entry's `default` is not a value of its declaration.
         GoalDefaultInvalid => "goal_default_invalid",
         /// G-R1: an `ordered` entry's table is no table of the game root, or a key under its
-        /// `names` no key of that table. Workflow #463 V1 replaced the `ordered` entry, and no
-        /// entry or variable takes a table in it, so nothing gives this word.
+        /// `names` no key of that table. Workflow #463 V1 replaced the `ordered` entry, and
+        /// nothing gave this word until Workflow #455 RR1 (since 0.12.92): a `records` entry's
+        /// table is no table of the root's accepted `goal-tables.json`, at its `table`.
         GoalTableUnknown => "goal_table_unknown",
         /// G-R1: a `resource` entry's `rate` has its ceiling below its floor.
         GoalRateInvalid => "goal_rate_invalid",
@@ -325,7 +326,8 @@ crate::outcome_vocabulary! {
         GoalVariableUnknown => "goal_variable_unknown",
         /// Workflow #463 V1 fix round 3 (since 0.12.61): `goals.json` is version 1, which this
         /// build reads no more (it reads version 2), at its `schema_version`; the file is read no
-        /// further. A version this build does not know yet is `malformed` there.
+        /// further. A version this build does not know yet is `malformed` there. Workflow #455
+        /// RR1 (since 0.12.92): or version 2; the build reads version 3.
         GoalVersionRetired => "goal_version_retired",
         /// Workflow #463 V1: a variable two packages of the root declare with declarations that
         /// are not byte-identical (at each declaration), or whose name an entry of `goals.json`
@@ -355,6 +357,57 @@ crate::outcome_vocabulary! {
         /// variable only a rule gives (`given_by: "rule"` in its declaration), which is no
         /// person's to set, at the entry's `name`.
         GoalVariableRuleGiven => "goal_variable_rule_given",
+        /// Workflow #455 RR1 (since 0.12.92; [`crate::standard_pack_goal_tables`]):
+        /// `goal-tables.json` is larger than 4 MiB, or one of its lists, maps, names, positions or
+        /// counts is outside its limit (a count of 0 too), at what exceeds.
+        TableOutOfLimits => "table_out_of_limits",
+        /// RR1: a table of `goal-tables.json`, or a column of a table, has a name an earlier one
+        /// of its list has, at the later `name`.
+        TableNameDuplicate => "table_name_duplicate",
+        /// RR1: a recipe, a step or a key's `own` names an item `goal-tables.json` does not
+        /// declare, at the name.
+        TableItemUnknown => "table_item_unknown",
+        /// RR1: a step names a role (`@<role>`) that a key which takes the step does not declare
+        /// in its `own`, at the step's member.
+        TableRoleUnknown => "table_role_unknown",
+        /// RR1: a key's `class` is no class of its table, at the `class`.
+        TableClassUnknown => "table_class_unknown",
+        /// RR1: a column's `read`, a sub's reading columns, a class, a key or a prerequisite name
+        /// a column (a reading column of the table's progress lists, a column of the table, or a
+        /// sub of a column) the table does not declare, at the name.
+        TableColumnUnknown => "table_column_unknown",
+        /// RR1: a ladder of fewer than two positions, with a position written twice or not of its
+        /// column's width, or with a count of steps other than one fewer than its positions; a
+        /// class's ladder of a column that is not `per: "class"`; a key's override of a ladder
+        /// its class does not have or of a step that ladder does not have; at the member.
+        TableLadderInvalid => "table_ladder_invalid",
+        /// RR1: an item reaches itself through the recipes (what it is made from and what making
+        /// it costs), at each such item's `recipe`.
+        TableRecipeCycle => "table_recipe_cycle",
+        /// RR1: a column reaches itself through its prerequisites, at each such column's
+        /// `requires`.
+        TableRequiresCycle => "table_requires_cycle",
+        /// RR1: a prerequisite the table cannot hold: it names a column of `per: "sub"` (at its
+        /// `column`), or its position (`at_least`) or its `from` is no position of the ladder it
+        /// speaks of, for a class or a key that has steps in the requiring column (at it).
+        TableRequiresInvalid => "table_requires_invalid",
+        /// RR1: an item with a recipe names no pool (its holding is what taking it apart
+        /// subtracts), at the item.
+        TableRecipeWithoutPool => "table_recipe_without_pool",
+        /// RR1: a progress list's `fact_key` is no key of a list reading (under
+        /// `inventory.list.`, a valid fact key), at it.
+        TableListKeyInvalid => "table_list_key_invalid",
+        /// RR1: a reading column listed twice among a table's progress lists, or twice in one
+        /// `read` or sub, at the later.
+        TableReadingColumnDuplicate => "table_reading_column_duplicate",
+        /// RR1: an item's pool is no pool of the composed `schedule.json`, at its `pool`.
+        TablePoolUnknown => "table_pool_unknown",
+        /// RR1: the pool of an item without a recipe (the one a need lands on) gives a goal no
+        /// step and importance, as `goal_pool_unvalued` judges a pool, at its `pool`.
+        TablePoolUnvalued => "table_pool_unvalued",
+        /// RR1: a bundle zip carries `goal-tables.json` and declares a `package` maximum below
+        /// 28. Refused by the installer's `place` at `interfaces.json`, as `goal_undeclared` is.
+        GoalTablesUndeclared => "goal_tables_undeclared",
     }
 }
 
@@ -430,7 +483,8 @@ pub struct StandardPackRootIssue {
     /// DA-4) [`crate::STANDARD_PACK_DISPLAY_LAYOUT_FILE`], (Workflow #477 PC-1)
     /// [`crate::STANDARD_PACK_CATALOG_FILE`], (Workflow #407 LOAD-1)
     /// [`crate::STANDARD_PACK_LOADING_FILE`] and a pack's [`crate::PACK_LOADING_FILE`], or
-    /// (Workflow #455 G-R1) [`crate::STANDARD_PACK_GOALS_FILE`].
+    /// (Workflow #455 G-R1) [`crate::STANDARD_PACK_GOALS_FILE`], or (Workflow #455 RR1)
+    /// [`crate::STANDARD_PACK_GOAL_TABLES_FILE`].
     pub file: &'static str,
     pub problem: StandardPackProblem,
     pub pointer: String,
@@ -1202,9 +1256,11 @@ pub enum BundleRevisionNeed {
     /// The notices directory `notices/` (Workflow #444 NOTICES-2): revision 10,
     /// `notice_undeclared`.
     Notices,
-    /// `goals.json` (Workflow #455 G-R1; version 2, the version this build reads, since Workflow
-    /// #463 V1 fix round 3): revision 14, `goal_undeclared`.
+    /// `goals.json` (Workflow #455 G-R1; version 2 since Workflow #463 V1 fix round 3; version 3,
+    /// the version this build reads, since Workflow #455 RR1): revision 28, `goal_undeclared`.
     Goals,
+    /// Workflow #455 RR1: `goal-tables.json`: revision 28, `goal_tables_undeclared`.
+    GoalTables,
     /// A pack whose control declaration declares variables (Workflow #463 V1 fix round 1;
     /// [`control_declares_variables`]): revision 14, `variable_undeclared`.
     Variables,
@@ -1212,11 +1268,13 @@ pub enum BundleRevisionNeed {
 
 impl BundleRevisionNeed {
     /// The `package` revision that brought what it names: [`crate::NOTICES_PACKAGE_REVISION`],
-    /// [`crate::GOALS_PACKAGE_REVISION`] or [`crate::VARIABLES_PACKAGE_REVISION`].
+    /// [`crate::GOALS_PACKAGE_REVISION`], [`crate::GOAL_TABLES_PACKAGE_REVISION`] or
+    /// [`crate::VARIABLES_PACKAGE_REVISION`].
     pub const fn revision(self) -> u64 {
         match self {
             Self::Notices => crate::NOTICES_PACKAGE_REVISION,
             Self::Goals => crate::GOALS_PACKAGE_REVISION,
+            Self::GoalTables => crate::GOAL_TABLES_PACKAGE_REVISION,
             Self::Variables => crate::VARIABLES_PACKAGE_REVISION,
         }
     }
@@ -1226,6 +1284,7 @@ impl BundleRevisionNeed {
         match self {
             Self::Notices => StandardPackProblem::NoticeUndeclared,
             Self::Goals => StandardPackProblem::GoalUndeclared,
+            Self::GoalTables => StandardPackProblem::GoalTablesUndeclared,
             Self::Variables => StandardPackProblem::VariableUndeclared,
         }
     }

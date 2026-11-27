@@ -38,7 +38,9 @@ use super::fixture::{BuildSpec, C1, FakeHost, code, live_root, run, speaks, word
 use super::manifest::parse_declaration;
 use crate::agent_channel::Answer as Answered;
 use crate::rescue::{self, Context};
-use actingcommand_contract::{StandardPackProblem, VARIABLES_PACKAGE_REVISION};
+use actingcommand_contract::{
+    GOALS_PACKAGE_REVISION, StandardPackProblem, VARIABLES_PACKAGE_REVISION,
+};
 use actingcommand_lab_ops::initiator::Initiator;
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -75,8 +77,12 @@ const PLAIN_CONTROL: &[u8] = br#"{"package_id": "neutral.pack"}"#;
 /// brought version 1.
 const VERSION_1_BUNDLE_PACKAGE: [u64; 2] = [12, 12];
 /// Fix round 3: what a bundle that carries `goals.json` version 2 declares, the revision that
-/// brought version 2 (the contract crate's `GOALS_PACKAGE_REVISION`).
-const VERSION_2_BUNDLE_PACKAGE: [u64; 2] = [14, 14];
+/// brought version 2 (the contract crate's `GOALS_PACKAGE_REVISION`). Workflow #455 RR1: version
+/// 3, which retired version 2, and its revision 28, the contract crate's constant since.
+const VERSION_2_BUNDLE_PACKAGE: [u64; 2] = [GOALS_PACKAGE_REVISION, GOALS_PACKAGE_REVISION];
+/// Workflow #455 RR1: the `package` range of the installer the test of `goals.json` runs, up to
+/// the revision a bundle that carries the file declares.
+const GOALS_INSTALLER_PACKAGE: [u64; 2] = [3, GOALS_PACKAGE_REVISION];
 
 #[test]
 fn v1_the_build_declares_package_through_revision_14() {
@@ -89,10 +95,10 @@ fn v1_the_build_declares_package_through_revision_14() {
     // §1.473, 0.12.73) to 19, Workflow #463 SEL-2L (register §1.480, 0.12.74) to 20, Workflow
     // #463 SEL-GRID G2 (register §1.491, 0.12.76) to 21, Workflow #428 S168-LK (register §1.500,
     // 0.12.78) to 22, Workflow #455 G-SLx (register §1.501, 0.12.78) to 23, Workflow #477 CV-1
-    // (register §1.507, 0.12.79) to 24, Workflow #477 LR-1 (register §1.513, 0.12.79) to 25 and
-    // Workflow #455 TK-1 (register §1.532, 0.12.89) to 26; the revision this test is about, 14,
-    // stays read.
-    assert_eq!(speaks.get("package"), Some(&[3, 26]));
+    // (register §1.507, 0.12.79) to 24, Workflow #477 LR-1 (register §1.513, 0.12.79) to 25,
+    // Workflow #455 TK-1 (register §1.532, 0.12.89) to 26 and Workflow #455 RR1 (register §1.535,
+    // 0.12.92) to 28; the revision this test is about, 14, stays read.
+    assert_eq!(speaks.get("package"), Some(&[3, 28]));
     assert!(
         speaks
             .get("package")
@@ -369,10 +375,10 @@ fn v1_a_bundle_whose_packs_declare_variables_below_revision_14_is_refused_variab
 }
 
 /// Fix round 3: the bytes of a version 2 `goals.json` of [`GAME`]: one made-up heading. `place`
-/// reads its name only.
+/// reads its name only. Workflow #455 RR1: version 3 since, its entries as they were.
 fn goals_version_2() -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": GAME,
         "entries": [{"name": "stock", "type": "heading", "title": {"en": "Stock"}}]
     }))
@@ -387,12 +393,15 @@ fn goals_version_2() -> Vec<u8> {
 // and its pack declaring no variable, is refused `pack_invalid` caused by
 // `standard_pack_root_invalid` with `goal_undeclared` at its `interfaces.json`, the pointer empty,
 // in the plan: no pause, no journal, nothing in the game root. The same bundle declaring [14, 14]
-// is planned, `goals.json` new and the last root file.
+// is planned, `goals.json` new and the last root file. Workflow #455 RR1 (adapted, its name kept:
+// the requirement retires version 2 and moves the file to 28): the file is version 3, the
+// installer's range [3, 28], and the bundle that is planned declares [28, 28]; [12, 12] is refused
+// as before.
 #[test]
 fn v1_a_bundle_that_carries_goals_version_2_below_revision_14_is_refused_goal_undeclared() {
     let temp = TempDir::new().expect("tempdir");
     let host = FakeHost::new(&temp.path().join("work"));
-    let (root, game_root) = prepared(temp.path(), &host, INSTALLER_PACKAGE);
+    let (root, game_root) = prepared(temp.path(), &host, GOALS_INSTALLER_PACKAGE);
     let before = journal_count(&root);
     let goals = goals_version_2();
     let zip = temp.path().join("neutral-goals-at-12.zip");

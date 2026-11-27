@@ -290,7 +290,8 @@ pub(crate) fn check_edit(
 /// order:
 ///
 /// 1. an entry of the accepted `goals.json`: a `heading` or a `note` holds no value
-///    (`holds_no_value`); a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
+///    (`holds_no_value`), and neither does (Workflow #455 RR1) a `records` entry until the slice
+///    that stores records; a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
 ///    its pool, as an other target does (below); a `variable` placement is the variable of its
 ///    name (2);
 /// 2. Workflow #455 TK-1: a variable only a rule gives, of a bound package or of the root:
@@ -312,7 +313,11 @@ fn check_set(
     set_by: VariableSetBy,
 ) -> Result<GoalRecordEdit, GoalRefusal> {
     match declared {
-        Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => {
+        // Workflow #455 RR1: a records entry is declared and holds no value until the slice that
+        // stores records: the word of an entry that holds none.
+        Some(
+            DeclaredGoalKind::Heading | DeclaredGoalKind::Note | DeclaredGoalKind::Records { .. },
+        ) => {
             return Err(GoalRefusal::new(GoalProblem::HoldsNoValue));
         }
         Some(DeclaredGoalKind::Tier { .. }) => {
@@ -397,7 +402,10 @@ fn check_clear(
         });
     }
     let problem = match declared {
-        Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => GoalProblem::HoldsNoValue,
+        // Workflow #455 RR1: a records entry holds no value until the slice that stores records.
+        Some(
+            DeclaredGoalKind::Heading | DeclaredGoalKind::Note | DeclaredGoalKind::Records { .. },
+        ) => GoalProblem::HoldsNoValue,
         Some(DeclaredGoalKind::Tier { .. }) => GoalProblem::TierNotBuilt,
         Some(DeclaredGoalKind::Resource { .. }) => GoalProblem::ValueNotSet,
         Some(DeclaredGoalKind::Variable) | None if page.rule_given(name) => GoalProblem::RuleGiven,
@@ -703,6 +711,9 @@ pub(crate) fn view_entries(
     {
         let raw_entry = Some(declared_entry(declared));
         let entry = match &declared.kind {
+            // Workflow #455 RR1 (ruling 7): a records entry is not listed: a client of today's
+            // `runtime-client` revision reads the page as it was without it.
+            DeclaredGoalKind::Records { .. } => continue,
             DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {
                 let entry_type = if declared.kind == DeclaredGoalKind::Heading {
                     GoalEntryType::Heading
@@ -1061,6 +1072,11 @@ pub(crate) fn declared_entry(goal: &DeclaredGoal) -> Value {
                 ),
             );
             entry.insert("default".to_owned(), Value::String(default.clone()));
+        }
+        // Workflow #455 RR1: as its reader read it (the view lists no records entry).
+        DeclaredGoalKind::Records { table, max_records } => {
+            entry.insert("table".to_owned(), Value::String(table.clone()));
+            entry.insert("max_records".to_owned(), Value::from(*max_records));
         }
         DeclaredGoalKind::Heading | DeclaredGoalKind::Note | DeclaredGoalKind::Variable => {}
     }

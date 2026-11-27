@@ -248,7 +248,9 @@ pub use adopt::OtherPackagesWarnings;
 pub use adopt::{AdoptStage, AdoptStageTime, AdoptTimings};
 pub use api::*;
 pub use authoring::*;
-pub use bundle_goals::{BundleGoals, BundleGoalsRequest, BundleGoalsVerdict, check_bundle_goals};
+pub use bundle_goals::{
+    BundleGoalFile, BundleGoals, BundleGoalsRequest, BundleGoalsVerdict, check_bundle_goals,
+};
 pub use business_catalog::*;
 // Workflow #463 AC-1: the word of the cases an adoption took.
 pub use codes::AdoptCasesState;

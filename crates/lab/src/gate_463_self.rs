@@ -1119,7 +1119,7 @@ fn installed(temp: &Path, name: &str, variables: Option<&Value>) -> PathBuf {
     write_json(
         &game_root.join("goals.json"),
         &json!({
-            "schema_version": "actingcommand.goals.v2",
+            "schema_version": "actingcommand.goals.v3",
             "game": "neutral",
             "entries": [
                 {"name": "picks", "type": "heading", "title": {"en": "Picks"}},
