@@ -68,7 +68,11 @@ The document has exactly the members `schema_version`, `game` and `entries`.
 - **Governs** (`governs`): what the entry sets a goal on, required for `resource` and `tier` and
   absent for the other types. A `resource` entry names one pool of `schedule.json`; a `tier` entry
   1 to 32 rules of `schedule.json`. Each id is 1 to 128 bytes without a control character and named
-  once in its list. The `governs` object holds exactly the member its type takes.
+  once in its list. The `governs` object holds exactly the member its type takes. A `resource`
+  entry's pool is the file's id on every instance of the game: on a game with two instances the
+  composition names each instance's copy `<id>@<alias>`, and a goal set on the entry still names
+  the file's id, which the Runtime reads as that instance's copy (#503 GOAL-1, since 0.12.88;
+  [resource-targets.md](resource-targets.md), "A target's pool").
 - **Default**: written in the file, never a pointer into the schedule. A `resource` entry's default
   is "no goal": it writes no `default`.
 

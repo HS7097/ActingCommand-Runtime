@@ -17359,9 +17359,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host reports resource targets record invalid.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A session.resource_targets record the Runtime built is not one its readers take. In EditGoal (#503 GOAL-1, since 0.12.88; contracts/runtime-interface.md, \"Goal request kinds\") it is the refusal of that request alone, Denied with runtime_code invalid_request, when the record the edit composed does not read back: nothing is appended, the stored record is as it was, nothing is latched and the Runtime goes on; the daemon writes its ERROR line. Elsewhere (the fact record of an EditGoal or an ApplyResourceTargets that the Runtime could not encode, a publication of the key that is not one instance's record) it is fatal, a fault of the Runtime only. Until 0.12.88 the EditGoal case was fatal too and stopped the Runtime.",
+      "common_causes": "A fault of the Runtime's composition of a goal record; until 0.12.88, an EditGoal whose target named its pool by a composed copy's id.",
+      "handling": "In EditGoal: read the goal page and send the request again; if it is refused again, report it with the daemon's ERROR line. A fatal one stops the Runtime as every fatal condition does."
     },
     "restore_artifact_size_overflow": {
       "category": "error",

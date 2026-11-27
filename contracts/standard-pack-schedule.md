@@ -765,6 +765,10 @@ pure: its caller reads the packages.
    `continues_from` gains `<id>` (Workflow #372 K5), so a later change from one instance to two
    keeps the first instance's budgets. Copies are counted per item: with instances on two
    servers of one game, a pool, profile or event without `server` has two copies and is suffixed.
+   The suffix is the composition's alone: a goal, a resource target and an instance's pool lines
+   name a pool by the file's id, and the Runtime reads that id as the instance's copy (#503
+   GOAL-1, since 0.12.88, [resource-targets.md](resource-targets.md), "A target's pool";
+   [scheduling/README.md](scheduling/README.md), "Lines for one instance").
 5. **Join and compile**: one V2 catalog `{catalog_id: "standard-packs", catalog_version,
    approval_refs: []}` of the games in name order, compiled by the catalog compiler with the
    4 MiB catalog bound for each document instead of 1 MiB (`compile_composed_catalog`). Two

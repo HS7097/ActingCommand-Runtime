@@ -28,7 +28,8 @@ use super::{
     ResourceTargetsDocumentV2, ResourceTargetsError, RowsDecodeError, TargetApplicationV2,
     TargetCondition, TargetMode, TargetObservation, TargetPolicyState, TargetRule, TargetWeight,
     check_target_v2, declaration_rejection, decode_rows_v2, encode_rows_v2, manual_offset_name,
-    mode_name, observe_target, present, rejected_at, rule_name, valid_identifier, weight_name,
+    mode_name, observe_target, present, rejected_at, rule_name, target_pool, valid_identifier,
+    weight_name,
 };
 use crate::canonical::canonical_serialized;
 use crate::codes::PolicyCode;
@@ -1200,7 +1201,8 @@ pub fn stored_v3_entries(
 
 /// The tasks of `instance` that lapsed v3 targets covered, each with the lifetime of the first
 /// such target in document order: a task whose scope covers the instance and one run of which
-/// produces the target's pool, among the target's named tasks when it names some. An expired v2
+/// produces the target's pool (#503 GOAL-1: the pool `target_pool` gives its `resource`, when its
+/// scope covers the instance), among the target's named tasks when it names some. An expired v2
 /// policy names them on its candidates; under a v3 record whose other targets still weigh they
 /// carry the same reason.
 pub(super) fn lapsed_coverage(
@@ -1211,10 +1213,9 @@ pub(super) fn lapsed_coverage(
     let bundle = catalog.catalog();
     let mut covered = BTreeMap::new();
     for lapsed in lapsed {
-        let Some(pool) = bundle.pools.pools.iter().find(|pool| {
-            pool.id == lapsed.target.resource
-                && crate::evaluator::scope_matches_instance(&pool.scope, instance)
-        }) else {
+        let Some(pool) = target_pool(catalog, &lapsed.target.resource, instance)
+            .filter(|pool| crate::evaluator::scope_matches_instance(&pool.scope, instance))
+        else {
             continue;
         };
         for task in &bundle.tasks.tasks {
@@ -1428,7 +1429,9 @@ pub enum GoalRecordRefusal {
     /// The edited record would hold more entries than a record keeps
     /// ([`MAX_RESOURCE_TARGET_ENTRIES`]).
     EntriesFull,
-    /// The edited record is no record the v3 reader reads back: an internal fault.
+    /// The edited record is no record the v3 reader reads back: an internal fault. #503 GOAL-1
+    /// (0.12.88): nothing is written, so the host refuses the one request
+    /// (`resource_targets_record_invalid`) and the Runtime goes on.
     Inconsistent,
 }
 
@@ -1630,7 +1633,9 @@ pub fn goal_entry_value_fits(value: &serde_json::Value) -> Result<(), GoalRecord
 /// Workflow #463 V3: the capacity the pool `pool_id` of `catalog` that covers `instance` is held
 /// to in `facts` at `time`, read as the evaluator reads it (a capacity the catalog writes, or the
 /// one its capacity fact gives); `None` when the catalog has no such pool or its capacity fact
-/// gives none.
+/// gives none. #503 GOAL-1: `pool_id` names the pool as a target does, as the game root's files
+/// write it (`target_pool`), so a composed copy's capacity is read under the name the goal page
+/// lists it by.
 pub fn pool_capacity(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -1638,9 +1643,8 @@ pub fn pool_capacity(
     pool_id: &str,
     time: EvaluationTime,
 ) -> Option<u64> {
-    let pool = catalog.catalog().pools.pools.iter().find(|pool| {
-        pool.id == pool_id && crate::evaluator::scope_matches_instance(&pool.scope, instance)
-    })?;
+    let pool = target_pool(catalog, pool_id, instance)
+        .filter(|pool| crate::evaluator::scope_matches_instance(&pool.scope, instance))?;
     crate::evaluator::pool_bound(pool, facts, time)
         .ok()
         .map(crate::evaluator::PoolBound::capacity)

@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use actingcommand_contract::resource_effect::scheduling_identifier;
 use actingcommand_contract::{
     DeclaredGoal, DeclaredGoalKind, DefaultOrigin, GoalEntryState, GoalEntryType, GoalOrphan,
     GoalProblem, GoalResourceState, GoalSetBy, GoalText, GoalUnit, GoalValueSource,
@@ -497,11 +498,13 @@ fn item_at(variable: &PackageVariable, value: &Value, word: GoalProblem) -> Opti
 /// Workflow #463 V3: a resource value, the `at_least` it holds, or why it is refused. For a
 /// resource entry (`pool` its `governs.pool`) the value is `{at_least}`; for an other target it is
 /// `{resource, at_least}`. Every other member is `wrong_type` at it, but `by_unix_ms`, which is
-/// `deadline_unsupported`; `at_least` is a whole number (else `wrong_type`) from 1 to the safe
-/// integers and not above the pool's capacity when its capacity reads one (else `out_of_range`);
-/// the pool is one the application can target (else `pool_not_targetable`) that gives the step and
-/// the importance a goal by name does not carry, by its valuation or (#455 B3-P) its
-/// `target_defaults`, as the targetable list says (else `pool_unvalued`).
+/// `deadline_unsupported`; #503 GOAL-1: `resource` is a pool's id as the game root's files write
+/// it, a scheduling identifier (else `wrong_type` at `/resource`); `at_least` is a whole number
+/// (else `wrong_type`) from 1 to the safe integers and not above the pool's capacity when its
+/// capacity reads one (else `out_of_range`); the pool is one the application can target (else
+/// `pool_not_targetable`: the targetable list names each pool of the application by that same id)
+/// that gives the step and the importance a goal by name does not carry, by its valuation or
+/// (#455 B3-P) its `target_defaults`, as the targetable list says (else `pool_unvalued`).
 pub(crate) fn check_target(
     page: &GoalPage,
     value: &Value,
@@ -530,8 +533,11 @@ pub(crate) fn check_target(
     }
     let pool = match pool {
         Some(pool) => pool.clone(),
+        // #503 GOAL-1 (ruling 4): a pool is named as the game root's files write it, a scheduling
+        // identifier, the one form the record keeps; any other text (a composed copy's id
+        // `<id>@<alias>` among them) is refused here, before anything is composed.
         None => match members.get("resource") {
-            Some(Value::String(resource)) => resource.clone(),
+            Some(Value::String(resource)) if scheduling_identifier(resource) => resource.clone(),
             _ => return Err(GoalRefusal::new(GoalProblem::WrongType).at("/resource")),
         },
     };

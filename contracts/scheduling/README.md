@@ -2807,7 +2807,9 @@ Alice's words. "The trigger line" and "A pool its lines cannot spend" are built 
     holds that carry no lines (`capped_cap_unknown`, `capped_round_empty`, and the
     `capped_not_head` of a block candidate behind its dispatched head) carry none. The
     instance's set names the pool by its id in the instance's `schedule.json`: the evaluation
-    takes it for the catalog pool of that id, or for the instance's copy `<id>@<alias>`.
+    takes it for the catalog pool of that id, or for the instance's copy `<id>@<alias>`. A
+    resource target names its pool by the same rule (#503 GOAL-1, since 0.12.88;
+    [../resource-targets.md](../resource-targets.md), "A target's pool").
   - It replaces the design's SS-2h-c (an optional member `pool_lines` of the resource-targets v3
     document through `ApplyResourceTargets`, waiting for R-13a; design
     `rd-1031/design-c424-redline-1109.md` §4.3).

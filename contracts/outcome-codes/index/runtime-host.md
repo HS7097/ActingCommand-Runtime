@@ -1006,7 +1006,7 @@ hand. The [summary](README.md) says what each column means. 1192 codes.
 | `resource_target_view_policy_unreadable` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports resource target view policy unreadable. |
 | `resource_targets_formal_entry_required` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports resource targets formal entry required. |
 | `resource_targets_key_reserved` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports resource targets key reserved. |
-| `resource_targets_record_invalid` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports resource targets record invalid. |
+| `resource_targets_record_invalid` | error | none | 0.12.0 | active | pending | written | A session.resource_targets record the Runtime built is not one its readers take. |
 | `resource_targets_rejected` | error | none | 0.12.0 | active | pending | TBD | An ApplyResourceTargets document was refused with field-positioned rejections. |
 | `restore_artifact_size_overflow` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports restore artifact size overflow. |
 | `restore_source_changed` | error | none | 0.12.0 | active | pending | TBD | The Runtime host reports restore source changed. |

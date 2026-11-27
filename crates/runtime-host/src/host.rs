@@ -2462,6 +2462,8 @@ impl RuntimeHost {
             #[cfg(test)]
             refused_close_record_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
+            unreadable_goal_edit_for_test: AtomicBool::new(false),
+            #[cfg(test)]
             resource_close_hook_for_test: Mutex::new(None),
             #[cfg(test)]
             ladder_hand_offs_withheld_for_test: AtomicU64::new(0),
@@ -7680,6 +7682,10 @@ struct HostShared {
     // fence its instance cannot be appended (the ledger's failure, the Runtime's own).
     #[cfg(test)]
     refused_close_record_failure_for_test: AtomicBool,
+    // #503 GOAL-1, test only: while set, the record an `EditGoal` that sets a target composes does
+    // not read back (`HostShared::unreadable_edit_for_test`).
+    #[cfg(test)]
+    unreadable_goal_edit_for_test: AtomicBool,
     // Workflow #475, test only: the hook the next close of an instance's resources that finds a
     // session to close runs once, before it asks its write authority (`retire_instance_resources`).
     #[cfg(test)]

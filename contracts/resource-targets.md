@@ -192,7 +192,7 @@ mismatches are refused with a line and column.
 | `valid_until_unix_ms` | required when `targets` is non-empty, with `now < v <= now + 31_536_000_000`; absent when `targets` is empty | `missing_field` / `validity_out_of_range` / `invalid_value` @ `/valid_until_unix_ms` |
 | `targets` | `0..=16` entries; `[]` withdraws every target | `out_of_range` @ `/targets` |
 | `targets[i].id` | scheduling identifier `^[a-z0-9][a-z0-9._:-]*$`, at most 128 bytes, unique in the document | `invalid_value` / `duplicate_id` @ `/targets/i/id` |
-| `resource` | a pool id of the active catalog whose `observation` is `fact` with a `fact_key` of the `resource.` or `inventory.` family, or (#455 P2, since 0.12.79) `list_rows` (its list's key under `inventory.list.`; "A pool read from rows of a list" below), and whose scope covers the instance | `unknown_resource` / `resource_not_observable` / `resource_out_of_scope` @ `/targets/i/resource` |
+| `resource` | a pool of the active catalog, named as the game root's files write its id (#503 GOAL-1, since 0.12.88: "A target's pool" below), whose `observation` is `fact` with a `fact_key` of the `resource.` or `inventory.` family, or (#455 P2, since 0.12.79) `list_rows` (its list's key under `inventory.list.`; "A pool read from rows of a list" below), and whose scope covers the instance | `unknown_resource` / `resource_not_observable` / `resource_out_of_scope` @ `/targets/i/resource` |
 | `condition` | `{"kind": "at_least", "amount": 1..=2^53-1}`, the only v1 condition | `invalid_type` / `out_of_range` @ `/targets/i/condition/amount` |
 | `scale` | `1..=2^53-1`: the gap at which the target weight equals `importance_milli` | `out_of_range` @ `/targets/i/scale` |
 | `importance_milli` | `1..=1_000_000` | `out_of_range` @ `/targets/i/importance_milli` |
@@ -230,6 +230,41 @@ document order its resource and then its tasks.
 The policy identity `policy_sha256` is `sha256:<hex>` of the policy crate's canonical
 serialization of the document (sorted keys, no whitespace), so documents that differ only in
 key order or whitespace are the same policy.
+
+### A target's pool
+
+#503 GOAL-1 (since 0.12.88; register §1.531). A target names its pool as the game root's files
+write it: its `resource` is the pool's id in the instance's `schedule.json` (the id a `goals.json`
+resource entry's `governs.pool` names), in catalog mode the catalog's id, a scheduling identifier;
+so in a document of every version, in an `EditGoal` value and in the stored record. The
+composition gives a pool it copies to two or more instances the id `<id>@<alias>` in each copy
+([standard-pack-schedule.md](standard-pack-schedule.md), composition step 4, "Ids"): that suffix
+comes of how many instances the installation has, is not what a person said, and is never stored.
+
+For one instance, the pool a target's `resource` names is the catalog pool of that id whose scope
+covers the instance, else the instance's copy `<id>@<alias>`, else the first catalog pool the files
+name so (whose scope then refuses it, `resource_out_of_scope`); a text that is no scheduling
+identifier, a copy's id among them, names no pool (`unknown_resource`). It is the rule the lines
+given for one instance read a pool by ([scheduling/README.md](scheduling/README.md), "Lines for one
+instance"). One function of the policy crate gives that pool, and every reader of a target's
+`resource` takes it from there: a document's check, the targetable lists below, the conditions of
+the view and of a receipt, the goal page's check and capacity ("One value by name"), and every
+evaluation that applies a target, scores its tasks, or names the tasks an expired or lapsed target
+would have weighed. A record therefore holds the same bytes on a game with one instance and on a
+game with two, and a record written while the game had one instance names the same pool after a
+second is added, and the other way round; the record's format does not change.
+
+A copy's id is no scheduling identifier, so no record can hold one, and a document that names one
+is refused `unknown_resource` @ `/targets/i/resource`. Until 0.12.88 a v2 or v3 document that named
+the instance's own copy was taken and left a record its reader refuses (`malformed_rows`), and one
+that named another instance's copy was `resource_out_of_scope`. A target's `tasks` name the
+catalog's task ids, as before; a copy's id there is no identifier either and is refused
+`unknown_task` @ `/targets/i/tasks/j` (naming a rule as the file writes it is not built, register
+§1.531). A condition (of the view's `active`, of a v1 or v2 receipt) names, as before, the catalog
+pool its target resolved to: on a game with two instances that is the instance's copy. On a game
+with one instance every stored byte and every evaluation is as before, and so is every answer but
+one: an `EditGoal` value whose `resource` is no identifier is `wrong_type` at `/resource`, where it
+was `pool_not_targetable` ("One value by name").
 
 ## Document `actingcommand.resource-targets.v2`
 
@@ -645,7 +680,11 @@ another request wrote with who set them:
   row (a pool that gives neither is refused `pool_unvalued`; "Who gives a goal its step and
   importance"), no tasks and no lifetime; it replaces the target on that pool
   whatever its id (the answer's `replaced_target_id`) and a target of the same id on another pool.
-  `clear` removes the target and its task rows.
+  `clear` removes the target and its task rows. #503 GOAL-1 (since 0.12.88; "A target's pool"):
+  the row's `resource` is the pool's id as the game root's files write it, the resource entry's
+  `governs.pool` or the other target's `resource`; an other target's `resource` that is no pool
+  identifier (a composed copy's id among them) is refused `wrong_type` at `/resource`, one that
+  no pool of the instance has `pool_not_targetable`, both before anything is composed.
 - **Over a v2 policy** its targets become v3 targets with the policy's lifetime and no setter, as
   under a v2 document applied over a v3 record; a v1 policy or rows no reader reads are refused
   `record_unreadable`; a record left with no target and no entry is the withdrawal.
@@ -655,7 +694,11 @@ another request wrote with who set them:
   gate first; only then are the name and the value checked against the record about to change.
 
 The whole record is read back by the v3 reader before it is published, as one `fact.published`
-keeping the request's origin, under the fact write gate.
+keeping the request's origin, under the fact write gate. #503 GOAL-1 (since 0.12.88): a composed
+record that does not read back is a refusal of that request, Denied with
+`resource_targets_record_invalid` (an error; its daemon line is written), nothing appended and the
+stored record as it was; it latches nothing, so the Runtime and its other instances go on. Until
+0.12.88 it was fatal and stopped the Runtime.
 
 ## Evaluation
 
@@ -1126,7 +1169,12 @@ between the phases is named by `checked_catalog_hash`.
   its reason. Without an active catalog both lists are empty and `catalog_hash` is absent.
   #455 P2 (since 0.12.79): a pool read from rows of a list is targetable under its list's key,
   its `observation` the reading the host computed under the same locks ("A pool read from rows
-  of a list" below).
+  of a list" below). #503 GOAL-1 (since 0.12.88; "A target's pool"): each list names a pool by
+  the one form a target takes, its id as the game root's files write it, each once, and judges it
+  as a target of that name: an instance's own copy is listed under the file's id; another
+  instance's copy of a pool this instance has is no second pool of the instance and is not
+  listed; the copies of a pool of other instances are one entry, by the file's id, with the
+  reason a target of that name meets. With no copy in the catalog the lists are as before.
 - `active` is the instance's stored policy as the evaluator reads it (the v1 or v2 row decoders
   and the active or expired state), with the `fact.published` event that holds it (`version`,
   `event_id`), `expired` once `valid_until_unix_ms` has passed, the targets in document form

@@ -1680,3 +1680,12 @@ tests = [
     "actingcommand-policy::lib::tests::gate_486_asleep::asleep5_t6_of_two_instances_the_awake_one_decides_as_before_and_the_asleep_one_adds_no_wake",
 ]
 incident = ["#486", "ASLEEP-5"]
+
+# #503 GOAL-1 (0.12.88; register §1.531; contracts/resource-targets.md, "A target's pool"), the policy half, on a neutral V2 catalogue written as the composer writes it (one instance: the file's ids; two: each instance's copies <id>@<alias>), one valued pool read from its fact (10 on each instance) and one hourly task producing it, no clock read: the same stored rows (a v3 record of A's target on the pool by the file's id, at least 50) under the catalogue for one instance and for two give A's pool: the view's condition on it computed, gap 40; the capacity the goal page reads under the file's id; A's targetable list names the pool once by the file's id with A's task and lists nothing it cannot target; the evaluation applies the target to A's task, gap 40; for two, B's list names the same pool by the same id with B's task, B has no record and B's task no target (t4); a v3 document of A naming the pool by the file's id is taken, its condition on A's copy; one naming A's or B's copy id is unknown_resource at /targets/0/resource; a task named by a copy id unknown_task at /targets/0/tasks/0 (t5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_503_goal1::goal1_t4_the_same_rows_give_the_instances_pool_for_one_instance_and_for_two",
+    "actingcommand-policy::lib::tests::gate_503_goal1::goal1_t5_a_document_names_the_files_id_and_a_copy_id_is_refused",
+]
+incident = ["#503 GOAL-1"]

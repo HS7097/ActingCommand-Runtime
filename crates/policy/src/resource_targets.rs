@@ -98,7 +98,8 @@ pub struct ResourceTargetsDocument {
 #[serde(deny_unknown_fields)]
 pub struct ResourceTargetSpec {
     pub id: String,
-    /// A pool id of the active catalog.
+    /// A pool as the game root's files write its id (#503 GOAL-1: `target_pool` gives its
+    /// catalog pool for the instance).
     pub resource: String,
     pub condition: TargetCondition,
     /// The gap at which the target weight equals `importance_milli`.
@@ -168,7 +169,8 @@ pub struct ResourceTargetsDocumentV2 {
 #[serde(deny_unknown_fields)]
 pub struct ResourceTargetSpecV2 {
     pub id: String,
-    /// A pool id of the active catalog, named by at most one target of the document.
+    /// A pool as the game root's files write its id (#503 GOAL-1), named by at most one target of
+    /// the document.
     pub resource: String,
     pub condition: TargetCondition,
     /// The gap step `S`; absent takes the pool's `valuation.scale`, else (#455 B3-P) its
@@ -852,20 +854,50 @@ pub(crate) fn resolve_target<'a>(
     })
 }
 
-/// The pool half of [`resolve_target`]: the target's pool `resource` and its inventory fact
-/// key, or the refusal at `/resource`.
+/// #503 GOAL-1 (0.12.88; `contracts/resource-targets.md`, "A target's pool"): the id the game
+/// root's files give the catalog pool `pool_id`. The composition names a pool it copies to two or
+/// more instances `<id>@<alias>` in each copy; such a copy's id is `<id>`, every other id is itself.
+fn file_pool_id(pool_id: &str) -> &str {
+    pool_id.split_once('@').map_or(pool_id, |(id, _)| id)
+}
+
+/// #503 GOAL-1 (0.12.88; `contracts/resource-targets.md`, "A target's pool"): the one function that
+/// gives the catalog pool a target's `resource` names for `instance`. A target names its pool as the
+/// game root's files write it, a scheduling identifier: for the instance that is the catalog pool of
+/// that id whose scope covers it, else the instance's composed copy `<id>@<alias>` (the rule
+/// `InstancePoolLines` reads the per-instance lines by), else the first pool of the catalog the files
+/// name so (whose scope then refuses it). A text that is no identifier, a copy's id among them, names
+/// no pool. With no copy in the catalog this is the pool of that id, as before. Every reader of a
+/// target's `resource` takes its pool from here: [`resolve_target_pool`] (the entry check of a
+/// document, the targetable list, the view's conditions and the evaluation), [`weighed_tasks`],
+/// `v3::lapsed_coverage` and `v3::pool_capacity`.
+pub(crate) fn target_pool<'a>(
+    catalog: &'a CompiledCatalog,
+    resource: &str,
+    instance: &InstanceSnapshot,
+) -> Option<&'a PoolSpec> {
+    if !valid_identifier(resource) {
+        return None;
+    }
+    let pools = &catalog.catalog().pools.pools;
+    let copy = format!("{resource}@{}", instance.instance_id);
+    pools
+        .iter()
+        .find(|pool| pool.id == resource && scope_matches_instance(&pool.scope, instance))
+        .or_else(|| pools.iter().find(|pool| pool.id == copy))
+        .or_else(|| pools.iter().find(|pool| file_pool_id(&pool.id) == resource))
+}
+
+/// The pool half of [`resolve_target`]: the target's pool `resource` (#503 GOAL-1: as
+/// [`target_pool`] gives it for `instance`) and its inventory fact key, or the refusal at
+/// `/resource`.
 pub(crate) fn resolve_target_pool<'a>(
     catalog: &'a CompiledCatalog,
     resource: &str,
     instance: &InstanceSnapshot,
 ) -> Result<(&'a PoolSpec, String), (ResourceTargetsRejectionReason, String)> {
     use ResourceTargetsRejectionReason as Reason;
-    let pool = catalog
-        .catalog()
-        .pools
-        .pools
-        .iter()
-        .find(|pool| pool.id == resource)
+    let pool = target_pool(catalog, resource, instance)
         .ok_or_else(|| (Reason::UnknownResource, "/resource".to_owned()))?;
     // #455 P2 (register §1.505, ruling 7): a pool read from rows of a list is observable, under
     // its list's key; its inventory is the reading the host gave it ([`observe_target`]).
@@ -927,13 +959,19 @@ pub(crate) fn per_run_yield(produces: &[ResourceEffectSpec], pool_id: &str) -> u
 }
 
 /// The catalog task `task_id` when it exists, its scope covers `instance` and no instance
-/// override of `instance` disables it.
+/// override of `instance` disables it. #503 GOAL-1 (ruling 3): a target names a task by a
+/// scheduling identifier, as a record keeps it; a composed copy's id `<id>@<alias>` is none, so it
+/// is `unknown_task`, never a row the record's reader refuses. Naming a rule as the file writes it
+/// is left: the readers of `tasks` compare it with the catalog's task ids in more places than this.
 fn target_task<'a>(
     catalog: &'a CompiledCatalog,
     task_id: &str,
     instance: &InstanceSnapshot,
 ) -> Result<&'a TaskSpec, ResourceTargetsRejectionReason> {
     use ResourceTargetsRejectionReason as Reason;
+    if !valid_identifier(task_id) {
+        return Err(Reason::UnknownTask);
+    }
     let task = catalog
         .catalog()
         .tasks
@@ -1883,7 +1921,8 @@ fn stored_policy_state_v2(
 /// targetable with that reason; every other pool is, with its producing tasks, the defaults its
 /// valuation supplies, else (#455 B3-P) its `target_defaults` (as [`target_terms`] reads them,
 /// [`pool_target_terms`]), and its inventory as the time-validity projection of `facts` shows it
-/// ([`observe_target`]). Pure.
+/// ([`observe_target`]). #503 GOAL-1: each pool once, named as the game root's files write it
+/// (a composed copy without `@<alias>`), the name a target takes. Pure.
 pub fn targetable_resources(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -1915,12 +1954,22 @@ pub fn targetable_resources_with_readings(
         .map_err(ResourceTargetsError::Evaluation)?;
     let mut targetable = Vec::new();
     let mut not_targetable = Vec::new();
+    // #503 GOAL-1 (rulings 1 and 2): each pool is named once, as the game root's files write it,
+    // the name a target takes, and judged as a target of that name is ([`target_pool`]): another
+    // instance's copy of a pool this instance has is no second pool of the instance, and the copies
+    // of a pool of other instances are one name. With no copy in the catalog every name is a pool's
+    // id, each once, as before.
+    let mut named = BTreeSet::new();
     for declared in &catalog.catalog().pools.pools {
-        let (pool, fact_key) = match resolve_target_pool(catalog, &declared.id, instance) {
+        let resource = file_pool_id(&declared.id);
+        if !named.insert(resource) {
+            continue;
+        }
+        let (pool, fact_key) = match resolve_target_pool(catalog, resource, instance) {
             Ok(resolved) => resolved,
             Err((reason, _)) => {
                 not_targetable.push(NotTargetableResource {
-                    resource: declared.id.clone(),
+                    resource: resource.to_owned(),
                     reason,
                 });
                 continue;
@@ -1938,7 +1987,7 @@ pub fn targetable_resources_with_readings(
             .collect::<Vec<_>>();
         if producing_tasks.is_empty() {
             not_targetable.push(NotTargetableResource {
-                resource: pool.id.clone(),
+                resource: resource.to_owned(),
                 reason: ResourceTargetsRejectionReason::UnmappedTask,
             });
             continue;
@@ -1963,7 +2012,7 @@ pub fn targetable_resources_with_readings(
             },
         };
         targetable.push(TargetableResource {
-            resource: pool.id.clone(),
+            resource: resource.to_owned(),
             fact_key,
             producing_tasks,
             default_scale,
@@ -2954,14 +3003,21 @@ fn weigh_production(
 }
 
 /// The tasks of `instance` that an active v2 policy with `targets` would weigh: those producing
-/// a pool that covers the instance and either declares a valuation or is the resource of a
-/// target covering the task. An expired policy names exactly them.
+/// a pool that covers the instance and either declares a valuation or is the pool of a target
+/// covering the task (#503 GOAL-1: the pool [`target_pool`] gives the target's `resource`, once
+/// per target). An expired policy names exactly them.
 fn weighed_tasks(
     catalog: &CompiledCatalog,
     instance: &InstanceSnapshot,
     targets: &[ResourceTargetSpecV2],
 ) -> BTreeSet<String> {
     let bundle = catalog.catalog();
+    let targeted = targets
+        .iter()
+        .filter_map(|target| {
+            target_pool(catalog, &target.resource, instance).map(|pool| (pool.id.as_str(), target))
+        })
+        .collect::<Vec<_>>();
     bundle
         .tasks
         .tasks
@@ -2972,8 +3028,8 @@ fn weighed_tasks(
                 scope_matches_instance(&pool.scope, instance)
                     && per_run_production(task, &pool.id) >= 1
                     && (pool.declared_valuation().is_some()
-                        || targets.iter().any(|target| {
-                            target.resource == pool.id
+                        || targeted.iter().any(|(pool_id, target)| {
+                            *pool_id == pool.id
                                 && target
                                     .tasks
                                     .as_ref()
