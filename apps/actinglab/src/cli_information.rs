@@ -166,7 +166,8 @@ pub(super) fn help_data() -> Value {
                 "--display-layout <display-layout.json> (the display declaration: checked as the Runtime reads it, laid beside bundle.json)",
                 "--loading <loading.json> (the game's loading pages: every pack's loading copy checked as package loading --check checks it, laid beside bundle.json with its loading/ templates; without it a pack that carries a copy is refused)",
                 "--notices <directory> (the package author's notice texts: every file held to the notices rules before anything is written, laid byte for byte into notices/ beside bundle.json; not listed in bundle.json)",
-                "--goals <goals.json> (the goal entries the game offers: read after the composition and held to the bundle's pools, rules and packages, laid beside bundle.json; a refused file refuses the bundle)"
+                "--goals <goals.json> (the goal entries the game offers: read after the composition and held to the bundle's pools, rules and packages, laid beside bundle.json; a refused file refuses the bundle)",
+                "--goal-tables <goal-tables.json> (the game's rules for raising, whose tables a records entry names: read after the composition and held to the bundle's pools, laid beside bundle.json; a refused file refuses the bundle)"
             ],
             "package loading": [
                 "--root-file <loading.json> (the game's loading pages; their templates in the loading/ directory beside it)",

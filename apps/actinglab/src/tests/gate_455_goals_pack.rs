@@ -219,7 +219,7 @@ impl Fixture {
 /// root.
 fn accepted_goals() -> Value {
     json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": "neutral",
         "entries": [
             {"name": "stock", "type": "heading", "title": {"en": "Stock"}},
@@ -234,7 +234,7 @@ fn accepted_goals() -> Value {
 /// variable no pack declares.
 fn refused_goals() -> Value {
     json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": "neutral",
         "entries": [
             {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
@@ -402,11 +402,12 @@ fn goals_pack_a_repository_without_the_file_is_verified_as_before() {
 
 // Test 2: an accepted `goals.json` (a heading and a note): the verification passes; the checkout
 // binds the file to the commit (12 files); the bundle step names it (the game, its path, one
-// heading and one note, every other type 0) among its root files; the zip carries it byte for byte
-// beside `bundle.json` and its `interfaces.json` declares `package` [14, 14]
-// (`GOALS_PACKAGE_REVISION`); the installer's plan takes such a zip: this build's installer range
-// holds 14 (`package_edge_holds`) and 14 declares what the file asks (`BundleRevisionNeed::Goals`,
-// which [3, 3], the declaration before this slice, does not: `goal_undeclared`); the installed root
+// heading and one note, every other type of version 2 0) among its root files; the zip carries it
+// byte for byte beside `bundle.json` and its `interfaces.json` declares `package` [14, 14]
+// (`GOALS_PACKAGE_REVISION`; [28, 28] since Workflow #455 RR1, whose version 3 the fixtures write);
+// the installer's plan takes such a zip: this build's installer range holds it
+// (`package_edge_holds`) and it declares what the file asks (`BundleRevisionNeed::Goals`, which
+// [3, 3], the declaration before this slice, does not: `goal_undeclared`); the installed root
 // holds the file and `standard-pack check` reads it without a problem.
 #[test]
 fn goals_pack_an_accepted_file_is_named_carried_and_declared() {

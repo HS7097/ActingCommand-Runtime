@@ -1301,7 +1301,12 @@ the rescue face:
   `package` maximum of 14 at least (`pack_invalid`, `variable_undeclared` at
   `<zip>\interfaces.json` with the first such pack's `package_id`, in the plan), and (fix round 3,
   `goals.json` version 2, the only version this build reads) a zip that carries `goals.json`
-  declares 14 at least (`goal_undeclared`, as before at 12); from 0.12.68 (Workflow #477 PC-1,
+  declares 14 at least (`goal_undeclared`, as before at 12); from 0.12.92 (Workflow #455 RR1,
+  `package` 28, [standard-pack-goal-tables.md](standard-pack-goal-tables.md)) `goals.json`, then of
+  version 3, asks 28, and the tables of goals `goal-tables.json` is a root file placed after
+  `schedule.json` and before `goals.json`, set aside as `goal-tables.json.old-<ms>` (after
+  `goals.json`) when the zip no longer carries it, a zip that carries it declaring 28 at least
+  (`pack_invalid`, `goal_tables_undeclared` at `<zip>\interfaces.json`, in the plan); from 0.12.68 (Workflow #477 PC-1,
   [pack-catalog.md](pack-catalog.md); fix round 1: a zip that carries it declares `package` 16,
   which an installer of 0.12.67 or earlier refuses at its `package` edge, and this `place` asks no
   revision of it) the package declaration `pack-catalog.json` is the last root file of the layout, placed with
@@ -1930,7 +1935,7 @@ will run, **B** a placed bundle (the register's declared range) or a new one (it
 |---|---|
 | update, rollback | `ledger`: Rp.max ∈ R\*; R\*.max > Rp.max needs `--accept-ledger-one-way` (journalled; it closes later rollbacks by the same edge). `runtime-outcomes`: R\*.max ∈ I. `install-control`: I ∩ Rp and I ∩ R\*. `runtime-client`: I ∩ Rp and I ∩ R\*. `package`: every placed B.max ∈ R\* (unknown: the warning). `actingd-config`: C passes R\*'s check-config, and I's key table knows every key C names in the sections the configuration mechanism resolves. Each build's Runtime and Tools manifests declare equal `speaks`. Since 0.12.80 (Workflow #429 RB-1): `requires`, R\*'s check-config names every subsystem the schedules a start of R\* would read require (`next_names_required`, a row only when it fails; "Subsystems the schedules require" above). |
 | config commit, restore | C passes the check-config of the build in `runtime\`. |
-| pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`); from 0.12.60 a bundle that carries `goals.json` declares B.max ≥ 12 (`pack_invalid`, `goal_undeclared`), from 0.12.61 ≥ 14 (`goals.json` version 2); and from 0.12.61 one whose packs declare `variables` declares B.max ≥ 14 (`pack_invalid`, `variable_undeclared`). |
+| pack place | B.max ∈ the live Runtime's `package` and ∈ I's, checked before the layout; a bundle that carries `notices/` declares B.max ≥ 10 (`pack_invalid`, `notice_undeclared`); from 0.12.60 a bundle that carries `goals.json` declares B.max ≥ 12 (`pack_invalid`, `goal_undeclared`), from 0.12.61 ≥ 14 (`goals.json` version 2), from 0.12.92 ≥ 28 (`goals.json` version 3); from 0.12.92 one that carries `goal-tables.json` declares B.max ≥ 28 (`pack_invalid`, `goal_tables_undeclared`); and from 0.12.61 one whose packs declare `variables` declares B.max ≥ 14 (`pack_invalid`, `variable_undeclared`). |
 | new | I ∩ R for `actingd-config` (Workflow #453 S4: `installer_meets_next`, before anything is written); R's check-config passes the first configuration (`write_config`). |
 
 An edge row is `{interface, check, result: pass | fail | warning, parties: [{party, source,

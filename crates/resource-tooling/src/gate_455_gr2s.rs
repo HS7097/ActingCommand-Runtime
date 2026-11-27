@@ -29,7 +29,7 @@
 // A made-up game `neutral`, server `test`, 16x9; every package, rule, capability and variable is
 // a placeholder.
 
-use crate::standard_pack_goals::{goal_issues, root_irreversibility, variable_report};
+use crate::standard_pack_goals::{GoalFiles, goal_issues, root_irreversibility, variable_report};
 use actingcommand_contract::{
     StandardPackProblem, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
     read_standard_pack_root,
@@ -237,10 +237,11 @@ fn installed(packs: Vec<Pack>, rules: Vec<Value>) -> (TempDir, PathBuf, Standard
     (temp, game_root, root, schedule)
 }
 
-/// `goals.json` with `entries` (version 2 since Workflow #463 V1 fix round 3).
+/// `goals.json` with `entries` (version 2 since Workflow #463 V1 fix round 3, version 3 since
+/// Workflow #455 RR1).
 fn goals(entries: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": GAME,
         "entries": entries
     }))
@@ -257,7 +258,8 @@ fn tier(rules: &[&str]) -> Value {
     })
 }
 
-/// The problems `goal_issues` gives of `goals` against the installed root.
+/// The problems `goal_issues` gives of `goals` against the installed root (Workflow #455 RR1: the
+/// problems of `goals.json`, the root holding no `goal-tables.json`).
 fn issues(
     game_root: &Path,
     root: &StandardPackRoot,
@@ -270,10 +272,14 @@ fn issues(
         root,
         Some((schedule, schedule_path.as_path())),
         None,
-        goals,
+        GoalFiles {
+            goals: Some(goals),
+            tables: None,
+        },
         &|directory: &str| game_root.join(directory),
     )
     .unwrap_or_else(|error| panic!("the check runs: {}: {}", error.code, error.message))
+    .goals
 }
 
 /// Each problem of `issues` as (word, pointer).

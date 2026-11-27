@@ -34,6 +34,11 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
     command reads no pack's content for its declaration: a pack that declares `variables` or a
     shared read's `lines` does not raise it; only `standard-pack build` raises its declaration by
     content ("The `package` revision" below);
+  - (Workflow #455 RR1, since 0.12.92; register [v012-register.md](v012-register.md) §1.535)
+    `goal-tables.json`, the game's tables of goals
+    ([standard-pack-goal-tables.md](standard-pack-goal-tables.md)), when present: checked with
+    `goals.json` by the same check and laid, zipped, read back and installed as it is; a zip that
+    carries it, or `goals.json` (of version 3 since), declares `package` [28, 28];
   - `packs/<package_id>/`, the bundle index v4 `path` form;
   - `declaration-exclusions.json`;
   - `regression/`, the regression cases. Their contract, reader and runner are
@@ -49,8 +54,8 @@ actinglab [--json] resource verify --repo <checkout> --source-repository <owner>
   - No untracked file anywhere.
   - No ignored file under `packs/` or `regression/`, and no ignored root input.
   - Every file under `packs/` and `regression/` and every root input (the five above,
-    `declaration-exclusions.json`, `manifest.yaml` and, Workflow #455 GOALS-PACK-1, `goals.json`)
-    is the committed blob, byte for byte (no filters).
+    `declaration-exclusions.json`, `manifest.yaml` and, Workflow #455 GOALS-PACK-1, `goals.json`,
+    and, Workflow #455 RR1, `goal-tables.json`) is the committed blob, byte for byte (no filters).
 
   Otherwise the command fails the `checkout` step (`resource_verify_checkout_dirty`), and no
   other step runs: nothing read from such a tree is bound to the commit. (Workflow #455
@@ -213,7 +218,7 @@ carries `step` where its code declares the key.
   | pins | `files` |
   | admission | `packs`, `admitted` |
   | format | `packs`, `json_files`, `unformatted` (files) |
-  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`, or (Workflow #455 GOALS-PACK-1) 14 when it carries `goals.json`, the highest of them); (Workflow #455 GOALS-PACK-1) `goals {game, path, entries}` when the step accepted and laid the repository's `goals.json`: the game whose root it was held to, `goals.json`, and how many entries of each type of version 2 it holds, every type named (`{heading, note, resource, tier, variable}`); absent otherwise, so that the counts of a repository without the file are as before |
+  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`, or (Workflow #455 GOALS-PACK-1) 14 when it carries `goals.json`, the highest of them); (Workflow #455 GOALS-PACK-1) `goals {game, path, entries}` when the step accepted and laid the repository's `goals.json`: the game whose root it was held to, `goals.json`, and how many entries of each type of version 2 it holds, every type named (`{heading, note, resource, tier, variable}`), and (Workflow #455 RR1) `records` when it holds one; absent otherwise, so that the counts of a repository without the file are as before. Workflow #455 RR1 (since 0.12.92): `package_revision` 28 when it carries `goals.json` (version 3) or `goal-tables.json`, and `goal_tables {game, path, entries {tables, items}}` when the step accepted and laid the repository's `goal-tables.json`, absent otherwise |
 
 - **No prose.** Messages appear only on the CLI's human line and in developer lines on stderr.
   Failures and warnings are outcome envelopes with typed values. Paths are absolute and native for
@@ -480,7 +485,7 @@ as an element of its array.
 | 11 | task | `field_lists` of the task | FL-1, §1.343 |
 | 13 | task | `select` under `operations` when it holds an object (a select step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (a page-graph select step keeps its revision): where the kernel's admission finds it (`TaskOperation.select`; `TaskProgram::validate_linear`, `LinearEffect::Select`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same member | K1, §1.374; [linear-steps.md](linear-steps.md), "Select steps" |
 | 14 | control | `variables` of the document, whatever it holds, as the installer's `place` reads it (`variable_undeclared` below 14) | V1, §1.378; [package-variables.md](package-variables.md) |
-| 14 | root | `goals.json`, by its presence at the zip's root, as `place` reads it (`goal_undeclared` below 14), whatever version it holds | G-R1, §1.356 (12, version 1); V1 fix round 3, §1.378 (14, version 2) |
+| 14 | root | `goals.json`, by its presence at the zip's root, as `place` reads it (`goal_undeclared` below 14), whatever version it holds; since Workflow #455 RR1 row 28's | G-R1, §1.356 (12, version 1); V1 fix round 3, §1.378 (14, version 2) |
 | 15 | control and its entry task | an ending page, in a pack whose `control.json` `execution_mode` is `linear_steps` only: a page of a `terminal_pages` under `mappings` of the `scheduling_outcome` of the task file of the control's `entry_task_id` (`resources/operations/<entry_task_id>/task.json`, the package's program; no other task file of the pack) that is none of that task's `target_page` (one page or a set) and none of the `from` of its `operations` whose `select` holds an `on_empty` (absent or `null`, none), each page compared with the prefix `<game>/`, the control's `game`, taken off where it is written. That is the kernel's own test of an admitted package (`PreparedContainedTask::declares_linear_endings`, `canonical_page_anchor`), a reader private to the kernel crate, which actinglab does not depend on, so the table reads the same members | K2, §1.380; [linear-steps.md](linear-steps.md), "Endings"; P2b, §1.385 |
 | 16 | root | `pack-catalog.json`, by its presence at the zip's root (`CATALOG_PACKAGE_REVISION`), so that an installer that knows no such root file refuses the zip at its `package` edge; `place` asks nothing of it | PC-1 fix round 1, §1.438; [pack-catalog.md](pack-catalog.md), "Interface" |
 | 17 | task | `key` under `operations` when it holds an object (a key step), in a pack whose `control.json` `execution_mode` is `linear_steps` only (every build refuses a key in a page-graph task): where the kernel's admission finds it (`TaskOperation.key`; `TaskProgram::validate_linear`, `LinearEffect::Key`), as row 13 finds a select step | KP-1 fix round 1, §1.448; [linear-steps.md](linear-steps.md), "Key steps" |
@@ -494,6 +499,7 @@ as an element of its array.
 | 25 | task | `presses` under `operations`, whatever it holds (a whole number, `{fact_key, minus?}` or `null`), in a pack whose `control.json` `execution_mode` is `linear_steps` only: where the kernel's admission finds it (`TaskOperation.presses`; `TaskProgram::validate_linear`), as rows 13, 17 and 22 find a select step, a key step and a list reading; a Runtime before 25 refuses the member's name at its declaration gate, `UnknownField` at `/operations/<i>/presses`, in every pack, and this build refuses it in a page-graph task (`presses requires linear_steps`), which therefore counts nothing | LR-1, §1.513; [linear-steps.md](linear-steps.md), "Pressing on one page" |
 | 26 | control | `given_by` of an entry of `variables`, whatever it holds: every Runtime before 26 refuses the member at the declaration (`variables_invalid` at `/variables/<i>/given_by`), in every pack | TK-1, §1.532; [package-variables.md](package-variables.md), "A variable a rule gives" |
 | 27 | task | `others` under `read_list`, whatever it holds, in a pack of any execution mode (a Runtime before 27 refuses the member's name at its declaration gate, `UnknownField` at `/operations/<i>/read_list/others`, in every pack); a list reading without it keeps row 8's or row 22's revision (`LIST_OTHERS_REVISION`) | LIST-A, §1.533; [resource-readings.md](resource-readings.md), "A list of the wanted keys only" |
+| 28 | root | `goals.json` (row 14's, moved: version 3 since, whatever version it holds, `goal_undeclared` below 28) and `goal-tables.json`, each by its presence at the zip's root, as `place` reads it (`goal_tables_undeclared` below 28), whatever it holds | RR1, §1.535; [standard-pack-goal-tables.md](standard-pack-goal-tables.md), "Interface" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
@@ -521,7 +527,8 @@ member name there would raise the number. None is known that the readers accept.
 that does not read needs nothing here (the `format` step refuses it). A feature that adds a
 `package` revision adds its row, in its own slice
 (`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps its rule, the highest
-of 3, 10 with `notices/` and (Workflow #455 GOALS-PACK-1, register §1.498) 14 with `goals.json`;
+of 3, 10 with `notices/` and (Workflow #455 GOALS-PACK-1, register §1.498) 14 with `goals.json`
+(Workflow #455 RR1, register §1.535: 28 with `goals.json` or `goal-tables.json`);
 it reads no pack's content for it, so the two rows can still declare different revisions for one
 commit (a follow-up slice on `resource verify`).
 

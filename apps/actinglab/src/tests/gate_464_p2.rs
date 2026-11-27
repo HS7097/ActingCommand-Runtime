@@ -384,7 +384,9 @@ fn p2_the_build_carries_resource_verifys_zip_and_verifys_report_is_as_before() {
 // GOALS-PACK-1 (adapted, its name kept: the requirement makes `resource verify` carry the file,
 // where this test pinned that it left it out and declared 10): `resource verify` of the commit with
 // `goals.json` carries it byte for byte too, lists it among its root files and declares [14, 14],
-// the highest of what its root carries (the notices directory's 10, the file's 14).
+// the highest of what its root carries (the notices directory's 10, the file's 14). Workflow #455
+// RR1 (adapted, its name kept: the requirement retires version 2 and gives version 3 revision
+// 28): the file is version 3 and both zips declare [28, 28].
 #[test]
 fn p2_notices_give_package_10_and_goals_give_14() {
     let fixture = Fixture::new();
@@ -406,7 +408,7 @@ fn p2_notices_give_package_10_and_goals_give_14() {
 
     fixture.write_json(
         "goals.json",
-        &json!({"schema_version": "actingcommand.goals.v2", "game": "neutral", "entries": []}),
+        &json!({"schema_version": "actingcommand.goals.v3", "game": "neutral", "entries": []}),
     );
     let goals = fs::read(fixture.repo().join("goals.json")).unwrap();
     let head = fixture.commit("a goal declaration");
@@ -414,9 +416,9 @@ fn p2_notices_give_package_10_and_goals_give_14() {
     assert_eq!(built.exit_code(), 0, "{}", built.envelope_json());
     let entries = zip_entries(&fixture.out("goals").join(zip_name(&head)));
     assert_eq!(entries.get("goals.json"), Some(&goals));
-    assert_eq!(declared_package(&entries), json!([14, 14]));
+    assert_eq!(declared_package(&entries), json!([28, 28]));
     let document = fixture.build_json("goals");
-    assert_eq!(document["package"], json!([14, 14]));
+    assert_eq!(document["package"], json!([28, 28]));
     assert!(
         document["root_files"]
             .as_array()
@@ -428,7 +430,7 @@ fn p2_notices_give_package_10_and_goals_give_14() {
     let (verified, report) = fixture.verify("goals-verify");
     assert_eq!(verified.exit_code(), 0, "{}", verified.envelope_json());
     let counts = &step(&report, "bundle")["counts"];
-    assert_eq!(counts["package_revision"], 14);
+    assert_eq!(counts["package_revision"], 28);
     assert_eq!(counts["root_files"], json!(["goals.json"]));
     let entries = zip_entries(
         &fixture
@@ -437,7 +439,7 @@ fn p2_notices_give_package_10_and_goals_give_14() {
             .join(zip_name(&head)),
     );
     assert_eq!(entries.get("goals.json"), Some(&goals));
-    assert_eq!(declared_package(&entries), json!([14, 14]));
+    assert_eq!(declared_package(&entries), json!([28, 28]));
 }
 
 // G, P2 third item, and the ruling on `--out`: a tree with a tracked change, and one with an
@@ -1643,14 +1645,17 @@ fn p2_revision_14_variables_of_control() {
 // requirement moves `goals.json` from 12 to 14): a `goals.json` at the zip's root needs 14 over
 // entries that need 13, whatever it holds, as `place` asks 14 of the file's presence; a version 1
 // document needs 14 too (the check refuses it, `goal_version_retired`, not the revision); without
-// the file the entries stay at 13.
+// the file the entries stay at 13. Workflow #455 RR1 (adapted, its name kept: the requirement
+// moves `goals.json` to 28, the revision of version 3): the file needs 28 over the same entries
+// that need 13, a version 3 document as a version 1 one.
 #[test]
 fn p2_revision_14_goals_json() {
     let goals = |value: Value| json_entry("goals.json".to_owned(), &value);
-    assert_row(
-        14,
+    assert_row_over(
+        13,
+        28,
         &[goals(json!({
-            "schema_version": "actingcommand.goals.v2",
+            "schema_version": "actingcommand.goals.v3",
             "game": "neutral",
             "entries": []
         }))],
@@ -1665,7 +1670,7 @@ fn p2_revision_14_goals_json() {
                 "entries": []
             }))]
         ),
-        14,
+        28,
         "a version 1 goals.json"
     );
 }

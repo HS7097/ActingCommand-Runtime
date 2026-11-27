@@ -750,7 +750,7 @@ fn place_listed_root(packs: &std::path::Path) {
     write_package(&game.join(COMPOSED), COMPOSED, None, None);
     write_json(
         &game.join("goals.json"),
-        &serde_json::json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A,
+        &serde_json::json!({"schema_version": "actingcommand.goals.v3", "game": GAME_A,
                             "entries": [{"name": "listed", "type": "resource",
                                          "governs": {"pool": LISTED},
                                          "title": {"en": "Listed"}}]}),

@@ -97,12 +97,12 @@ use actingcommand_contract::outcome::{Outcome, OutcomeEnvelope};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, BundleRevisionNeed, InterruptThen, LabError, LabResult,
     MaintenanceUse, PACKAGE_CONTROL_FILE, RuntimeErrorCode, STANDARD_PACK_BUNDLE_FILE,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot, StandardPackRootBytes,
-    StandardPackRootIssue, StandardPackSchedule, classify_standard_pack_packages,
-    control_declares_variables, package_edge_holds, parse_standard_pack_schedule,
-    read_standard_pack_root, standard_pack_maintenance_packages,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
+    STANDARD_PACK_PAGES_FILE, STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRoot,
+    StandardPackRootBytes, StandardPackRootIssue, StandardPackSchedule,
+    classify_standard_pack_packages, control_declares_variables, package_edge_holds,
+    parse_standard_pack_schedule, read_standard_pack_root, standard_pack_maintenance_packages,
 };
 use actingcommand_execution_kernel::{
     ExecutionKernelCode, NavigationPackageDescriptor, PreparedContainedTask, PrerequisiteChain,
@@ -681,7 +681,8 @@ struct RevisionNeed {
 
 /// I2: what the game root `root` of `game` carries that a `package` revision brought, in the order
 /// `place` asks it of a bundle zip: the notices directory (unless a pack is named like it, whose
-/// folder it then is, as `standard-pack check` reads it), `goals.json`, and the first pack, in
+/// folder it then is, as `standard-pack check` reads it), `goals.json`, (Workflow #455 RR1)
+/// `goal-tables.json`, and the first pack, in
 /// `bundle.json`'s order, whose control declaration declares variables, read by the contract
 /// crate's `control_declares_variables`, the reading `place` calls. A control declaration that
 /// cannot be read declares none here: the loader refuses that pack (S1) and `standard-pack check`
@@ -713,6 +714,15 @@ fn revision_needs(root: &Path, game: &str, checked: &CheckedRoot) -> Vec<Revisio
         needs.push(RevisionNeed {
             need: BundleRevisionNeed::Goals,
             refusal: refusal(BundleRevisionNeed::Goals),
+        });
+    }
+    // Workflow #455 RR1: `goal-tables.json`, by the same rule.
+    if fs::metadata(root.join(STANDARD_PACK_GOAL_TABLES_FILE))
+        .is_ok_and(|metadata| metadata.is_file())
+    {
+        needs.push(RevisionNeed {
+            need: BundleRevisionNeed::GoalTables,
+            refusal: refusal(BundleRevisionNeed::GoalTables),
         });
     }
     let declaring = checked.listed.iter().find(|package_id| {

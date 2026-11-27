@@ -56,6 +56,14 @@
 //! their business part from the file, and the installed root's check composes them with it), and
 //! its `interfaces.json` then declares the highest of what its root carries and the file's
 //! revision. A repository whose `schedule.json` does not name it is verified as before.
+//!
+//! Workflow #455 RR1 (register §1.535; contracts/standard-pack-goal-tables.md): a repository's
+//! `goal-tables.json` is checked and carried as `goals.json` is, by the same check and in the same
+//! place ([`lay_goals`]): a refused file fails the step with every problem and no zip is made; an
+//! accepted one is laid, zipped, read back and installed with the other root files and named in
+//! the counts (`goal_tables`: the game, the path and how many tables and items it declares); the
+//! zip then declares `package` 28 (`GOAL_TABLES_PACKAGE_REVISION`), as one that carries
+//! `goals.json` of version 3 does. A repository with neither file is verified as before.
 
 use super::revision::content_revision;
 use super::steps::{
@@ -70,8 +78,9 @@ use crate::codes::{ActinglabCode, BundleProblem, LayoutProblem, ReadbackProblem,
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    BundleIndex, BundleMaintenance, BundleSource, CatalogScheduleFacts, GOALS_PACKAGE_REVISION,
-    NOTICES_PACKAGE_REVISION, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
+    BundleIndex, BundleMaintenance, BundleSource, CatalogScheduleFacts,
+    GOAL_TABLES_PACKAGE_REVISION, GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION,
+    STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOAL_TABLES_FILE,
     STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_RETIRED_UI_FILE,
     STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRegistry,
     catalog_package_revision, notice_relative_path, parse_standard_pack_catalog_with,
@@ -79,9 +88,9 @@ use actingcommand_contract::{
 };
 use actingcommand_policy::standard_pack_schedule_takes_catalog;
 use actingcommand_resource_tooling::{
-    BundleGoalsRequest, BundleGoalsVerdict, PackageBundleRequest, ResourceToolingCode,
-    StandardPackCheckRequest, StandardPackNotices, StandardPackRootFiles, check_bundle_goals,
-    check_standard_pack_root, package_bundle,
+    BundleGoalFile, BundleGoalsRequest, BundleGoalsVerdict, PackageBundleRequest,
+    ResourceToolingCode, StandardPackCheckRequest, StandardPackNotices, StandardPackRootFiles,
+    check_bundle_goals, check_standard_pack_root, package_bundle,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -164,20 +173,22 @@ struct BundleTally {
     revision: Option<u64>,
     /// Workflow #455 GOALS-PACK-1: the repository's `goals.json`, once it was accepted and laid.
     goals: Option<GoalsCounts>,
+    /// Workflow #455 RR1: the repository's `goal-tables.json`, once it was accepted and laid.
+    goal_tables: Option<GoalsCounts>,
 }
 
 pub(super) fn bundle(inputs: &BundleInputs<'_>) -> StepRun {
     let mut run = StepRun::start(VerifyStep::Bundle);
     // Workflow #455 GOALS-PACK-1: `goals.json` is a root file of both rows (Workflow #464 P2 gave
-    // it to `standard-pack build` only), checked and laid by the step itself ([`lay_goals`]).
+    // it to `standard-pack build` only), checked and laid by the step itself ([`lay_goals`]);
+    // Workflow #455 RR1: so is `goal-tables.json`.
     let root_files = ROOT_FILES
         .into_iter()
-        .chain([STANDARD_PACK_GOALS_FILE])
+        .chain([STANDARD_PACK_GOALS_FILE, STANDARD_PACK_GOAL_TABLES_FILE])
         .filter(|name| is_file(&inputs.repo.join(name)))
         .collect::<Vec<_>>();
     // Workflow #444 NOTICES-3: the notices directory, found as the root files are.
     let notices = is_directory(&inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY));
-    let goals = root_files.contains(&STANDARD_PACK_GOALS_FILE);
     let mut tally = BundleTally::default();
     if let Err(outcome) = lay_out(inputs, &root_files, notices, &mut run, &mut tally) {
         run.fail(outcome);
@@ -190,24 +201,29 @@ pub(super) fn bundle(inputs: &BundleInputs<'_>) -> StepRun {
         root_files: root_files.iter().map(|name| (*name).to_owned()).collect(),
         package_revision: tally
             .revision
-            .unwrap_or_else(|| package_revision(notices, goals)),
+            .unwrap_or_else(|| package_revision(notices, &root_files)),
         goals: tally.goals,
+        goal_tables: tally.goal_tables,
     };
     run.finish()
 }
 
 /// The `package` revision `resource verify`'s zip declares: the highest of [`PACKAGE_REVISION`],
 /// the contract crate's `NOTICES_PACKAGE_REVISION` when it carries the notices directory
-/// (Workflow #444 NOTICES-3) and (Workflow #455 GOALS-PACK-1) `GOALS_PACKAGE_REVISION` when it
-/// carries `goals.json`. What its packs need is read by `standard-pack build` only
+/// (Workflow #444 NOTICES-3), (Workflow #455 GOALS-PACK-1) `GOALS_PACKAGE_REVISION` when its root
+/// files (`root_files`) hold `goals.json` and (Workflow #455 RR1) `GOAL_TABLES_PACKAGE_REVISION`
+/// when they hold `goal-tables.json`. What its packs need is read by `standard-pack build` only
 /// (`revision.rs`).
-fn package_revision(notices: bool, goals: bool) -> u64 {
+fn package_revision(notices: bool, root_files: &[&str]) -> u64 {
     let mut revision = PACKAGE_REVISION;
     if notices {
         revision = revision.max(NOTICES_PACKAGE_REVISION);
     }
-    if goals {
+    if root_files.contains(&STANDARD_PACK_GOALS_FILE) {
         revision = revision.max(GOALS_PACKAGE_REVISION);
+    }
+    if root_files.contains(&STANDARD_PACK_GOAL_TABLES_FILE) {
+        revision = revision.max(GOAL_TABLES_PACKAGE_REVISION);
     }
     revision
 }
@@ -259,8 +275,10 @@ fn lay_out(
             notices: notices.then(|| inputs.repo.join(STANDARD_PACK_NOTICES_DIRECTORY)),
             // Workflow #455 GOALS-PACK-1: `goals.json` is checked and laid by the step once the
             // bundle is written ([`lay_goals`]), so that a refused file names every problem;
-            // `--goals` would name its first only.
+            // `--goals` would name its first only. Workflow #455 RR1: `goal-tables.json` the same
+            // way.
             goals: None,
+            goal_tables: None,
         },
     })
     .map_err(|error| lab_failure(&error))?;
@@ -269,13 +287,14 @@ fn lay_out(
     }
     // Workflow #455 GOALS-PACK-1: a refused `goals.json` fails the step; the index and copy checks
     // still run, on the bundle without it, so that one run names every error of the step, and
-    // then the step stops before any zip is made (fix round 1).
-    let goals_refused = root_files.contains(&STANDARD_PACK_GOALS_FILE)
-        && !lay_goals(inputs.repo, &bundle_dir, run, tally)?;
+    // then the step stops before any zip is made (fix round 1). Workflow #455 RR1: so does a
+    // refused `goal-tables.json`.
+    let refused = lay_goals(inputs.repo, root_files, &bundle_dir, run, tally)?;
+    let goals_refused = !refused.is_empty();
     let laid_root_files = root_files
         .iter()
         .copied()
-        .filter(|name| !goals_refused || *name != STANDARD_PACK_GOALS_FILE)
+        .filter(|name| !refused.contains(name))
         .collect::<Vec<_>>();
     let index = check_index(
         inputs,
@@ -344,7 +363,7 @@ fn lay_out(
     // fix round 1: a switched root's catalog's too).
     let revision = match inputs.steps_for {
         StepsFor::Verify => {
-            let carried = package_revision(notices, root_files.contains(&STANDARD_PACK_GOALS_FILE));
+            let carried = package_revision(notices, root_files);
             entries
                 .get(STANDARD_PACK_CATALOG_FILE)
                 .map_or(carried, |bytes| {
@@ -535,35 +554,57 @@ fn read_maintenance(repo: &Path) -> Result<Vec<BundleMaintenance>, Outcome> {
 /// `standard_pack_problem` and `json_pointer`, in file order, and the answer is `false`. An
 /// accepted one: its bytes as the check read them are laid beside `bundle.json`, as `package bundle
 /// --goals` lays them, the counts name it, and the answer is `true`. A bundle, a root file or a
-/// package the check cannot read is the step's error.
+/// package the check cannot read is the step's error. Workflow #455 RR1: `goal-tables.json` too,
+/// both held by the one call of the check when `root_files` (the repository's) holds them; the
+/// answer is the names of the files refused (empty: every file it holds is laid).
 fn lay_goals(
     repo: &Path,
+    root_files: &[&'static str],
     bundle_dir: &Path,
     run: &mut StepRun,
     tally: &mut BundleTally,
-) -> Result<bool, Outcome> {
-    let checked = check_bundle_goals(&BundleGoalsRequest {
+) -> Result<Vec<&'static str>, Outcome> {
+    let held = |name: &str| root_files.contains(&name).then(|| repo.join(name));
+    let request = BundleGoalsRequest {
         bundle: bundle_dir.to_owned(),
-        goals: repo.join(STANDARD_PACK_GOALS_FILE),
-    })
-    .map_err(|error| lab_failure(&error))?;
-    match checked.verdict {
-        BundleGoalsVerdict::Refused(problems) => {
-            for problem in problems {
-                run.fail(problem);
+        goals: held(STANDARD_PACK_GOALS_FILE),
+        goal_tables: held(STANDARD_PACK_GOAL_TABLES_FILE),
+    };
+    if request.goals.is_none() && request.goal_tables.is_none() {
+        return Ok(Vec::new());
+    }
+    let checked = check_bundle_goals(&request).map_err(|error| lab_failure(&error))?;
+    let mut refused = Vec::new();
+    for (name, file) in [
+        (STANDARD_PACK_GOALS_FILE, checked.goals),
+        (STANDARD_PACK_GOAL_TABLES_FILE, checked.goal_tables),
+    ] {
+        let Some(BundleGoalFile { bytes, verdict }) = file else {
+            continue;
+        };
+        match verdict {
+            BundleGoalsVerdict::Refused(problems) => {
+                for problem in problems {
+                    run.fail(problem);
+                }
+                refused.push(name);
             }
-            Ok(false)
-        }
-        BundleGoalsVerdict::Accepted(entries) => {
-            write_new(&bundle_dir.join(STANDARD_PACK_GOALS_FILE), &checked.bytes)?;
-            tally.goals = Some(GoalsCounts {
-                game: checked.game,
-                path: STANDARD_PACK_GOALS_FILE.to_owned(),
-                entries,
-            });
-            Ok(true)
+            BundleGoalsVerdict::Accepted(entries) => {
+                write_new(&bundle_dir.join(name), &bytes)?;
+                let counts = Some(GoalsCounts {
+                    game: checked.game.clone(),
+                    path: name.to_owned(),
+                    entries,
+                });
+                if name == STANDARD_PACK_GOALS_FILE {
+                    tally.goals = counts;
+                } else {
+                    tally.goal_tables = counts;
+                }
+            }
         }
     }
+    Ok(refused)
 }
 
 /// Workflow #464 P2: the tables of the repository `repo` (`tables/<table_id>.json` at its root,

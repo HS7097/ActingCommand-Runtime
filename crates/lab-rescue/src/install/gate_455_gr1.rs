@@ -61,10 +61,10 @@ const UNDECLARED_BUNDLE_PACKAGE: [u64; 2] = [3, 11];
 const CONTROL: &[u8] = br#"{"neutral": 1}"#;
 
 /// The bytes of a `goals.json` of [`GAME`]: one made-up heading (version 2 since Workflow #463 V1
-/// fix round 3).
+/// fix round 3, version 3 since Workflow #455 RR1).
 fn goals_bytes() -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": GAME,
         "entries": [{"name": "stock", "type": "heading", "title": {"en": "Stock"}}]
     }))

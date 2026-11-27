@@ -38,6 +38,17 @@
 //! `goal_version_retired` at `/schema_version` and read no further, and a version this build does
 //! not know yet stays `malformed` there.
 //!
+//! Workflow #455 RR1 (register §1.535; release 0.12.89 having shipped version 2): the document is
+//! version 3, [`STANDARD_PACK_GOALS_SCHEMA_VERSION`], version 2 with one more type, `records`
+//! (`{name, type, title, help?, block?, table, max_records}`: the records of whom to raise and to
+//! which grade, read against a table of the root's `goal-tables.json`,
+//! [`crate::standard_pack_goal_tables`]); a bundle declares it with `package` 28. A version 1 or
+//! version 2 document is `goal_version_retired` at `/schema_version` and read no further
+//! ([`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSIONS`]); a version 3 document without a `records`
+//! entry reads to what its version 2 form read to. The references hold a records entry's table to
+//! the tables of the root's accepted `goal-tables.json` ([`GoalReferences::tables`],
+//! `goal_table_unknown`).
+//!
 //! The file stores no value: a value is the installation's, set by a person or an agent (Workflow
 //! #463 V3, `EditGoal`). The Runtime interprets no text here: titles, help texts, unit texts,
 //! option titles and locales are opaque, measured in bytes only, and ids and option values are
@@ -60,18 +71,23 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The game root's goal declaration (G-R1).
 pub const STANDARD_PACK_GOALS_FILE: &str = "goals.json";
-/// The one version of `goals.json` this build reads: version 2 (Workflow #463 V1 fix round 3),
-/// whose five types place a package's variable where version 1 governed packages.
-pub const STANDARD_PACK_GOALS_SCHEMA_VERSION: &str = "actingcommand.goals.v2";
-/// Workflow #463 V1 fix round 3: version 1, the version release 0.12.60 read with its eight
-/// types, which this build reads no more: a document of it is `goal_version_retired` at
-/// `/schema_version` and is read no further.
-pub const STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION: &str = "actingcommand.goals.v1";
-/// The `package` interface revision a bundle that carries `goals.json` declares: `[14, 14]` since
-/// Workflow #463 V1 fix round 3, the revision that brought version 2, the version this build reads
-/// (`contracts/component-interfaces.md`, the `package` row 14, with a package's `variables`);
-/// revision 12 (the row 12, Workflow #455 G-R1) brought version 1.
-pub const GOALS_PACKAGE_REVISION: u64 = 14;
+/// The one version of `goals.json` this build reads: version 3 (Workflow #455 RR1), version 2's
+/// five types and `records`.
+pub const STANDARD_PACK_GOALS_SCHEMA_VERSION: &str = "actingcommand.goals.v3";
+/// The versions this build reads no more: version 1, the version release 0.12.60 read with its
+/// eight types (Workflow #463 V1 fix round 3), and version 2, the version releases 0.12.61 to
+/// 0.12.91 read with its five types (Workflow #455 RR1). A document of either is
+/// `goal_version_retired` at `/schema_version` and is read no further.
+pub const STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSIONS: [&str; 2] =
+    ["actingcommand.goals.v1", "actingcommand.goals.v2"];
+/// The `package` interface revision a bundle that carries `goals.json` declares: `[28, 28]` since
+/// Workflow #455 RR1, the revision that brought version 3, the version this build reads
+/// (`contracts/component-interfaces.md`, the `package` row 28, with `goal-tables.json`); revision
+/// 14 (Workflow #463 V1 fix round 3) brought version 2 and revision 12 (Workflow #455 G-R1)
+/// version 1.
+pub const GOALS_PACKAGE_REVISION: u64 = 28;
+/// Workflow #455 RR1: the largest `max_records` of a `records` entry (the smallest is 1).
+pub const MAX_GOAL_RECORDS: u64 = 128;
 /// The largest `goals.json`, in bytes (1 MiB).
 pub const MAX_STANDARD_PACK_GOALS_BYTES: usize = 1_048_576;
 /// The most violations one refused `goals.json` reports; the first ones in document order.
@@ -100,8 +116,9 @@ pub const MAX_GOAL_SCALE_MILLI: i64 = 1_000_000;
 /// The largest integer of the file, in magnitude: the safe integers of JSON, 2^53 - 1.
 pub const MAX_GOAL_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
-/// The type of an entry (`type`), one of the five of version 2 (Workflow #463 V1, which replaced
-/// version 1's four types that governed packages by `variable`; version 2 since its fix round 3).
+/// The type of an entry (`type`), one of the six of version 3 (Workflow #463 V1, which replaced
+/// version 1's four types that governed packages by `variable`; version 2 since its fix round 3;
+/// Workflow #455 RR1: version 3, `records` added).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GoalType {
     /// A group title between entries; no value, governs nothing.
@@ -115,16 +132,20 @@ pub enum GoalType {
     /// Workflow #463 V1: the place on the page of a variable a package of the root declares; its
     /// value, its texts and its block are the variable's.
     Variable,
+    /// Workflow #455 RR1: the records of whom to raise and to which grade, each a key of a table
+    /// of the root's `goal-tables.json`; their values are a later slice's.
+    Records,
 }
 
 impl GoalType {
-    /// The five types of version 2, in the contract's order.
-    pub const ALL: [Self; 5] = [
+    /// The six types of version 3, in the contract's order.
+    pub const ALL: [Self; 6] = [
         Self::Heading,
         Self::Note,
         Self::Resource,
         Self::Tier,
         Self::Variable,
+        Self::Records,
     ];
 
     /// The type's word in the file.
@@ -135,6 +156,7 @@ impl GoalType {
             Self::Resource => "resource",
             Self::Tier => "tier",
             Self::Variable => "variable",
+            Self::Records => "records",
         }
     }
 
@@ -146,7 +168,7 @@ impl GoalType {
             .find(|goal_type| goal_type.as_str() == word)
     }
 
-    /// The block every reader shows the type with: the only block version 2 gives it. `None` for
+    /// The block every reader shows the type with: the only block version 3 gives it. `None` for
     /// a `variable` placement, which a reader shows with the placed variable's block.
     pub const fn base_block(self) -> Option<GoalBlock> {
         match self {
@@ -155,6 +177,7 @@ impl GoalType {
             Self::Resource => Some(GoalBlock::GoalRow),
             Self::Tier => Some(GoalBlock::Choice),
             Self::Variable => None,
+            Self::Records => Some(GoalBlock::RecordList),
         }
     }
 
@@ -165,13 +188,14 @@ impl GoalType {
             Self::Resource => RESOURCE_REQUIRED,
             Self::Tier => TIER_REQUIRED,
             Self::Variable => VARIABLE_REQUIRED,
+            Self::Records => RECORDS_REQUIRED,
         }
     }
 
     /// The members an entry of the type may hold besides the required ones.
     const fn optional(self) -> &'static [&'static str] {
         match self {
-            Self::Heading | Self::Note | Self::Tier => COMMON_OPTIONAL,
+            Self::Heading | Self::Note | Self::Tier | Self::Records => COMMON_OPTIONAL,
             Self::Resource => RESOURCE_OPTIONAL,
             Self::Variable => VARIABLE_OPTIONAL,
         }
@@ -183,6 +207,8 @@ const RESOURCE_REQUIRED: &[&str] = &["name", "type", "title", "governs"];
 const TIER_REQUIRED: &[&str] = &["name", "type", "title", "governs", "options", "default"];
 /// Workflow #463 V1: a placement writes no texts and no value of its own.
 const VARIABLE_REQUIRED: &[&str] = &["name", "type"];
+/// Workflow #455 RR1: a `records` entry names its table and the most records it keeps.
+const RECORDS_REQUIRED: &[&str] = &["name", "type", "title", "table", "max_records"];
 const COMMON_OPTIONAL: &[&str] = &["block", "help"];
 const RESOURCE_OPTIONAL: &[&str] = &["block", "help", "rate"];
 const VARIABLE_OPTIONAL: &[&str] = &["block"];
@@ -208,11 +234,13 @@ pub enum GoalBlock {
     /// Values in an order a person sets, with search when the list is long (an `ordered`
     /// variable).
     OrderedList,
+    /// Workflow #455 RR1: the records of whom to raise and to which grade (`records`).
+    RecordList,
 }
 
 impl GoalBlock {
-    /// The seven blocks of version 2, version 1's.
-    pub const ALL: [Self; 7] = [
+    /// The eight blocks of version 3: version 2's seven (version 1's) and `record_list`.
+    pub const ALL: [Self; 8] = [
         Self::Group,
         Self::Text,
         Self::GoalRow,
@@ -220,6 +248,7 @@ impl GoalBlock {
         Self::Choice,
         Self::Switch,
         Self::OrderedList,
+        Self::RecordList,
     ];
 
     /// The block's word in the file.
@@ -232,6 +261,7 @@ impl GoalBlock {
             Self::Choice => "choice",
             Self::Switch => "switch",
             Self::OrderedList => "ordered_list",
+            Self::RecordList => "record_list",
         }
     }
 
@@ -321,6 +351,13 @@ pub enum DeclaredGoalKind {
     },
     /// Workflow #463 V1: the place of the variable the entry's name names.
     Variable,
+    /// Workflow #455 RR1: the table of the root's `goal-tables.json` the records are keys of
+    /// (`table`), and the most records the entry keeps (`max_records`, 1 to
+    /// [`MAX_GOAL_RECORDS`]). Its default is "no record": the entry writes none.
+    Records {
+        table: String,
+        max_records: u64,
+    },
 }
 
 impl DeclaredGoalKind {
@@ -331,6 +368,7 @@ impl DeclaredGoalKind {
             Self::Resource { .. } => GoalType::Resource,
             Self::Tier { .. } => GoalType::Tier,
             Self::Variable => GoalType::Variable,
+            Self::Records { .. } => GoalType::Records,
         }
     }
 }
@@ -432,6 +470,12 @@ pub struct GoalReferences {
     /// Workflow #463 V1: the variables the packages of the root declare, by name; none until a
     /// reader adds them, so that every placement is then `goal_variable_unknown`.
     pub variables: BTreeMap<String, GoalVariable>,
+    /// Workflow #455 RR1: the tables of the root's `goal-tables.json` a `records` entry may name:
+    /// `Some` of the tables of a file the reader and its references accept, `Some` empty (the
+    /// default) for a root without the file, so that every records entry is then
+    /// `goal_table_unknown`; `None` for a root whose file is refused: a records entry's table is
+    /// then not judged (that file's problems are its own, and it applies no records entry).
+    pub tables: Option<BTreeSet<String>>,
     /// The packages of the game root's `bundle.json` by id ([`GoalReferences::new`]). Workflow
     /// #455 G-SLx (register §1.501): only which packages the root has; until 0.12.77 each with
     /// whether it can do something irreversible.
@@ -586,6 +630,7 @@ impl GoalReferences {
             pools: BTreeMap::new(),
             rules: BTreeMap::new(),
             variables: BTreeMap::new(),
+            tables: Some(BTreeSet::new()),
             packages,
         }
     }
@@ -603,18 +648,19 @@ impl GoalReferences {
 ///
 /// - `goal_out_of_limits` (fix round 1): the file is larger than [`MAX_STANDARD_PACK_GOALS_BYTES`]
 ///   (the whole document); a list, a map, a text's locales, or the bytes of a name, an option
-///   value, an id, a locale or a text outside its limit (at what exceeds);
+///   value, an id, a locale or a text outside its limit (at what exceeds); Workflow #455 RR1: a
+///   `records` entry's `max_records` outside 1 to [`MAX_GOAL_RECORDS`];
 /// - `malformed`: no JSON or no object (the whole document; a byte-order mark too); a member
 ///   repeated in one object, unknown, missing or not of its type (an integer outside the safe
 ///   integers too), a `schema_version` other than [`STANDARD_PACK_GOALS_SCHEMA_VERSION`] and
-///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`] (a version this build does not know yet), a
-///   name, an option value or an id outside its form;
-/// - `goal_version_retired` (Workflow #463 V1 fix round 3): `schema_version` is
-///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION`], version 1, at `/schema_version`; the document
-///   is read no further;
+///   the [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSIONS`] (a version this build does not know yet),
+///   a name, an option value or an id outside its form;
+/// - `goal_version_retired` (Workflow #463 V1 fix round 3): `schema_version` is one of the
+///   [`STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSIONS`], version 1 or (Workflow #455 RR1) version 2,
+///   at `/schema_version`; the document is read no further;
 /// - `game_mismatch`: `game` is not the directory's;
 /// - `goal_name_duplicate`: a name an earlier entry has (at the later `name`);
-/// - `goal_type_unknown`: a `type` that is none of the five of version 2 (Workflow #463 V1: the
+/// - `goal_type_unknown`: a `type` that is none of the six of version 3 (Workflow #463 V1: the
 ///   four types version 1 governed packages with too);
 /// - `goal_block_mismatch`: a `block` other than the type's base block, or (Workflow #463 V1) a
 ///   placement's `block` that is no block a variable is shown with;
@@ -669,7 +715,10 @@ pub fn parse_standard_pack_goals(
 ///   root declares, at its `name`) and `goal_block_mismatch` (a placement's `block` is not the
 ///   placed variable's, at its `block`);
 /// - Workflow #455 TK-1: `goal_variable_rule_given` (a placement places a variable only a rule
-///   gives, `given_by`, which is no person's to set, at its `name`).
+///   gives, `given_by`, which is no person's to set, at its `name`);
+/// - Workflow #455 RR1: `goal_table_unknown` (a `records` entry's table is no table of the root's
+///   accepted `goal-tables.json`, [`GoalReferences::tables`], at its `table`; not judged while that
+///   file is refused).
 ///
 /// Workflow #455 G-SLx (register §1.501): `goal_governs_irreversible`, which until 0.12.77 an
 /// entry got that governed, reached or followed a package that can do something irreversible, is
@@ -738,6 +787,18 @@ pub fn check_standard_pack_goal_references(
                     );
                 }
             }
+            // Workflow #455 RR1: a records entry names a table of the root's `goal-tables.json`,
+            // judged against an accepted file only: while that file is refused its own problems
+            // say why, and it applies no records entry.
+            DeclaredGoalKind::Records { table, .. } => {
+                if references
+                    .tables
+                    .as_ref()
+                    .is_some_and(|tables| !tables.contains(table))
+                {
+                    check.issue(StandardPackProblem::GoalTableUnknown, at(&pointer, "table"));
+                }
+            }
         }
     }
     check.issues
@@ -793,14 +854,23 @@ pub(crate) fn bounded(
 /// reader read before it, with the file it reports in.
 pub(crate) struct Check {
     file: &'static str,
+    /// Workflow #455 RR1: the word of a bound of the shape broken: `goal_out_of_limits`, or the
+    /// word of the file [`Check::with_limits`] names (`goal-tables.json`'s `table_out_of_limits`).
+    limits: StandardPackProblem,
     issues: Vec<StandardPackRootIssue>,
 }
 
 impl Check {
     /// The checks of a document of `file`, with no issue yet.
     pub(crate) const fn new(file: &'static str) -> Self {
+        Self::with_limits(file, StandardPackProblem::GoalOutOfLimits)
+    }
+
+    /// Workflow #455 RR1: the checks of a document of `file` whose broken bounds are `limits`.
+    pub(crate) const fn with_limits(file: &'static str, limits: StandardPackProblem) -> Self {
         Self {
             file,
+            limits,
             issues: Vec::new(),
         }
     }
@@ -808,6 +878,11 @@ impl Check {
     /// The issues found so far, in the order they were found.
     pub(crate) fn issues(&self) -> &[StandardPackRootIssue] {
         &self.issues
+    }
+
+    /// Workflow #455 RR1: the issues found, in the order they were found.
+    pub(crate) fn into_issues(self) -> Vec<StandardPackRootIssue> {
+        self.issues
     }
 
     pub(crate) fn issue(&mut self, problem: StandardPackProblem, pointer: impl Into<String>) {
@@ -821,9 +896,10 @@ impl Check {
         self.issue(StandardPackProblem::Malformed, pointer);
     }
 
-    /// Fix round 1: a bound of the shape broken, at what exceeds it.
+    /// Fix round 1: a bound of the shape broken, at what exceeds it (Workflow #455 RR1: with the
+    /// file's own word).
     pub(crate) fn out_of_limits(&mut self, pointer: impl Into<String>) {
-        self.issue(StandardPackProblem::GoalOutOfLimits, pointer);
+        self.issue(self.limits, pointer);
     }
 
     /// An object of the members `required` and `optional`: an unknown member and a missing one
@@ -989,8 +1065,11 @@ impl Check {
             None | Some(Some(STANDARD_PACK_GOALS_SCHEMA_VERSION)) => {}
             // Workflow #463 V1 fix round 3: version 1, which release 0.12.60 read, is read no
             // more and says so with a word of its own; the document is read no further, as an
-            // entry of an unknown type is not.
-            Some(Some(STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSION)) => {
+            // entry of an unknown type is not. Workflow #455 RR1: so is version 2, which releases
+            // 0.12.61 to 0.12.91 read.
+            Some(Some(retired))
+                if STANDARD_PACK_GOALS_RETIRED_SCHEMA_VERSIONS.contains(&retired) =>
+            {
                 self.issue(StandardPackProblem::GoalVersionRetired, "/schema_version");
                 return None;
             }
@@ -1169,6 +1248,47 @@ impl Check {
                 })
             }
             GoalType::Variable => Some(DeclaredGoalKind::Variable),
+            // Workflow #455 RR1: the table's name, of an entry name's form, and the most records.
+            GoalType::Records => {
+                let table = object
+                    .get("table")
+                    .and_then(|table| self.table_name(table, &at(pointer, "table")));
+                let max_records = object
+                    .get("max_records")
+                    .and_then(|count| self.max_records(count, &at(pointer, "max_records")));
+                Some(DeclaredGoalKind::Records {
+                    table: table?,
+                    max_records: max_records?,
+                })
+            }
+        }
+    }
+
+    /// Workflow #455 RR1: a `records` entry's `table`, the name of a table of `goal-tables.json`,
+    /// of an entry name's form ([`goal_name`]; its length [`bounded`]).
+    fn table_name(&mut self, value: &Value, pointer: &str) -> Option<String> {
+        let Some(name) = value.as_str() else {
+            self.malformed(pointer);
+            return None;
+        };
+        match bounded(name, MAX_GOAL_NAME_BYTES, goal_name) {
+            None => Some(name.to_owned()),
+            Some(problem) => {
+                self.issue(problem, pointer);
+                None
+            }
+        }
+    }
+
+    /// Workflow #455 RR1: a `records` entry's `max_records`, a whole number ([`Check::count`]:
+    /// `malformed` otherwise) from 1 to [`MAX_GOAL_RECORDS`] (`goal_out_of_limits` otherwise).
+    fn max_records(&mut self, value: &Value, pointer: &str) -> Option<u64> {
+        let count = self.count(value, pointer)?;
+        if (1..=MAX_GOAL_RECORDS).contains(&count) {
+            Some(count)
+        } else {
+            self.out_of_limits(pointer);
+            None
         }
     }
 

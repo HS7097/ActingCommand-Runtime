@@ -23,6 +23,14 @@
 //! Its fix round 1 judged the packages by the rule of irreversibility over the whole root and
 //! listed a variable of a package that counted as irreversible as not applying, until Workflow
 //! #455 G-SLx (register §1.501), since which such a variable applies as any other.
+//!
+//! Workflow #455 RR1 (register §1.535; contracts/standard-pack-goal-tables.md): the root's
+//! `goal-tables.json` is checked in the same place ([`goal_issues`]): read with the contract
+//! crate's reader (`parse_standard_pack_goal_tables`), and an accepted file's pools held to the
+//! composed schedule's (`check_standard_pack_goal_table_references`) with the same references the
+//! goal declaration is held to, the pools' one judgement of whether a goal can be put on them; a
+//! file both accept gives its tables to the references of `goals.json`, whose `records` entries
+//! name them. Each file's problems are its own, and each is reported as `goals.json`'s are.
 
 use crate::package_directory::PACK_DEADLINE;
 use crate::standard_pack_check::{CHECK_LABEL, root_invalid, root_issue_outcome};
@@ -31,9 +39,11 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     DeclaredCapabilities, GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
-    MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE, RootGoalDocument, RootPackageVariables,
-    StandardPackRoot, StandardPackRootIssue, VariableOrigins, check_standard_pack_goal_references,
-    goal_variables, judge_root_variables, parse_standard_pack_goals, parse_standard_pack_schedule,
+    MAX_STANDARD_PACK_GOAL_TABLES_BYTES, MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE,
+    RootGoalDocument, RootPackageVariables, StandardPackRoot, StandardPackRootIssue,
+    VariableOrigins, check_standard_pack_goal_references,
+    check_standard_pack_goal_table_references, goal_variables, judge_root_variables,
+    parse_standard_pack_goal_tables, parse_standard_pack_goals, parse_standard_pack_schedule,
     take_catalog_business,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
@@ -50,6 +60,19 @@ use std::time::Instant;
 /// `goal_out_of_limits` (G-R1 fix round 1), never an error of `standard-pack check`. A file that
 /// cannot be read is a usage error naming it.
 pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
+    read_bounded_file(path, MAX_STANDARD_PACK_GOALS_BYTES)
+}
+
+/// Workflow #455 RR1: the bytes of the game root's `goal-tables.json` at `path`, as
+/// [`read_goals_file`] reads `goals.json`: `None` when the root holds none, through the file's
+/// bound plus one byte (a file of any size is then the reader's `table_out_of_limits`).
+pub(crate) fn read_goal_tables_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
+    read_bounded_file(path, MAX_STANDARD_PACK_GOAL_TABLES_BYTES)
+}
+
+/// The bytes of the file at `path` through `bound` plus one byte, `None` when it does not exist;
+/// a file that cannot be read is a usage error naming it.
+fn read_bounded_file(path: &Path, bound: usize) -> LabResult<Option<Vec<u8>>> {
     let unreadable = |error: io::Error| LabError::usage(format!("{}: {error}", path.display()));
     let file = match fs::File::open(path) {
         Ok(file) => file,
@@ -57,7 +80,7 @@ pub(crate) fn read_goals_file(path: &Path) -> LabResult<Option<Vec<u8>>> {
         Err(error) => return Err(unreadable(error)),
     };
     let mut bytes = Vec::new();
-    file.take(MAX_STANDARD_PACK_GOALS_BYTES as u64 + 1)
+    file.take(bound as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(unreadable)?;
     Ok(Some(bytes))
@@ -94,14 +117,38 @@ fn package_variables(
     Ok(variables)
 }
 
-/// The problems of the goal declaration `goals` (the bytes of `goals.json`) of the game root
-/// `root` of `game`, in file order: the reader's, or, for a file the reader accepts, its
-/// references'. `schedule` is `schedule.json`'s bytes and path when the root holds one (the
-/// composition has accepted it); each of its rules is held with the package it runs (Workflow #455
-/// G-SLx, register §1.501: no longer with the rules that follow it); `pack_directory` is where a
-/// registry entry's directory lies. Workflow #463 V1: no entry takes a table any more, so no
-/// table is read. Empty for a file that keeps every rule. A package that cannot be read is the
-/// caller's error, not a problem of the file. Workflow #477 CV-2 (register §1.508): a
+/// Workflow #455 RR1: the bytes of the game root's two goal files a check holds to the root, each
+/// `None` when the root holds none.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct GoalFiles<'a> {
+    /// `goals.json`.
+    pub(crate) goals: Option<&'a [u8]>,
+    /// `goal-tables.json`.
+    pub(crate) tables: Option<&'a [u8]>,
+}
+
+/// Workflow #455 RR1: the problems of each of a game root's two goal files, each in its file's
+/// order; both empty for files that keep every rule.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GoalIssues {
+    /// `goals.json`'s.
+    pub(crate) goals: Vec<StandardPackRootIssue>,
+    /// `goal-tables.json`'s.
+    pub(crate) tables: Vec<StandardPackRootIssue>,
+}
+
+/// The problems of the goal declaration (the bytes of `goals.json`) and (Workflow #455 RR1) of
+/// the table of rules for raising (the bytes of `goal-tables.json`) of the game root `root` of
+/// `game`, each in file order: the reader's, or, for a file the reader accepts, its references'.
+/// `schedule` is `schedule.json`'s bytes and path when the root holds one (the composition has
+/// accepted it); each of its rules is held with the package it runs (Workflow #455 G-SLx, register
+/// §1.501: no longer with the rules that follow it), and each of its pools is judged once, for
+/// both files, by whether a goal can be put on it; `pack_directory` is where a registry entry's
+/// directory lies. RR1: the tables file is held to the pools first; one that both its reader and
+/// its references accept gives its tables to the references of `goals.json` (a `records` entry
+/// names one), one that is refused leaves a records entry's table unjudged, and a root without it
+/// has no table. A package that cannot be read is the caller's error, not a problem of a file; the
+/// packages are read only for an accepted `goals.json`. Workflow #477 CV-2 (register §1.508): a
 /// `schedule.json` that names `catalog_business` is held with its rules' business part taken from
 /// `catalog`, the root's `pack-catalog.json`, as the composer takes it (a `tier` entry's rule has
 /// its fixed value there); a refusal of it is the caller's error, at the file it names.
@@ -110,20 +157,44 @@ pub(crate) fn goal_issues(
     root: &StandardPackRoot,
     schedule: Option<(&[u8], &Path)>,
     catalog: Option<&[u8]>,
-    goals: &[u8],
+    files: GoalFiles<'_>,
     pack_directory: &dyn Fn(&str) -> PathBuf,
-) -> LabResult<Vec<StandardPackRootIssue>> {
-    let declared = match parse_standard_pack_goals(goals, game) {
-        Ok(declared) => declared,
-        Err(issues) => return Ok(issues),
+) -> LabResult<GoalIssues> {
+    let mut found = GoalIssues::default();
+    let declared = match files
+        .goals
+        .map(|bytes| parse_standard_pack_goals(bytes, game))
+    {
+        None => None,
+        Some(Ok(declared)) => Some(declared),
+        Some(Err(issues)) => {
+            found.goals = issues;
+            None
+        }
     };
-    // G-R1 fix round 1: every package of the root, each read by the Runtime's metadata reader in
-    // registry order as the remedy report reads them (one it refuses is the check's error).
-    let variables = package_variables(root, pack_directory)?;
+    let tables = match files
+        .tables
+        .map(|bytes| parse_standard_pack_goal_tables(bytes, game))
+    {
+        None => None,
+        Some(Ok(tables)) => Some(tables),
+        Some(Err(issues)) => {
+            found.tables = issues;
+            None
+        }
+    };
+    if declared.is_none() && tables.is_none() {
+        return Ok(found);
+    }
     let mut references =
         GoalReferences::new(root.registry.package_ids().map(str::to_owned).collect());
-    // Workflow #463 V1: every variable a package declares, which a placement names.
-    references.variables = goal_variables(&variables);
+    if declared.is_some() {
+        // G-R1 fix round 1: every package of the root, each read by the Runtime's metadata reader
+        // in registry order as the remedy report reads them (one it refuses is the check's
+        // error). Workflow #463 V1: every variable a package declares, which a placement names.
+        let variables = package_variables(root, pack_directory)?;
+        references.variables = goal_variables(&variables);
+    }
     if let Some((bytes, path)) = schedule {
         let mut schedule = parse_standard_pack_schedule(bytes)
             .map_err(|issue| root_invalid(game, path, &issue))?;
@@ -164,7 +235,22 @@ pub(crate) fn goal_issues(
             );
         }
     }
-    Ok(check_standard_pack_goal_references(&declared, &references))
+    // Workflow #455 RR1: the tables' pools, then the tables a records entry may name: none of a
+    // root without the file (the references' default), those of a file that keeps every rule, and
+    // no judgement while the root's file is refused.
+    if files.tables.is_some() {
+        references.tables = match &tables {
+            Some(tables) => {
+                found.tables = check_standard_pack_goal_table_references(tables, &references);
+                found.tables.is_empty().then(|| tables.table_names())
+            }
+            None => None,
+        };
+    }
+    if let Some(declared) = &declared {
+        found.goals = check_standard_pack_goal_references(declared, &references);
+    }
+    Ok(found)
 }
 
 /// [`root_irreversibility`]'s reading of the package at `path`: what the Runtime's metadata reader

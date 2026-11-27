@@ -20,9 +20,9 @@ use crate::{CliError, FlagArgs};
 use actingcommand_contract::codes::{ContractCode, SharedCode};
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
 use actingcommand_contract::{
-    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE,
-    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NOTICES_DIRECTORY,
-    STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOAL_TABLES_FILE,
+    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY,
 };
 use serde::Serialize;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
@@ -45,8 +45,9 @@ const ROOT_DECLARATIONS: [&str; 6] = [
 /// The root files the command reads besides `packs/` and `regression/`, whose bytes must be
 /// their blobs. Workflow #455 GOALS-PACK-1: and `goals.json`, which the bundle of both rows carries
 /// (Workflow #464 P2 read it for `standard-pack build` only), so that the file a zip carries is
-/// the committed blob and never an ignored file.
-const ROOT_INPUTS: [&str; 8] = [
+/// the committed blob and never an ignored file; Workflow #455 RR1: and `goal-tables.json`, for the
+/// same reason.
+const ROOT_INPUTS: [&str; 9] = [
     "applications.json",
     "maintenance.json",
     "pages.json",
@@ -55,6 +56,7 @@ const ROOT_INPUTS: [&str; 8] = [
     "declaration-exclusions.json",
     "manifest.yaml",
     STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_GOAL_TABLES_FILE,
 ];
 /// Workflow #464 P2: the root files `standard-pack build` reads besides [`ROOT_INPUTS`], and the
 /// root directories it reads: every other input its bundle carries, so that each is the committed

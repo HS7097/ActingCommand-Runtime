@@ -38,6 +38,9 @@ pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
                 "--notices",
                 // Workflow #455 G-R1: the game's goal declaration.
                 "--goals",
+                // Workflow #455 RR1: the game's rules for raising, whose tables a records entry
+                // names.
+                "--goal-tables",
             ],
             switches: &[],
             refused: &[],
@@ -56,7 +59,9 @@ pub(crate) const BUNDLE_READS: crate::flag_args::reads::FlagReads =
 /// the package author's notice texts: every file is held to the notices rules before anything is
 /// written, then laid byte for byte into `notices/` beside `bundle.json`. Workflow #455 G-R1:
 /// `--goals` names the game's `goals.json`: read after the composition and held to the bundle's
-/// root, then laid beside `bundle.json`; a refused file refuses the bundle.
+/// root, then laid beside `bundle.json`; a refused file refuses the bundle. Workflow #455 RR1:
+/// `--goal-tables` names the game's `goal-tables.json`, read and laid the same way, its pools held
+/// to the bundle's, and the tables a `records` entry of `--goals` names.
 ///
 /// Workflow #434 LAB-5B3: whether a flag was given is read through `FlagArgs::given`.
 pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
@@ -120,6 +125,7 @@ pub(super) fn run_bundle(flags: &FlagArgs) -> CliOutcome<Value> {
             loading: root_file("--loading")?,
             notices: root_file("--notices")?,
             goals: root_file("--goals")?,
+            goal_tables: root_file("--goal-tables")?,
         },
     };
     let mut lab = super::env_detection::build_readonly_lab()?;

@@ -16,8 +16,11 @@
 //! the packages that declare its variable being packages of the root. V1 fix round 3 made the
 //! document of the five types
 //! version 2: the fixtures write `actingcommand.goals.v2`, "another version" is a later one, and a
-//! version 1 document is `goal_version_retired` and read no further. A made-up game `neutral`;
-//! every id, name and text is a placeholder.
+//! version 1 document is `goal_version_retired` and read no further. Workflow #455 RR1 (register
+//! §1.535) made the document version 3, version 2's types and `records`: the fixtures write
+//! `actingcommand.goals.v3` (their entries as they were), one entry of each type includes a
+//! `records` entry, "another version" is version 4, and a version 2 document is retired as version
+//! 1 is. A made-up game `neutral`; every id, name and text is a placeholder.
 
 use super::*;
 use serde_json::{Value, json};
@@ -26,8 +29,8 @@ const GAME: &str = "neutral";
 
 /// The design's neutral example, as the contract writes it (Workflow #463 V1: its third entry
 /// places the variable `route` some package of the root declares; version 2 since its fix round
-/// 3).
-const NEUTRAL_EXAMPLE: &str = r#"{"schema_version": "actingcommand.goals.v2", "game": "neutral",
+/// 3; Workflow #455 RR1: version 3, its entries as they were, which read as version 2 read them).
+const NEUTRAL_EXAMPLE: &str = r#"{"schema_version": "actingcommand.goals.v3", "game": "neutral",
  "entries": [
   {"name": "stock", "type": "heading", "title": {"en": "Stock", "zh-Hans": "储备"}},
   {"name": "points", "type": "resource", "governs": {"pool": "pool.neutral.points"},
@@ -150,11 +153,11 @@ fn goals_neutral_example_reads_to_typed_entries() {
     assert!(issues.is_empty(), "{issues:?}");
 }
 
-/// One entry of each of the five types of version 2, each with every member its type has, and a
-/// placement that writes no block.
+/// One entry of each of the six types of version 3 (Workflow #455 RR1 added `records`), each with
+/// every member its type has, and a placement that writes no block.
 fn every_type() -> Value {
     json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": GAME,
         "entries": [
             {"name": "group_a", "type": "heading", "block": "group",
@@ -172,7 +175,9 @@ fn every_type() -> Value {
                          {"value": "more", "title": {"en": "More"}, "scale_milli": 2000}],
              "default": "normal"},
             {"name": "route", "type": "variable", "block": "choice"},
-            {"name": "keep", "type": "variable"}
+            {"name": "keep", "type": "variable"},
+            {"name": "raise", "type": "records", "block": "record_list", "table": "heroes",
+             "max_records": 16, "title": {"en": "Whom to raise"}, "help": {"en": "Records."}}
         ]
     })
 }
@@ -236,9 +241,17 @@ fn goals_each_type_reads_its_members() {
                 &DeclaredGoalKind::Variable
             ),
             ("keep", None, &DeclaredGoalKind::Variable),
+            (
+                "raise",
+                Some(GoalBlock::RecordList),
+                &DeclaredGoalKind::Records {
+                    table: "heroes".to_owned(),
+                    max_records: 16,
+                }
+            ),
         ]
     );
-    // Every type of version 2 once or more, in the file's order; the texts as written, and none
+    // Every type of version 3 once or more, in the file's order; the texts as written, and none
     // for a placement.
     assert_eq!(
         goals
@@ -259,10 +272,12 @@ fn goals_each_type_reads_its_members() {
     );
     assert_eq!(
         goals.names_besides_placements(),
-        BTreeSet::from(["group_a", "about", "points", "weight"])
+        BTreeSet::from(["group_a", "about", "points", "weight", "raise"])
     );
-    // A root that offers every reference holds them all.
+    // A root that offers every reference holds them all (Workflow #455 RR1: a table of its
+    // `goal-tables.json` too).
     let mut references = GoalReferences::new(packages(&["neutral.collect", "neutral.spend"]));
+    references.tables = Some(BTreeSet::from(["heroes".to_owned()]));
     references
         .pools
         .insert("pool.neutral.points".to_owned(), true);
@@ -331,7 +346,7 @@ fn goals_reader_is_strict() {
             issue(Problem::GoalTypeUnknown, "/entries/1/type"),
         ),
         (
-            "a sixth type, a later version's",
+            "a seventh type, a later version's",
             with(|value| value["entries"][1]["type"] = json!("slider")),
             issue(Problem::GoalTypeUnknown, "/entries/1/type"),
         ),
@@ -357,10 +372,11 @@ fn goals_reader_is_strict() {
             issue(Problem::Malformed, "/entries/1/type"),
         ),
         // V1 fix round 3: version 2 is the file's; a version this build does not know yet keeps
-        // `malformed`, a word other than version 1's `goal_version_retired`.
+        // `malformed`, a word other than version 1's `goal_version_retired`. Workflow #455 RR1:
+        // version 3 is the file's, and the later version is version 4.
         (
             "a later version",
-            with(|value| value["schema_version"] = json!("actingcommand.goals.v3")),
+            with(|value| value["schema_version"] = json!("actingcommand.goals.v4")),
             issue(Problem::Malformed, "/schema_version"),
         ),
         (
@@ -396,7 +412,7 @@ fn goals_reader_is_strict() {
     }
 
     // A member written twice in one object, no JSON, and a file over 1 MiB.
-    let repeated = br#"{"schema_version": "actingcommand.goals.v2", "game": "neutral",
+    let repeated = br#"{"schema_version": "actingcommand.goals.v3", "game": "neutral",
         "entries": [{"name": "stock", "name": "stock", "type": "heading", "title": {"en": "Stock"}}]}"#;
     let large = vec![b' '; MAX_STANDARD_PACK_GOALS_BYTES + 1];
     for (case, bytes, expected) in [
@@ -504,7 +520,7 @@ fn gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root()
         PACKAGES.map(|package_id| json!({"name": variable_of(package_id), "type": "variable"})),
     );
     let goals = read(&json!({
-        "schema_version": "actingcommand.goals.v2",
+        "schema_version": "actingcommand.goals.v3",
         "game": GAME,
         "entries": entries
     }))
@@ -548,5 +564,152 @@ fn gslx_goals_references_hold_rules_and_placements_to_the_packages_of_the_root()
     assert_eq!(
         check_standard_pack_goal_references(&goals, &GoalReferences::new(BTreeSet::new())),
         unknown
+    );
+}
+
+/// Workflow #455 RR1: a version 3 document of one `records` entry beside a heading, the entry
+/// changed by `change`.
+fn with_records(change: impl Fn(&mut Value)) -> Value {
+    let mut value = json!({
+        "schema_version": "actingcommand.goals.v3",
+        "game": GAME,
+        "entries": [
+            {"name": "stock", "type": "heading", "title": {"en": "Stock"}},
+            {"name": "raise", "type": "records", "table": "heroes", "max_records": 16,
+             "title": {"en": "Whom to raise"}}
+        ]
+    });
+    change(&mut value["entries"][1]);
+    value
+}
+
+/// Workflow #455 RR1 (register §1.535; contracts/standard-pack-goals.md, "The records entry"):
+/// a `records` entry reads with its table and its bound, its block the type's base block; each of
+/// its members and its bound is refused at its pointer; and its table is held to the tables of the
+/// root's accepted `goal-tables.json`: known it passes, unknown (a root without the file too) it is
+/// `goal_table_unknown` at its `table`, and while the root's file is refused it is not judged.
+#[test]
+fn rr1_a_records_entry_reads_and_is_held_to_the_root_s_tables() {
+    use StandardPackProblem as Problem;
+    let goals = read(&with_records(|_| {}))
+        .unwrap_or_else(|issues| panic!("a records entry reads: {issues:?}"));
+    let raise = goals.entry("raise").expect("the records entry");
+    assert_eq!(
+        (raise.goal_type(), raise.block, &raise.kind),
+        (
+            GoalType::Records,
+            Some(GoalBlock::RecordList),
+            &DeclaredGoalKind::Records {
+                table: "heroes".to_owned(),
+                max_records: 16,
+            }
+        )
+    );
+    assert_eq!(raise.title, Some(text(&[("en", "Whom to raise")])));
+    for bound in [1, MAX_GOAL_RECORDS] {
+        assert!(
+            read(&with_records(|entry| entry["max_records"] = json!(bound))).is_ok(),
+            "{bound} records"
+        );
+    }
+    let cases = [
+        (
+            "no record",
+            with_records(|entry| entry["max_records"] = json!(0)),
+            issue(Problem::GoalOutOfLimits, "/entries/1/max_records"),
+        ),
+        (
+            "more records than the bound",
+            with_records(|entry| entry["max_records"] = json!(MAX_GOAL_RECORDS + 1)),
+            issue(Problem::GoalOutOfLimits, "/entries/1/max_records"),
+        ),
+        (
+            "a bound that is no whole number",
+            with_records(|entry| entry["max_records"] = json!(-1)),
+            issue(Problem::Malformed, "/entries/1/max_records"),
+        ),
+        (
+            "no table",
+            with_records(|entry| {
+                entry.as_object_mut().expect("the entry").remove("table");
+            }),
+            issue(Problem::Malformed, "/entries/1/table"),
+        ),
+        (
+            "a table outside a name's form",
+            with_records(|entry| entry["table"] = json!("Heroes")),
+            issue(Problem::Malformed, "/entries/1/table"),
+        ),
+        (
+            "another type's block",
+            with_records(|entry| entry["block"] = json!("choice")),
+            issue(Problem::GoalBlockMismatch, "/entries/1/block"),
+        ),
+        (
+            "a member another type has",
+            with_records(|entry| entry["governs"] = json!({"pool": "pool.neutral.points"})),
+            issue(Problem::Malformed, "/entries/1/governs"),
+        ),
+    ];
+    for (case, value, expected) in cases {
+        assert_eq!(read(&value).map(|_| ()), Err(vec![expected]), "{case}");
+    }
+
+    let mut references = GoalReferences::new(BTreeSet::new());
+    assert_eq!(
+        check_standard_pack_goal_references(&goals, &references),
+        [issue(Problem::GoalTableUnknown, "/entries/1/table")],
+        "a root without the file"
+    );
+    references.tables = Some(BTreeSet::from(["units".to_owned()]));
+    assert_eq!(
+        check_standard_pack_goal_references(&goals, &references),
+        [issue(Problem::GoalTableUnknown, "/entries/1/table")],
+        "a table the file does not have"
+    );
+    references.tables = Some(BTreeSet::from(["heroes".to_owned(), "units".to_owned()]));
+    assert!(
+        check_standard_pack_goal_references(&goals, &references).is_empty(),
+        "a table of the root's file"
+    );
+    references.tables = None;
+    assert!(
+        check_standard_pack_goal_references(&goals, &references).is_empty(),
+        "a refused file: the table is not judged"
+    );
+}
+
+/// Workflow #455 RR1 (ruling 1): a version 2 document is retired as version 1 is, one problem at
+/// `/schema_version`, read no further (its game neither); the same entries written as version 3
+/// read to what `goals_neutral_example_reads_to_typed_entries` pins, which is what version 2 read
+/// them to.
+#[test]
+fn rr1_version_2_is_retired_and_version_3_reads_its_entries() {
+    let retired = || -> Result<(), Vec<StandardPackRootIssue>> {
+        Err(vec![issue(
+            StandardPackProblem::GoalVersionRetired,
+            "/schema_version",
+        )])
+    };
+    let version_2 = with(|value| value["schema_version"] = json!("actingcommand.goals.v2"));
+    assert_eq!(read(&version_2).map(|_| ()), retired(), "version 2");
+    let other_game = with(|value| {
+        value["schema_version"] = json!("actingcommand.goals.v2");
+        value["game"] = json!("other");
+    });
+    assert_eq!(
+        read(&other_game).map(|_| ()),
+        retired(),
+        "read no further: its game is not judged"
+    );
+    let version_3 = parse_standard_pack_goals(NEUTRAL_EXAMPLE.as_bytes(), GAME)
+        .unwrap_or_else(|issues| panic!("version 3 reads: {issues:?}"));
+    assert_eq!(
+        version_3
+            .entries
+            .iter()
+            .map(DeclaredGoal::goal_type)
+            .collect::<Vec<_>>(),
+        [GoalType::Heading, GoalType::Resource, GoalType::Variable]
     );
 }

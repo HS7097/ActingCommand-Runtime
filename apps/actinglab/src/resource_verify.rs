@@ -643,6 +643,10 @@ pub(super) enum Counts {
         /// repository without the file are as before.
         #[serde(skip_serializing_if = "Option::is_none")]
         goals: Option<GoalsCounts>,
+        /// Workflow #455 RR1: the repository's accepted `goal-tables.json`, which the zip carries
+        /// (its `entries` the counts of its `tables` and `items`); absent without one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        goal_tables: Option<GoalsCounts>,
     },
 }
 
@@ -655,7 +659,8 @@ pub(super) struct ZipCounts {
 
 /// Workflow #455 GOALS-PACK-1: the accepted `goals.json` the bundle step read and the zip carries:
 /// the game whose root it was held to, its repository path and how many entries of each type of
-/// version 2 it holds, every type named.
+/// version 2 it holds, every type named (Workflow #455 RR1: and `records` when it holds one). RR1:
+/// of `goal-tables.json` the same, its `entries` how many `tables` and `items` it declares.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct GoalsCounts {
     pub(super) game: String,

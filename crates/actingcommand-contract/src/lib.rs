@@ -52,6 +52,9 @@ pub mod standard_pack;
 pub mod standard_pack_catalog;
 // Workflow #392 DA-4: a game root's display declaration `display-layout.json` (model 392 §4.1).
 pub mod standard_pack_display;
+// Workflow #455 RR1 (since 0.12.92): a game root's table of the game's rules for raising,
+// `goal-tables.json`, which a `records` entry of `goals.json` names.
+pub mod standard_pack_goal_tables;
 // Workflow #455 G-R1 (since 0.12.60): a game root's goal declaration `goals.json`.
 pub mod standard_pack_goals;
 // Workflow #407 LOAD-1 (since 0.12.37): a game's `loading.json` and a pack's loading copy.
@@ -99,6 +102,7 @@ pub use runtime_observation::*;
 pub use standard_pack::*;
 pub use standard_pack_catalog::*;
 pub use standard_pack_display::*;
+pub use standard_pack_goal_tables::*;
 pub use standard_pack_goals::*;
 pub use standard_pack_loading::*;
 pub use standard_pack_notices::*;

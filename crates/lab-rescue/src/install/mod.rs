@@ -139,6 +139,10 @@ mod gate_451_loadp;
 // round 3, the revision of version 2).
 #[cfg(test)]
 mod gate_455_gr1;
+// Test-only: Workflow #455 RR1, the rescue module's `place` of a bundle's root file
+// `goal-tables.json` and the `package` revision 28 a bundle that carries it declares.
+#[cfg(test)]
+mod gate_455_rr1;
 // Test-only: Workflow #477 PC-1, the rescue module's `place` of a bundle's root file
 // `pack-catalog.json`, of one wrong in its business part, and of a game root that still holds
 // `ui.json`.

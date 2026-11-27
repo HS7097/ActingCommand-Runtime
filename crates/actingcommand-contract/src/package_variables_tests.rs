@@ -789,7 +789,7 @@ fn v1_a_placement_is_held_to_the_variables_the_root_declares() {
     );
     let goals: StandardPackGoals = parse_standard_pack_goals(
         &serde_json::to_vec(&json!({
-            "schema_version": "actingcommand.goals.v2",
+            "schema_version": "actingcommand.goals.v3",
             "game": "neutral",
             "entries": [
                 {"name": "floor", "type": "variable", "block": "number"},
@@ -963,7 +963,7 @@ fn tk1_a_placement_of_a_variable_a_rule_gives_is_refused_at_its_name() {
     );
     let goals: StandardPackGoals = parse_standard_pack_goals(
         &serde_json::to_vec(&json!({
-            "schema_version": "actingcommand.goals.v2",
+            "schema_version": "actingcommand.goals.v3",
             "game": "neutral",
             "entries": [
                 {"name": "pick", "type": "variable"},

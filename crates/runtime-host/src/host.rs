@@ -310,7 +310,7 @@ pub use standard_pack::{StandardPackGameReport, StandardPacksReport, inspect_sta
 // ROUT-L RL-1b: the scheduler workbench, which composes the standard packs' schedule rules.
 mod standard_pack_schedule;
 pub use standard_pack_schedule::{
-    ConfiguredStandardPackSchedule, RootGoals, RootUnread, StandardPackGoalRoot,
+    ConfiguredStandardPackSchedule, RootGoalTables, RootGoals, RootUnread, StandardPackGoalRoot,
     StandardPackGoalRoots, StandardPackSchedulePreview, compose_configured_standard_packs,
     preview_standard_pack_schedule,
 };

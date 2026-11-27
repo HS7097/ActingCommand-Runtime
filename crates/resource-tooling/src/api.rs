@@ -52,6 +52,12 @@ pub struct StandardPackRootFiles {
     /// the bundle's root, then laid beside `bundle.json` byte for byte; a refused file refuses the
     /// bundle. Without it nothing of the output changes.
     pub goals: Option<PathBuf>,
+    /// Workflow #455 RR1 (`--goal-tables`): the game's rules for raising, `goal-tables.json`
+    /// (contracts/standard-pack-goal-tables.md), whose tables a `records` entry of `goals.json`
+    /// names: read after the composition and its pools held to the bundle's root, then laid
+    /// beside `bundle.json` byte for byte; a refused file refuses the bundle. Without it nothing
+    /// of the output changes.
+    pub goal_tables: Option<PathBuf>,
 }
 
 /// Workflow #407 LOAD-1: `actinglab package loading --root-file <loading.json> --packs-root

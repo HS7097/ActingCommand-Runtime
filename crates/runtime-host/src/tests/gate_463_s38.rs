@@ -107,7 +107,7 @@ fn place_with_goals_taking_pick(packs: &Path) {
     place_game_root(packs);
     write_json(
         &packs.join(GAME_A).join("goals.json"),
-        &json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A,
+        &json!({"schema_version": "actingcommand.goals.v3", "game": GAME_A,
                 "entries": [{"name": "pick", "type": "heading", "title": {"en": "Pick"}}]}),
     );
 }

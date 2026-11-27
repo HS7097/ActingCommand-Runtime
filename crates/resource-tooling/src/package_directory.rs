@@ -20,7 +20,8 @@
 //! `interfaces.json` is written either way. Workflow #455 G-R1: with `--goals`, `goals.json` is
 //! read after the composition and its references held to the bundle's root (`standard_pack_goals`,
 //! no table: the bundle holds none); a refused file refuses the bundle, and an accepted one is laid
-//! beside `bundle.json` byte for byte with the other root files.
+//! beside `bundle.json` byte for byte with the other root files. Workflow #455 RR1: so is
+//! `--goal-tables`, `goal-tables.json`, by the same check.
 
 use crate::codes::ResourceToolingCode;
 use crate::notices_directory::{NoticesDirectory, bundle_source};
@@ -28,7 +29,7 @@ use crate::package_loading::{LoadingRoot, check_loading, named_packs, stale_copi
 use crate::standard_pack_check::{
     RootFileInputs, cross_check, probe_keys_marked, store_update_cooldowns,
 };
-use crate::standard_pack_goals::{goal_issues, refuse_goals, root_irreversibility};
+use crate::standard_pack_goals::{GoalFiles, goal_issues, refuse_goals, root_irreversibility};
 use crate::standard_pack_schedule::{ScheduleReport, report_schedule, switched_catalog};
 use crate::{PackageBundleRequest, PackageBundleResponse};
 use actingcommand_contract::outcome::{Detail, Outcome};
@@ -372,7 +373,9 @@ fn write_bundle(
         // Workflow #455 G-R1 (register §1.356): `--goals`, after the composition; a refused file
         // refuses the bundle as a refused root file does. Workflow #463 V1: no entry takes a
         // table any more, and a placement is held to the variables the bundle's packs declare.
-        if let Some(goals) = root_files.goals() {
+        // Workflow #455 RR1 (register §1.535): `--goal-tables` with it, by the same check; a
+        // refused `goals.json` refuses the bundle first, then a refused `goal-tables.json`.
+        if root_files.goals().is_some() || root_files.goal_tables().is_some() {
             // Workflow #477 CV-2: a `--schedule` that names `catalog_business` is held with the
             // `pack-catalog.json` beside it, as its composition above was.
             let catalog = match root_files.schedule() {
@@ -386,10 +389,20 @@ fn write_bundle(
                     .schedule()
                     .map(|schedule| (schedule.bytes.as_slice(), schedule.path.as_path())),
                 catalog.as_deref(),
-                &goals.bytes,
+                GoalFiles {
+                    goals: root_files.goals().map(|goals| goals.bytes.as_slice()),
+                    tables: root_files
+                        .goal_tables()
+                        .map(|tables| tables.bytes.as_slice()),
+                },
                 &|directory: &str| packs_dir.join(directory),
             )?;
-            refuse_goals(&applications.game, &goals.path, &issues)?;
+            if let Some(goals) = root_files.goals() {
+                refuse_goals(&applications.game, &goals.path, &issues.goals)?;
+            }
+            if let Some(tables) = root_files.goal_tables() {
+                refuse_goals(&applications.game, &tables.path, &issues.tables)?;
+            }
         }
     }
     write_new(&staging.join("applications.json"), applications_bytes)?;

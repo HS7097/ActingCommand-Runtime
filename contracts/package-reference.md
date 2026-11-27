@@ -252,8 +252,8 @@ declares.
 `actinglab package bundle --applications <file> --packs-root <directory> --out <new
 directory> [--source-repository <owner>/<name> --source-commit <commit>] [--maintenance <file>]
 [--pages <file>] [--interrupts <file>] [--navigation <file>] [--schedule <file>]
-[--display-layout <file>] [--loading <file>] [--notices <directory>] [--goals <file>]` lays out
-the resource section of a standard package:
+[--display-layout <file>] [--loading <file>] [--notices <directory>] [--goals <file>]
+[--goal-tables <file>]` lays out the resource section of a standard package:
 
 ```text
 applications.json              the given applications table, copied byte for byte
@@ -264,6 +264,7 @@ navigation.json                with --navigation, copied byte for byte
 schedule.json                  with --schedule, copied byte for byte (ROUT-L RL-1a)
 display-layout.json            with --display-layout, copied byte for byte (Workflow #392 DA-4)
 goals.json                     with --goals, copied byte for byte (Workflow #455 G-R1)
+goal-tables.json               with --goal-tables, copied byte for byte (Workflow #455 RR1)
 loading.json                   with --loading, copied byte for byte (Workflow #407 LOAD-1)
 loading/<file>.png             with --loading, every template it declares, byte for byte
 notices/<path>                 with --notices, every file of the directory, byte for byte (Workflow #444)
@@ -381,8 +382,12 @@ goal declaration; every pack is admitted for real as with the other root files, 
 composition (with `--schedule`) the file is read and its references held to the root the bundle
 makes, no table judged (the bundle holds none): a refused file is `standard_pack_root_invalid` with
 `game`, the given file's `path`, `standard_pack_problem` (one of the file's words, its first
-problem) and `json_pointer`, and an accepted one is laid beside `bundle.json` as `goals.json`. The
-root files are copied byte for byte last.
+problem) and `json_pointer`, and an accepted one is laid beside `bundle.json` as `goals.json`.
+Workflow #455 RR1 (since 0.12.92; [standard-pack-goal-tables.md](standard-pack-goal-tables.md)):
+`--goal-tables` names the game's tables of goals, read with `--goals` by the same check (its
+items' pools held to the root's, its tables given to the records entries of `--goals`): a refused
+file is refused the same way, after a refused `--goals`, and an accepted one is laid beside
+`bundle.json` as `goal-tables.json`. The root files are copied byte for byte last.
 
 **Loading pages** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),
 "Loading pages"). `--loading` names the game's `loading.json`, with its templates in the
@@ -542,8 +547,9 @@ repository:
                                     (with tables when the repository has some), interfaces.json,
                                     the root files and directories the repository holds
                                     (pages.json, interrupts.json, navigation.json, schedule.json,
-                                    display-layout.json, goals.json, pack-catalog.json,
-                                    loading.json with loading/, notices/, tables/),
+                                    display-layout.json, goals.json, goal-tables.json,
+                                    pack-catalog.json, loading.json with loading/, notices/,
+                                    tables/),
                                     packs/<package_id>/
 <out>/SHA256SUMS                    <hex>  <zip name>
 <out>/build.json                    actingcommand.standard-pack-build.v1
@@ -815,7 +821,8 @@ data files beside its package directories, one directory per game below the conf
   schedule.json      actingcommand.schedule.v1: the game's schedule rules (ROUT-L RL-1a)
   display-layout.json  actingcommand.display-layout.v1: the game's display declaration (#392 DA-4)
   pack-catalog.json  actingcommand.pack-catalog.v1, optional: one declaration per package (#477 PC-1)
-  goals.json         actingcommand.goals.v2, optional: the goal entries the game offers (#455 G-R1; v2 #463 V1)
+  goals.json         actingcommand.goals.v3, optional: the goal entries the game offers (#455 G-R1; v2 #463 V1; v3 #455 RR1)
+  goal-tables.json   actingcommand.goal-tables.v1, optional: the game's rules for raising, which records entries name (#455 RR1)
   loading.json       actingcommand.loading.v1, optional: the game's loading pages, for audit (#407 LOAD-1)
   loading/           the templates loading.json declares (#407 LOAD-1)
   notices/           the package author's notice texts; no reader of the Runtime opens them (#444)
@@ -1080,7 +1087,20 @@ data files beside its package directories, one directory per game below the conf
   and `place` refuses one that declares a maximum below 12 (`goal_undeclared`, G-R1 fix round 1;
   below 14 since Workflow #463 V1 fix round 3). The Runtime's root reader, its
   startup, a run's preparation, the policy crate and check-config never read it in G-R1, so the
-  file changes no run yet.
+  file changes no run yet. Workflow #455 RR1 (since 0.12.92): version 3 (`actingcommand.goals.v3`),
+  version 2's types and `records`, a version 2 file `goal_version_retired`; a bundle that carries it
+  declares [28, 28] (row 28), and `place` refuses one that declares less (`goal_undeclared`).
+- **`goal-tables.json`** (Workflow #455 RR1, since 0.12.92; `v012-register.md` §1.535;
+  [standard-pack-goal-tables.md](standard-pack-goal-tables.md) is the contract). Optional. The
+  game's rules for raising: its items (each with its pool and how it is made) and its tables (the
+  lists a table's progress is read from, its columns, its classes with their ladders, its keys),
+  which the `records` entries of `goals.json` name. `standard-pack check`, `package bundle
+  --goal-tables`, `resource verify` and `standard-pack build` check it with `goals.json` by the same
+  check; the installer's `place` places it after `schedule.json` and before `goals.json` and sets it
+  aside when a later bundle carries none; a bundle that carries it declares `package` [28, 28]
+  (row 28), and `place` refuses one that declares less (`goal_tables_undeclared`). The Runtime's
+  scheduler workbench reads it with `goals.json`, once per content; a refused one applies no
+  records entry. Nothing is computed from it in 0.12.92.
 - **`loading.json`** (Workflow #407 LOAD-1, since 0.12.37; [resource-declarations.md](resource-declarations.md),
   "Loading pages"). Optional; laid with its `loading/` templates by `package bundle --loading`, for
   audit only. What runs is each pack's own copy (`resources/loading.json`), which the pack's

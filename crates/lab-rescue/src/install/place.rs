@@ -137,16 +137,16 @@ use actingcommand_contract::{
     MAX_NOTICE_FILE_BYTES, MaintenanceUse, NavigationRole, NoticeBound, NoticeEntry, NoticeIssue,
     RESERVED_TABLES_DIRECTORY, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_COMPOSITION_RECORD_FILE, STANDARD_PACK_COMPOSITION_RECORD_SCHEMA,
-    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
-    STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE,
-    STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE, STANDARD_PACK_RETIRED_UI_FILE,
-    STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem, StandardPackRegistry, StandardPackRoot,
-    StandardPackRootBytes, StandardPackRootIssue, StandardPackSchedule, check_notice_listing,
-    check_notice_pack_ids, check_notice_size, check_notice_text, classify_standard_pack_packages,
-    control_declares_variables, notice_relative_path, package_edge_holds,
-    parse_standard_pack_catalog_with, parse_standard_pack_loading, parse_standard_pack_schedule,
-    read_standard_pack_root, standard_pack_maintenance_packages,
-    validate_standard_pack_schedule_references,
+    STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_INTERRUPTS_FILE, STANDARD_PACK_LOADING_DIRECTORY, STANDARD_PACK_LOADING_FILE,
+    STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_PAGES_FILE,
+    STANDARD_PACK_RETIRED_UI_FILE, STANDARD_PACK_SCHEDULE_FILE, StandardPackProblem,
+    StandardPackRegistry, StandardPackRoot, StandardPackRootBytes, StandardPackRootIssue,
+    StandardPackSchedule, check_notice_listing, check_notice_pack_ids, check_notice_size,
+    check_notice_text, classify_standard_pack_packages, control_declares_variables,
+    notice_relative_path, package_edge_holds, parse_standard_pack_catalog_with,
+    parse_standard_pack_loading, parse_standard_pack_schedule, read_standard_pack_root,
+    standard_pack_maintenance_packages, validate_standard_pack_schedule_references,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -191,13 +191,15 @@ const PREREQUISITE_ROLE: &str = "prerequisite";
 const LAB_PROGRAM: &str = "actinglab.exe";
 /// The root files a bundle zip may carry, in the order they are placed: `bundle.json` first (the
 /// others name its packs), the files the Runtime's readers open, `applications.json`,
-/// `schedule.json` (its rules name packs the placed `bundle.json` lists), (Workflow #455 G-R1,
-/// `package` 12; version 2 at `package` 14 since Workflow #463 V1 fix round 3) `goals.json` (its
-/// entries name the schedule's pools and rules and the variables of the bundle's packs) and
-/// (Workflow #477 PC-1, no revision: the Runtime reads no member of it) `pack-catalog.json` last
-/// (its entries name the bundle's packs and the schedule's pools). `ui.json` is none of them since
-/// PC-1: a zip that carries it is refused as a member no layout knows.
-const ROOT_FILES: [&str; 10] = [
+/// `schedule.json` (its rules name packs the placed `bundle.json` lists), (Workflow #455 RR1,
+/// `package` 28) `goal-tables.json` (its items name the schedule's pools), (Workflow #455 G-R1,
+/// `package` 12; version 2 at `package` 14 since Workflow #463 V1 fix round 3, version 3 at 28
+/// since Workflow #455 RR1) `goals.json` (its entries name the schedule's pools and rules, the
+/// variables of the bundle's packs and the tables of `goal-tables.json`) and (Workflow #477 PC-1,
+/// no revision: the Runtime reads no member of it) `pack-catalog.json` last (its entries name the
+/// bundle's packs and the schedule's pools). `ui.json` is none of them since PC-1: a zip that
+/// carries it is refused as a member no layout knows.
+const ROOT_FILES: [&str; 11] = [
     STANDARD_PACK_BUNDLE_FILE,
     STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_INTERRUPTS_FILE,
@@ -206,17 +208,20 @@ const ROOT_FILES: [&str; 10] = [
     STANDARD_PACK_LOADING_FILE,
     APPLICATIONS_FILE,
     STANDARD_PACK_SCHEDULE_FILE,
+    STANDARD_PACK_GOAL_TABLES_FILE,
     STANDARD_PACK_GOALS_FILE,
     STANDARD_PACK_CATALOG_FILE,
 ];
 /// The root files the Runtime's readers open and those the Tools read beside them, set aside when
 /// the new zip no longer carries them (they would be read against the new registry), in this
 /// order: (Workflow #477 PC-1) `pack-catalog.json` first, then (Workflow #455 G-R1) `goals.json`,
-/// whose entries the Tools' check holds to the placed root; PC-1: `ui.json`, which no zip carries
-/// any more, is set aside by every placement of a root that still holds it.
-const RETIRED_WHEN_ABSENT: [&str; 9] = [
+/// whose entries the Tools' check holds to the placed root, then (Workflow #455 RR1)
+/// `goal-tables.json`, whose tables `goals.json` names; PC-1: `ui.json`, which no zip carries any
+/// more, is set aside by every placement of a root that still holds it.
+const RETIRED_WHEN_ABSENT: [&str; 10] = [
     STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_GOALS_FILE,
+    STANDARD_PACK_GOAL_TABLES_FILE,
     STANDARD_PACK_SCHEDULE_FILE,
     STANDARD_PACK_RETIRED_UI_FILE,
     STANDARD_PACK_LOADING_FILE,
@@ -933,9 +938,15 @@ fn check_notices<'a>(
 /// that carries `goals.json` of any version declares 14, and the version is the check's
 /// (`goal_version_retired`), which `post_check` runs through `standard-pack check`. Workflow #464
 /// P3: the contract crate's rule [`BundleRevisionNeed::Goals`], which the readiness item I2 calls
-/// too.
-fn check_goals_declared(zip: &Path, game: &str, package: [u64; 2]) -> Result<(), Outcome> {
-    let need = BundleRevisionNeed::Goals;
+/// too. Workflow #455 RR1: version 3 and revision 28 since; and `goal-tables.json` by the same
+/// rule, [`BundleRevisionNeed::GoalTables`] (`goal_tables_undeclared`), each the `need` of the
+/// root file the zip carries.
+fn check_goals_declared(
+    zip: &Path,
+    game: &str,
+    package: [u64; 2],
+    need: BundleRevisionNeed,
+) -> Result<(), Outcome> {
     if !need.declared_by(package) {
         return Err(invalid(zip).caused_by(
             Outcome::new(SharedCode::StandardPackRootInvalid)
@@ -1601,9 +1612,13 @@ pub(crate) fn plan(
             bundle.packs.iter().map(|pack| pack.package_id.as_str()),
         )?;
     }
-    // Workflow #455 G-R1 fix round 1: `goals.json` with the revision that brings it.
+    // Workflow #455 G-R1 fix round 1: `goals.json` with the revision that brings it; Workflow
+    // #455 RR1: and `goal-tables.json`.
     if roots.contains(STANDARD_PACK_GOALS_FILE) {
-        check_goals_declared(&zip, &game, package)?;
+        check_goals_declared(&zip, &game, package, BundleRevisionNeed::Goals)?;
+    }
+    if roots.contains(STANDARD_PACK_GOAL_TABLES_FILE) {
+        check_goals_declared(&zip, &game, package, BundleRevisionNeed::GoalTables)?;
     }
     // Workflow #463 V1 fix round 1: packs that declare variables with the revision that brings
     // them.
