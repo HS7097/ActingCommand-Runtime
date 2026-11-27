@@ -6812,6 +6812,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                                 HostCode::ContainedTaskResourceReadingFrameMismatch,
                             ));
                         }
+                        // Workflow #503 LIST-A: a list that passes over says how many positions
+                        // it passed over, a note on the frame it is observed on.
+                        if let Some(note) = declaration.passed_over_outcome() {
+                            let recorded = self.diagnostic_list_miss(frame_id, note);
+                            self.diagnostic_frame = None;
+                            recorded?;
+                        }
                         let joined = JoinedListReading {
                             captured_at,
                             frame_id,
@@ -6847,6 +6854,13 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
                             return Err(resource_reading_poison(
                                 HostCode::ContainedTaskResourceReadingFrameMismatch,
                             ));
+                        }
+                        // Workflow #503 LIST-A: the note of a list that passes over comes before
+                        // its miss's warning, on the same frame.
+                        if let Some(note) = declaration.passed_over_outcome() {
+                            let recorded = self.diagnostic_list_miss(frame_id, note);
+                            self.diagnostic_frame = None;
+                            recorded?;
                         }
                         let recorded =
                             self.diagnostic_list_miss(frame_id, miss.outcome(&declaration));

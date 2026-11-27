@@ -680,9 +680,10 @@ fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_rev
     // SEL-GRID G2 (register §1.491) 21, the lines of a shared read's name boxes, Workflow
     // #428 S168-LK (register §1.500) 22, a linear step's list reading, Workflow #455 G-SLx
     // (register §1.501) 23, a pack's variables beside an irreversible capability, Workflow #477
-    // CV-1 (register §1.507) 24, a bundle that carries a version 2 package declaration, and
-    // Workflow #477 LR-1 (register §1.513) 25, a linear press step's count.
-    assert_eq!(own, [3, KEY_REVISION + 8]);
+    // CV-1 (register §1.507) 24, a bundle that carries a version 2 package declaration,
+    // Workflow #477 LR-1 (register §1.513) 25, a linear press step's count, and Workflow #503
+    // LIST-A (register §1.533) 27, a list reading of the wanted keys only.
+    assert_eq!(own, [3, KEY_REVISION + 10]);
     assert!(package_edge_holds(own, with_key));
     assert!(!package_edge_holds(earlier, with_key));
     assert!(package_edge_holds(own, without_key));

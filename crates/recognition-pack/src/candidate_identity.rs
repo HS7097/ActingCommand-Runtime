@@ -147,6 +147,30 @@ impl CandidateIdentityDeclaration {
     }
 
     pub fn map_ocr(&self, text: &str, confidence: Option<u16>) -> CandidateFeature {
+        self.judge_ocr(text, confidence).0
+    }
+
+    /// Workflow #503 LIST-A (`contracts/business-identity-consensus.md`, "Identity and readable
+    /// attributes"; `contracts/resource-readings.md`, "List readings"): the mark the mapping gives
+    /// one OCR read of a name, beside the feature [`Self::map_ocr`] gives it, in the one judgement
+    /// both come from. [`CandidateNameMark::Known`] when the read names a wanted key;
+    /// [`CandidateNameMark::NoneOfTheKeys`] only when its text is not empty, its confidence is at
+    /// least `minimum_confidence_milli`, and its distance to every alias of every entry is greater
+    /// than `max_distance + minimum_margin`; [`CandidateNameMark::Unread`] for everything else (an
+    /// empty or unreadable text, a confidence missing or below the floor, a read near a wanted name
+    /// that does not match it, an ambiguous one, and every icon identity, which reads no text).
+    pub fn mark_ocr(&self, text: &str, confidence: Option<u16>) -> CandidateNameMark {
+        match self.judge_ocr(text, confidence) {
+            (CandidateFeature::Identity { .. }, _) => CandidateNameMark::Known,
+            (_, true) => CandidateNameMark::NoneOfTheKeys,
+            (_, false) => CandidateNameMark::Unread,
+        }
+    }
+
+    /// The one judgement of an OCR read (`map_ocr`'s feature), and whether the read passed the
+    /// confidence floor, normalized to a text that is not empty, and lies further than
+    /// `max_distance + minimum_margin` from every alias of every entry (Workflow #503 LIST-A).
+    fn judge_ocr(&self, text: &str, confidence: Option<u16>) -> (CandidateFeature, bool) {
         let CandidateIdentityRecognition::OcrAliases {
             max_distance,
             minimum_margin,
@@ -154,13 +178,13 @@ impl CandidateIdentityDeclaration {
             confusions,
         } = &self.recognition
         else {
-            return self.unknown(CandidateUnknownReason::OutOfDomain);
+            return (self.unknown(CandidateUnknownReason::OutOfDomain), false);
         };
         if confidence.is_none_or(|confidence| confidence < *minimum_confidence_milli) {
-            return self.unknown(CandidateUnknownReason::LowConfidence);
+            return (self.unknown(CandidateUnknownReason::LowConfidence), false);
         }
         let Some(text) = normalize_name(text, confusions) else {
-            return self.unknown(CandidateUnknownReason::OutOfDomain);
+            return (self.unknown(CandidateUnknownReason::OutOfDomain), false);
         };
         // The runner-up needs max_distance + margin precision; saturated distances beyond
         // that cannot alter admission. Each DP row contains at most 129 cells.
@@ -176,12 +200,16 @@ impl CandidateIdentityDeclaration {
                 .unwrap_or(limit + 1);
             rows.push((entry.id.as_str(), entry.variant.as_deref(), distance));
         }
-        self.choose(
+        // Workflow #503 LIST-A: a distance is saturated at `limit + 1`, so one above `limit` is
+        // exactly one further than `max_distance + minimum_margin` from every alias.
+        let beyond_every_alias = rows.iter().all(|&(_, _, distance)| distance > limit);
+        let feature = self.choose(
             &rows,
             *max_distance,
             *minimum_margin,
             confidence.map(i64::from),
-        )
+        );
+        (feature, beyond_every_alias)
     }
 
     /// Workflow #463 SEL-GRID G2 ([`CandidateUnreadCause`]): [`Self::map_ocr`]'s feature, and when
@@ -356,6 +384,25 @@ impl CandidateUnreadCause {
     }
 }
 
+/// Workflow #503 LIST-A (`contracts/resource-readings.md`, "List readings", "A list of the wanted
+/// keys only"): what one read of a name is to a reading that wants only the keys its identity
+/// declares, the mark the mapping gives ([`CandidateIdentityDeclaration::mark_ocr`]) beside the
+/// known key and the unread reading. The feature, its records and its decisions do not change:
+/// a read marked [`Self::NoneOfTheKeys`] keeps its Unknown feature (the projection's reasons are
+/// a closed vocabulary of the ledger's records, which this slice does not move). Readers take the
+/// mark; none sorts the feature's reasons itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateNameMark {
+    /// The read names a wanted key: the feature is its identity.
+    Known,
+    /// The read names no key and is not far from every one: empty, below the confidence floor,
+    /// near a wanted name without matching it, ambiguous, or an identity that reads no text.
+    Unread,
+    /// The read is a name, with confidence, further than `max_distance + minimum_margin` from
+    /// every alias of every entry: none of the wanted keys.
+    NoneOfTheKeys,
+}
+
 pub(crate) fn valid_identity_name(value: &str) -> bool {
     !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control)
 }
@@ -440,6 +487,92 @@ fn edit_distance(left: &str, right: &str, limit: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Workflow #503 LIST-A (register §1.533, ruling 2): the mark the mapping gives a read of a
+    // name. Three wanted keys, each with one alias, read within 1 at a margin of 1 and a floor of
+    // 800, so `max_distance + minimum_margin` is 2. A wanted alias, and a read 1 from it, is the
+    // known key; a name further than 2 from every alias, read at 950, is none of the keys, and its
+    // feature stays the Unknown `low_confidence` it was; a read 2 from an alias (near a wanted name
+    // without matching it), an empty text, a confidence below the floor or none, and any read of
+    // an icon identity are unread.
+    #[test]
+    fn list_a_a_name_far_from_every_alias_is_none_of_the_keys_and_a_near_empty_or_low_one_unread() {
+        let identity = CandidateIdentityDeclaration {
+            entries: [
+                ("member-a", "alpha"),
+                ("member-b", "bravo"),
+                ("member-c", "charlie"),
+            ]
+            .into_iter()
+            .map(|(id, alias)| CandidateIdentityEntry {
+                id: id.to_owned(),
+                variant: None,
+                aliases: vec![alias.to_owned()],
+            })
+            .collect(),
+            recognition: CandidateIdentityRecognition::OcrAliases {
+                max_distance: 1,
+                minimum_margin: 1,
+                minimum_confidence_milli: 800,
+                confusions: BTreeMap::new(),
+            },
+        };
+        identity.validate().expect("the identity validates");
+
+        for wanted in ["alpha", "alphx"] {
+            assert_eq!(
+                identity.mark_ocr(wanted, Some(950)),
+                CandidateNameMark::Known,
+                "{wanted}"
+            );
+            assert!(
+                matches!(
+                    identity.map_ocr(wanted, Some(950)),
+                    CandidateFeature::Identity { ref value, .. } if value == "member-a"
+                ),
+                "{wanted}"
+            );
+        }
+
+        assert_eq!(
+            identity.mark_ocr("zulu", Some(950)),
+            CandidateNameMark::NoneOfTheKeys
+        );
+        assert_eq!(
+            identity.map_ocr("zulu", Some(950)),
+            CandidateFeature::Unknown {
+                reason: CandidateUnknownReason::LowConfidence,
+                source: Some(CandidateIdentitySource::OcrAlias),
+            },
+            "the feature of a name none of the keys is the one it was"
+        );
+
+        for (text, confidence, case) in [
+            ("alpzz", Some(950), "2 from an alias"),
+            ("", Some(950), "an empty text"),
+            ("zulu", Some(799), "below the floor"),
+            ("zulu", None, "no confidence"),
+        ] {
+            assert_eq!(
+                identity.mark_ocr(text, confidence),
+                CandidateNameMark::Unread,
+                "{case}"
+            );
+        }
+
+        let icons = CandidateIdentityDeclaration {
+            recognition: CandidateIdentityRecognition::IconTemplates {
+                minimum_score_milli: 900,
+                minimum_margin_milli: 50,
+            },
+            ..identity
+        };
+        assert_eq!(
+            icons.mark_ocr("zulu", Some(950)),
+            CandidateNameMark::Unread,
+            "an icon identity reads no text"
+        );
+    }
 
     #[test]
     fn a_pack_declares_an_identity_domain_of_up_to_1024_entries() {

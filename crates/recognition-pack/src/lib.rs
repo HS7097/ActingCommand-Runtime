@@ -83,6 +83,9 @@ pub use candidate_identity::{
 };
 // Workflow #463 SEL-GRID G2: why a name read no identity, in a select's refusal's words.
 pub use candidate_identity::CandidateUnreadCause;
+// Workflow #503 LIST-A: the mark the mapping gives a read of a name (known, unread, none of the
+// wanted keys).
+pub use candidate_identity::CandidateNameMark;
 
 pub use codes::{
     RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget, ValueOp,

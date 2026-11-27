@@ -256,6 +256,9 @@ mod gate_486_asleep;
 // #455 P2 (0.12.79; register §1.505): the host computes the reading of a pool read from rows of a
 // list before each evaluation and gives it to the evaluator.
 mod gate_455_p2;
+// Workflow #503 LIST-A (0.12.90; register §1.533): a pool read from rows of a list that holds the
+// wanted keys only counts a wanted key the list does not hold 0.
+mod gate_503_list_a;
 // #477 CV-2 (0.12.80; register §1.508): the scheduler workbench composes a game root whose
 // `schedule.json` names `catalog_business` with its `pack-catalog.json`, watches that file, and
 // keeps the game's last good rules when it is refused or gone.

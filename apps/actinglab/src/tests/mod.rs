@@ -319,6 +319,10 @@ mod gate_477_cv1;
 // 25, and nothing else so.
 #[path = "gate_477_lr1.rs"]
 mod gate_477_lr1;
+// Workflow #503 LIST-A: the revision table counts a list reading's `others` as `package` 27, in a
+// pack of either mode, and nothing else so.
+#[path = "gate_503_list_a.rs"]
+mod gate_503_list_a;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

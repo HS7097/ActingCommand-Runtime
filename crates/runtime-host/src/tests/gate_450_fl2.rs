@@ -1544,9 +1544,10 @@ fn field_list_miss_keeps_record() {
 //   cancels it by its client while the host holds the whole list. The same run shown `done` after
 //   the tap ends there and publishes that list: the stopped run's list could have been published.
 // - Shown an item, `last` with the mark and an item, a run decides the list on `last`, taps `back`
-//   and collects the next item after the list's end: it fails `contained_task_state_invalid`, a
-//   Runtime invariant (`state_problem` `runtime_invariant`, no page named, as a refusal of the run's
-//   state machine names one), its fields having collected that item as their third frame. The host
+//   and collects the next item after the list's end: it fails `contained_task_state_invalid`, the
+//   package's route (`state_problem` `frame_after_list_end`, no page named; adapted by Workflow
+//   #503 LIST-A, register §1.533, ruling 6, where it was the Runtime invariant
+//   `runtime_invariant`), its fields having collected that item as their third frame. The host
 //   keeps no detail of this failure (`failure_detail_for_test` is `None`: it keeps the kernel's
 //   detail of a `linear_steps` package's failure and of a few codes only), so the frames the run
 //   collected stand for it.
@@ -1656,7 +1657,7 @@ fn field_list_failed_or_cancelled_run_publishes_nothing() {
     );
     assert_eq!(
         outcome.value("state_problem"),
-        Some(&json!(StateProblem::RuntimeInvariant.as_str())),
+        Some(&json!(StateProblem::FrameAfterListEnd.as_str())),
         "{outcome:?}"
     );
     assert!(outcome.value("page_id").is_none(), "{outcome:?}");

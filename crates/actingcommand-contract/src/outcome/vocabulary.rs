@@ -257,6 +257,11 @@ crate::outcome_vocabulary! {
         /// A state the run's layers or a package registry hold is not one the host can use (the
         /// run's navigation or interrupt state, an admitted layer package, a registry entry).
         HeldStateUnusable => "held_state_unusable",
+        /// Workflow #503 LIST-A (since 0.12.90): a frame of a field list's group was collected
+        /// after the list was decided on its end frame: the package's route brought the run back
+        /// to a page of the group (a stage of a phased route that goes on past the list's end
+        /// page, for example), an authoring error of the package.
+        FrameAfterListEnd => "frame_after_list_end",
     }
 }
 

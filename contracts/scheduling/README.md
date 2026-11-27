@@ -2560,6 +2560,12 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
   list read whole does not hold is not on the screen it was read from. (The cost: a name the
   reading took for another valid key reads a held item as 0; a producer then runs once too often,
   which its target caps and the next reading corrects, and a consumer is held by its reserve.)
+  Workflow #503 LIST-A (since 0.12.90): a list that wants only its declared keys
+  ([resource-readings.md](../resource-readings.md), "A list of the wanted keys only") holds no row
+  of a wanted item held at zero, whose screen shows no card of it, so this rule counts that item 0;
+  its own cost, a wanted name read wrong far from every alias with confidence every time, which
+  reads 0 every time and which the next reading does not correct, is written there, with its
+  remedy. Nothing is paused, held or lowered on a reading of 0.
 - **Unknown, never 0**, each a fact reading's reason under the list's key L: no list,
   `fact_missing`; a list past its expiry, `fact_expired` (the evaluation judges it by the expiry
   given with the reading); the list's confidence below C, `fact_low_confidence`; a named row's value
