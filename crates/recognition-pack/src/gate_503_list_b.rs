@@ -257,6 +257,9 @@ fn mapping_identity() -> CandidateIdentityDeclaration {
     .expect("the identity")
 }
 
+// A slot's entry of the equivalence table: its key, its variant and its target.
+type SlotEntry<'a> = (&'a str, Option<&'a str>, &'a str);
+
 fn pool_entry(id: Option<&str>, target: &str) -> CandidatePoolTemplate {
     CandidatePoolTemplate {
         id: id.map(str::to_owned),
@@ -412,7 +415,7 @@ fn list_b_a_pool_without_other_entries_answers_as_a_slots_pool_over_a_table_of_i
         ("member-a", Some("short"), "card/pic_c"),
     ]
     .map(
-        |(id, variant, target): (&str, Option<&str>, &str)| CandidateIdentityTemplate {
+        |(id, variant, target): SlotEntry<'_>| CandidateIdentityTemplate {
             id: id.to_owned(),
             variant: variant.map(str::to_owned),
             target_id: target.to_owned(),
@@ -427,25 +430,26 @@ fn list_b_a_pool_without_other_entries_answers_as_a_slots_pool_over_a_table_of_i
             target_id: template.target_id.clone(),
         })
         .collect::<Vec<_>>();
-    for scores in [
-        vec![990, 200, 300],
-        vec![300, 990, 200],
-        vec![200, 300, 990],
-        vec![960, 920, 100],
-        vec![950, 100, 950],
-        vec![950, 950, 100],
-        vec![899, 100, 100],
-        vec![900, 100, 100],
-        vec![900, 850, 100],
-        vec![900, 851, 100],
-        vec![1000, 950, 949],
-        vec![0, 0, 0],
-        vec![1001, 0, 0],
-        vec![990, 200],
-    ] {
+    let table: [&[u16]; 14] = [
+        &[990, 200, 300],
+        &[300, 990, 200],
+        &[200, 300, 990],
+        &[960, 920, 100],
+        &[950, 100, 950],
+        &[950, 950, 100],
+        &[899, 100, 100],
+        &[900, 100, 100],
+        &[900, 850, 100],
+        &[900, 851, 100],
+        &[1000, 950, 949],
+        &[0, 0, 0],
+        &[1001, 0, 0],
+        &[990, 200],
+    ];
+    for scores in table {
         assert_eq!(
-            identity.read_pool(&pool, &scored(&scores)).0,
-            identity.map_icons(&slot, &scores),
+            identity.read_pool(&pool, &scored(scores)).0,
+            identity.map_icons(&slot, scores),
             "{scores:?}"
         );
     }
