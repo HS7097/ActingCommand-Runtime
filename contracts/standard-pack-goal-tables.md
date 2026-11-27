@@ -1,6 +1,7 @@
 # Standard-pack tables of goals (`goal-tables.json`)
 
-Workflow #455, slice RR1 (Runtime 0.12.92; [v012-register.md](v012-register.md) §1.535). A person
+Workflow #455, slice RR1 and its fix round 1 (Runtime 0.12.92; [v012-register.md](v012-register.md)
+§1.535). A person
 says which character to raise and to which grade; nobody types how many of each material that
 takes. What it takes is the game's rule, the same for every account: this file. It is an optional
 root file of the game root, beside `goals.json`, whose `records` entries name its tables
@@ -36,13 +37,31 @@ position: [integer]                                       one for each reading c
 step:     {<item> | "@<role>": amount}
 ```
 
+### Names
+
+Fix round 1 states the forms the reader holds every name to (a name of a length outside its bound
+is `table_out_of_limits`, one outside its form `malformed`):
+
+- a table's, a column's, a class's, a sub's, a role's (in a key's `own` and after the `@` of a
+  step's member) and a condition's name: an entry name's form, `[a-z0-9][a-z0-9_]*`, 1 to 64
+  bytes, as `goals.json`'s entry names ([standard-pack-goals.md](standard-pack-goals.md)); no
+  column is named `class` or `own`;
+- an item's and a key's name: 1 to 128 bytes without a control character, an item's never
+  beginning with `@`; a pool id: 1 to 128 bytes without a control character;
+- a progress list's `key_column` and every reading column (of a list's `columns`, a column's
+  `read`, a sub): a list reading's column form, `[a-z][a-z0-9_]*`, 1 to 32 bytes
+  ([resource-readings.md](resource-readings.md));
+- an override's index: a decimal whole number without a leading zero.
+
 ### Items
 
 Each item has a name (1 to 128 bytes without a control character, never beginning with `@`), and
 two optional members:
 
 - **`pool`**: the pool of the root's `schedule.json` that holds it (an id, 1 to 128 bytes). An item
-  without a recipe and without a pool is shown and weighs nothing.
+  without a recipe and without a pool is shown and weighs nothing. A pool is named by one item at
+  most (fix round 1: a holding has one name in the file, and what a later slice subtracts of a
+  pool's holding it subtracts once; a later item that names it is `table_pool_duplicate`).
 - **`recipe`**: how the item is made: one making turns out `makes` of it from the items of `from`
   (1 to 16) and costs the items of `cost` (0 to 16), each with its amount. **An item with a recipe
   is taken apart; one without is where taking apart stops.** An item with a recipe names a pool:
@@ -61,19 +80,19 @@ file; a `records` entry of `goals.json` names it.
   value is a key of the table, and the reading `columns` it gives (1 to 63, of a list reading's
   column form, each listed once among the table's lists). At most one list writes `held_by: true`:
   read whole, a list that holds no row of a key says the key is not held. Only the key's form is
-  held: the packages that write the list may come later.
+  held: the packages that write the list may come later. Fix round 1: the lists of one table name
+  distinct fact keys (a later list that names an earlier one's is `table_list_key_duplicate` at
+  its `fact_key`), and a list's `key_column` is none of its own `columns` (the list would name
+  that column twice: `table_reading_column_duplicate` at it among the `columns`).
 - **`columns`**: 1 to 8, each a name unique in the table (never `class` or `own`, a key's own
   members) and its `per`: `class` (its ladders are written in the classes; a key may override a
   step), `key` (written in each key) or `sub` (written in each key, one ladder for each of its
   `subs`, 1 to 8, each with its own reading columns). A column of `class` or `key` reads 1 to 4
   reading columns (`read`), each one the table's lists give and named once; its positions are of
   that width. A sub likewise.
-- **`requires`** (0 to 4): the column's prerequisites. `{column, at_least}` asks that the column
-  `column` (of `per` `class` or `key`) be at the position `at_least` or beyond; with `from`, a
-  position of the requiring column itself, it is asked only from that position on (a column whose
-  later steps need another column's grade and whose first steps do not); without it, for the whole
-  column. `{condition}` names a condition that is no column's (a word of the file's), marked and
-  not counted.
+- **`requires`** (0 to 4): the column's prerequisites, each `{column, at_least, from?}` or
+  `{condition}` ("Prerequisites", below). `{condition}` names a condition that is no column's (a
+  word of the file's), marked and not counted.
 - **`classes`**: 1 to 64 by name, each with its ladders of the table's columns of `per: "class"`.
 - **`keys`**: 1 to 1024 by name (1 to 128 bytes without a control character; a key is the value of
   a list's `key_column`), each with its `class`, its `own` items by role (0 to 8 roles, each naming
@@ -86,9 +105,56 @@ file; a `records` entry of `goals.json` names it.
 
 A ladder has 2 to 512 positions, each distinct and of its column's width (integers within the safe
 integers of JSON), and one step fewer: the step `i` is what going from position `i` to position
-`i + 1` uses. A step uses 0 to 16 items or roles, each with an amount from 1 within the safe
-integers. A position on a ladder is a reading tuple compared element by element with what the
-lists give.
+`i + 1` uses, and it *arrives at* position `i + 1`. A step uses 0 to 16 items or roles, each with
+an amount from 1 within the safe integers. A position on a ladder is a reading tuple compared
+element by element, for equality, with what the lists give.
+
+**What a table reads** (fix round 1). A position is a tuple of whole numbers, one for each reading
+column its column reads, in their order, and a column's `read` (and a sub's reading columns) names
+list columns that hold whole numbers. The reader holds the file's own positions to that (a number
+with a fraction, a text or a truth value in a position is `malformed`); what a list's column holds
+is declared by the packages that write the list, which the reader does not see. A reading of
+another kind never equals a position: the later slice then takes the position as not known.
+
+### Prerequisites
+
+Fix round 1 states what a prerequisite `{column, at_least, from?}` of a column, the *requiring*
+column, means; the checks hold its positions to it ("The checks").
+
+- **Which column.** `column` names another column of the same table, of `per: "class"` or
+  `per: "key"`. A column of `per: "sub"` has no one ladder and is refused
+  (`table_requires_invalid` at the prerequisite's `column`); a name that is no column of the
+  table is `table_column_unknown` there; a column that names itself reaches itself
+  (`table_requires_cycle`).
+- **Which ladder.** `at_least` is a position of the ladder the key walks in the required column:
+  its class's ladder of a column of `per: "class"` (an override changes no position), its own of
+  a column of `per: "key"`. `from` is a position of the requiring column's own ladder, its class's
+  or its own; for a requiring column of `per: "sub"`, of the ladder of each of the key's subs, and
+  the prerequisite then speaks of each sub's steps.
+- **Order.** A position is *at or beyond* another when it is that position or stands after it in
+  the `positions` list of the ladder concerned. It is the ladder's order: the numbers of two
+  positions are never compared.
+- **What is asked.** Without `from`: before any step of the requiring column is taken, the
+  required column stands at `at_least` or beyond. With `from`: before a step that arrives at
+  `from` or beyond is taken; a step that arrives at a position before `from` asks nothing.
+- **Who is held to it.** The classes and keys that have steps in the requiring column: each key
+  that has, and each such class of a required column of `per: "class"`, holds `at_least` on its
+  ladder of the required column, and each of their ladders of the requiring column holds `from`
+  (`table_requires_invalid` at that member otherwise). A class without a ladder of the requiring
+  column, and a key without steps in it, are not held to it: nothing is asked of them.
+
+*A worked example*, on the first example below. The column `mastery` (per sub) requires `phase`
+at least `[2]` and `skill` at least `[4]`, both without `from`. The key `hero_a` walks its class
+`rank_6`'s phase ladder `[0], [1], [2]` and its own skill ladder `[1], [2], [3], [4]`: no step of
+either of its mastery subs (from `[0]` to `[1]`, or from `[1]` to `[2]`) is taken before phase
+stands at `[2]` and skill at `[4]` (each the last position of its ladder, so only that position
+meets it). `hero_b` has no mastery ladder and takes no step of the column: nothing is asked of it.
+Were the first prerequisite `{"column": "phase", "at_least": [2], "from": [2]}`, a sub's step from
+`[0]` to `[1]` would ask nothing of phase, and its step from `[1]` to `[2]`, which arrives at
+`[2]`, would ask phase at `[2]`; skill, without `from`, would still be asked before the first
+step. And the order is the list's: on the class's level ladder `[0, 1], [0, 2], [1, 1], [1, 2],
+[2, 1], [2, 2]`, a prerequisite of level at least `[0, 2]` is met at `[0, 2]` and at the four
+positions written after it, `[1, 1]` among them though its second number is the smaller.
 
 ## Limits
 
@@ -118,9 +184,10 @@ pools to the composed root, with the same references (`GoalReferences`) the goal
 `standard_pack_problem` and `json_pointer`, at most 64: first every member repeated in one object,
 then the forms and limits in the reader's order (the document's members, `items` in file order,
 each table in file order, its members in the order `name`, `progress`, `columns`, `classes`,
-`keys`: the classes and keys are read against the columns, the keys against the classes too), then,
-for a file whose forms all hold, what it says of itself (the recipes, then each table's
-prerequisites, roles and prerequisites' positions), then the references'.
+`keys`: the classes and keys are read against the columns, the keys against the classes too; a
+name, a pool or a fact key written a second time where once is allowed is found where the second
+is read), then, for a file whose forms all hold, what it says of itself (the recipes, then each
+table's prerequisites, roles and prerequisites' positions), then the references'.
 
 | `standard_pack_problem` | When | `json_pointer` |
 |---|---|---|
@@ -134,11 +201,13 @@ prerequisites, roles and prerequisites' positions), then the references'.
 | `table_column_unknown` | a reading column a `read` or a sub reads that no list of the table gives; a class's or a key's member that is no column of the table; a sub a key writes that its column does not have; a prerequisite's `column` | the name |
 | `table_ladder_invalid` | a ladder of fewer than two positions (at `positions`), a position written twice or not of its column's width (at the position), a count of steps other than one fewer than its positions (at `steps`); a class's ladder of a column not of `per: "class"` (at it); a key's override of a ladder its class does not have (at the column) or of a step that ladder does not have (at the step) | the member named |
 | `table_recipe_cycle` | an item reaches itself through the recipes (`from` and `cost`) | each such item's `recipe` |
-| `table_requires_cycle` | a column reaches itself through its prerequisites | each such column's `requires` |
-| `table_requires_invalid` | a prerequisite names a column of `per: "sub"` (at its `column`); or its `at_least` is no position of the required column's ladder, or its `from` no position of the requiring column's ladder, for a class or a key that has steps in the requiring column (at that member, once): a class that has no ladder of the requiring column is not held to it | the member named |
+| `table_requires_cycle` | a column reaches itself through its prerequisites (one that names itself too) | each such column's `requires` |
+| `table_requires_invalid` | a prerequisite names a column of `per: "sub"` (at its `column`); or its `at_least` is no position of the required column's ladder, or its `from` no position of the requiring column's ladder, for a class or a key that has steps in the requiring column (at that member, once): a class that has no ladder of the requiring column is not held to it ("Prerequisites") | the member named |
 | `table_recipe_without_pool` | an item with a recipe names no pool | `/items/<item>` |
+| `table_pool_duplicate` | fix round 1: an item names a pool an earlier item names (a holding has one name in the file) | the later item's `pool` |
 | `table_list_key_invalid` | a progress list's `fact_key` is no list reading's key | its `fact_key` |
-| `table_reading_column_duplicate` | a reading column listed twice among a table's lists, or twice in one `read` or sub | the later |
+| `table_list_key_duplicate` | fix round 1: a progress list's `fact_key` is the one of an earlier list of its table | the later list's `fact_key` |
+| `table_reading_column_duplicate` | a reading column listed twice among a table's lists, or twice in one `read` or sub; fix round 1: a list's `key_column` listed among its own `columns` (the list names that column twice) | the later; the key column among the `columns` |
 | `table_pool_unknown` | an item's pool is no pool of the composed `schedule.json` (none without the file) | `/items/<item>/pool` |
 | `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
 
@@ -245,10 +314,13 @@ Every reader calls the two functions above; none has a copy.
   force, with the sha256 of the bytes (`StandardPackGoalRoot::goal_tables`), and **parses the file
   once per content**: a read whose bytes have the sha256 of what it keeps takes what it keeps. A
   file the reader refuses, or that cannot be read, applies no `records` entry:
-  `standard_pack_goals_not_applied` names it (`path` the file, `goals_failure` `refused` with the
-  reader's first problem as its cause, or `unreadable` with the operating system's failure),
-  recorded once per sha256 of a refused file and once until an unreadable one reads again; the
-  root runs and every other entry of `goals.json` applies as before. The offline readers that read
+  `standard_pack_goal_tables_not_applied` names it (a warning; `path` the file, `goals_failure`
+  `refused` with the reader's first problem as its cause, or `unreadable` with the operating
+  system's failure), recorded once per sha256 of a refused file and once until an unreadable one
+  reads again; the root runs and every other entry of `goals.json` applies as before. Fix round 1
+  gave the file this code of its own: `standard_pack_goals_not_applied`, with the same values, is
+  `goals.json`'s alone, whose failure applies none of its entries, so a reader tells the two
+  consequences apart by the code, not by `path`. The offline readers that read
   a root as the workbench does keep nothing between reads. Nothing in an evaluation reads the
   tables in this release.
 
@@ -275,5 +347,6 @@ empty, before the hold and any write. A Runtime before it opens no such file. A 
 refused for it: an earlier Runtime reads a root that holds the file as one without it, and an
 earlier installer refuses a bundle that carries it. `ledger`, `runtime-client`, `actingd-config`
 and `runtime-outcomes` do not move: the words are the existing vocabulary `standard_pack_problem`'s
-under the existing code `standard_pack_root_invalid`, and the Runtime's record is the existing
-`standard_pack_goals_not_applied`.
+under the existing code `standard_pack_root_invalid`, and the Runtime's record is
+`standard_pack_goal_tables_not_applied` (fix round 1), a new code of the catalog only, with the
+values and the vocabulary `goals_failure` of `standard_pack_goals_not_applied`.

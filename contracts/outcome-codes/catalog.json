@@ -2826,7 +2826,7 @@
     },
     "goals_failure": {
       "type": "vocab:goals_failure",
-      "description": "Why a game root's goals.json is not applied while the root runs: the reader refused it, or it could not be read (Workflow #463 V2 fix round 2, since 0.12.61)."
+      "description": "Why a game root's goals.json is not applied while the root runs: the reader refused it, or it could not be read (Workflow #463 V2 fix round 2, since 0.12.61); since Workflow #455 RR1 fix round 1 (0.12.92) likewise why its goal-tables.json is not applied."
     },
     "goal_name": {
       "type": "token",
@@ -7978,14 +7978,20 @@
         "table_list_key_invalid": {
           "description": "A progress list of goal-tables.json names a fact_key that is no key of a list reading (under inventory.list., a valid fact key), at it; only the key's form is judged, the packages that write it may come later (Workflow #455 RR1, since 0.12.92)."
         },
+        "table_list_key_duplicate": {
+          "description": "A progress list of a table of goal-tables.json names the fact_key an earlier list of the same table names, at the later list's fact_key (Workflow #455 RR1 fix round 1, since 0.12.92)."
+        },
         "table_reading_column_duplicate": {
-          "description": "A reading column listed twice among a table's progress lists in goal-tables.json, or twice in one column's read or one sub, at the later (Workflow #455 RR1, since 0.12.92)."
+          "description": "A reading column listed twice among a table's progress lists in goal-tables.json, or twice in one column's read or one sub, at the later (Workflow #455 RR1, since 0.12.92); since its fix round 1 (0.12.92) also a progress list's key_column listed among its own columns, at it there: the list names that column twice."
         },
         "table_pool_unknown": {
           "description": "An item of goal-tables.json names a pool that is no pool of the game root's composed schedule.json (none without the file), at its pool (Workflow #455 RR1, since 0.12.92)."
         },
         "table_pool_unvalued": {
           "description": "An item of goal-tables.json without a recipe, the item a need lands on, names a pool a goal cannot be put on: the judgement goal_pool_unvalued gives a resource entry's pool (neither a valuation with scale and gap nor, without a valuation, target_defaults with scale and importance_milli), at its pool; the pool of an item with a recipe need only be a pool of the root (Workflow #455 RR1, since 0.12.92)."
+        },
+        "table_pool_duplicate": {
+          "description": "An item of goal-tables.json names a pool an earlier item of the file names: a holding has one name in the file, so what a later slice subtracts of a pool's holding it subtracts once. At the later item's pool (Workflow #455 RR1 fix round 1, since 0.12.92)."
         },
         "goal_tables_undeclared": {
           "description": "A bundle zip carries goal-tables.json and declares a package interface maximum below 28. Refused by the installer's place at interfaces.json, as goal_undeclared is (Workflow #455 RR1, since 0.12.92)."
@@ -10044,7 +10050,7 @@
       }
     },
     "goals_failure": {
-      "description": "Why a game root's goals.json is not applied while the root runs, the value goals_failure of standard_pack_goals_not_applied (Workflow #463 V2 fix round 2, contracts/package-variables.md \"A variable that does not apply\", since 0.12.61).",
+      "description": "Why a game root's goals.json is not applied while the root runs, the value goals_failure of standard_pack_goals_not_applied (Workflow #463 V2 fix round 2, contracts/package-variables.md \"A variable that does not apply\", since 0.12.61); since Workflow #455 RR1 fix round 1 (0.12.92) also why its goal-tables.json is not applied, the value goals_failure of standard_pack_goal_tables_not_applied.",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",
@@ -10052,10 +10058,10 @@
       },
       "tokens": {
         "refused": {
-          "description": "The contract crate's reader refused the file: it applies no entry and takes no name."
+          "description": "The contract crate's reader refused the file: it applies no entry and takes no name (a goal-tables.json, since Workflow #455 RR1 fix round 1: it applies no records entry of goals.json)."
         },
         "unreadable": {
-          "description": "The file could not be read (an I/O failure other than its absence): which names it takes is not known, so no variable of the root applies."
+          "description": "The file could not be read (an I/O failure other than its absence): which names it takes is not known, so no variable of the root applies (a goal-tables.json, since Workflow #455 RR1 fix round 1: it applies no records entry of goals.json, and no variable depends on it)."
         }
       }
     },

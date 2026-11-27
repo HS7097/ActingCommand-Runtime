@@ -50658,6 +50658,85 @@ entry is `variable_conflict` as for any entry name of the file, and its cause in
 reads as text; no root is known to do so. The revision table counts `goals.json` as 28 whatever
 version it holds, as it counted 14: the check, not the table, refuses a retired version.
 
+**Fix round 1** (coordinator work order `rd-1123/brief-455-rr1-fix1.md`, on the one review of pull
+request #1912; the rulings are the coordinator's). *What the review found*: the code sound, and the
+contract silent where the resource side, writing real tables to it now, needs it before the first
+release that reads the file (a format once shipped is not changed in place): what a prerequisite
+asks (whether `from` speaks of the step that leaves a position or of the one that arrives at it,
+and whether "beyond" is the ladder's order or a comparison of numbers), what kind of list column a
+table reads, and the form of every name but a table's; three things the reader took that have no
+meaning; one code that spoke for two files of different consequences, told apart only by `path`; a
+pointer text built for every step whether or not anything was wrong; and a text of the edit's
+refusals the slice left behind. *What changed*:
+- *1, what a prerequisite means* ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
+  "Prerequisites", with a worked example on the contract's first example). A position is at or
+  beyond another when it is that position or stands after it in the `positions` list of the ladder
+  concerned: the ladder's order, the numbers never compared. `at_least` is a position of the
+  ladder the key walks in the required column (its class's or its own); `from` one of the
+  requiring column's own ladder (of each of a key's subs for a column of `per: "sub"`). Without
+  `from` the required column stands at `at_least` or beyond before any step of the requiring
+  column is taken; with it, before a step that arrives at `from` or beyond, and a step that
+  arrives before it asks nothing. The required column is another column of the table and not one
+  of `per: "sub"`: the reader refused such a column already (`table_requires_invalid` at the
+  prerequisite's `column`), and a column that names itself already reaches itself
+  (`table_requires_cycle`); no code changed for it, a gate test was added.
+- *2, what a table reads* ("Ladders and steps"). A position is a tuple of whole numbers and a
+  column's `read` names list columns that hold whole numbers; a reading of another kind never
+  equals a position (the later slice then takes the position as not known). The reader took whole
+  numbers only already: no code.
+- *3, names* ("Names"). The forms the reader already held a column's, a class's, a sub's, a
+  role's and a condition's name to (an entry name's, 1 to 64 bytes), beside the others.
+- *4, three things refused that were taken*, each found in the forms' pass at the second
+  occurrence in the reader's order, each the only problem of its test: an item that names a pool
+  an earlier item names, `table_pool_duplicate` at its `pool` (new: no word said it; a holding has
+  one name in a table, and the later slice subtracts a pool's holding once); a progress list whose
+  `key_column` is also one of its `columns`, `table_reading_column_duplicate` at it among the
+  columns (the existing word, its text widened: the list names one reading column twice; the
+  shared helper `reading_columns` takes the list's key column); two progress lists of one table
+  that name one `fact_key`, `table_list_key_duplicate` at the later's `fact_key` (new).
+- *5, one code, one file*. The tables file the workbench does not apply is
+  `standard_pack_goal_tables_not_applied` (new, a warning of ladder class `none` in the host
+  fragment, beside `standard_pack_goals_not_applied`, with its values `game`, `path` and
+  `goals_failure` and the vocabulary `goals_failure` shared; `StandardPackGoalsCode::TablesNotApplied`,
+  `goal_tables_not_applied`), recorded as before, once per sha256 of a refused file and once until
+  an unreadable one reads again; `standard_pack_goals_not_applied` is `goals.json`'s alone again,
+  whose failure applies none of its entries. Where ruling 5 above and this section's contract list
+  name `standard_pack_goals_not_applied` for the tables file, read this code. The contract ("Who
+  reads it", "Interface"), the catalog, the `package` row 28 and the host gate say which is which;
+  `runtime-outcomes` stays 1 (a new code of the catalog only).
+- *6, a cost that grows with the file*. `roles()` builds a step's pointer only for a step that
+  names a role its key does not declare (each pointer passed as a closure the check calls then);
+  the problems and their pointers are as before.
+- *7, a text left behind*. [runtime-interface.md](runtime-interface.md), "The edit": a records
+  entry answers `holds_no_value` for a set, and for a clear with nothing stored, until the slice
+  that stores records.
+
+Nothing else moved: no member of either file, no limit, no answer of a root without the files.
+
+| Word or code | The one cause | Refuses or warns |
+|---|---|---|
+| `table_pool_duplicate` | an item names a pool an earlier item of the file names | refuses the file (a warning of `standard-pack check`; the root runs) |
+| `table_list_key_duplicate` | a progress list names the fact key of an earlier list of its table | as above |
+| `table_reading_column_duplicate` (text widened) | a reading column named twice, a list's key column among its own columns too | as above |
+| `standard_pack_goal_tables_not_applied` | the workbench applies no records entry: the root's tables file refused or unreadable (`goals_failure`) | warns (the root runs) |
+
+| Test | What it shows |
+|---|---|
+| `rr1_fix1_a_pool_two_items_name_is_refused_at_the_later_item_s_pool` (contract) | the second item naming a pool refused at its `pool`, the only problem; two items without a pool read |
+| `rr1_fix1_a_list_s_key_column_among_its_columns_is_refused_at_it` (contract) | the key column among a list's columns refused at it, the only problem |
+| `rr1_fix1_two_lists_of_one_table_with_one_fact_key_are_refused_at_the_later` (contract) | the later list's `fact_key` refused, the only problem |
+| `rr1_fix1_a_prerequisite_on_a_sub_column_or_on_its_own_column_is_refused` (contract) | a column of `per: "key"` requiring one of `per: "sub"` refused at the prerequisite's `column`; a column requiring itself a cycle at its `requires` |
+| `rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_applies_no_records` (host, adapted) | the refused tables file's record is the new code, naming only that file, and no `standard_pack_goals_not_applied` is recorded for it; a `goals.json` refused afterwards (version 2) is one `standard_pack_goals_not_applied` naming `goals.json`, the tables' record still one |
+
+The contract's two examples still read (`rr1_the_two_examples_read_to_their_tables`, unchanged).
+Not proven by a test: what a prerequisite asks (no slice computes with it yet), and the cost of
+`roles()` on a file near its bound (not measured). *What is left*: the composer's judgement of "a
+pool a target can be put on" is still read from a table that copies the policy's
+(`GoalReferences::pools`), not from one function both call; the list of a root's files stands in
+several places (the installer's, the bundle's, the readers'); and `standard_pack_root_invalid`'s
+words `table_ladder_invalid` and `table_column_unknown` each cover several cases, told apart by the
+pointer.
+
 **At deploy.** Nothing to configure. A bundle that carries `goals.json` or `goal-tables.json`
 declares `package` [28, 28]; an installer of 0.12.91 or earlier refuses it. A root that still holds
 a version 2 `goals.json` applies no entry of it after this release is installed (its goal page

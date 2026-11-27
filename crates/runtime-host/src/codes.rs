@@ -3698,7 +3698,9 @@ actingcommand_contract::outcome_codes! {
     /// The host's code of a game root's `goals.json` that is not applied while the root runs
     /// (Workflow #463 V2 fix round 2). No existing code fits: `standard_pack_root_invalid` and
     /// `standard_pack_root_unreadable` say of every other root file that the root is not
-    /// composed, and here the root runs and only its goal document is not applied.
+    /// composed, and here the root runs and only its goal document is not applied. Workflow #455
+    /// RR1 fix round 1: and its code of the root's `goal-tables.json` that is not applied, which
+    /// has another consequence (one code, one file).
     pub(crate) enum StandardPackGoalsCode {
         /// Warning (since 0.12.61). The scheduler workbench does not apply the game root's
         /// (`game`) `goals.json` (`path`), for the reason `goals_failure` names: the contract
@@ -3706,14 +3708,23 @@ actingcommand_contract::outcome_codes! {
         /// `standard_pack_root_invalid`) or it could not be read (the operating system's failure
         /// as the cause). The root runs; no entry of the file takes a name, and a file that
         /// cannot be read keeps every variable of the root from applying. Recorded once per
-        /// sha256 of a refused file, and once until an unreadable file reads again.
+        /// sha256 of a refused file, and once until an unreadable file reads again. `goals.json`'s
+        /// alone.
         NotApplied => "standard_pack_goals_not_applied": warning / none,
+        /// Warning (Workflow #455 RR1 fix round 1, since 0.12.92). The scheduler workbench does
+        /// not apply the game root's (`game`) `goal-tables.json` (`path`), for the reason
+        /// `goals_failure` names, with the same causes as `goals.json`'s. The root runs and every
+        /// entry of its `goals.json` applies as before but its `records` entries, which apply
+        /// none. Recorded once per sha256 of a refused file, and once until an unreadable file
+        /// reads again.
+        TablesNotApplied => "standard_pack_goal_tables_not_applied": warning / none,
     }
 }
 
 actingcommand_contract::outcome_vocabulary! {
     /// Why a game root's `goals.json` is not applied (vocabulary `goals_failure`; Workflow #463 V2
-    /// fix round 2, `standard_pack_goals_not_applied` carries it).
+    /// fix round 2, `standard_pack_goals_not_applied` carries it); Workflow #455 RR1 fix round 1:
+    /// or its `goal-tables.json` (`standard_pack_goal_tables_not_applied` carries it).
     pub enum GoalsFailure: "goals_failure" {
         /// The contract crate's reader refused the file.
         Refused => "refused",

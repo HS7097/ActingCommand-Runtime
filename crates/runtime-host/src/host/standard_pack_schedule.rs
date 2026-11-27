@@ -69,7 +69,8 @@
 //!   with the root's files, and keeps what it read with the root's goals for the generation in
 //!   force, with its sha256 ([`RootGoalTables`]); a read whose bytes have the sha256 of what it
 //!   keeps takes what it keeps, so the file is parsed once per content. A file the reader refuses
-//!   or that cannot be read applies no `records` entry: `standard_pack_goals_not_applied` names
+//!   or that cannot be read applies no `records` entry: `standard_pack_goal_tables_not_applied`
+//!   (fix round 1: the file's own code; `standard_pack_goals_not_applied` is `goals.json`'s) names
 //!   it, once per sha256 of a refused file and once until an unreadable one reads again; the root
 //!   runs and every other entry of `goals.json` applies as before. Nothing reads the tables in an
 //!   evaluation yet.
@@ -265,7 +266,7 @@ pub enum RootGoalTables {
         issues: Vec<StandardPackRootIssue>,
     },
     /// It could not be read (an I/O failure other than its absence): the operating system's
-    /// failure, the cause of its `standard_pack_goals_not_applied`.
+    /// failure, the cause of its `standard_pack_goal_tables_not_applied` (fix round 1).
     Unreadable(Outcome),
 }
 
@@ -850,6 +851,19 @@ fn unreadable_package(game: &str, package_id: &str, files: Option<&ScheduleGame>
 /// system's failure.
 fn goals_not_applied(game: &str, path: &Path, failure: GoalsFailure) -> Outcome {
     Outcome::new(StandardPackGoalsCode::NotApplied)
+        .operation(HostLocation::StandardPackRead)
+        .game(game)
+        .path(path)
+        .goals_failure(failure)
+}
+
+/// Workflow #455 RR1 fix round 1 (`contracts/standard-pack-goal-tables.md`, "Who reads it"): the
+/// `standard_pack_goal_tables_not_applied` of `game`'s `goal-tables.json` at `path` for the reason
+/// `failure`, with the members of [`goals_not_applied`]: the root runs and every entry of its
+/// `goals.json` applies but the `records` entries. A code of its own, as its consequence is not
+/// `goals.json`'s. The caller links the cause.
+fn goal_tables_not_applied(game: &str, path: &Path, failure: GoalsFailure) -> Outcome {
+    Outcome::new(StandardPackGoalsCode::TablesNotApplied)
         .operation(HostLocation::StandardPackRead)
         .game(game)
         .path(path)
@@ -1949,8 +1963,9 @@ impl HostShared {
                 | (RootGoals::Refused { .. } | RootGoals::Unreadable(_), None) => {}
             }
             // Workflow #455 RR1: a `goal-tables.json` the reader refused, or that could not be
-            // read, applies no records entry while the root runs: the same record names it, once
-            // per sha256 of a refused file and once until an unreadable one reads again.
+            // read, applies no records entry while the root runs: one record names it, once per
+            // sha256 of a refused file and once until an unreadable one reads again. Fix round 1:
+            // `standard_pack_goal_tables_not_applied`, the file's own code.
             if !matches!(declarations.goal_tables, RootGoalTables::Unreadable(_)) {
                 state
                     .reported
@@ -1972,14 +1987,15 @@ impl HostShared {
                             issue: issue.clone(),
                         }
                         .outcome(Some(game.as_str()));
-                        let outcome = goals_not_applied(game, refused_path, GoalsFailure::Refused)
-                            .caused_by(refusal);
+                        let outcome =
+                            goal_tables_not_applied(game, refused_path, GoalsFailure::Refused)
+                                .caused_by(refusal);
                         self.report_once(state, game, &format!("goal-tables:{digest}"), outcome)?;
                     }
                 }
                 (RootGoalTables::Unreadable(failure), Some(unreadable_path)) => {
                     let outcome =
-                        goals_not_applied(game, unreadable_path, GoalsFailure::Unreadable)
+                        goal_tables_not_applied(game, unreadable_path, GoalsFailure::Unreadable)
                             .caused_by(failure.clone());
                     self.report_once(state, game, GOAL_TABLES_UNREADABLE_KEY, outcome)?;
                 }

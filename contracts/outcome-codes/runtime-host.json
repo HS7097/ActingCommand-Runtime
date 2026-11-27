@@ -22237,8 +22237,31 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.61",
-      "description": "Workflow #463 V2 fix round 2 (contracts/package-variables.md, \"A variable that does not apply\"): the scheduler workbench does not apply the goals.json (path) of the game root game, for the reason goals_failure names: refused, the contract crate's reader refused it (its first problem as the cause, a standard_pack_root_invalid naming the file, its problem and its pointer), so no entry of it takes a name; or unreadable, it could not be read (the operating system's failure as the cause), so which names it takes is not known and no variable of the root applies (goals_unreadable). The root runs and is composed as without the file. Recorded once per sha256 of a refused file, and once until an unreadable one reads again. Workflow #455 RR1 (since 0.12.92): path may name the root's goal-tables.json, which the workbench reads with goals.json; refused or unreadable, it applies no records entry of goals.json, every other entry applies as before and the root runs, recorded the same way.",
-      "common_causes": "goals.json or goal-tables.json breaks a rule of its reader (actinglab standard-pack check names it), or the file is locked or not readable by the Runtime's account.",
+      "description": "Workflow #463 V2 fix round 2 (contracts/package-variables.md, \"A variable that does not apply\"): the scheduler workbench does not apply the goals.json (path) of the game root game, for the reason goals_failure names: refused, the contract crate's reader refused it (its first problem as the cause, a standard_pack_root_invalid naming the file, its problem and its pointer), so no entry of it takes a name; or unreadable, it could not be read (the operating system's failure as the cause), so which names it takes is not known and no variable of the root applies (goals_unreadable). The root runs and is composed as without the file. Recorded once per sha256 of a refused file, and once until an unreadable one reads again. It names goals.json alone: the root's goal-tables.json, which the workbench reads with goals.json since Workflow #455 RR1 (0.12.92), is standard_pack_goal_tables_not_applied (RR1 fix round 1).",
+      "common_causes": "goals.json breaks a rule of the reader (actinglab standard-pack check names it), or the file is locked or not readable by the Runtime's account.",
+      "handling": "Fix the file as standard-pack check says, or make it readable; the next check reads it again."
+    },
+    "standard_pack_goal_tables_not_applied": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "game": "required",
+        "path": "required",
+        "goals_failure": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.92",
+      "description": "Workflow #455 RR1 fix round 1 (contracts/standard-pack-goal-tables.md, \"Who reads it\"; register section 1.535): the scheduler workbench does not apply the goal-tables.json (path) of the game root game, which it reads with goals.json, for the reason goals_failure names: refused, the contract crate's reader refused it (its first problem as the cause, a standard_pack_root_invalid naming the file, its problem and its pointer); or unreadable, it could not be read (the operating system's failure as the cause). The file applies no records entry of the root's goals.json; every other entry of goals.json applies as before and the root runs and is composed as without the file. Recorded once per sha256 of a refused file, and once until an unreadable one reads again. A goals.json that is not applied is standard_pack_goals_not_applied, whose consequence is another.",
+      "common_causes": "goal-tables.json breaks a rule of its reader (actinglab standard-pack check names it), or the file is locked or not readable by the Runtime's account.",
       "handling": "Fix the file as standard-pack check says, or make it readable; the next check reads it again."
     },
     "priority_offset_unknown_task": {

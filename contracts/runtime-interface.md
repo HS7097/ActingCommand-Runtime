@@ -714,7 +714,9 @@ stored value, stored target or variable of the game root has, is `goal_value_inv
 `goal_problem` `name_unknown`; a `set` whose value is no JSON `value_not_json`; a page not in
 memory yet `not_checked_yet` (nothing is known of the name: send the request again after the next
 check; fix round 2: a root no check since the start could read `root_failing`, a game without
-`schedule.json` `no_schedule`, for every name); for a `set`, a heading or a note `holds_no_value`; a tier `tier_not_built`; a remedy
+`schedule.json` `no_schedule`, for every name); for a `set`, a heading or a note `holds_no_value`,
+and so does a `records` entry until the slice that stores records (Workflow #455 RR1, since
+0.12.92; [standard-pack-goals.md](standard-pack-goals.md), "The records entry"); a tier `tier_not_built`; a remedy
 parameter `remedy_parameter` (never written here); a variable that does not apply
 `variable_not_applying` with its `variable_problem`; a name the root declares that no bound
 package declares (a placement, or a variable of a package the catalog does not bind there)
@@ -733,7 +735,8 @@ the one the page's targetable list names it by: [resource-targets.md](resource-t
 target's pool"). A `clear` removes what is stored under the
 name whatever its entry is (a resource entry's target on its pool, else the entry row of the name,
 else the target of that id); with nothing stored under it the name's own word answers
-(`holds_no_value`, `tier_not_built`, `value_not_set` for a resource entry or a bound variable,
+(`holds_no_value` for a heading, a note or, until the slice that stores records, a `records`
+entry, `tier_not_built`, `value_not_set` for a resource entry or a bound variable,
 `remedy_parameter`, `not_offered`, `name_unknown`). Then `record_unreadable` for a v1 policy or
 rows no reader reads, `record_out_of_limits` for a 17th target or a 97th entry, one row replaced,
 added or removed, the whole record read back by the v3 reader, and one `fact.published` keeping

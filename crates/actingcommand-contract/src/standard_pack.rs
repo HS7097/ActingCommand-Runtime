@@ -397,14 +397,21 @@ crate::outcome_vocabulary! {
         /// RR1: a progress list's `fact_key` is no key of a list reading (under
         /// `inventory.list.`, a valid fact key), at it.
         TableListKeyInvalid => "table_list_key_invalid",
+        /// RR1 fix round 1: a progress list's `fact_key` is the `fact_key` of an earlier list of
+        /// its table, at the later's `fact_key`.
+        TableListKeyDuplicate => "table_list_key_duplicate",
         /// RR1: a reading column listed twice among a table's progress lists, or twice in one
-        /// `read` or sub, at the later.
+        /// `read` or sub, at the later; fix round 1: or a progress list's `key_column` listed
+        /// among its own `columns`, at it there.
         TableReadingColumnDuplicate => "table_reading_column_duplicate",
         /// RR1: an item's pool is no pool of the composed `schedule.json`, at its `pool`.
         TablePoolUnknown => "table_pool_unknown",
         /// RR1: the pool of an item without a recipe (the one a need lands on) gives a goal no
         /// step and importance, as `goal_pool_unvalued` judges a pool, at its `pool`.
         TablePoolUnvalued => "table_pool_unvalued",
+        /// RR1 fix round 1: an item names a pool an earlier item of `goal-tables.json` names (a
+        /// holding has one name in the file), at the later item's `pool`.
+        TablePoolDuplicate => "table_pool_duplicate",
         /// RR1: a bundle zip carries `goal-tables.json` and declares a `package` maximum below
         /// 28. Refused by the installer's `place` at `interfaces.json`, as `goal_undeclared` is.
         GoalTablesUndeclared => "goal_tables_undeclared",

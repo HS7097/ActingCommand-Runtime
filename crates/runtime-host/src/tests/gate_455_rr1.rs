@@ -7,7 +7,8 @@
 // due at every evaluation. Its `goals.json` (version 3) holds a heading and a `records` entry that
 // names the table `heroes` of its `goal-tables.json`. The scheduler workbench reads the tables
 // with the goal declaration, once per content, and keeps them for the generation in force; a
-// tables file the reader refuses applies no records entry and the root runs; the goal page lists
+// tables file the reader refuses applies no records entry and the root runs, recorded with the
+// file's own code (fix round 1, rd-1123/brief-455-rr1-fix1.md, ruling 5); the goal page lists
 // no records entry, and a set or a clear of its name answers `holds_no_value`. Every name, pool
 // and amount is made up; no clock is read and nothing sleeps.
 
@@ -31,7 +32,10 @@ const RESULT: [u8; 3] = [255, 255, 255];
 const HOME: [u8; 3] = [255, 0, 0];
 const VIEWED: &str = "request_goal_view_completed";
 const INVALID: &str = "goal_value_invalid";
+/// The code of a `goals.json` that is not applied, `goals.json`'s alone (fix round 1).
 const GOALS_NOT_APPLIED: &str = "standard_pack_goals_not_applied";
+/// Fix round 1: the code of a `goal-tables.json` that is not applied, the file's own.
+const TABLES_NOT_APPLIED: &str = "standard_pack_goal_tables_not_applied";
 /// The default `standard_packs.check_interval_ms`: a check reads the roots again after it.
 const CHECK_INTERVAL_MS: u64 = 60_000;
 /// The records entry's name.
@@ -321,9 +325,9 @@ impl Scene {
         client.send(&request)
     }
 
-    /// The `standard_pack_goals_not_applied` outcomes of the workbench's `standard_pack_read`
-    /// lifecycle records that name `goal-tables.json`, in ledger order.
-    fn tables_not_applied(&self) -> Vec<Outcome> {
+    /// Fix round 1: the outcomes spelled `spelling` of the workbench's `standard_pack_read`
+    /// lifecycle records, in ledger order, each with the file its `path` names.
+    fn read_outcomes(&self, spelling: &str) -> Vec<(String, Outcome)> {
         let mut events = self
             .host
             .query_persisted_events_for_test(EventQuery {
@@ -338,18 +342,32 @@ impl Scene {
                 EventPayload::Runtime(RuntimePayload::LifecycleObserved(value)) => {
                     match value.phase() {
                         RuntimeLifecyclePhase::StandardPackRead { outcome }
-                            if outcome.code().as_str() == GOALS_NOT_APPLIED
-                                && outcome
-                                    .value("path")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|path| path.ends_with("goal-tables.json")) =>
+                            if outcome.code().as_str() == spelling =>
                         {
-                            Some(outcome.clone())
+                            let file = outcome
+                                .value("path")
+                                .and_then(Value::as_str)
+                                .and_then(|path| Path::new(path).file_name())
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            Some((file, outcome.clone()))
                         }
                         _ => None,
                     }
                 }
                 _ => None,
+            })
+            .collect()
+    }
+
+    /// The `standard_pack_goal_tables_not_applied` outcomes (fix round 1: the file's own code),
+    /// in ledger order; each names `goal-tables.json`.
+    fn tables_not_applied(&self) -> Vec<Outcome> {
+        self.read_outcomes(TABLES_NOT_APPLIED)
+            .into_iter()
+            .map(|(file, outcome)| {
+                assert_eq!(file, "goal-tables.json", "{outcome}");
+                outcome
             })
             .collect()
     }
@@ -385,10 +403,13 @@ fn refused_word(receipt: &RuntimeReceipt) -> Option<String> {
 // declaration one byte longer), the same tables: what it keeps is the same parse (the same shared
 // value, not a second one). Another content (one byte longer): parsed again, with its amount. A
 // file the reader refuses (its key names a class the table does not have): the workbench keeps the
-// refusal at its pointer, one `standard_pack_goals_not_applied` names `goal-tables.json` (`refused`,
-// caused by the reader's `standard_pack_root_invalid` with `table_class_unknown`), the root runs
-// and `goals.json` still applies (accepted, its heading listed); the root read again with the same
-// refused file adds no second record.
+// refusal at its pointer, one record names `goal-tables.json` (`refused`, caused by the reader's
+// `standard_pack_root_invalid` with `table_class_unknown`), the root runs and `goals.json` still
+// applies (accepted, its heading listed); the root read again with the same refused file adds no
+// second record. Fix round 1 (ruling 5): that record is the file's own code,
+// `standard_pack_goal_tables_not_applied`, and no `standard_pack_goals_not_applied` is recorded
+// for it; a `goals.json` refused afterwards is `standard_pack_goals_not_applied` naming
+// `goals.json`, and the tables' code still names only `goal-tables.json`, once.
 #[test]
 fn rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_applies_no_records() {
     let scene = Scene::with(|packs| {
@@ -483,6 +504,12 @@ fn rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_app
         cause.value("standard_pack_problem").and_then(Value::as_str),
         Some("table_class_unknown")
     );
+    // Fix round 1: `goals.json`'s code says nothing of the tables file.
+    assert!(
+        scene.read_outcomes(GOALS_NOT_APPLIED).is_empty(),
+        "{:#?}",
+        scene.read_outcomes(GOALS_NOT_APPLIED)
+    );
     let view = scene.view();
     assert_eq!(view.declaration.state, GoalDeclarationRead::Accepted);
     assert_eq!(
@@ -492,8 +519,28 @@ fn rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_app
 
     // The root read again, the same refused file: no second record.
     one_byte_longer_again(scene.packs.path());
-    scene.evaluate_and_run(next.max(refused_at + CHECK_INTERVAL_MS), 10);
+    let same_at = next.max(refused_at + CHECK_INTERVAL_MS);
+    let next = scene.evaluate_and_run(same_at, 10);
     assert_eq!(scene.tables_not_applied().len(), 1, "once per content");
+
+    // Fix round 1: a `goals.json` the reader refuses (version 2, retired) is named by its own
+    // code, `standard_pack_goals_not_applied`, naming `goals.json`; the tables file, refused as
+    // before, adds no record, and no record of the tables' code names `goals.json`.
+    write_json(
+        &goals_path(scene.packs.path()),
+        &json!({"schema_version": "actingcommand.goals.v2", "game": GAME_A,
+                "entries": [{"name": "group_a", "type": "heading", "title": {"en": "Group A"}}]}),
+    );
+    scene.evaluate_and_run(next.max(same_at + CHECK_INTERVAL_MS), 11);
+    let goals_records = scene.read_outcomes(GOALS_NOT_APPLIED);
+    assert_eq!(goals_records.len(), 1, "{goals_records:#?}");
+    let (file, goals_record) = &goals_records[0];
+    assert_eq!(file, "goals.json");
+    assert_eq!(
+        goals_record.value("goals_failure").and_then(Value::as_str),
+        Some("refused")
+    );
+    assert_eq!(scene.tables_not_applied().len(), 1, "the tables as before");
     scene.close();
 }
 

@@ -773,3 +773,95 @@ fn rr1_the_pools_are_held_to_the_composed_root() {
         HERO_POOLS.len()
     );
 }
+
+// Fix round 1 (ruling 4): a holding has one name in the file. The second item that names the pool
+// of an earlier one (`exp` names `gold`'s) is refused `table_pool_duplicate` at its `pool`, the
+// only problem; two items that name no pool name no pool twice.
+#[test]
+fn rr1_fix1_a_pool_two_items_name_is_refused_at_the_later_item_s_pool() {
+    let named_twice = hero_with(|value| value["items"]["exp"]["pool"] = json!("pool.neutral.gold"));
+    assert_eq!(
+        read(&named_twice, GAME).map(|_| ()),
+        Err(vec![issue(
+            StandardPackProblem::TablePoolDuplicate,
+            "/items/exp/pool"
+        )])
+    );
+    let two_without = hero_with(|value| {
+        value["items"]["chip"] = json!({});
+        value["items"]["chip_2"] = json!({});
+    });
+    assert!(
+        read(&two_without, GAME).is_ok(),
+        "{:?}",
+        read(&two_without, GAME)
+    );
+}
+
+// Fix round 1 (ruling 4): a progress list whose `key_column` is also one of its own `columns`
+// names that reading column twice: `table_reading_column_duplicate` at it among the columns, the
+// only problem. Another list's key column among a list's columns is not that list's own.
+#[test]
+fn rr1_fix1_a_list_s_key_column_among_its_columns_is_refused_at_it() {
+    let key_read = hero_with(|value| {
+        value["tables"][0]["progress"][0]["columns"] = json!(["phase", "level", "hero"]);
+    });
+    assert_eq!(
+        read(&key_read, GAME).map(|_| ()),
+        Err(vec![issue(
+            StandardPackProblem::TableReadingColumnDuplicate,
+            "/tables/0/progress/0/columns/2"
+        )])
+    );
+}
+
+// Fix round 1 (ruling 4): two progress lists of one table that name the same `fact_key` are
+// refused `table_list_key_duplicate` at the later one's `fact_key`, the only problem.
+#[test]
+fn rr1_fix1_two_lists_of_one_table_with_one_fact_key_are_refused_at_the_later() {
+    let one_key = hero_with(|value| {
+        value["tables"][0]["progress"][1]["fact_key"] = json!("inventory.list.neutral_roster");
+    });
+    assert_eq!(
+        read(&one_key, GAME).map(|_| ()),
+        Err(vec![issue(
+            StandardPackProblem::TableListKeyDuplicate,
+            "/tables/0/progress/1/fact_key"
+        )])
+    );
+}
+
+// Fix round 1 (ruling 1): the column a prerequisite requires is another column of the table and
+// not one of `per: "sub"`. `skill` (per key) requiring `mastery` (per sub, its own prerequisites
+// taken off so that no cycle forms) is refused `table_requires_invalid` at the prerequisite's
+// `column`, the only problem; a column that requires itself reaches itself,
+// `table_requires_cycle` at its `requires`, the only problem.
+#[test]
+fn rr1_fix1_a_prerequisite_on_a_sub_column_or_on_its_own_column_is_refused() {
+    let on_sub = hero_with(|value| {
+        value["tables"][0]["columns"][3]
+            .as_object_mut()
+            .expect("mastery")
+            .remove("requires");
+        value["tables"][0]["columns"][2]["requires"] =
+            json!([{"column": "mastery", "at_least": [1]}]);
+    });
+    assert_eq!(
+        read(&on_sub, GAME).map(|_| ()),
+        Err(vec![issue(
+            StandardPackProblem::TableRequiresInvalid,
+            "/tables/0/columns/2/requires/0/column"
+        )])
+    );
+    let on_itself = hero_with(|value| {
+        value["tables"][0]["columns"][0]["requires"] =
+            json!([{"column": "phase", "at_least": [1]}]);
+    });
+    assert_eq!(
+        read(&on_itself, GAME).map(|_| ()),
+        Err(vec![issue(
+            StandardPackProblem::TableRequiresCycle,
+            "/tables/0/columns/0/requires"
+        )])
+    );
+}

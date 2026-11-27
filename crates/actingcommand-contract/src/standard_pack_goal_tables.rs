@@ -258,11 +258,17 @@ impl GoalColumnPer {
 /// A position on a ladder: one integer for each reading column its column reads, in their order.
 pub type GoalPosition = Vec<i64>;
 
-/// One prerequisite of a column.
+/// One prerequisite of a column (fix round 1: what it means,
+/// `contracts/standard-pack-goal-tables.md`, "Prerequisites").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GoalRequirement {
-    /// The column `column` is at `at_least` or beyond; asked from the requiring column's position
-    /// `from` on, or for the whole column without it.
+    /// The column `column`, another column of the table and not one of `per: "sub"`, stands at
+    /// `at_least` or beyond: at that position or at one after it in the `positions` list of the
+    /// ladder the key walks in `column` (its class's or its own), the ladder's order, never the
+    /// numbers compared. Without `from`, before any step of the requiring column is taken; with
+    /// `from`, a position of the requiring column's own ladder (of each of a key's subs for a
+    /// column of `per: "sub"`), before a step that arrives at `from` or beyond is taken, and a step
+    /// that arrives before it asks nothing.
     Column {
         column: String,
         at_least: GoalPosition,
@@ -348,7 +354,10 @@ pub enum GoalKeyColumn {
 /// `table_name_duplicate`, `table_item_unknown`, `table_role_unknown`, `table_class_unknown`,
 /// `table_column_unknown`, `table_ladder_invalid`, `table_recipe_cycle`, `table_requires_cycle`,
 /// `table_requires_invalid`, `table_recipe_without_pool`, `table_list_key_invalid` and
-/// `table_reading_column_duplicate`.
+/// `table_reading_column_duplicate`; fix round 1: `table_pool_duplicate` (a pool an earlier item
+/// names) and `table_list_key_duplicate` (a fact key an earlier list of the table names), each in
+/// the reader's order at the later, and a list's key column among its own columns
+/// `table_reading_column_duplicate` there.
 pub fn parse_standard_pack_goal_tables(
     bytes: &[u8],
     game: &str,
@@ -561,13 +570,14 @@ impl Reader {
         })
     }
 
-    /// `items`: 1 to [`MAX_GOAL_TABLE_ITEMS`] items by name.
+    /// `items`: 1 to [`MAX_GOAL_TABLE_ITEMS`] items by name, each pool named by one of them.
     fn items(&mut self, value: &Value) -> Option<Vec<GoalTableItem>> {
         let map = self.map(value, "/items", (1, MAX_GOAL_TABLE_ITEMS))?;
         let mut items = Vec::new();
+        let mut pools = BTreeSet::new();
         let mut complete = true;
         for (name, item) in map {
-            match self.item(name, item, &at("/items", name)) {
+            match self.item(name, item, &at("/items", name), &mut pools) {
                 Some(item) => items.push(item),
                 None => complete = false,
             }
@@ -575,17 +585,34 @@ impl Reader {
         complete.then_some(items)
     }
 
-    /// One item `{pool?, recipe?}`, its name of [`item_word`].
-    fn item(&mut self, name: &str, value: &Value, pointer: &str) -> Option<GoalTableItem> {
+    /// One item `{pool?, recipe?}`, its name of [`item_word`]. Fix round 1: its pool is new to
+    /// `pools`, the pools the items before it name (`table_pool_duplicate` at its `pool`
+    /// otherwise): a holding has one name in the file, and what a later slice subtracts of a
+    /// pool's holding it subtracts once.
+    fn item(
+        &mut self,
+        name: &str,
+        value: &Value,
+        pointer: &str,
+        pools: &mut BTreeSet<String>,
+    ) -> Option<GoalTableItem> {
         let named = self.named(name, pointer, MAX_GOAL_TABLE_ID_BYTES, item_word);
         let object = self
             .check
             .object(value, pointer, &[], &["pool", "recipe"])?;
+        let at_pool = at(pointer, "pool");
         let pool = match object.get("pool") {
             None => Some(None),
             Some(pool) => self
-                .name_value(pool, &at(pointer, "pool"), MAX_GOAL_REFERENCE_BYTES, opaque)
-                .map(Some),
+                .name_value(pool, &at_pool, MAX_GOAL_REFERENCE_BYTES, opaque)
+                .and_then(|id| {
+                    if pools.insert(id.clone()) {
+                        Some(Some(id))
+                    } else {
+                        self.issue(StandardPackProblem::TablePoolDuplicate, &at_pool);
+                        None
+                    }
+                }),
         };
         let recipe = match object.get("recipe") {
             None => Some(None),
@@ -727,18 +754,20 @@ impl Reader {
     }
 
     /// `progress`: 1 to [`MAX_GOAL_TABLE_PROGRESS_LISTS`] lists, at most one of them `held_by`,
-    /// their reading columns each listed once among them.
+    /// their reading columns each listed once among them; fix round 1: each fact key named by one
+    /// of them.
     fn progress(&mut self, value: &Value, pointer: &str) -> Option<Vec<GoalProgressList>> {
         let list = self
             .check
             .list(value, pointer, (1, MAX_GOAL_TABLE_PROGRESS_LISTS))?;
         let mut seen = BTreeSet::new();
+        let mut keys = BTreeSet::new();
         let mut held = false;
         let mut lists = Vec::new();
         let mut complete = true;
         for (index, item) in list.iter().enumerate() {
             let at_list = format!("{pointer}/{index}");
-            match self.progress_list(item, &at_list, &mut seen, &mut held) {
+            match self.progress_list(item, &at_list, &mut seen, &mut keys, &mut held) {
                 Some(read) => lists.push(read),
                 None => complete = false,
             }
@@ -747,13 +776,17 @@ impl Reader {
     }
 
     /// One list `{fact_key, key_column, held_by?, columns}`: a list reading's key
-    /// (`table_list_key_invalid` otherwise), its key column and 1 to 63 columns of a list
-    /// reading's column form, `held_by` a boolean (a second `true` of the table `malformed`).
+    /// (`table_list_key_invalid` otherwise) that no list before it names (fix round 1,
+    /// `table_list_key_duplicate` otherwise, `keys` the ones they name), its key column and 1 to
+    /// 63 columns of a list reading's column form, each new to `seen` and, fix round 1, none of
+    /// them its key column (`table_reading_column_duplicate` otherwise, at the column), `held_by`
+    /// a boolean (a second `true` of the table `malformed`).
     fn progress_list(
         &mut self,
         value: &Value,
         pointer: &str,
         seen: &mut BTreeSet<String>,
+        keys: &mut BTreeSet<String>,
         held: &mut bool,
     ) -> Option<GoalProgressList> {
         let object = self.check.object(
@@ -764,7 +797,7 @@ impl Reader {
         )?;
         let fact_key = object
             .get("fact_key")
-            .and_then(|key| self.fact_key(key, &at(pointer, "fact_key")));
+            .and_then(|key| self.fact_key(key, &at(pointer, "fact_key"), keys));
         let key_column = object.get("key_column").and_then(|column| {
             self.name_value(
                 column,
@@ -796,6 +829,7 @@ impl Reader {
                 (1, MAX_LIST_READING_COLUMNS),
                 seen,
                 None,
+                key_column.as_deref(),
             )
         });
         Some(GoalProgressList {
@@ -806,23 +840,34 @@ impl Reader {
         })
     }
 
-    /// A list reading's `fact_key` (`table_list_key_invalid` when it is no such key).
-    fn fact_key(&mut self, value: &Value, pointer: &str) -> Option<String> {
+    /// A list reading's `fact_key` (`table_list_key_invalid` when it is no such key), new to
+    /// `keys`, the fact keys of the table's lists before it (fix round 1:
+    /// `table_list_key_duplicate` otherwise).
+    fn fact_key(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        keys: &mut BTreeSet<String>,
+    ) -> Option<String> {
         let Some(key) = value.as_str() else {
             self.check.malformed(pointer);
             return None;
         };
-        if list_reading_fact_key_valid(key) {
+        if !list_reading_fact_key_valid(key) {
+            self.issue(StandardPackProblem::TableListKeyInvalid, pointer);
+            None
+        } else if keys.insert(key.to_owned()) {
             Some(key.to_owned())
         } else {
-            self.issue(StandardPackProblem::TableListKeyInvalid, pointer);
+            self.issue(StandardPackProblem::TableListKeyDuplicate, pointer);
             None
         }
     }
 
     /// A list of `min..=max` reading column names, each new to `seen`
     /// (`table_reading_column_duplicate` at the later) and, with `known`, one of them
-    /// (`table_column_unknown`).
+    /// (`table_column_unknown`); fix round 1: with `key`, a progress list's own key column, none of
+    /// them `key` (`table_reading_column_duplicate` at it: the list names that column twice).
     fn reading_columns(
         &mut self,
         value: &Value,
@@ -830,6 +875,7 @@ impl Reader {
         bounds: (usize, usize),
         seen: &mut BTreeSet<String>,
         known: Option<&BTreeSet<String>>,
+        key: Option<&str>,
     ) -> Option<Vec<String>> {
         let list = self.check.list(value, pointer, bounds)?;
         let mut columns = Vec::new();
@@ -848,7 +894,7 @@ impl Reader {
             if known.is_some_and(|known| !known.contains(&column)) {
                 self.issue(StandardPackProblem::TableColumnUnknown, at_column);
                 complete = false;
-            } else if !seen.insert(column.clone()) {
+            } else if key == Some(column.as_str()) || !seen.insert(column.clone()) {
                 self.issue(StandardPackProblem::TableReadingColumnDuplicate, at_column);
                 complete = false;
             } else {
@@ -928,6 +974,7 @@ impl Reader {
                         (1, MAX_GOAL_TABLE_READ),
                         &mut BTreeSet::new(),
                         reading,
+                        None,
                     )
                 })
                 .map(|read| match per {
@@ -966,6 +1013,7 @@ impl Reader {
                 (1, MAX_GOAL_TABLE_READ),
                 &mut BTreeSet::new(),
                 reading,
+                None,
             );
             match (named, read) {
                 (true, Some(read)) => subs.push((sub.clone(), read)),
@@ -1547,7 +1595,8 @@ impl Reader {
 
     /// A table's roles: every step a key takes (its class's, as the key overrides them, and its
     /// own) names roles the key declares in its `own` (`table_role_unknown` at the step's member,
-    /// each pointer once).
+    /// each pointer once). Fix round 1: a step's pointer is built only when the step names a role
+    /// its key does not declare, never for a step that is in order.
     fn roles(&mut self, table: &GoalTable, pointer: &str) {
         let mut reported = BTreeSet::new();
         for key in &table.keys {
@@ -1556,9 +1605,7 @@ impl Reader {
                 .iter()
                 .map(|(role, _)| role.as_str())
                 .collect::<BTreeSet<_>>();
-            let at_key = at(&at(pointer, "keys"), &key.name);
             if let Some(class) = table.class(&key.class) {
-                let at_class = at(&at(pointer, "classes"), &class.name);
                 for (column, ladder) in &class.ladders {
                     let overrides = key
                         .columns
@@ -1571,26 +1618,32 @@ impl Reader {
                         let overridden = overrides.and_then(|steps| {
                             steps.iter().find(|(position, _)| *position == index)
                         });
-                        let (taken, at_step) = match overridden {
-                            Some((_, written)) => {
-                                (written, format!("{}/steps/{index}", at(&at_key, column)))
-                            }
-                            None => (step, format!("{}/steps/{index}", at(&at_class, column))),
+                        // The step is the key's override or its class's, at the one's member.
+                        let (taken, owner, name) = match overridden {
+                            Some((_, written)) => (written, "keys", key.name.as_str()),
+                            None => (step, "classes", class.name.as_str()),
                         };
-                        self.step_roles(taken, &at_step, &roles, &mut reported);
+                        self.step_roles(taken, &roles, &mut reported, || {
+                            format!(
+                                "{}/steps/{index}",
+                                at(&at(&at(pointer, owner), name), column)
+                            )
+                        });
                     }
                 }
             }
             for (column, written) in &key.columns {
-                let at_column = at(&at_key, column);
+                let at_column = || at(&at(&at(pointer, "keys"), &key.name), column);
                 match written {
                     GoalKeyColumn::Steps(_) => {}
                     GoalKeyColumn::Ladder(ladder) => {
-                        self.ladder_roles(ladder, &at_column, &roles, &mut reported);
+                        self.ladder_roles(ladder, &roles, &mut reported, at_column);
                     }
                     GoalKeyColumn::Subs(subs) => {
                         for (sub, ladder) in subs {
-                            self.ladder_roles(ladder, &at(&at_column, sub), &roles, &mut reported);
+                            self.ladder_roles(ladder, &roles, &mut reported, || {
+                                at(&at_column(), sub)
+                            });
                         }
                     }
                 }
@@ -1598,32 +1651,36 @@ impl Reader {
         }
     }
 
-    /// The roles of every step of `ladder` at `pointer` ([`Self::step_roles`]).
+    /// The roles of every step of `ladder`, whose pointer `pointer` builds
+    /// ([`Self::step_roles`]).
     fn ladder_roles(
         &mut self,
         ladder: &GoalLadder,
-        pointer: &str,
         roles: &BTreeSet<&str>,
         reported: &mut BTreeSet<String>,
+        pointer: impl Fn() -> String,
     ) {
         for (index, step) in ladder.steps.iter().enumerate() {
-            self.step_roles(step, &format!("{pointer}/steps/{index}"), roles, reported);
+            self.step_roles(step, roles, reported, || {
+                format!("{}/steps/{index}", pointer())
+            });
         }
     }
 
-    /// Each role `step` at `pointer` names that is none of `roles`, once per pointer.
+    /// Each role `step` names that is none of `roles`, once per pointer: `pointer` builds the
+    /// step's pointer, called only for such a role.
     fn step_roles(
         &mut self,
         step: &GoalStep,
-        pointer: &str,
         roles: &BTreeSet<&str>,
         reported: &mut BTreeSet<String>,
+        pointer: impl Fn() -> String,
     ) {
         for (used, _) in step {
             if let GoalUse::Role(role) = used
                 && !roles.contains(role.as_str())
             {
-                let at_use = at(pointer, &format!("{ROLE_PREFIX}{role}"));
+                let at_use = at(&pointer(), &format!("{ROLE_PREFIX}{role}"));
                 if reported.insert(at_use.clone()) {
                     self.issue(StandardPackProblem::TableRoleUnknown, at_use);
                 }
