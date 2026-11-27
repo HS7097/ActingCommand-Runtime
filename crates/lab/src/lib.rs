@@ -290,6 +290,8 @@ pub use actingcommand_execution_kernel::{
 };
 // Workflow #308 SEL-L6b: the scan replay of `actinglab replay --frames --select --scan`.
 pub use actingcommand_execution_kernel::{ScanDeclaration, ScanDryRun, replay_scan};
+// Workflow #503 LIST-A3: the dry run of a list reading, for `actinglab package list-check`.
+pub use actingcommand_execution_kernel::{ListReadingDryRun, dry_run_list_reading};
 // #411 Lab RP: the run parameters a Lab evaluation reads, given with `--parameter`.
 pub use actingcommand_execution_kernel::GivenParameterProblem;
 // Workflow #463 V2: the variable values the scan replay reads, given with `--variable`; fix round

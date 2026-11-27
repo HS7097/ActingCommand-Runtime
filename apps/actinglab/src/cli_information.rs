@@ -209,6 +209,12 @@ pub(super) fn help_data() -> Value {
                 "--package <content directory>",
                 "--variable <name> (the variable one select step of the package reads)",
                 "--fixed <name,name,...> (the names to fix the select to, in an order of preference; absent: the variable's default)"
+            ],
+            // Workflow #503 LIST-A3.
+            "package list-check": [
+                "--package <directory | .zip | .json container>",
+                "--frames <directory of PNG frames in file-name order: the step's dispatched frame, then every capture of its scan>",
+                "--step <operation id of one read_list step; absent: every read_list step of the task>"
             ]
         },
         "compatibility_notes": {

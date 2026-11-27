@@ -129,6 +129,7 @@ fn view_in(list: &[Card], offset: i32, band_end: i32, (start, end): (bool, bool)
                         CandidateFeatureMap::new()
                     },
                     passed_over: false,
+                    name_read: None,
                 }
             })
         })
@@ -510,6 +511,7 @@ fn grid_view(grid: &[(i32, Card)], offset: i32) -> View {
                         CandidateFeatureMap::new()
                     },
                     passed_over: false,
+                    name_read: None,
                 }
             })
         })

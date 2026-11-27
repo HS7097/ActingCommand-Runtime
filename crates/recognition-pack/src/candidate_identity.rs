@@ -212,6 +212,65 @@ impl CandidateIdentityDeclaration {
         (feature, beyond_every_alias)
     }
 
+    /// Workflow #503 LIST-A3 (`contracts/business-identity-consensus.md`, "Identity and readable
+    /// attributes"; `contracts/resource-readings.md`, "List readings", "Offline"): the wanted name
+    /// nearest to one OCR read of a name, beside the mark [`Self::mark_ocr`] gives it: the entry and
+    /// the alias whose normalized text lies at the smallest edit distance from the read's
+    /// normalized text (the first in declaration order among equals), that distance itself, not
+    /// bounded at the margin, and `max_distance + minimum_margin`, the distance a read must exceed
+    /// to be none of the keys. The distance is the one the mapping measures, after the same
+    /// normalization and confusions. `None` for a text that normalizes to nothing (empty or
+    /// overlong) and for an icon identity, which reads no text. The confidence plays no part: the
+    /// nearest name is the same whatever the read's confidence.
+    pub fn nearest_ocr(&self, text: &str) -> Option<CandidateNearestName> {
+        let CandidateIdentityRecognition::OcrAliases {
+            max_distance,
+            minimum_margin,
+            confusions,
+            ..
+        } = &self.recognition
+        else {
+            return None;
+        };
+        let text = normalize_name(text, confusions)?;
+        let limit = max_distance + minimum_margin;
+        let mut nearest: Option<CandidateNearestName> = None;
+        for entry in &self.entries {
+            for alias in &entry.aliases {
+                let Some(normalized) = normalize_name(alias, confusions) else {
+                    continue;
+                };
+                let distance = unbounded_edit_distance(&text, &normalized);
+                if nearest.as_ref().is_none_or(|kept| distance < kept.distance) {
+                    nearest = Some(CandidateNearestName {
+                        key: entry.id.clone(),
+                        variant: entry.variant.clone(),
+                        alias: alias.clone(),
+                        distance,
+                        limit,
+                    });
+                }
+            }
+        }
+        nearest
+    }
+
+    /// Workflow #503 LIST-A3: everything the mapping says of one OCR read of a name, for a reader
+    /// that shows it (the dry run of a list reading): the text and the confidence as read, the
+    /// mark ([`Self::mark_ocr`]), why it names no key ([`Self::map_ocr_with_cause`]; `None` for a
+    /// known key) and the nearest wanted name ([`Self::nearest_ocr`]). Each part is the mapping's
+    /// own; nothing here judges again.
+    pub fn read_ocr(&self, text: &str, confidence: Option<u16>) -> CandidateNameReading {
+        let (_, unread_cause) = self.map_ocr_with_cause(text, confidence);
+        CandidateNameReading {
+            text: text.to_owned(),
+            confidence_milli: confidence,
+            mark: self.mark_ocr(text, confidence),
+            unread_cause,
+            nearest: self.nearest_ocr(text),
+        }
+    }
+
     /// Workflow #463 SEL-GRID G2 ([`CandidateUnreadCause`]): [`Self::map_ocr`]'s feature, and when
     /// the reading names no identity, why, in the words of a select's refusal: the feature's
     /// reason, but a reading whose confidence passed `minimum_confidence_milli` and that no alias
@@ -391,7 +450,10 @@ impl CandidateUnreadCause {
 /// a read marked [`Self::NoneOfTheKeys`] keeps its Unknown feature (the projection's reasons are
 /// a closed vocabulary of the ledger's records, which this slice does not move). Readers take the
 /// mark; none sorts the feature's reasons itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Workflow #503 LIST-A3: the mark serializes as `known`, `unread` or `none_of_the_keys`, for the
+/// dry run of a list reading that shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CandidateNameMark {
     /// The read names a wanted key: the feature is its identity.
     Known,
@@ -401,6 +463,43 @@ pub enum CandidateNameMark {
     /// The read is a name, with confidence, further than `max_distance + minimum_margin` from
     /// every alias of every entry: none of the wanted keys.
     NoneOfTheKeys,
+}
+
+/// Workflow #503 LIST-A3 (`contracts/business-identity-consensus.md`, "Identity and readable
+/// attributes"): the wanted name nearest to one OCR read, as the mapping measures it
+/// ([`CandidateIdentityDeclaration::nearest_ocr`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateNearestName {
+    /// The entry's id: the wanted key.
+    pub key: String,
+    /// The entry's variant, when it declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    /// The alias, as the entry declares it.
+    pub alias: String,
+    /// The edit distance between the read's and the alias's normalized texts, not bounded.
+    pub distance: u16,
+    /// `max_distance + minimum_margin`: a read further than this from every alias of every entry
+    /// is none of the keys, one within it near a wanted name.
+    pub limit: u16,
+}
+
+/// Workflow #503 LIST-A3: one OCR read of a name with what the mapping says of it
+/// ([`CandidateIdentityDeclaration::read_ocr`]). A name's text is what an account holds: a reader
+/// shows it where it was asked to, and records it nowhere.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateNameReading {
+    /// The text as read.
+    pub text: String,
+    /// The read's confidence, milli, when the provider gave one.
+    pub confidence_milli: Option<u16>,
+    pub mark: CandidateNameMark,
+    /// Why the read names no key; `None` for a known key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unread_cause: Option<CandidateUnreadCause>,
+    /// The nearest wanted name; `None` for a text that normalizes to nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nearest: Option<CandidateNearestName>,
 }
 
 pub(crate) fn valid_identity_name(value: &str) -> bool {
@@ -482,6 +581,14 @@ fn edit_distance(left: &str, right: &str, limit: u16) -> u16 {
         previous = next;
     }
     previous[right.len()].min(limit + 1)
+}
+
+/// Workflow #503 LIST-A3: [`edit_distance`] with a bound no distance of the two texts can reach,
+/// the longer one's length, so that its band is the whole table and the distance is exact. Both
+/// texts are normalized names, at most `MAX_IDENTITY_TEXT_CHARS` characters each.
+fn unbounded_edit_distance(left: &str, right: &str) -> u16 {
+    let longest = left.chars().count().max(right.chars().count());
+    edit_distance(left, right, u16::try_from(longest).unwrap_or(u16::MAX - 1))
 }
 
 #[cfg(test)]
@@ -572,6 +679,99 @@ mod tests {
             CandidateNameMark::Unread,
             "an icon identity reads no text"
         );
+    }
+
+    // Workflow #503 LIST-A3 (register §1.534, ruling 1): the nearest wanted name the mapping gives
+    // a read of a name, beside its mark. LIST-A's identity above: `alpha`, `bravo`, `charlie`,
+    // within 1 at a margin of 1, so the limit `max_distance + minimum_margin` is 2. An exact alias
+    // is at 0 from its own entry and known; a near miss (`alpzz`, two letters changed) is at 2 from
+    // `alpha` and unread; a read far from every alias (`cxxxxxe`, five letters of `charlie` changed,
+    // seven edits from the others) is at its true distance 5, where the distance the mark is
+    // judged on stops at 3 (one past the limit), and none of the keys. An empty text and an icon
+    // identity have no nearest name.
+    #[test]
+    fn list_a3_the_nearest_wanted_name_is_the_true_distance_and_none_for_an_empty_text_or_icons() {
+        let identity = CandidateIdentityDeclaration {
+            entries: [
+                ("member-a", "alpha"),
+                ("member-b", "bravo"),
+                ("member-c", "charlie"),
+            ]
+            .into_iter()
+            .map(|(id, alias)| CandidateIdentityEntry {
+                id: id.to_owned(),
+                variant: None,
+                aliases: vec![alias.to_owned()],
+            })
+            .collect(),
+            recognition: CandidateIdentityRecognition::OcrAliases {
+                max_distance: 1,
+                minimum_margin: 1,
+                minimum_confidence_milli: 800,
+                confusions: BTreeMap::new(),
+            },
+        };
+        identity.validate().expect("the identity validates");
+        let nearest = |key: &str, alias: &str, distance: u16| CandidateNearestName {
+            key: key.to_owned(),
+            variant: None,
+            alias: alias.to_owned(),
+            distance,
+            limit: 2,
+        };
+
+        for (text, mark, unread_cause, expected) in [
+            (
+                "alpha",
+                CandidateNameMark::Known,
+                None,
+                nearest("member-a", "alpha", 0),
+            ),
+            (
+                "alpzz",
+                CandidateNameMark::Unread,
+                Some(CandidateUnreadCause::BeyondDistance),
+                nearest("member-a", "alpha", 2),
+            ),
+            (
+                "cxxxxxe",
+                CandidateNameMark::NoneOfTheKeys,
+                Some(CandidateUnreadCause::BeyondDistance),
+                nearest("member-c", "charlie", 5),
+            ),
+        ] {
+            assert_eq!(identity.nearest_ocr(text), Some(expected.clone()), "{text}");
+            assert_eq!(
+                identity.read_ocr(text, Some(950)),
+                CandidateNameReading {
+                    text: text.to_owned(),
+                    confidence_milli: Some(950),
+                    mark,
+                    unread_cause,
+                    nearest: Some(expected),
+                },
+                "{text}"
+            );
+        }
+        assert!(
+            identity.nearest_ocr("cxxxxxe").map(|found| found.distance) > Some(3),
+            "the true distance, not the one past the limit the mark is judged on"
+        );
+
+        assert_eq!(identity.nearest_ocr(""), None, "an empty text");
+        assert_eq!(
+            identity.read_ocr("", Some(950)).nearest,
+            None,
+            "an empty text"
+        );
+        let icons = CandidateIdentityDeclaration {
+            recognition: CandidateIdentityRecognition::IconTemplates {
+                minimum_score_milli: 900,
+                minimum_margin_milli: 50,
+            },
+            ..identity
+        };
+        assert_eq!(icons.nearest_ocr("alpha"), None, "an icon identity");
     }
 
     #[test]

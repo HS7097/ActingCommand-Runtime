@@ -104,6 +104,9 @@ mod gate_428_s168_lk;
 // Workflow #503 LIST-A: a list reading that wants only the keys it declares passes over the rest.
 #[cfg(test)]
 mod gate_503_list_a;
+// Workflow #503 LIST-A3: the dry run of a list reading answers every position it read.
+#[cfg(test)]
+mod gate_503_list_a3;
 // Workflow #450 FL-1a and FL-1b: a list grouped from fields read one position per frame.
 mod field_list;
 // Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.
@@ -385,7 +388,8 @@ pub use capture_cadence::CaptureCadence;
 pub use declared_operation::{DeclaredOperation, DeclaredOperationOutcome};
 pub use linear::linear_main_interface;
 pub use list_reading::{
-    ListReadingDeclaration, ListReadingDryRun, ListReadingMiss, ListReadingRows,
+    ListDryRunPosition, ListDryRunSummary, ListDryRunUnknown, ListPositionAnswer, ListPositionRead,
+    ListReadingDeclaration, ListReadingDryRun, ListReadingMiss, ListReadingRows, ListUnreadCause,
 };
 pub use loading::{LoadingEvent, LoadingMode, LoadingRecord};
 pub use readings::{

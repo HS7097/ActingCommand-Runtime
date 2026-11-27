@@ -49,9 +49,9 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Detail;
 use actingcommand_contract::{ContainedTaskRequest, InstanceFactSnapshot, ScanCoverageState};
 use actingcommand_lab::{
-    ExternallyVerifiedBundle, GivenParameterProblem, GivenVariableProblem, OfflineReplayEnd,
-    OfflineReplayError, OfflineReplayFacts, PreparedContainedTask, ScanDeclaration,
-    replay_contained_task_with_tables, replay_scan_with_tables,
+    ExternallyVerifiedBundle, GivenParameterProblem, GivenVariableProblem, LabOcr,
+    OfflineReplayEnd, OfflineReplayError, OfflineReplayFacts, PreparedContainedTask,
+    ScanDeclaration, replay_contained_task_with_tables, replay_scan_with_tables,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -201,27 +201,7 @@ enum ScanReplayStatus {
 impl ReplayArgs {
     fn parse(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome<Self> {
         flags.expect_positionals("replay", 0)?;
-        if global.run_root.is_some()
-            || global.instance.is_some()
-            || global.instances.is_some()
-            || global.profile.is_some()
-            || global.resource_root.is_some()
-            || global.dry_run
-            || global.verbose
-            || global.quiet
-            || global.game.is_some()
-            || global.server.is_some()
-            || global.runtime_endpoint.is_some()
-            || global.capture_backend.is_some()
-            || global.touch_backend.is_some()
-        {
-            return Err(CliError::new(
-                ErrorKind::UsageValidation,
-                "offline_device_scope_forbidden",
-                "replay accepts no global Runtime, device, selector, backend, resource, or execution flags",
-                &[],
-            ));
-        }
+        offline_scope_only(global, "replay")?;
         if let Some(name) = flags
             .flags
             .keys()
@@ -274,6 +254,36 @@ impl ReplayArgs {
             seed,
         })
     }
+}
+
+/// The refusal of an offline command `command` that reads files only (`replay`; Workflow #503
+/// LIST-A3: `package list-check`) given one of actinglab's global Runtime, device, selector,
+/// backend, resource or execution flags: `offline_device_scope_forbidden`, before anything is read.
+pub(crate) fn offline_scope_only(global: &GlobalOptions, command: &str) -> CliOutcome<()> {
+    if global.run_root.is_some()
+        || global.instance.is_some()
+        || global.instances.is_some()
+        || global.profile.is_some()
+        || global.resource_root.is_some()
+        || global.dry_run
+        || global.verbose
+        || global.quiet
+        || global.game.is_some()
+        || global.server.is_some()
+        || global.runtime_endpoint.is_some()
+        || global.capture_backend.is_some()
+        || global.touch_backend.is_some()
+    {
+        return Err(CliError::new(
+            ErrorKind::UsageValidation,
+            "offline_device_scope_forbidden",
+            format!(
+                "{command} accepts no global Runtime, device, selector, backend, resource, or execution flags"
+            ),
+            &[],
+        ));
+    }
+    Ok(())
 }
 
 /// Workflow #463 V2: the `--variable <name>=<json>` values as given, before anything is read, one
@@ -579,8 +589,9 @@ fn process_now() -> CliOutcome<u64> {
         })
 }
 
-/// The frames of `directory`: every entry, each a PNG file, in file-name order.
-fn frame_paths(directory: &Path) -> CliOutcome<Vec<PathBuf>> {
+/// The frames of `directory`: every entry, each a PNG file, in file-name order. Workflow #503
+/// LIST-A3: `package list-check` takes its frames by this one reading too.
+pub(crate) fn frame_paths(directory: &Path) -> CliOutcome<Vec<PathBuf>> {
     let unreadable = |error: std::io::Error| {
         CliError::new(
             ErrorKind::UsageValidation,
@@ -637,6 +648,13 @@ fn replay_instant(facts: &OfflineReplayFacts) -> u64 {
 /// The package at `package`, read by its path (Workflow #336 option 丙: no reference is given
 /// or compared) with the Runtime's OCR provider when actinglab has one.
 fn admit(package: &Path) -> CliOutcome<PreparedContainedTask> {
+    admit_with(package, crate::offline_ocr::lab_ocr())
+}
+
+/// Workflow #503 LIST-A3: [`admit`] with the OCR provider `ocr`, the one recognition set-up of the
+/// replay and of `package list-check` (the process's provider, or a test's scripted one): a pack
+/// that declares an OCR target is refused `lab_ocr_unavailable` when `ocr` reads no text.
+pub(crate) fn admit_with(package: &Path, ocr: &LabOcr) -> CliOutcome<PreparedContainedTask> {
     let package = if package.is_absolute() {
         package.to_path_buf()
     } else {
@@ -653,11 +671,11 @@ fn admit(package: &Path) -> CliOutcome<PreparedContainedTask> {
         REPLAY_INSTANCE,
         &package,
         false,
-        crate::offline_ocr::lab_ocr().provider(),
+        ocr.provider(),
         deadline,
     )
     .map_err(|error| CliError::package_invalid(error.to_string()))?;
-    crate::offline_ocr::require_package(&bundle)?;
+    crate::offline_ocr::require_package(&bundle, ocr)?;
     PreparedContainedTask::from_bundle(bundle).map_err(|error| {
         CliError::package_invalid(format!(
             "{}: {}",

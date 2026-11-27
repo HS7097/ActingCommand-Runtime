@@ -84,6 +84,8 @@ pub(crate) fn command_capabilities() -> Vec<Value> {
         command_cap("package fix-select", ["offline"], "available"),
         // Workflow #463 V3: what one package's control declaration declares; reads only.
         command_cap("package variables", ["offline", "read_only"], "available"),
+        // Workflow #503 LIST-A3: a list reading of a package checked over saved frames; reads only.
+        command_cap("package list-check", ["offline", "read_only"], "available"),
         command_cap("operation validate", ["offline"], "available"),
         command_cap("operation inspect", ["offline"], "available"),
         command_cap("operation explain", ["offline"], "available"),

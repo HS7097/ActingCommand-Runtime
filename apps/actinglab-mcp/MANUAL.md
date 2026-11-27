@@ -768,6 +768,20 @@ naming this file.
   A refusal is `record_select_invalid` with its `select_problem` (`variable_missing`,
   `variable_read_elsewhere`, `members_edited`, `default_not_names`, `default_not_in_names`,
   `kernel_refused`) and writes nothing.
+- **The offline check of a list reading** (Workflow #503 LIST-A3, 0.12.91;
+  `contracts/resource-readings.md`, "List readings", "Offline"). `ac_package_list_check`
+  (`package`, `frames`, `step`), through a child, offline and reading only: over a package and a
+  directory of saved frames, read as `ac_replay` reads them, it runs the kernel's dry run of one
+  `read_list` step (`step`) or of every one of the task, and answers for each step every position
+  the scan read: where it stands, the reads of its name (the text as read, its confidence, the
+  identity mapping's mark, why it names no key, the nearest wanted key and alias, the distance and
+  the limit the distance had to exceed) and what it gives the list (its known key, passed over, or
+  unread with its cause: `identity_unread`, `feature_unread`, `contradicted` or
+  `partly_passed_over`), with the wanted keys a card showed and those none showed. A list not whole
+  is `package_list_check_not_whole`, a scan that failed its own code, each with the whole answer in
+  `details`. A card's text is in this answer only. Over the answer budget this server's rules
+  hold as for every row: a success is written whole to a file under the user's temporary folder,
+  a refusal answers `output_budget_exceeded`; the command line prints either whole.
 - **Adoption** (Workflow #464 P1, 0.12.61; `contracts/standard-pack-authoring.md`).
   `ac_standard_pack_adopt` (`repo`, `record_id` or `package`, `decide`, or `held_reason` with an
   optional `held_reference`, `replace`, `state_dir`, and, #463 AD-1, 0.12.72, `session_state_dir`

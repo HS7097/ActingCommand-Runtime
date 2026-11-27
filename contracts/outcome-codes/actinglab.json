@@ -147,6 +147,20 @@
       "common_causes": "A member is missing, misspelt or of the wrong type, or the file holds more than the declaration.",
       "handling": "Save the step's scan declaration alone, with every member it requires."
     },
+    "package_list_check_not_whole": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "actinglab",
+      "layer": "process",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.91",
+      "description": "Workflow #503 LIST-A3: actinglab package list-check ran the dry run of each list reading it checked over the saved frames, and the scan of at least one of them reached the list's end with the list not whole: a position unread, two positions of one key, or a position past the list's bound. The details carry the whole answer: for each step its status (whole, not_whole, or failed), its miss (reading_problem and count), its summary of the wanted keys and every position it read with the reads of its name. A scan that failed before the list's end answers its own code instead. Nothing was executed or written; the exit code is that of a usage refusal, so a CI job fails on it.",
+      "common_causes": "A card of a wanted key is read near a wanted name without matching it, or below the confidence floor; a list without others: pass_over shows cards of other keys; the frames show a position known on one viewport and passed over on another, or a column that changes between viewports.",
+      "handling": "Read each unread position's cause and the reads of its name in the details; add an alias for a misreading, raise the reading's quality, or record the frames again."
+    },
     "recognition_regression_evidence_unreadable": {
       "category": "error",
       "ladder_class": "none",

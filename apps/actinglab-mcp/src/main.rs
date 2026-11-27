@@ -112,6 +112,11 @@ mod gate_392_dal0;
 // where `package edit`'s is (`self_t11_package_fix_select_is_offered_where_package_edit_is`).
 #[cfg(test)]
 mod gate_463_self;
+// Test-only: Workflow #503 LIST-A3, the offline list check's row is offered as
+// `ac_package_list_check`, served by a `serve` child
+// (`list_a3_the_list_check_is_offered_as_ac_package_list_check`).
+#[cfg(test)]
+mod gate_503_list_a3;
 
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
