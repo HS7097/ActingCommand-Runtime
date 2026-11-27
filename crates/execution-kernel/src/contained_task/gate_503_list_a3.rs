@@ -614,7 +614,10 @@ fn list_a3_each_position_of_a_mixed_screen_is_answered_with_its_reads_and_the_wa
         (MEMBERS[2], "charlie", 5),
     );
 
-    let read = offline(&load(Some(json!("pass_over")), false), &[screen.clone()]);
+    let read = offline(
+        &load(Some(json!("pass_over")), false),
+        std::slice::from_ref(&screen),
+    );
     assert_eq!(
         read.list,
         Ok(ListReadingRows {

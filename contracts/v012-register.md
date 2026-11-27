@@ -50636,6 +50636,22 @@ test: a grid of several columns, a consensus of several samples per read (the ev
 sample is shown; the fixtures have one), the scan failure's exit through the check, the text form on
 a real terminal, and the MCP face's answer over a child (its tool is tested, not a call).
 
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found nothing
+that must change, and that a run writes, computes, compares and publishes what it did, byte for
+byte: the text a position was read as is kept only when the scan is a dry run's (`keep_names`,
+false on a run's path), the mark's judgement is untouched, and the unbounded distance is the same
+banded computation with its band opened, so "farther than the limit" in the check's answer and the
+run's "none of the wanted keys" cannot disagree for one read. Changed after it: the first build's
+one failure (a lint: a clone made only to build a one-element slice in a kernel test); the
+catalog's text of the count's code, which still said the check was owed, now names the operation;
+the contract's list of the dry run's causes gains `partly_passed_over`, and "the middle two" is
+"the first two"; a blank line that broke the interface table between rows 26 and 27, left by the
+merge of the two slices before. Left, as the review lists: a run computes the positions' summary
+too and drops it (microseconds, no record; a later slice may compute it for a dry run only); over
+MCP a refusal for a list that is not whole answers `output_budget_exceeded` when it is over 24 KiB,
+as every refusal does, so the command line is where a long list is read; an icon identity's
+position prints no line saying that no text was read.
+
 **At deploy.** Nothing to configure, and nothing changes for a run. The operation needs the Lab's OCR
 model as `replay` does. In the release notes' language: 新增 Lab 离线操作 `package list-check`（MCP
 `ac_package_list_check`）：拿一个包和一个存下的帧目录（同 `replay` 的读法），对一个或全部

@@ -1009,7 +1009,8 @@ with its motion, frame, content offset, counts and the end check it read) and th
 and is not judged. Beside the list it holds `unknown`, the positions the scan read but could not
 read whole, in first-seen order, each as a select's dry run lists an unknown position (its index in
 first-seen order, its place in content coordinates, the viewport that first read it, its cause
-`identity_unread`, `feature_unread` or `contradicted`, and the identity it kept, if any), so that
+`identity_unread`, `feature_unread`, `contradicted` or (Workflow #503 LIST-A3, since 0.12.91)
+`partly_passed_over`, and the identity it kept, if any), so that
 a self-check can name the place that was not read: none for a list read whole, and for
 `list_position_unread` exactly the positions its `count` counts; a run records none of them.
 Workflow #503 LIST-A: a position a list that passes over passed over is not among them, and one the
@@ -1047,7 +1048,7 @@ one without:
   one) and `partly_passed_over` (in a list that passes over, the mapping marked one read of it none
   of the wanted keys and another not: a known key on one viewport passed over on another). When
   several hold, the first in the order `contradicted`, `partly_passed_over`, `feature_unread`,
-  `identity_unread` is given. Until 0.12.91 the dry run gave `contradicted` to both of the middle
+  `identity_unread` is given. Until 0.12.91 the dry run gave `contradicted` to both of the first
   two; `unknown` holds the unread positions with the same causes.
 - **The list's summary**: whether the list is whole, how many positions the scan read, how many it
   passed over and how many are unread, the wanted keys (the entries of the key feature's identity)
