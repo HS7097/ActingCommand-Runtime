@@ -29,6 +29,9 @@
 // - `tk1_h5_...`: the package converted between a dispatch and its run: the kernel refuses the run
 //   with `contained_task_variable_value_missing` before any input; the next evaluation after the
 //   workbench's check holds the pair `goal_value_rule_missing` and dispatches it no more.
+// - `tk1_h6_...` (fix round 1): the rule's dispatch carries `pick`'s default, the package then
+//   converted before its run: the run does not read the dispatched default and is refused as the
+//   run of `tk1_h5_...` is.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
@@ -848,5 +851,39 @@ fn tk1_h5_a_run_without_the_value_is_refused_before_any_input_and_its_pair_is_he
     );
     seam().remove(&root);
     missing_hold(&held, RULE_B);
+    scene.close();
+}
+
+// Fix round 1 (the independent review), ruling 2: `pick` is a person's variable and the one rule
+// carries none, so the rule's dispatch carries the default `item_c`, which no rule gave. Between
+// the dispatch and its run the package is converted, `pick` only a rule gives. The run does not
+// read the dispatched default: it holds no value of `pick` and fails with
+// `contained_task_variable_value_missing` before any input (nothing pressed), as the run of test
+// 5 that was handed nothing does.
+#[test]
+fn tk1_h6_a_default_dispatched_before_the_conversion_is_no_value_of_the_run() {
+    let scene = Scene::new(
+        vec![carrying(RULE_B, 2, None)],
+        Some(json!([pick(false)])),
+        false,
+    );
+    let first = scene.evaluate(POLICY_NOW_UNIX_MS, 6);
+    declare(scene.packs.path(), Some(json!([pick(true)])));
+    let taps = scene.taps();
+    let context = scene.run_failing(&first, RULE_B);
+    // The premise: the dispatch carried the default, and took no value from a rule.
+    let carried =
+        crate::fact_refresh::dispatch_parameters(&context).expect("the run's dispatch parameters");
+    assert_eq!(carried.variables, [("pick".to_owned(), json!("item_c"))]);
+    assert!(
+        carried.rule_variables.is_empty(),
+        "{:?}",
+        carried.rule_variables
+    );
+    assert_eq!(scene.taps(), taps, "the run pressed nothing");
+    assert_eq!(
+        scene.failed_terminals().last().map(String::as_str),
+        Some(KERNEL_MISSING)
+    );
     scene.close();
 }

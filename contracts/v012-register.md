@@ -50067,6 +50067,29 @@ among them (`resource_target_view_policy_unreadable`); a new document through `A
 a withdrawal among them, replaces it. No game, alias, pool name or amount is named in code or
 contract.
 
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found no path
+on which a request's value stops the Runtime and none that puts a goal on the wrong pool, and one
+thing to change, which the coordinator had ruled while the review ran: **an answer about a target
+names its pool as the target does.** A condition's `resource` is the target's own `resource`, the
+file's id, in the v1 and v2 checks' receipts, in the view's `active` and in the v3 check
+(`resource_targets.rs`, `resource_targets/v3.rs`: four places wrote the catalog pool's id, the
+instance's copy on a game with two instances); the goal page pairs a condition with its target by
+`target_id`, so no reader follows. The two policy gates that pinned the copy's id on a condition now
+pin the file's id, and the host gate `goal1_t2` pins it on the view's condition. The contract's
+"A target's pool" says so, and also, from the review: which word refuses the third step's pool
+(`resource_not_observable` is judged before the scope), how an unreadable record of an earlier
+version is taken away, and the second answer that changes on a game with one instance. Not proven
+by a test, as the review lists: the ERROR line of the refused edit (no reporter is attached in the
+gate), `weighed_tasks` and `lapsed_coverage` under copies beyond what `goal1_t2` and `goal1_t4`
+drive, instances on two servers of one game, and the merged `not_targetable` entry.
+
+**At deploy.** Nothing to configure. On production, on the game with two instances: each instance's
+goal page lists its pools by the file's ids; `goals set` of a resource entry with `{at_least}` is
+taken, and the instance's candidates that produce the pool carry it (`resource_targets` on its copy),
+the other instance's do not; an other target by a copy's id is refused `wrong_type` at `/resource`
+and the Runtime goes on. A `resource_targets_record_invalid` line in the daemon's log no longer
+precedes a `runtime_stopped`.
+
 ### 1.532 Slice #455 TK-1 (0.12.89): a package variable that only a rule gives: not offered on the goal page, never read from a default, and a run without it refused (board #455; the rulings are the coordinator's of 11-28, after the owner's words on the board that the goal page offers only what is a person's to say; rulings 6a and 6b are the coordinator's of the same day, after the implementer's stop; coordinator work order `rd-1123/brief-455-tk1.md`; on main `410d1636`, v0.12.88)
 
 It ships in 0.12.89. [package-variables.md](package-variables.md) ("A variable a rule gives", the
@@ -50202,6 +50225,7 @@ trial runs (`select::decide`, `scan::offline_entry`, the cross-check's simulatio
 | `tk1_h3_the_hold_lifts_when_the_rule_carries_the_value` (host) | the rule mended in `schedule.json`: dispatched, its run reads the rule's value |
 | `tk1_h4_a_direct_run_without_the_value_is_refused_and_one_with_it_records_it` (host) | Denied `run_variable_missing`, nothing pressed; with the value it runs and its admission record lists it |
 | `tk1_h5_a_run_without_the_value_is_refused_before_any_input_and_its_pair_is_held` (host) | the package converted between dispatch and run: the run fails with the kernel's code, nothing pressed; the next evaluation after the check holds the pair |
+| `tk1_h6_a_default_dispatched_before_the_conversion_is_no_value_of_the_run` (host; fix round 1) | the dispatch carries the variable's default, the package converted before its run: the run does not read it and fails with the kernel's code, nothing pressed |
 
 A root without such a variable: bytes and identities as before; the gates that hold it, unchanged:
 `gate_500_sv2` (policy: `sv2_t9`'s golden tasks and compiled task; host: every rule-value path),
@@ -50233,33 +50257,35 @@ gives the value, `type` and `given_by` are independent, and each missing value h
 source. A host-started run (a startup package, a ladder's package) of a package that declares such a
 variable is refused at the kernel's entry; no offline check refuses such a binding in this slice.
 
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found one
+way a run could still act on a value no rule gave, and it is closed: **a dispatched value that no
+rule gave is no value of a variable only a rule gives.** A dispatch planned while the package
+declared the variable a person's carries its default or its stored value; with the package changed
+before that run, the kernel judged the dispatched value by the new declaration, took it, and the
+entry's refusal let the run through. The host now hands a run, of a variable its prepared package
+says only a rule gives, only a dispatched value whose record's source is `rule`
+(`fact_refresh.rs`: `DispatchedParameters::rule_variables`, read from the records'
+`variable_source`, and `for_run_of`, called once in `execute_contained_task_with_lease` before the
+admission record and the run's parameters are made), so the run holds none and is refused at its
+entry; `tk1_h6` drives it with a default. A direct run's given value is not a dispatched one and
+is read as before. From the review also, in the contract's words now: the entry's refusal is a
+failure of a started run
+(its lease held, its initial configuration recorded, a handset's start gate passed), not a refused
+request; each rerun spends what a dispatch spends until the workbench's check; a rule that pauses
+its pair when its retries are used up pauses it on this failure as on any other; and the kernel's
+one code says the run holds no value, however that came about. The first build also failed on two
+things no reader caught: the host gate called a helper its module does not import, and three
+operations' help texts in the Lab's table had grown past the table's 160 bytes (the added sentences
+are in the rows' notes now). The catalog's text of `run_variable_missing` no longer names
+`standard-pack trial`, which refuses in its plan. Left, as the review lists: the refusal placed
+before a handset's start gate; a startup or ladder package that declares such a variable refused
+offline; and, not proven by a test, the rerun's spending and a stored value (not a default) carried
+by the dispatch, which takes the same path.
+
 **At deploy.** Nothing to configure. A bundle whose packs declare `given_by` declares `package`
 [26, 26]; an installer of 0.12.88 refuses it. On production nothing changes until a root holds such
 a package; then its rules each carry the value, its goal page shows no such variable, and a stored
 value of it appears among the orphans.
-
-**Fix round 1 (the coordinator, after the one review; no second review).** The review found no path
-on which a request's value stops the Runtime and none that puts a goal on the wrong pool, and one
-thing to change, which the coordinator had ruled while the review ran: **an answer about a target
-names its pool as the target does.** A condition's `resource` is the target's own `resource`, the
-file's id, in the v1 and v2 checks' receipts, in the view's `active` and in the v3 check
-(`resource_targets.rs`, `resource_targets/v3.rs`: four places wrote the catalog pool's id, the
-instance's copy on a game with two instances); the goal page pairs a condition with its target by
-`target_id`, so no reader follows. The two policy gates that pinned the copy's id on a condition now
-pin the file's id, and the host gate `goal1_t2` pins it on the view's condition. The contract's
-"A target's pool" says so, and also, from the review: which word refuses the third step's pool
-(`resource_not_observable` is judged before the scope), how an unreadable record of an earlier
-version is taken away, and the second answer that changes on a game with one instance. Not proven
-by a test, as the review lists: the ERROR line of the refused edit (no reporter is attached in the
-gate), `weighed_tasks` and `lapsed_coverage` under copies beyond what `goal1_t2` and `goal1_t4`
-drive, instances on two servers of one game, and the merged `not_targetable` entry.
-
-**At deploy.** Nothing to configure. On production, on the game with two instances: each instance's
-goal page lists its pools by the file's ids; `goals set` of a resource entry with `{at_least}` is
-taken, and the instance's candidates that produce the pool carry it (`resource_targets` on its copy),
-the other instance's do not; an other target by a copy's id is refused `wrong_type` at `/resource`
-and the Runtime goes on. A `resource_targets_record_invalid` line in the daemon's log no longer
-precedes a `runtime_stopped`.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

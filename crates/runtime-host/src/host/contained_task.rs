@@ -9153,6 +9153,14 @@ impl HostShared {
         dispatched_parameters: Option<crate::fact_refresh::DispatchedParameters>,
     ) -> Result<OperationSuccess, RequestFailure> {
         let scheduled = run_links.is_some();
+        // Workflow #455 TK-1 fix round 1 (contracts/package-variables.md, "A variable a rule
+        // gives"): of a variable the prepared package says only a rule gives, a policy run reads
+        // the dispatched value only when the dispatch took it from its task's rule. A default or
+        // a stored value its dispatch resolved under an earlier declaration of the package is
+        // left out here, once, for the admission record and the run's parameters alike, so the
+        // run holds no value of it and the kernel refuses it below.
+        let dispatched_parameters =
+            dispatched_parameters.map(|dispatched| dispatched.for_run_of(&prepared));
         // Workflow #463 CH-1 (contracts/package-variables.md, "The run's admission record"): the
         // values handed to the run from outside, as its admission record carries them: a policy
         // run's, those of its dispatch it reads under its prepared package's declaration

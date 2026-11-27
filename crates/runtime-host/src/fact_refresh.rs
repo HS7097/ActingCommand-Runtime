@@ -97,6 +97,32 @@ pub(crate) struct DispatchedParameters {
     /// reads as JSON, in its order; empty when the reason carries none, so the run reads its
     /// package's variable defaults.
     pub(crate) variables: Vec<(String, serde_json::Value)>,
+    /// Workflow #455 TK-1 fix round 1 (`contracts/package-variables.md`, "A variable a rule
+    /// gives"): the names of the `variable_values` records whose `variable_source` is `rule`: the
+    /// values the dispatch took from its task's rule, the one source of a variable only a rule
+    /// gives.
+    pub(crate) rule_variables: BTreeSet<String>,
+}
+
+impl DispatchedParameters {
+    /// Workflow #455 TK-1 fix round 1 (`contracts/package-variables.md`, "A variable a rule
+    /// gives"): these values as a run of `prepared` reads them. A value of a variable `prepared`'s
+    /// declaration says only a rule gives that the dispatch did not take from its task's rule (a
+    /// default, or a value stored on the application, resolved under the declaration the dispatch
+    /// was planned by, the package changed since) is no value of that variable: it is left out,
+    /// so the run holds none and the kernel refuses it
+    /// (`contained_task_variable_value_missing`). Every other value stays as carried.
+    pub(crate) fn for_run_of(mut self, prepared: &PreparedContainedTask) -> Self {
+        let rule_variables = &self.rule_variables;
+        self.variables.retain(|(name, _)| {
+            rule_variables.contains(name)
+                || !prepared
+                    .declared_variables()
+                    .iter()
+                    .any(|variable| variable.rule_given() && variable.name == *name)
+        });
+        self
+    }
 }
 
 /// Workflow #411 B8: the keys of `policy_dispatch_parameters` a run reads as
@@ -160,7 +186,34 @@ pub(crate) fn dispatch_parameters(context: &PolicyRunContext) -> Option<Dispatch
         schedule: dispatch_schedule_values(&reason.outcome),
         admitted_at_unix_ms: context.admission().activity.admitted_at_unix_ms,
         variables: dispatch_variable_values(&reason.outcome),
+        rule_variables: dispatch_rule_variables(&reason.outcome),
     })
+}
+
+/// Workflow #455 TK-1 fix round 1 (`contracts/package-variables.md`, "A variable a rule gives"):
+/// the names of `outcome`'s `variable_values` records (a `policy_dispatch_parameters`) whose
+/// `variable_source` is `rule`: the values the dispatch took from its task's rule. A record
+/// without a name, or of another source, gives nothing.
+pub(crate) fn dispatch_rule_variables(outcome: &Outcome) -> BTreeSet<String> {
+    let rule = actingcommand_contract::VariableSource::Rule.as_str();
+    outcome
+        .value("variable_values")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|record| {
+            record
+                .get("variable_source")
+                .and_then(serde_json::Value::as_str)
+                == Some(rule)
+        })
+        .filter_map(|record| {
+            record
+                .get("variable_name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 /// Workflow #463 V2 (`contracts/package-variables.md`, "The run"): each `(variable_name, value)`

@@ -24428,7 +24428,7 @@
       "status": "active",
       "since": "0.12.89",
       "description": "Workflow #455 TK-1 (register section 1.532; contracts/package-variables.md, \"A variable a rule gives\"): a direct run's request gives no value of the variable variable_name, which its package package_id declares with given_by rule: such a variable has no default and no value stored on the application is read for it, so the run would have nothing to read. The first such variable in declaration order is named. Denied in the run's preparation, before any record, claim or lease: nothing ran, and the Runtime and its other instances go on.",
-      "common_causes": "actinglab run start or standard-pack trial of such a package without --variable <name>=<json> for that variable.",
+      "common_causes": "actinglab run start of such a package without --variable <name>=<json> for that variable (standard-pack trial refuses the same in its plan, before anything is sent).",
       "handling": "Send the run again with --variable <name>=<json>, a value the variable's declaration takes (actinglab package variables --package <dir> lists it)."
     },
     "scheduling_pause_kept_at_shutdown": {

@@ -286,7 +286,14 @@ kind writes `"given_by": "rule"` in its declaration, and no `default` and no `de
   rule" below) and nothing else: it has no default, no value stored on the application is read for
   it (the resolution, `resolve_variable`, answers no value for it, so the one order of sources stays
   in one function), and "a value set on the application decides which rules run" does not apply to
-  it: a stored value under its name holds no rule back.
+  it: a stored value under its name holds no rule back. Fix round 1: this holds at the run too. A
+  dispatch planned while the package declared the variable a person's carries its default or its
+  stored value (the record's `variable_source` `default` or `set`); when the package is changed
+  before that run, the host hands the run, of a variable the prepared package says only a rule
+  gives, only a dispatched value whose record's source is `rule`
+  (`DispatchedParameters::for_run_of`, once, for the admission record and the run's parameters
+  alike), so the run holds no value of it and is refused at its entry (below), never run on the
+  default or on the stored value.
 - **Offline.** A rule whose package declares such a variable and that carries no value for it is
   refused where the root is composed: `schedule_invalid` at `/rules/<i>/variables`, the text naming
   the variable, by the composer the Runtime, `standard-pack check` (exit 2) and `package bundle
@@ -305,15 +312,25 @@ kind writes `"given_by": "rule"` in its declaration, and no `default` and no `de
   value. Only the resource side can mend it; the warning is the record that says so.
 - **At the run's entry.** A run that reaches the kernel without a value of such a variable (a
   package changed between its dispatch and its run, a run the host starts itself, an offline run
-  without the value) is refused before any input: `contained_task_variable_value_missing` (error,
-  ladder class `declaration_error`; `package_id`, `variable_name`, the detail
-  `variable_name=<name>`), by the kernel's one check (`refuse_missing_variable`), which the host's
-  runs, the offline simulation, the whole offline replay and the scan replay all call before their
-  first capture. In the Runtime it settles as any failure of its class does (rerun only, never
-  accumulating, [policy-suspension.md](policy-suspension.md)); a rerun at once meets the same
-  refusal only until the workbench's next check (at most `standard_packs.check_interval_ms` after
-  the package changed) reads the changed package, after which position 5a holds the pair with no
-  wake, so the refusal is never rerun at once for ever.
+  without the value) is refused before any capture or input of the package:
+  `contained_task_variable_value_missing` (error, ladder class `declaration_error`; `package_id`,
+  `variable_name`, the detail `variable_name=<name>`), by the kernel's one check
+  (`refuse_missing_variable`), which the host's runs, the offline simulation, the whole offline
+  replay and the scan replay all call before their first capture. Fix round 1, said as it is: in
+  the Runtime the run has started by then (its lease is held, its initial configuration is
+  recorded, and a handset's start gate has passed), so the refusal is a failure of the run, not a
+  refused request, and moving it before that gate is left to a later slice; and one code
+  names the one thing the kernel knows, that the run holds no value of the variable, whether its
+  dispatch carried none, carried one the declaration in force does not take, or carried one no rule
+  gave ("One source"). It settles as any failure of its class does
+  ([policy-suspension.md](policy-suspension.md)): it never accumulates, and it is rerun after its
+  backoff ("Immediate rerun (R22)"), each rerun spending what a dispatch spends, its retry round's
+  counts included. The reruns meet the same refusal only until the workbench's next check (at most
+  `standard_packs.check_interval_ms` after the package changed) reads the changed package, after
+  which position 5a holds the pair with no wake, so the refusal is never rerun for ever. A rule
+  that pauses its pair when its retries are used up (`on_failure.action` `pause`; at the first
+  failure when it allows no retry) pauses it on this failure as on any other
+  (`retries_exhausted`), and that pause lifts as every pause does ("Lifting (R19)").
 - **A run nobody dispatched.** A direct run gives the value as it gives any variable
   (`ContainedTaskRequest.variables`, "A direct run given values"); without it the request is Denied
   `run_variable_missing` (`package_id`, `variable_name`) in the run's preparation, before any
