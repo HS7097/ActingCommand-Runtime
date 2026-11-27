@@ -18294,7 +18294,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.61",
-      "description": "A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the application's session.resource_targets record published as one fact.published (or, replayed, the record already held it); the result names the record's version after the edit and that event. Workflow #378 A4: one success code per request kind.",
+      "description": "A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the application's session.resource_targets record published as one fact.published (or, replayed, the record already held it); the result names the record's version after the edit and that event. Workflow #455 RR2 (since 0.12.94): a records entry's records are its session.goal_records record instead, and the version the result names is the page's after the edit, the greater of the two records' sequences. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; send the result's version as the next edit's expected_version."
     },

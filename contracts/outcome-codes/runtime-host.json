@@ -7221,7 +7221,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.0",
-      "description": "The Runtime host refused a write made against another version of what it changes: a fact record other than the one it was based on, or (Workflow #429 R-4, since 0.12.36) a ConfigureSettings whose expected_version is not the settings' version now, fact_key host.config_overrides and current_version the version now, kept in codes mode; or (Workflow #429 R-8, since 0.12.55) an EditPackSchedule whose expected_version is not the scope's pack schedule list version, fact_key session.pack.schedule and current_version that version (0 without a list); or (Workflow #455 T1-R, since 0.12.60) an ApplyResourceTargets whose expected_version is not the version of the instance's resource target policy record, fact_key session.resource_targets and current_version that version (0 without a record). Nothing changed.",
+      "description": "The Runtime host refused a write made against another version of what it changes: a fact record other than the one it was based on, or (Workflow #429 R-4, since 0.12.36) a ConfigureSettings whose expected_version is not the settings' version now, fact_key host.config_overrides and current_version the version now, kept in codes mode; or (Workflow #429 R-8, since 0.12.55) an EditPackSchedule whose expected_version is not the scope's pack schedule list version, fact_key session.pack.schedule and current_version that version (0 without a list); or (Workflow #455 T1-R, since 0.12.60) an ApplyResourceTargets whose expected_version is not the version of the instance's resource target policy record, fact_key session.resource_targets and current_version that version (0 without a record); or (Workflow #463 V3, since 0.12.61) an EditGoal whose expected_version is not the goal page's version, current_version that version: since Workflow #455 RR2 (0.12.94) the greater of the sequences that hold the application's session.resource_targets and session.goal_records records (0 without either), fact_key the key of the record that holds it (session.resource_targets when neither is the later). Nothing changed.",
       "common_causes": "Another client changed the settings after this one read their version.",
       "handling": "Read the values in effect again (status --config, the runtime fact snapshot), or take current_version from the refusal, and send the change again with that expected_version if it still applies; never retry the same request unchanged."
     },
@@ -22119,7 +22119,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.61",
-      "description": "Workflow #463 V3 (contracts/runtime-interface.md, \"Goal request kinds\"): an EditGoal was refused under the fact write gate, after the version comparison (so a request of another version is fact_observation_version_conflict whatever its name and value), against the record it would change, for the reason goal_problem names: the name is no entry of the application's goal page and no variable of its game root (name_unknown), holds no value (holds_no_value), is a tier no reader of this build reads (tier_not_built), a remedy parameter (remedy_parameter), a variable that does not apply in the game root (variable_not_applying, with variable_problem) or one the root declares but no package the active catalog binds on the application (not_offered, fix round 1), or (Workflow #455 TK-1, since 0.12.89) a variable only a rule gives, for a set and for a clear of a name that holds no stored value (rule_given); or what the page is judged by is not in memory yet, before the Runtime's first check (not_checked_yet, fix round 1: send it again); fix round 2: or the workbench checks the game root and no check since the start could read it (root_failing: the root must be repaired), or the game has no standard pack root with schedule.json (no_schedule: nothing to check); or the value is no JSON (value_not_json), not of the entry's type (wrong_type), outside its range or off its step (out_of_range, off_step, with range_min and range_max), no option (not_an_option), a repeated key (key_repeated), of a count outside its range (count_out_of_range), longer than the store keeps (value_too_large), on a pool the application cannot target or that needs its own step (pool_not_targetable, pool_unvalued, with pool_id), with a deadline (deadline_unsupported); or a clear of a name that holds nothing (value_not_set); or the stored record is no record the readers read (record_unreadable) or the edit would hold more targets or entries than a record keeps (record_out_of_limits). goal_name names the request's name when it has an entry name's form; json_pointer points into the value. Denied; nothing is appended and the stored record is unchanged.",
+      "description": "Workflow #463 V3 (contracts/runtime-interface.md, \"Goal request kinds\"): an EditGoal was refused under the fact write gate, after the version comparison (so a request of another version is fact_observation_version_conflict whatever its name and value), against the record it would change, for the reason goal_problem names: the name is no entry of the application's goal page and no variable of its game root (name_unknown), holds no value (holds_no_value), is a tier no reader of this build reads (tier_not_built), a remedy parameter (remedy_parameter), a variable that does not apply in the game root (variable_not_applying, with variable_problem) or one the root declares but no package the active catalog binds on the application (not_offered, fix round 1), or (Workflow #455 TK-1, since 0.12.89) a variable only a rule gives, for a set and for a clear of a name that holds no stored value (rule_given); or what the page is judged by is not in memory yet, before the Runtime's first check (not_checked_yet, fix round 1: send it again); fix round 2: or the workbench checks the game root and no check since the start could read it (root_failing: the root must be repaired), or the game has no standard pack root with schedule.json (no_schedule: nothing to check); or the value is no JSON (value_not_json), not of the entry's type (wrong_type), outside its range or off its step (out_of_range, off_step, with range_min and range_max), no option (not_an_option), a repeated key (key_repeated), of a count outside its range (count_out_of_range), longer than the store keeps (value_too_large), on a pool the application cannot target or that needs its own step (pool_not_targetable, pool_unvalued, with pool_id), with a deadline (deadline_unsupported); or a clear of a name that holds nothing (value_not_set); or the stored record is no record the readers read (record_unreadable) or the edit would hold more targets or entries than a record keeps (record_out_of_limits). Workflow #455 RR2 (since 0.12.94; contracts/standard-pack-goals.md, \"The records entry\"): a records entry the root in force applies takes a JSON array of records {key, to} held to its table, the same words at their causes: not of the form (wrong_type, at the record, its member, its key, its to, a column or a sub), a key the table does not hold (not_an_option), a key twice (key_repeated), more records than the entry's max_records (count_out_of_range), a column the key has no ladder for or a position its ladder does not hold (out_of_range, at the column or the sub), a to whose canonical text is longer than 1024 bytes (value_too_large), more than 128 records over the application (record_out_of_limits), the stored session.goal_records record unreadable (record_unreadable); a records entry the root does not apply answers as an unknown name; a clear of a records entry with nothing stored is value_not_set. goal_name names the request's name when it has an entry name's form; json_pointer points into the value. Denied; nothing is appended and the stored record is unchanged.",
       "common_causes": "A value written by hand or by an agent that the declaration does not take; a package update that removed the option, narrowed the range or changed the type; a name of another application's game.",
       "handling": "Read the page (goals get) and set a value the entry's declaration takes; for variable_not_applying fix the root as standard-pack check's warning says; for not_offered bind a package that declares the variable on the application, or set nothing; for not_checked_yet send the same request again after the Runtime's next check; for root_failing repair the game root the page's declaration names (asking again does not help); for no_schedule give the game root a schedule.json; for record_unreadable write the whole document with targets set first."
     },
@@ -22263,6 +22263,66 @@
       "description": "Workflow #455 RR1 fix round 1 (contracts/standard-pack-goal-tables.md, \"Who reads it\"; register section 1.535): the scheduler workbench does not apply the goal-tables.json (path) of the game root game, which it reads with goals.json, for the reason goals_failure names: refused, the contract crate's reader refused it (its first problem as the cause, a standard_pack_root_invalid naming the file, its problem and its pointer); or unreadable, it could not be read (the operating system's failure as the cause). The file applies no records entry of the root's goals.json; every other entry of goals.json applies as before and the root runs and is composed as without the file. Recorded once per sha256 of a refused file, and once until an unreadable one reads again. A goals.json that is not applied is standard_pack_goals_not_applied, whose consequence is another.",
       "common_causes": "goal-tables.json breaks a rule of its reader (actinglab standard-pack check names it), or the file is locked or not readable by the Runtime's account.",
       "handling": "Fix the file as standard-pack check says, or make it readable; the next check reads it again."
+    },
+    "goal_records_formal_entry_required": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.94",
+      "description": "Workflow #455 RR2 (contracts/instance-fact-store.md, \"Goal records facts\"; register section 1.537): a publication named the instance fact key session.goal_records, the records of an application's records entries, which only the goal edit (EditGoal) writes. A client's PublishFact or PublishFacts, from every client envelope, and any other publication path of the Runtime is refused before the fact write gate and nothing is appended, as one of session.resource_targets is (resource_targets_formal_entry_required, whose name says that key). Not fatal.",
+      "common_causes": "A script that copies or restores an instance's facts, its goal records included, or a client that tries to write the records by hand.",
+      "handling": "Leave the key out of the publication; set a records entry's records with goals set (EditGoal), which writes the key."
+    },
+    "goal_records_key_reserved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.94",
+      "description": "Workflow #455 RR2 (contracts/instance-fact-store.md, \"Goal records facts\"; register section 1.537): the inputs of a projection held a fact of the key session.goal_records, which only the goal edit writes into the instance fact store: a configured policy input fact of the key fails every authoritative projection (and so the daemon's first evaluation), and a forward projection caller supplying one is refused; as one of session.resource_targets is (resource_targets_key_reserved, whose name says that key).",
+      "common_causes": "A configuration whose policy input facts name session.goal_records, or a forward projection request that carries such a fact.",
+      "handling": "Remove the fact from the configuration or the request; set the records with goals set (EditGoal)."
+    },
+    "goal_records_record_invalid": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.94",
+      "description": "Workflow #455 RR2 (contracts/instance-fact-store.md, \"Goal records facts\"; register section 1.537): a session.goal_records record the Runtime built is not one its reader takes, as resource_targets_record_invalid says of a session.resource_targets record. In EditGoal, when the record the edit composed does not read back, it is the refusal of that request alone, Denied with runtime_code invalid_request: nothing is appended, the stored record is as it was, nothing is latched and the Runtime goes on; the daemon writes its ERROR line. When the Runtime cannot encode the fact record that would hold it, it is fatal, a fault of the Runtime only.",
+      "common_causes": "A fault of the Runtime: the composition of a goal records record and its reader disagree.",
+      "handling": "Report it with the request and the daemon's line; the stored records are unchanged."
     },
     "priority_offset_unknown_task": {
       "category": "warning",

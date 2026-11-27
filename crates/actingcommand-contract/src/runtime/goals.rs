@@ -33,9 +33,9 @@ crate::outcome_vocabulary! {
         /// resource target `{resource, at_least}`; for a `clear`, no stored value and no target
         /// has the name.
         NameUnknown => "name_unknown",
-        /// The name is a `heading` or a `note` entry of `goals.json`, which holds no value;
-        /// Workflow #455 RR1 (since 0.12.92): or a `records` entry, which holds none until the
-        /// slice that stores records (the page does not list it).
+        /// The name is a `heading` or a `note` entry of `goals.json`, which holds no value. (From
+        /// Workflow #455 RR1, 0.12.92, until Workflow #455 RR2, 0.12.94, a `records` entry
+        /// answered it too; since RR2 a records entry holds its records.)
         HoldsNoValue => "holds_no_value",
         /// The name is a `tier` entry of `goals.json`: no reader of this build reads a tier's
         /// value (Workflow #455 G-R5 builds it), so none is stored.
@@ -54,23 +54,36 @@ crate::outcome_vocabulary! {
         /// `value_json` is no JSON text.
         ValueNotJson => "value_not_json",
         /// The value is not of the entry's type, or an object of other members than its own
-        /// (`json_pointer` names the member).
+        /// (`json_pointer` names the member). Workflow #455 RR2 (since 0.12.94): for a `records`
+        /// entry, a value that is no array, a record that is no object `{key, to}` or holds
+        /// another member, a `key` that is no text, a `to` that is no object or names nothing, a
+        /// sub column's value that is no object of subs or names none, or a position that is no
+        /// array of whole numbers (`json_pointer` names it).
         WrongType => "wrong_type",
         /// An `integer` value below `min` or above `max`, or a resource `at_least` below 1 or
-        /// above the largest amount (`range_min`, `range_max`).
+        /// above the largest amount (`range_min`, `range_max`). Workflow #455 RR2 (since
+        /// 0.12.94): or a record's position that the key's ladder of that column, or of that sub,
+        /// does not hold, a key without such a ladder holding none (`json_pointer` names the
+        /// column or the sub).
         OutOfRange => "out_of_range",
         /// An `integer` value within its range but on no step from `min` (`range_min` the
         /// variable's `min`).
         OffStep => "off_step",
         /// A `choice` value, or an item of an `ordered` value, that is none of the declaration's
-        /// options (`json_pointer` names the item).
+        /// options (`json_pointer` names the item). Workflow #455 RR2 (since 0.12.94): or a
+        /// record's `key` that is no key of the records entry's table (`json_pointer` names it).
         NotAnOption => "not_an_option",
         /// An `ordered` value that names one key twice (`json_pointer` names the later one).
+        /// Workflow #455 RR2 (since 0.12.94): or a records value with two records of one key
+        /// (`json_pointer` names the later record's `key`).
         KeyRepeated => "key_repeated",
         /// An `ordered` value of fewer than `min_count` or more than `max_count` keys
-        /// (`range_min`, `range_max`).
+        /// (`range_min`, `range_max`). Workflow #455 RR2 (since 0.12.94): or a records value of
+        /// more records than the entry's `max_records` (`range_min` 0, `range_max` the bound).
         CountOutOfRange => "count_out_of_range",
         /// The value's canonical text is longer than the store keeps, 1024 bytes (`range_max`).
+        /// Workflow #455 RR2 (since 0.12.94): or a record's `to` whose canonical text is longer
+        /// than that (`json_pointer` names the record's `to`).
         ValueTooLarge => "value_too_large",
         /// The pool of a resource value is no pool the application can target (`pool_id`).
         PoolNotTargetable => "pool_not_targetable",
@@ -81,13 +94,19 @@ crate::outcome_vocabulary! {
         /// A resource value carries `by_unix_ms`: no reader of this build reads a deadline
         /// (Workflow #455 G-R4 builds it), so none is stored.
         DeadlineUnsupported => "deadline_unsupported",
-        /// A `clear` of a name that holds no stored value: nothing to clear.
+        /// A `clear` of a name that holds no stored value: nothing to clear (Workflow #455 RR2,
+        /// since 0.12.94: a `records` entry without stored records among them).
         ValueNotSet => "value_not_set",
         /// The application's stored record is neither a v2 nor a v3 record the readers read (a v1
         /// policy, or rows the reader refuses): write its whole document with `targets set` first.
+        /// Workflow #455 RR2 (since 0.12.94): for a `records` entry, its stored
+        /// `session.goal_records` record is no record the reader reads, which only a fault of the
+        /// Runtime writes.
         RecordUnreadable => "record_unreadable",
         /// The edited record would hold more targets (16) or entries (96) than a record keeps
-        /// (`range_max`).
+        /// (`range_max`). Workflow #455 RR2 (since 0.12.94): or the application would hold more
+        /// records over all its records entries than its `session.goal_records` record keeps
+        /// (128).
         RecordOutOfLimits => "record_out_of_limits",
         /// Fix round 1: what the page is judged by is not in the Runtime's memory yet: the
         /// scheduler workbench has not checked the game root since the start (or since the game
@@ -138,10 +157,11 @@ impl GoalEdit {
 }
 
 /// What `EditGoal` answers: the record's version after the edit (the next `expected_version`, an
-/// opaque token compared only for equality), the event of the `fact.published` that holds the
-/// record, whether nothing was appended because the record already held the change (`replayed`),
-/// and, for a resource value, the id of the target it replaced on the same pool when that target
-/// had another id.
+/// opaque token compared only for equality; Workflow #455 RR2, since 0.12.94: the page's version
+/// after the edit, the greater of the sequences that hold the application's two records), the
+/// event of the `fact.published` that holds the record the edit wrote, whether nothing was
+/// appended because the record already held the change (`replayed`), and, for a resource value,
+/// the id of the target it replaced on the same pool when that target had another id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoalEdited {
@@ -154,11 +174,14 @@ pub struct GoalEdited {
 
 /// What `GoalView` answers for one application (`contracts/runtime-interface.md`, "Goal request
 /// kinds"): its game, the version of its goal record (the sequence of the `fact.published` that
-/// holds its `session.resource_targets` record, `0` without one: the `expected_version` of the
-/// next `EditGoal`), what the workbench holds of its game's `goals.json`, the page's entries in
-/// their order, the stored values no entry offers any more, the bound packages' remedy parameters
-/// (read-only), the ids of the stored targets that are no declared resource entry's, and the
-/// resource target view as `ResourceTargetView` answers it.
+/// holds its `session.resource_targets` record, `0` without one; Workflow #455 RR2, since 0.12.94:
+/// the greater of that and the sequence that holds its `session.goal_records` record: the
+/// `expected_version` of the next `EditGoal`), what the workbench holds of its game's
+/// `goals.json`, the page's entries in their order, the stored values no entry offers any more,
+/// the bound packages' remedy parameters (read-only), the ids of the stored targets that are no
+/// declared resource entry's, and the resource target view as `ResourceTargetView` answers it.
+/// Workflow #455 RR2: no member speaks of the stored records, which are read as the application's
+/// fact `session.goal_records`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoalView {

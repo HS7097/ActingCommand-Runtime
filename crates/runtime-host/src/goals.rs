@@ -15,12 +15,16 @@
 //!   with their capacities, which variables do not apply in its game root (the word a dispatch
 //!   reads) and, fix round 1, the root's judgement of each of its names (its packages and the
 //!   detail of why it does not apply).
-//! - **The checks** ([`check_edit`]), which the host runs under the fact write gate after it
+//! - **The checks** ([`check_goal_edit`]), which the host runs under the fact write gate after it
 //!   compares the version: the name and the value of an `EditGoal` against the page and the stored
 //!   record, each refusal one [`GoalRefusal`] with the word of [`GoalProblem`]; a change that
 //!   passes is one [`GoalRecordEdit`]. Fix round 1: a variable's value is judged by the dispatch's
 //!   own function (`resolve_variable`), so what `set` takes is what a dispatch applies whole; a
-//!   `clear` removes a stored row whatever its name's entry is.
+//!   `clear` removes a stored row whatever its name's entry is. Workflow #455 RR2 (register
+//!   §1.537): a `records` entry the root in force applies takes its records, held to its table
+//!   ([`check_records`]), and a change of them is one [`RecordsChange`] of the application's
+//!   `session.goal_records` record; a `clear` removes the records stored under its name whatever
+//!   the name's entry is.
 //! - **The view** ([`view_entries`]): every entry of the page in its order, the stored values no
 //!   entry shows, and the stored targets that are no declared resource entry's.
 //!
@@ -28,14 +32,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::goal_records::{
+    GivenRecord, MAX_GOAL_RECORD_TO_BYTES, MAX_INSTANCE_GOAL_RECORDS, RecordsChange,
+    RecordsRefusal, StoredGoalRecords,
+};
 use actingcommand_contract::resource_effect::scheduling_identifier;
 use actingcommand_contract::{
-    DeclaredGoal, DeclaredGoalKind, DefaultOrigin, GoalEntryState, GoalEntryType, GoalOrphan,
-    GoalProblem, GoalResourceState, GoalSetBy, GoalText, GoalUnit, GoalValueSource,
-    GoalVariableCause, GoalViewEntry, MAX_GOAL_SAFE_INTEGER, PackageVariable,
-    ResourceTargetCondition, ResourceTargetConditionState, RootVariableVerdict, StandardPackGoals,
-    TargetableResource, VariableCause, VariableKind, VariableProblem, VariableSource, goal_name,
-    variable_value_json,
+    DeclaredGoal, DeclaredGoalKind, DefaultOrigin, GoalColumnRead, GoalEntryState, GoalEntryType,
+    GoalKey, GoalKeyColumn, GoalOrphan, GoalProblem, GoalResourceState, GoalSetBy, GoalTable,
+    GoalText, GoalUnit, GoalValueSource, GoalVariableCause, GoalViewEntry, MAX_GOAL_SAFE_INTEGER,
+    PackageVariable, ResourceTargetCondition, ResourceTargetConditionState, RootVariableVerdict,
+    StandardPackGoalTables, StandardPackGoals, TargetableResource, VariableCause, VariableKind,
+    VariableProblem, VariableSource, goal_name, variable_value_json,
 };
 use actingcommand_policy::{
     GoalRecordEdit, GoalRecordRefusal, ResolvedVariable, StoredEntry, StoredGoalEntry,
@@ -212,6 +220,19 @@ impl GoalRefusal {
             GoalRecordRefusal::Inconsistent => None,
         }
     }
+
+    /// Workflow #455 RR2: the refusal of a `session.goal_records` record that cannot take the
+    /// edit; `None` for an internal fault, which the host refuses on its own code.
+    pub(crate) fn of_records(refusal: RecordsRefusal) -> Option<Self> {
+        match refusal {
+            RecordsRefusal::Unreadable => Some(Self::new(GoalProblem::RecordUnreadable)),
+            RecordsRefusal::Full => Some(
+                Self::new(GoalProblem::RecordOutOfLimits)
+                    .within(0, max_i64(MAX_INSTANCE_GOAL_RECORDS)),
+            ),
+            RecordsRefusal::Inconsistent => None,
+        }
+    }
 }
 
 /// Whether a text the caller wrote (a member's name, a pool id) is carried in a refusal's values as
@@ -245,20 +266,38 @@ pub(crate) enum EditRequest<'a> {
     Clear { name: &'a str },
 }
 
+/// What one `EditGoal` changes: the application's `session.resource_targets` record (a name of
+/// every kind but a records entry's), or (Workflow #455 RR2) its `session.goal_records` record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GoalChange {
+    Record(GoalRecordEdit),
+    Records(RecordsChange),
+}
+
 /// Workflow #463 V3 (`contracts/runtime-interface.md`, "Goal request kinds", the checks): the
-/// change `request` makes to the record `stored` of the application whose page is `page`, the row
-/// set by `set_by`, or why it is refused. The host runs it under the fact write gate, after it
-/// compared the version, on the record it is about to change. A name outside an entry name's form
-/// is `name_unknown`, a `set` whose value is no JSON `value_not_json`; then (fix round 1) a page
-/// not in memory yet refuses every request `not_checked_yet` (fix round 2: or, for a game root
-/// that fails its checks or a game without `schedule.json`, `root_failing` or `no_schedule`). A
-/// `set` is judged by [`check_set`], a `clear` by [`check_clear`].
-pub(crate) fn check_edit(
+/// change `request` makes to the records `stored` (`session.resource_targets`) and, Workflow #455
+/// RR2, `records` (`session.goal_records`) of the application whose page is `page`, the row set by
+/// `set_by`, or why it is refused. The host runs it under the fact write gate, after it compared
+/// the version, on the records it is about to change. A name outside an entry name's form is
+/// `name_unknown`, a `set` whose value is no JSON `value_not_json`; then (fix round 1) a page not
+/// in memory yet refuses every request `not_checked_yet` (fix round 2: or, for a game root that
+/// fails its checks or a game without `schedule.json`, `root_failing` or `no_schedule`).
+///
+/// Workflow #455 RR2: a `records` entry of the accepted `goals.json` applies when its table is a
+/// table of the root's accepted `goal-tables.json` (`tables`, the root in force's; `None` when the
+/// root holds no accepted file); a `set` of one takes its records ([`check_records`]), and one the
+/// root does not apply is no entry for the checks below, so its name answers as an unknown name
+/// does. A `clear` of a name under which `records` holds records removes them, whatever the name's
+/// entry is (declared or not: the rule of a value left under a name); else, as every other `set`
+/// and `clear`, it is judged by [`check_set`] or [`check_clear`] on the other record.
+pub(crate) fn check_goal_edit(
     page: &GoalPage,
+    tables: Option<&StandardPackGoalTables>,
     stored: &StoredGoalRecord,
+    records: &StoredGoalRecords,
     request: EditRequest<'_>,
     set_by: VariableSetBy,
-) -> Result<GoalRecordEdit, GoalRefusal> {
+) -> Result<GoalChange, GoalRefusal> {
     let name = match request {
         EditRequest::Set { name, .. } | EditRequest::Clear { name } => name,
     };
@@ -280,20 +319,232 @@ pub(crate) fn check_edit(
         .as_ref()
         .and_then(|declaration| declaration.entry(name))
         .map(|declared| &declared.kind);
-    match &value {
-        Some(value) => check_set(page, name, declared, value, set_by),
-        None => check_clear(page, stored, name, declared),
+    // Workflow #455 RR2 (ruling 4): the table and the bound of a records entry the root in force
+    // applies; a records entry it does not apply (its table no table of an accepted tables file)
+    // is no entry here.
+    let applied = match declared {
+        Some(DeclaredGoalKind::Records { table, max_records }) => tables
+            .and_then(|tables| tables.table(table))
+            .map(|table| (table, *max_records)),
+        _ => None,
+    };
+    let declared = declared
+        .filter(|kind| !matches!(kind, DeclaredGoalKind::Records { .. }) || applied.is_some());
+    match (&value, applied) {
+        (Some(value), Some((table, max_records))) => Ok(GoalChange::Records(RecordsChange::Set {
+            entry: name.to_owned(),
+            records: check_records(table, max_records, value)?,
+        })),
+        (Some(value), None) => {
+            check_set(page, name, declared, value, set_by).map(GoalChange::Record)
+        }
+        // Ruling 6: the records stored under the name, declared or not.
+        (None, _) if records.holds(name) => Ok(GoalChange::Records(RecordsChange::Clear {
+            entry: name.to_owned(),
+        })),
+        (None, _) => check_clear(page, stored, name, declared).map(GoalChange::Record),
     }
+}
+
+/// The change `request` makes to the `session.resource_targets` record `stored`, as
+/// [`check_goal_edit`] judges it on a root without an accepted tables file and an application
+/// without stored records, where every change is one of that record: the tests of the slices
+/// before Workflow #455 RR2 read it.
+#[cfg(test)]
+pub(crate) fn check_edit(
+    page: &GoalPage,
+    stored: &StoredGoalRecord,
+    request: EditRequest<'_>,
+    set_by: VariableSetBy,
+) -> Result<GoalRecordEdit, GoalRefusal> {
+    match check_goal_edit(
+        page,
+        None,
+        stored,
+        &StoredGoalRecords::Absent,
+        request,
+        set_by,
+    )? {
+        GoalChange::Record(edit) => Ok(edit),
+        GoalChange::Records(change) => {
+            panic!("no records entry applies without a tables file: {change:?}")
+        }
+    }
+}
+
+/// Workflow #455 RR2 (`contracts/standard-pack-goals.md`, "The records entry", the value): the
+/// records a `set` of a records entry gives, whose table is `table` and whose bound is
+/// `max_records`, or why it is refused, in this order: a value that is no array `wrong_type`; more
+/// than `max_records` records `count_out_of_range` (`range_min` 0, `range_max` the bound); then
+/// each record in its order: no object, or a member other than `key` and `to`, `wrong_type` (at
+/// the record, at the member); a `key` that is no text `wrong_type`, one the table does not hold
+/// `not_an_option`, one an earlier record names `key_repeated` (each at the record's `key`); then
+/// its `to` ([`check_to`]). A record holds nothing else. Not checked, on purpose: a position
+/// against the account's progress (not known when a person speaks; a goal behind it asks nothing)
+/// and the prerequisites (the computation raises a required column itself).
+fn check_records(
+    table: &GoalTable,
+    max_records: u64,
+    value: &Value,
+) -> Result<Vec<GivenRecord>, GoalRefusal> {
+    let Value::Array(items) = value else {
+        return Err(GoalRefusal::new(GoalProblem::WrongType));
+    };
+    let bound = usize::try_from(max_records).unwrap_or(usize::MAX);
+    if items.len() > bound {
+        return Err(GoalRefusal::new(GoalProblem::CountOutOfRange).within(0, max_i64(bound)));
+    }
+    let mut given: Vec<GivenRecord> = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let record = format!("/{index}");
+        let Value::Object(members) = item else {
+            return Err(GoalRefusal::new(GoalProblem::WrongType).at(record));
+        };
+        if let Some(member) = members
+            .keys()
+            .find(|member| !matches!(member.as_str(), "key" | "to"))
+        {
+            let refusal = GoalRefusal::new(GoalProblem::WrongType);
+            return Err(if carried(member) {
+                refusal.at(format!("{record}/{member}"))
+            } else {
+                refusal.at(record)
+            });
+        }
+        let key_at = format!("{record}/key");
+        let Some(Value::String(key)) = members.get("key") else {
+            return Err(GoalRefusal::new(GoalProblem::WrongType).at(key_at));
+        };
+        let Some(declared) = table.key(key) else {
+            return Err(GoalRefusal::new(GoalProblem::NotAnOption).at(key_at));
+        };
+        if given.iter().any(|earlier| earlier.key == *key) {
+            return Err(GoalRefusal::new(GoalProblem::KeyRepeated).at(key_at));
+        }
+        let to = check_to(table, declared, members.get("to"), &format!("{record}/to"))?;
+        given.push(GivenRecord {
+            key: key.clone(),
+            to,
+        });
+    }
+    Ok(given)
+}
+
+/// Workflow #455 RR2: a record's `to` for the key `key` of `table` (at the pointer `at`), as its
+/// canonical text, or why it is refused: no object, or one that names no column, `wrong_type`;
+/// then each column it names: one for which the key has no ladder (its class's for a column of
+/// `per: "class"`, its own for one of `per: "key"`; a name no column of the table has among them)
+/// `out_of_range`; a position that is no array of whole numbers `wrong_type`, one the ladder does
+/// not hold `out_of_range`; for a column of `per: "sub"`, an object of the key's subs, each with a
+/// position of that sub's ladder (no object, or one that names no sub, `wrong_type`; a sub the key
+/// has no ladder for `out_of_range` at it); each at the column or the sub. The canonical text is
+/// compact JSON, the members of every object in ascending byte order of their names, each position
+/// an array of whole numbers; longer than [`MAX_GOAL_RECORD_TO_BYTES`] it is `value_too_large` at
+/// `at` (`range_min` 0, `range_max` the bound).
+fn check_to(
+    table: &GoalTable,
+    key: &GoalKey,
+    to: Option<&Value>,
+    at: &str,
+) -> Result<String, GoalRefusal> {
+    let Some(Value::Object(columns)) = to else {
+        return Err(GoalRefusal::new(GoalProblem::WrongType).at(at));
+    };
+    if columns.is_empty() {
+        return Err(GoalRefusal::new(GoalProblem::WrongType).at(at));
+    }
+    let mut written = BTreeMap::<String, Value>::new();
+    for (column, target) in columns {
+        let column_at = within_pointer(at, column);
+        let Some(declared) = table.column(column) else {
+            return Err(GoalRefusal::new(GoalProblem::OutOfRange).at(column_at));
+        };
+        let canonical = match &declared.read {
+            GoalColumnRead::Class(_) | GoalColumnRead::Key(_) => {
+                let Some(ladder) = table.ladders_of(key, column).into_iter().next() else {
+                    return Err(GoalRefusal::new(GoalProblem::OutOfRange).at(column_at));
+                };
+                let Some(position) = position_of(target) else {
+                    return Err(GoalRefusal::new(GoalProblem::WrongType).at(column_at));
+                };
+                if !ladder.holds(&position) {
+                    return Err(GoalRefusal::new(GoalProblem::OutOfRange).at(column_at));
+                }
+                position_value(position)
+            }
+            GoalColumnRead::Sub(_) => {
+                let Value::Object(subs) = target else {
+                    return Err(GoalRefusal::new(GoalProblem::WrongType).at(column_at));
+                };
+                if subs.is_empty() {
+                    return Err(GoalRefusal::new(GoalProblem::WrongType).at(column_at));
+                }
+                let ladders = key
+                    .columns
+                    .iter()
+                    .find(|(name, _)| name == column)
+                    .and_then(|(_, written_column)| match written_column {
+                        GoalKeyColumn::Subs(ladders) => Some(ladders.as_slice()),
+                        GoalKeyColumn::Steps(_) | GoalKeyColumn::Ladder(_) => None,
+                    })
+                    .unwrap_or_default();
+                let mut positions = BTreeMap::<String, Value>::new();
+                for (sub, sub_target) in subs {
+                    let sub_at = within_pointer(&column_at, sub);
+                    let Some((_, ladder)) = ladders.iter().find(|(name, _)| name == sub) else {
+                        return Err(GoalRefusal::new(GoalProblem::OutOfRange).at(sub_at));
+                    };
+                    let Some(position) = position_of(sub_target) else {
+                        return Err(GoalRefusal::new(GoalProblem::WrongType).at(sub_at));
+                    };
+                    if !ladder.holds(&position) {
+                        return Err(GoalRefusal::new(GoalProblem::OutOfRange).at(sub_at));
+                    }
+                    positions.insert(sub.clone(), position_value(position));
+                }
+                Value::Object(positions.into_iter().collect())
+            }
+        };
+        written.insert(column.clone(), canonical);
+    }
+    let text = Value::Object(written.into_iter().collect()).to_string();
+    if text.len() > MAX_GOAL_RECORD_TO_BYTES {
+        return Err(GoalRefusal::new(GoalProblem::ValueTooLarge)
+            .at(at)
+            .within(0, max_i64(MAX_GOAL_RECORD_TO_BYTES)));
+    }
+    Ok(text)
+}
+
+/// The pointer to the member `member` of the value at `at`, when `member` is carried as it is
+/// ([`carried`]); else `at`.
+fn within_pointer(at: &str, member: &str) -> String {
+    if carried(member) {
+        format!("{at}/{member}")
+    } else {
+        at.to_owned()
+    }
+}
+
+/// A position as a record writes it: an array of whole numbers within 64 bits; `None` for any
+/// other value.
+fn position_of(value: &Value) -> Option<Vec<i64>> {
+    value.as_array()?.iter().map(Value::as_i64).collect()
+}
+
+/// A position as its canonical text writes it.
+fn position_value(position: Vec<i64>) -> Value {
+    Value::Array(position.into_iter().map(Value::from).collect())
 }
 
 /// A `set` of `name` (whose entry of the accepted `goals.json` is `declared`) to `value`, in this
 /// order:
 ///
 /// 1. an entry of the accepted `goals.json`: a `heading` or a `note` holds no value
-///    (`holds_no_value`), and neither does (Workflow #455 RR1) a `records` entry until the slice
-///    that stores records; a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
+///    (`holds_no_value`); a `tier` is `tier_not_built`; a `resource` entry takes `{at_least}` on
 ///    its pool, as an other target does (below); a `variable` placement is the variable of its
-///    name (2);
+///    name (2); a `records` entry never reaches here (Workflow #455 RR2: [`check_goal_edit`]
+///    takes the records of one the root applies, and passes one it does not apply as no entry);
 /// 2. Workflow #455 TK-1: a variable only a rule gives, of a bound package or of the root:
 ///    `rule_given`, before its value is judged;
 /// 3. a variable of a bound package: one that does not apply is `variable_not_applying` with its
@@ -313,11 +564,7 @@ fn check_set(
     set_by: VariableSetBy,
 ) -> Result<GoalRecordEdit, GoalRefusal> {
     match declared {
-        // Workflow #455 RR1: a records entry is declared and holds no value until the slice that
-        // stores records: the word of an entry that holds none.
-        Some(
-            DeclaredGoalKind::Heading | DeclaredGoalKind::Note | DeclaredGoalKind::Records { .. },
-        ) => {
+        Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => {
             return Err(GoalRefusal::new(GoalProblem::HoldsNoValue));
         }
         Some(DeclaredGoalKind::Tier { .. }) => {
@@ -331,7 +578,8 @@ fn check_set(
                 at_least,
             });
         }
-        Some(DeclaredGoalKind::Variable) | None => {}
+        // Workflow #455 RR2: a records entry is never passed here; were it, it would be no entry.
+        Some(DeclaredGoalKind::Variable | DeclaredGoalKind::Records { .. }) | None => {}
     }
     if page.rule_given(name) {
         return Err(GoalRefusal::new(GoalProblem::RuleGiven));
@@ -376,7 +624,9 @@ fn check_set(
 /// `not_offered` for a name the root declares that no bound package declares, else
 /// `name_unknown`. Workflow #455 TK-1: a variable only a rule gives answers `rule_given` when
 /// nothing is stored under its name; a value stored before it became one (an orphan) is removed
-/// as any stored row is.
+/// as any stored row is. Workflow #455 RR2: a records entry the root applies reaches here only
+/// without stored records, and with nothing stored under its name in this record answers
+/// `value_not_set` ([`check_goal_edit`] passes one the root does not apply as no entry).
 fn check_clear(
     page: &GoalPage,
     stored: &StoredGoalRecord,
@@ -402,12 +652,12 @@ fn check_clear(
         });
     }
     let problem = match declared {
-        // Workflow #455 RR1: a records entry holds no value until the slice that stores records.
-        Some(
-            DeclaredGoalKind::Heading | DeclaredGoalKind::Note | DeclaredGoalKind::Records { .. },
-        ) => GoalProblem::HoldsNoValue,
+        Some(DeclaredGoalKind::Heading | DeclaredGoalKind::Note) => GoalProblem::HoldsNoValue,
         Some(DeclaredGoalKind::Tier { .. }) => GoalProblem::TierNotBuilt,
-        Some(DeclaredGoalKind::Resource { .. }) => GoalProblem::ValueNotSet,
+        // Workflow #455 RR2: a records entry holds its records, none stored here.
+        Some(DeclaredGoalKind::Resource { .. } | DeclaredGoalKind::Records { .. }) => {
+            GoalProblem::ValueNotSet
+        }
         Some(DeclaredGoalKind::Variable) | None if page.rule_given(name) => GoalProblem::RuleGiven,
         Some(DeclaredGoalKind::Variable) | None if page.variable(name).is_some() => {
             GoalProblem::ValueNotSet

@@ -1356,6 +1356,13 @@ actingcommand_contract::outcome_codes! {
         ResourceTargetsKeyReserved => "resource_targets_key_reserved": error / none,
         ResourceTargetsRecordInvalid => "resource_targets_record_invalid": error / none,
         ResourceTargetsRejected => "resource_targets_rejected": error / none,
+        // Workflow #455 RR2 (register §1.537; `contracts/instance-fact-store.md`, "Goal records
+        // facts"): the key `session.goal_records` mirrors `session.resource_targets`, whose three
+        // codes above name that key: its formal entry, its reservation in the projection's inputs
+        // and a record the Runtime built that its reader does not take.
+        GoalRecordsFormalEntryRequired => "goal_records_formal_entry_required": error / none,
+        GoalRecordsKeyReserved => "goal_records_key_reserved": error / none,
+        GoalRecordsRecordInvalid => "goal_records_record_invalid": error / none,
         RestoreArtifactSizeOverflow => "restore_artifact_size_overflow": error / none,
         RestoreSourceChanged => "restore_source_changed": error / none,
         RestoreStateHasAdvanced => "restore_state_has_advanced": error / none,

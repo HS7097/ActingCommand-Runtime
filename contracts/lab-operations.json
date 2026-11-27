@@ -1198,7 +1198,7 @@
       "new": "#463 V3, #455 G-R2b (EditGoal)",
       "slice": "463-V3",
       "status": "planned",
-      "notes": "Workflow #463 V3: a value the page does not take is goal_value_invalid with goal_problem; a run in progress is not stopped; nothing is recomposed. Workflow #455 TK-1 (0.12.89): a variable only a rule gives (given_by rule) is no person's to set and is goal_value_invalid with goal_problem rule_given"
+      "notes": "Workflow #463 V3: a value the page does not take is goal_value_invalid with goal_problem; a run in progress is not stopped; nothing is recomposed. Workflow #455 TK-1 (0.12.89): a variable only a rule gives (given_by rule) is no person's to set and is goal_value_invalid with goal_problem rule_given. Workflow #455 RR2 (0.12.94): a records entry of goals.json takes a JSON array of 0 to its max_records records {key, to}: key a key of the entry's table in goal-tables.json, each once; to an object naming at least one column the key has a ladder for, each with a position of that ladder (an array of whole numbers), a column by sub with an object of the key's subs, each with a position of its ladder; the array replaces the entry's records, [] removes them; the records are stored in the instance fact session.goal_records, read back with facts, not listed by goals; a records entry whose table the root's tables file does not give answers as an unknown name"
     },
     {
       "name": "goals clear",
@@ -1219,7 +1219,7 @@
       "new": "#463 V3, #455 G-R2b (EditGoal)",
       "slice": "463-V3",
       "status": "planned",
-      "notes": "Workflow #463 V3: a name that holds no stored value is goal_value_invalid with goal_problem value_not_set. Workflow #455 TK-1 (0.12.89): for a variable only a rule gives that holds no stored value, goal_problem rule_given; a value stored under its name before it became one, which has no default to fall back to, is removed as an orphan"
+      "notes": "Workflow #463 V3: a name that holds no stored value is goal_value_invalid with goal_problem value_not_set. Workflow #455 TK-1 (0.12.89): for a variable only a rule gives that holds no stored value, goal_problem rule_given; a value stored under its name before it became one, which has no default to fall back to, is removed as an orphan. Workflow #455 RR2 (0.12.94): for a records entry, removes all its records from the instance fact session.goal_records, and so for a name whose records are stored though the root no longer declares its entry; a records entry with none stored is value_not_set"
     },
     {
       "name": "crash-log",
