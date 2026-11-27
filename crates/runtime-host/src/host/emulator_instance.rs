@@ -92,6 +92,7 @@ use super::failure_scope::Contained;
 use super::host_claims::HostKey;
 use super::lease::HostClaim;
 use super::recovery_ladder::PendingRecoveryLadder;
+use super::resource_close::lapsed_key_refusal;
 use super::runtime_facts::{TASK_GAME_FACT_KEY, TASK_PAGE_FACT_KEY, TASK_SERVER_FACT_KEY};
 use super::startup_package::PendingStartupPackage;
 use super::*;
@@ -1346,6 +1347,26 @@ impl HostShared {
                     record_action,
                     busy_error(instance_id, MonitorRecoveryCoordinationReason::ActiveLease),
                     RuntimeReceiptState::Denied,
+                    EffectDisposition::NotPerformed,
+                    None,
+                ));
+            }
+            // #503 HALT-1 (#475's model): the control's own key lapsed between its admission
+            // above and this close, which its lapsed lease refused before it began. The refusal
+            // is recorded once, fences the instance and is owed under the key
+            // (`fence_expired_close_of`); the control fails with a refusal of its own that is not
+            // fatal, before its provider step, and its key's end makes the close. Until 0.12.86 the
+            // refusal was the control's fatal failure.
+            Err(refused) if self.expiry_close_refused(&refused) => {
+                self.fence_expired_close_of(mode.token(), instance_id, refused, links.clone())?;
+                let refusal =
+                    lapsed_key_refusal(HostLocation::CloseEmulatorDeviceSession, mode.token());
+                return Err(self.control_failed(
+                    mode,
+                    links,
+                    record_action,
+                    refusal,
+                    RuntimeReceiptState::Failed,
                     EffectDisposition::NotPerformed,
                     None,
                 ));

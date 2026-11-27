@@ -3092,3 +3092,16 @@ tests = [
     "actingcommand-actingd::bin:actingcommand-actingd::gate_503_cyc2::cyc2_t1_the_line_ends_with_the_three_slowest_calls_of_the_setup",
 ]
 incident = ["#503 CYC-2"]
+
+# #503 HALT-1 (0.12.87; register §1.530; contracts/runtime-watchdog.md, "Observation" item 5, "Decision" rows 7b and 7f, "Files"), the watchdog's half: whole run-once --from-task ticks over gate_382_a4's A/B root on a scripted machine (each tick's probe a pair of answers, the first way's and the second way's, put together by observe::probe_with_second_way; each spawn exits at once or answers at the first health poll; the clock moves only by the test or a readiness poll). A first way that fails is followed by the process list: a daemon whose path cannot be read and one under the root count, one under another root does not, no boot time; an empty list is no process; both failing is the first way's process_probe_failed with timeout_ms and the second's as its secondary link; a first way that answers is the answer and the list is not taken (1); the second way seeing a daemon without a path: watchdog_runtime_process_present, nothing spawned (2); two ticks that cannot probe, each watchdog_start_failed caused by process_probe_failed with its own ERROR line (until 0.12.87 the second wrote none), nothing spawned, then a tick that sees no Runtime starts it (3); after a start whose process exited first, the next tick that sees no Runtime starts it (4); after a tick that could not probe, the installer's writer lock held is watchdog_installer_busy and a tick after a five-minute gap is watchdog_grace, nothing spawned (5); fix round 1 (rows 7e and 7f, "Budget", "Start"): a start counts against the budget only when it spawned a process, so five ticks whose first way fails, whose second lists no daemon and whose start method fails before any process exists (wmi_start_failed with timeout_ms) are each watchdog_start_failed with its own ERROR line, state.json keeps no start record and no exhaustion and the fourth and fifth start again (before the round the fourth was row 7e), and the sixth, whose method works, starts the Runtime with the one record kept (6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-watchdog::lib::gate_503_halt1::halt1_b1_a_first_way_that_fails_is_followed_by_the_process_list_and_both_failing_fails",
+    "actingcommand-watchdog::lib::gate_503_halt1::halt1_b1_a_daemon_the_second_way_sees_is_running_and_nothing_starts_beside_it",
+    "actingcommand-watchdog::lib::gate_503_halt1::halt1_b2_every_tick_that_cannot_probe_writes_its_line_and_the_first_that_can_starts",
+    "actingcommand-watchdog::lib::gate_503_halt1::halt1_after_a_start_that_failed_the_next_tick_that_sees_no_runtime_starts_it",
+    "actingcommand-watchdog::lib::gate_503_halt1::halt1_after_a_tick_that_could_not_probe_a_hold_or_the_grace_still_forbids_a_start",
+    "actingcommand-watchdog::lib::gate_503_halt1::halt1_fix1_starts_that_spawned_no_process_use_no_budget_and_the_first_that_spawns_starts",
+]
+incident = ["#503 HALT-1"]

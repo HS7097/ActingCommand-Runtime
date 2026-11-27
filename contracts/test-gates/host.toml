@@ -4897,3 +4897,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_cyc3::cyc3_t3_a_run_admitted_without_a_window_end_is_read_once_beside_one_admitted_with_it",
 ]
 incident = ["#503 CYC-3"]
+
+# #503 HALT-1 (0.12.87; register §1.530; contracts/read-session-resource-close.md, contracts/runtime-outcomes.md "Device and kernel failures"), the host's half: the closes under a held key that #475 left out, on the fixture of gate_458_close_isolates (X and Y alone on their devices both on the Nemu IPC, the multi-Nemu gate, a manual Runtime clock, stuck recovery off; a test hook lets the lease lapse right before the next close that finds a session asks its write authority; the lease sweep's expiry scan held). A person's self-check of X, a connection preparation on its own held key, opens X's session and its close after the self-check meets the lapsed key: the self-check is denied lease_expired, not fatal; health clean; X alone fenced with lease_expired; the refusal recorded once under the self-check's request at the stage runtime_lifecycle_session_close naming the key's lease; after a sweep tick the lease ended once, handed to no one, X's session closed once after that; Y's direct run completed (1); the same with the slices turned off (close_isolates_off_for_test), as 0.12.86 took it: lease_expired at begin_destructive_resource_close latched, fatal and Global, no fence (2); the record of the refused close made to fail: ledger_failure at fence_instance_resources latched, fatal and Global, no fence (3); a client's explicit release of X whose lease lapses inside the release's close, after its validation: the release denied lease_expired, not fatal; X alone fenced, the refusal recorded once naming the lease; after a sweep tick the lease ended once, handed to no one, X's session closed once after that; Y's direct run completed (4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::halt1_a_preparations_close_under_a_lapsed_key_fences_only_its_instance_and_the_runtime_runs",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::halt1_with_the_slices_off_the_same_close_stops_the_runtime_as_0_12_86_did",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::halt1_a_record_that_cannot_be_appended_at_a_preparations_close_still_stops_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::halt1_an_explicit_release_whose_lease_lapses_at_its_close_fences_only_its_instance",
+]
+incident = ["#503 HALT-1"]

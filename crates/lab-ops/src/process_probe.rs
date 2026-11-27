@@ -10,9 +10,20 @@
 use crate::codes::ActingctlCode;
 use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, RawSource};
+pub use actingcommand_host_metrics::NamedProcess;
 use actingcommand_host_metrics::ProcessProbe;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// #503 HALT-1 (`contracts/runtime-watchdog.md`, "Observation" item 5): the watchdog's second way
+/// to read its process probe, without WMI: the processes named `image_name` in the operating
+/// system's process list, each with its pid and its image path where it can be read. A list that
+/// cannot be taken is `process_probe_failed`, caused by its reason.
+pub fn processes_named(image_name: &str) -> Result<Vec<NamedProcess>, Outcome> {
+    actingcommand_host_metrics::processes_named(image_name).map_err(|reason| {
+        Outcome::new(ActingctlCode::ProcessProbeFailed).caused_by(Outcome::new(reason))
+    })
+}
 
 /// #411 P49 (MCP-ENTRY review L4): the creation time, in Unix milliseconds, of the process now
 /// running with `pid`, as the operating system reports it (the probe the owner release uses);

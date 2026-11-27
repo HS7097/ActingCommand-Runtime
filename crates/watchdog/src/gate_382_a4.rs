@@ -246,7 +246,8 @@ fn describe(report: &Report) -> String {
 // An A/B root with slot A and generation 1 whose zero-instance config names `<root>\state`: its
 // fixed entry exists, acsetup's writer lock is free, and the owner journal's last record is
 // active while nothing holds the owner lock (the Runtime crashed), so the tick considers a start.
-fn install_root(base: &Path) -> PathBuf {
+// #503 HALT-1 (`gate_503_halt1`) ticks on it too.
+pub(super) fn install_root(base: &Path) -> PathBuf {
     let root = base.join("install");
     let generation = root.join("install").join("generations").join("1");
     for directory in [

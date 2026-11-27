@@ -1739,7 +1739,10 @@ impl HostShared {
         // ("lease already ended"), never a poison.
         let resolved = self.validated_instance(request, token, connection_id)?;
         self.expire_queued_for_instance(token.instance_id())?;
-        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)?;
+        // #503 HALT-1: a lease that lapses between the validation and the close (a device call or
+        // a ledger write that outlasts it) has that close refused; the refusal is fenced and owed,
+        // and the release answers it, not fatal (`LeaseDeviceEnd::Release`).
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Release)?;
         // Workflow #437 MAPP-1d: each claim of the device's queue by its own member's gate.
         let gates = self.device_gates(token.instance_id())?;
         let gate = |member: InstanceId| gates.gate_of(member);
@@ -2386,7 +2389,8 @@ impl HostShared {
         let instance_guard = self.instance_guard(instance_id)?;
         let _admission = self.lock_admission(&instance_guard, instance_id)?;
         self.expire_queued_for_instance(instance_id)?;
-        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Keep)?;
+        // #503 HALT-1: as at `release_lease`.
+        self.end_lease_device_use(token, connection_id, LeaseDeviceEnd::Release)?;
         let gate = self.routine_gate(instance_id)?;
         let order_lock = self.queue_order_lock(instance_id)?;
         let _order = lock(&order_lock, HostLocation::LockInstanceQueueOrder)?;

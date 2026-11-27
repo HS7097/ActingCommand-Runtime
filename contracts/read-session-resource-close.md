@@ -166,8 +166,8 @@ An earlier fatal does not skip other instances' permitted cleanup. A close attem
 under an otherwise invalid lease, an unresolved destructive step, or an unconfirmed native
 close retains failure and owner protection; a close refused under an expired lease fences its
 instance instead, at a lease's expiry, at a holder's own end of the lapsed lease, in a failed
-input's clean-up and in the five closes under a held key of Workflow #475 (below), and after a
-capture failure (above). The end of an
+input's clean-up, in the five closes under a held key of Workflow #475 and in the closes under a
+held key of #503 HALT-1 (below), and after a capture failure (above). The end of an
 expired lease attempts no close (Workflow #191 H): it keeps the session and forgets its input
 frames, as for no session. A session that must close (it needs the close, its instance is
 outside the multi-Nemu gate, or it is a member of a device group of several) is asked to close
@@ -234,12 +234,29 @@ closes it, and a session whose instance's own key a holder took on is that holde
 end or preparation closes it. A session owed for a member whose device a lease of another member
 holds then (no path reaches it today) is not passed over: its close is tried, the session close
 ahead refuses the held device (`lease_busy`), and that refusal is recorded once and leaves the
-session to a preparation of the fenced member, as any refusal of that close does. A close that a
-connection preparation makes under a held key (`prepare_connection_attempt` on the key of a
+session to a preparation of the fenced member, as any refusal of that close does. #503 HALT-1
+(Runtime 0.12.87; on 11-27 one instance's emulator start by its idle wake waited 970 s in its
+preparation's opens, its key's lease lapsed, the close after the opens was refused, and the
+refusal stopped the whole Runtime) does the same for the closes left out until then. A close that
+a connection preparation makes under a held key (`prepare_connection_attempt` on the key of a
 person's self-check, an emulator control, the recovery ladder, the emulator watch or a backend
 switch's candidate and restored backends: the retained session's close before the opens, and the
-close after a failed open or outside the multi-Nemu gate) is not among these: the same refusal
-there keeps its fatality, left to a later slice of Workflow #475. During shutdown, where no fence
+close after a failed open or outside the multi-Nemu gate) is refused the same way; the refusal is
+recorded once, the instance is fenced with `lease_expired` as its cause and the close is owed
+under the key; the preparation then opens and closes nothing more and fails with a refusal of its
+own, `lease_expired` at `close_prepared_instance_session` naming the key's lease, not fatal: its
+self-check fails with that code, so no passing self-check lifts the fence, and its caller goes on
+as after any failed preparation (an emulator control's start ends its hold, whose release the
+lapsed key refuses, and its clean-up ends the key). An emulator control's close of the instance's
+retained session under its own key before its provider step (`ready_control_phase`) is refused
+the same way and handled the same way; the control fails with `lease_expired` at
+`close_emulator_device_session`, not fatal, before its provider step. And an explicit release of
+a held lease whose close meets the lapsed lease after the release was validated (`release_lease`,
+`release_lease_to_claim`: the lease lapsed between the validation and the close) is handled the
+same way; the release ends nothing and answers `lease_expired` at `close_execution_session`, not
+fatal, as a release that met the lapse at its validation is refused; the holder's clean-up or the
+sweep's expiry then ends the lease and makes the close. In each, the key's end, whichever it is,
+makes the owed close under the session close ahead, as above. During shutdown, where no fence
 may take the instance, and for a failure of the Runtime itself, these paths keep their fatality
 as above. #411 A64's own
 dedicated close lease, refused for any
