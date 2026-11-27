@@ -36,6 +36,7 @@ use super::{
 };
 use crate::codes::ExecutionKernelCode;
 use actingcommand_contract::codes::SharedCode;
+use actingcommand_contract::outcome::{Outcome, StateProblem};
 use actingcommand_contract::{
     FactScalar, FieldListCondition, FieldListDeclaration, FieldListTask, MAX_LIST_READING_ROWS,
     OcrFieldPrivacy, OcrFieldReason, OcrFieldRecord, OcrFieldType, OcrFieldValue,
@@ -176,13 +177,15 @@ impl PreparedFieldList {
         }
     }
 
-    /// The declaration the host publishes the list by, with the frames a miss names.
+    /// The declaration the host publishes the list by, with the frames a miss names. A field list
+    /// passes over nothing (Workflow #503 LIST-A).
     fn declaration(&self, frame_indices: Vec<u32>) -> ListReadingDeclaration {
         ListReadingDeclaration {
             operation_id: self.id.clone(),
             fact_key: self.fact_key.clone(),
             valid_for_ms: self.valid_for_ms,
             frame_indices,
+            passed_over: None,
         }
     }
 
@@ -640,10 +643,15 @@ impl PreparedContainedTask {
                 continue;
             }
             if state.decided {
-                return Err(invariant_detailed(
+                // Workflow #503 LIST-A (ruling 6): the package's route brought the run back to a
+                // page of the list's group after its end, a cause of its own, not an invariant of
+                // the Runtime (`state_problem` `frame_after_list_end`).
+                let code = SharedCode::ContainedTaskStateInvalid.code();
+                return Err(ContainedTaskError::with_detail(
+                    code,
                     "field list: a frame of its group was collected after its end",
-                    |outcome| outcome,
                 )
+                .with_values(Outcome::new(code).state_problem(StateProblem::FrameAfterListEnd))
                 .into());
             }
             if state.start_met.is_none() {

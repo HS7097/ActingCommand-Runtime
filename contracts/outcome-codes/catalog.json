@@ -9792,6 +9792,9 @@
         },
         "held_state_unusable": {
           "description": "A state the run's layers or a package registry hold is not one the host can use: the run's navigation or interrupt state, a layer package the run admitted, or a registry's return-home entry without a listed package."
+        },
+        "frame_after_list_end": {
+          "description": "Workflow #503 LIST-A (since 0.12.90): a frame of a field list's group was collected after the list was decided on its end frame, so the list is never published with a frame after its end: the package's route brought the run back to a page of the group (for example a stage of a phased route that goes on past the list's end page). An authoring error of the package, not of the Runtime; before 0.12.90 it was runtime_invariant. A live run and the offline replay answer it alike."
         }
       }
     },

@@ -429,7 +429,9 @@ for no other; row 24, a version 2 `pack-catalog.json`, Workflow #477 CV-1, regis
 computes 24 for a zip that carries one; row 25, a `linear_steps` press step's count, Workflow #477 LR-1, register §1.513, so
 it computes 25 for a zip whose `linear_steps` pack has an operation that declares `presses`;
 row 26, a variable only a rule gives, Workflow #455 TK-1, register §1.532, so it computes 26 for a
-zip whose pack's `control.json` has a variable that writes `given_by`);
+zip whose pack's `control.json` has a variable that writes `given_by`; row 27, a list reading of
+the wanted keys only, Workflow #503 LIST-A, register §1.533, so it computes 27 for a zip whose pack
+has a `read_list` that declares `others`);
 and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
@@ -491,6 +493,7 @@ as an element of its array.
 | 24 | root | `pack-catalog.json` whose `schema_version` is `actingcommand.pack-catalog.v2` (`CATALOG_V2_PACKAGE_REVISION`, by the contract crate's `catalog_package_revision`); a file of any other version keeps row 16's revision; `place` asks nothing of it | CV-1, §1.507; [pack-catalog.md](pack-catalog.md), "Interface" |
 | 25 | task | `presses` under `operations`, whatever it holds (a whole number, `{fact_key, minus?}` or `null`), in a pack whose `control.json` `execution_mode` is `linear_steps` only: where the kernel's admission finds it (`TaskOperation.presses`; `TaskProgram::validate_linear`), as rows 13, 17 and 22 find a select step, a key step and a list reading; a Runtime before 25 refuses the member's name at its declaration gate, `UnknownField` at `/operations/<i>/presses`, in every pack, and this build refuses it in a page-graph task (`presses requires linear_steps`), which therefore counts nothing | LR-1, §1.513; [linear-steps.md](linear-steps.md), "Pressing on one page" |
 | 26 | control | `given_by` of an entry of `variables`, whatever it holds: every Runtime before 26 refuses the member at the declaration (`variables_invalid` at `/variables/<i>/given_by`), in every pack | TK-1, §1.532; [package-variables.md](package-variables.md), "A variable a rule gives" |
+| 27 | task | `others` under `read_list`, whatever it holds, in a pack of any execution mode (a Runtime before 27 refuses the member's name at its declaration gate, `UnknownField` at `/operations/<i>/read_list/others`, in every pack); a list reading without it keeps row 8's or row 22's revision (`LIST_OTHERS_REVISION`) | LIST-A, §1.533; [resource-readings.md](resource-readings.md), "A list of the wanted keys only" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

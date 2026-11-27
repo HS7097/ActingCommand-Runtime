@@ -18,15 +18,18 @@ use super::field_list::{
 };
 use super::tests::scripted::{ScriptedFrame, ScriptedRuntime};
 use super::*;
+use crate::{OfflineReplayEnd, OfflineReplayFacts, replay_contained_task};
 use actingcommand_contract::{
     FactScalar, FieldListCondition, FieldListDeclaration, ocr_confidence_milli,
 };
+use actingcommand_device::CaptureBackendName;
 use actingcommand_recognition_pack::{
     FsAssetResolver, NnProviderRequest, NnProviderResult, OcrExecutionProviderKind,
     OcrProviderObservation, OcrProviderRequest, OcrProviderResult, OcrProviderTextBlock,
     VisionProviderError, VisionProviderErrorCode, load_pack_from_json_str,
 };
 use serde_json::{Value, json};
+use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -143,6 +146,7 @@ fn declaration_naming(frame_indices: Vec<u32>) -> ListReadingDeclaration {
         fact_key: LIST_KEY.to_owned(),
         valid_for_ms: 86_400_000,
         frame_indices,
+        passed_over: None,
     }
 }
 
@@ -747,9 +751,15 @@ impl ContainedTaskRuntime for ListDevice {
     }
 }
 
-// A frame of `page` showing the name `name` (a code of `NAMES`) and the amount `amount`, at the
-// shown confidences, with or without the previous arrow and the final mark.
-fn screen(page: [u8; 3], name: u8, amount: u8, previous: bool, final_mark: bool) -> ScriptedFrame {
+// The pixels of a frame of `page` showing the name `name` (a code of `NAMES`) and the amount
+// `amount`, at the shown confidences, with or without the previous arrow and the final mark.
+fn shown(
+    page: [u8; 3],
+    name: u8,
+    amount: u8,
+    previous: bool,
+    final_mark: bool,
+) -> [[u8; 3]; WIDTH as usize] {
     let mut pixels = [[0_u8; 3]; WIDTH as usize];
     pixels[0] = page;
     pixels[NAME_X] = [name, 0, 0];
@@ -761,7 +771,24 @@ fn screen(page: [u8; 3], name: u8, amount: u8, previous: bool, final_mark: bool)
     if final_mark {
         pixels[FINAL_X] = ARROW;
     }
-    ScriptedFrame::rgb(WIDTH, 1, &pixels)
+    pixels
+}
+
+// That frame as the scripted device shows it.
+fn screen(page: [u8; 3], name: u8, amount: u8, previous: bool, final_mark: bool) -> ScriptedFrame {
+    ScriptedFrame::rgb(WIDTH, 1, &shown(page, name, amount, previous, final_mark))
+}
+
+// Workflow #503 LIST-A: that frame as a saved frame, for the offline replay.
+fn saved_screen(page: [u8; 3], name: u8, amount: u8, previous: bool, final_mark: bool) -> Frame {
+    Frame::from_pixels(
+        WIDTH,
+        1,
+        shown(page, name, amount, previous, final_mark).concat(),
+        PixelFormat::Rgb8,
+        CaptureBackendName::FixtureSimulation,
+    )
+    .expect("saved frame")
 }
 
 fn color(id: &str, x: usize, expected: [u8; 3]) -> Value {
@@ -1085,10 +1112,11 @@ fn field_list_run_end_and_start_unseen() {
 }
 
 // FL-1b: a frame of the list's group collected after the list was decided fails the run with
-// `contained_task_state_invalid` (`runtime_invariant`): here the end is `last` with the final
-// mark, and the task's `back` returns from `last` to an item, which the fields collect. The list
-// decided on `last` stays recorded once; the run does not reach `Finalizing`, so nothing of it
-// is published.
+// `contained_task_state_invalid`: here the end is `last` with the final mark, and the task's
+// `back` returns from `last` to an item, which the fields collect. The list decided on `last`
+// stays recorded once; the run does not reach `Finalizing`, so nothing of it is published.
+// Adapted by Workflow #503 LIST-A (register §1.533, ruling 6): the refusal's `state_problem` is
+// `frame_after_list_end`, the package's route, where it was `runtime_invariant`.
 #[test]
 fn field_list_frame_after_end_fails_run() {
     let mut list = list_json();
@@ -1117,7 +1145,7 @@ fn field_list_frame_after_end_fails_run() {
     );
     assert_eq!(
         error.outcome().value("state_problem"),
-        Some(&json!("runtime_invariant"))
+        Some(&json!("frame_after_list_end"))
     );
     let (frames, lists) = device.list_traces();
     assert_eq!(frames.len(), 1);
@@ -1127,6 +1155,51 @@ fn field_list_frame_after_end_fails_run() {
         device
             .positions(|trace| matches!(trace, ContainedTaskTrace::Finalizing { .. }))
             .is_empty()
+    );
+}
+
+// Workflow #503 LIST-A (register §1.533, ruling 6): the offline replay answers a frame of the
+// group after the list's end by the name a run gives it. The task of the test above, replayed
+// over saved frames: the first item, `last` with the final mark, then items, more than the replay
+// can take after `back` (each of them a frame of the group). The replay ends refused with
+// `contained_task_state_invalid` and the `state_problem` `frame_after_list_end`.
+#[test]
+fn list_a_the_offline_replay_answers_a_frame_after_the_lists_end_by_its_own_problem() {
+    let mut list = list_json();
+    list["end"] = json!({"page_ids": ["last"], "required": ["mark/final"]});
+    let mut task = task_json(Some(list), 256);
+    task["target_page"] = json!("done");
+    task["operations"] = json!([
+        next_step(),
+        {"id": "back", "from": "last", "to": "item",
+         "click": {"kind": "point", "x": 6, "y": 0}, "unguarded_trusted_coordinate": true}
+    ]);
+    let task = package(task, 256);
+    let mut frames = vec![
+        saved_screen(ITEM, 3, 9, false, false),
+        saved_screen(LAST, 1, 5, true, true),
+    ];
+    frames.extend((0..8).map(|_| saved_screen(ITEM, 2, 7, true, false)));
+    let replayed = replay_contained_task(
+        &task,
+        frames.into_iter().map(Ok::<_, Infallible>),
+        OfflineReplayFacts::Empty {
+            now_unix_ms: 1_000_000,
+        },
+    )
+    .expect("the replay gives a result");
+    let OfflineReplayEnd::Refused { outcome } = &replayed.end else {
+        panic!("the replay is refused, got {:?}", replayed.end);
+    };
+    assert_eq!(
+        outcome.code().as_str(),
+        SharedCode::ContainedTaskStateInvalid.as_str(),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        outcome.value("state_problem"),
+        Some(&json!("frame_after_list_end")),
+        "{outcome:?}"
     );
 }
 

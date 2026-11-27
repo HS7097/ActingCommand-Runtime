@@ -89,10 +89,10 @@ fn v1_the_build_declares_package_through_revision_14() {
     // §1.473, 0.12.73) to 19, Workflow #463 SEL-2L (register §1.480, 0.12.74) to 20, Workflow
     // #463 SEL-GRID G2 (register §1.491, 0.12.76) to 21, Workflow #428 S168-LK (register §1.500,
     // 0.12.78) to 22, Workflow #455 G-SLx (register §1.501, 0.12.78) to 23, Workflow #477 CV-1
-    // (register §1.507, 0.12.79) to 24, Workflow #477 LR-1 (register §1.513, 0.12.79) to 25 and
-    // Workflow #455 TK-1 (register §1.532, 0.12.89) to 26; the revision this test is about, 14,
-    // stays read.
-    assert_eq!(speaks.get("package"), Some(&[3, 26]));
+    // (register §1.507, 0.12.79) to 24, Workflow #477 LR-1 (register §1.513, 0.12.79) to 25,
+    // Workflow #455 TK-1 (register §1.532, 0.12.89) to 26 and Workflow #503 LIST-A (register
+    // §1.533, 0.12.90) to 27; the revision this test is about, 14, stays read.
+    assert_eq!(speaks.get("package"), Some(&[3, 27]));
     assert!(
         speaks
             .get("package")

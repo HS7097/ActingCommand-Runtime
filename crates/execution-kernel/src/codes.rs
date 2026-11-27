@@ -167,6 +167,9 @@ actingcommand_contract::outcome_codes! {
         /// Warning (Workflow #384 D2-S2): a reading mark gave no reading; the run goes on (keys
         /// `reading_id`, `fact_key`, `reading_problem`).
         ContainedTaskResourceReadingUnresolved => "contained_task_resource_reading_unresolved": warning / none,
+        /// Info (Workflow #503 LIST-A): how many positions a list reading that declares
+        /// `others: pass_over` passed over (keys `reading_id`, `fact_key`, `count`).
+        ContainedTaskResourceReadingPassedOver => "contained_task_resource_reading_passed_over": info / none,
         ContainedTaskStabilityComparisonFailed => "contained_task_stability_comparison_failed": error / environment_fault,
         ContainedTaskStabilityCounterInvalid => "contained_task_stability_counter_invalid": error / none,
         ContainedTaskStabilityCounterOverflow => "contained_task_stability_counter_overflow": error / none,

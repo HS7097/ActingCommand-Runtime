@@ -128,6 +128,7 @@ fn view_in(list: &[Card], offset: i32, band_end: i32, (start, end): (bool, bool)
                     } else {
                         CandidateFeatureMap::new()
                     },
+                    passed_over: false,
                 }
             })
         })
@@ -508,6 +509,7 @@ fn grid_view(grid: &[(i32, Card)], offset: i32) -> View {
                     } else {
                         CandidateFeatureMap::new()
                     },
+                    passed_over: false,
                 }
             })
         })
@@ -593,6 +595,7 @@ fn list_reading_miss_publishes_nothing() {
         fact_key: "inventory.list.example_kind_a".to_owned(),
         valid_for_ms: 86_400_000,
         frame_indices: Vec::new(),
+        passed_over: None,
     });
     assert_eq!(
         warning.code().as_str(),

@@ -158,6 +158,7 @@ fn view(list: &[Card], offset: i32, start: bool, end: bool) -> View {
                     } else {
                         CandidateFeatureMap::new()
                     },
+                    passed_over: false,
                 }
             })
         })

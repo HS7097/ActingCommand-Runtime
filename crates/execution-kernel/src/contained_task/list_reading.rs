@@ -36,8 +36,8 @@
 //! (`dry_run_list_reading`) calls and answers ([`ListReadingDryRun`]).
 
 use super::scan::{
-    RuntimeScanSource, ScanDeclaration, ScanDryRunUnknown, ScanDryRunViewport, ScanEnd,
-    ScanSession, ScanSource,
+    ListPosition, RuntimeScanSource, ScanDeclaration, ScanDryRunUnknown, ScanDryRunViewport,
+    ScanEnd, ScanSession, ScanSource,
 };
 use super::{
     ContainedTaskError, ContainedTaskRunError, ContainedTaskRuntime, ContainedTaskTimingContext,
@@ -78,6 +78,19 @@ struct TaskReadList {
     fact_key: String,
     valid_for_ms: u64,
     scan: ScanDeclaration,
+    /// Workflow #503 LIST-A (`package` revision 27): what the list does with a card that is none
+    /// of the keys its identity declares; absent (or `null`), every card is read as before.
+    #[serde(default)]
+    others: Option<TaskListOthers>,
+}
+
+/// Workflow #503 LIST-A: the closed vocabulary of `read_list.others`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TaskListOthers {
+    /// A position the identity mapping marks none of the wanted keys on every read makes no row
+    /// and does not make the list unread.
+    PassOver,
 }
 
 /// One declared column: the row member `column` holds the fixed reading of the layout's
@@ -100,6 +113,8 @@ pub(super) struct PreparedListReading {
     fact_key: String,
     valid_for_ms: u64,
     scan: ScanDeclaration,
+    /// Workflow #503 LIST-A: the reading declares `others: pass_over`.
+    pass_over: bool,
 }
 
 impl PreparedListReading {
@@ -120,13 +135,19 @@ impl PreparedListReading {
     }
 
     /// Workflow #428 S168-LK: the list's declaration as the step `operation_id` records it with
-    /// its list, and as the dry run answers it.
-    pub(super) fn declaration(&self, operation_id: &str) -> ListReadingDeclaration {
+    /// its list, and as the dry run answers it. Workflow #503 LIST-A: with the positions its scan
+    /// passed over, `passed_over` (`None` for a reading that declares no `others`).
+    pub(super) fn declaration(
+        &self,
+        operation_id: &str,
+        passed_over: Option<u32>,
+    ) -> ListReadingDeclaration {
         ListReadingDeclaration {
             operation_id: operation_id.to_owned(),
             fact_key: self.fact_key.clone(),
             valid_for_ms: self.valid_for_ms,
             frame_indices: Vec::new(),
+            passed_over,
         }
     }
 }
@@ -144,6 +165,26 @@ pub struct ListReadingDeclaration {
     /// (the warning's `frame_indices`): the unresolved frames, the frames that hold a repeated
     /// key, or the first or the last frame. Empty for a `read_list` step and for a whole list.
     pub frame_indices: Vec<u32>,
+    /// Workflow #503 LIST-A: for a `read_list` step that declares `others: pass_over`, how many
+    /// positions its scan passed over, whole list or miss alike, which the host writes as the
+    /// note [`Self::passed_over_outcome`]; `None` for every other list, a field list's included.
+    pub passed_over: Option<u32>,
+}
+
+impl ListReadingDeclaration {
+    /// Workflow #503 LIST-A (`contracts/resource-readings.md`, "List readings", "A list of the
+    /// wanted keys only"): the note of a list that passes over, `contained_task_resource_reading_
+    /// passed_over` (info) with the operation's id as `reading_id`, the list's `fact_key` and
+    /// `count` the positions passed over (0 included); `None` for a list that declares no
+    /// `others`. No card's text is in it.
+    pub fn passed_over_outcome(&self) -> Option<Outcome> {
+        self.passed_over.map(|count| {
+            Outcome::new(ExecutionKernelCode::ContainedTaskResourceReadingPassedOver)
+                .reading_id(self.operation_id.as_str())
+                .fact_key(self.fact_key.as_str())
+                .count(count)
+        })
+    }
 }
 
 /// A list read whole: one row per position, `{<key_column>: <business ID>, <column>: <value>,
@@ -226,6 +267,9 @@ pub(super) struct ScannedList {
     pub(super) list: Result<ListReadingRows, ListReadingMiss>,
     pub(super) viewports: Vec<ScanDryRunViewport>,
     pub(super) unknown: Vec<ScanDryRunUnknown>,
+    /// Workflow #503 LIST-A: the positions a list that passes over passed over; `None` for a
+    /// reading that declares no `others`.
+    pub(super) passed_over: Option<u32>,
 }
 
 /// `contained_task_resource_reading_invalid` of the operation `operation_id`, refused at `member`
@@ -457,6 +501,7 @@ pub(super) fn prepare_list_readings(
             fact_key: read.fact_key,
             valid_for_ms: read.valid_for_ms,
             scan: read.scan,
+            pass_over: read.others == Some(TaskListOthers::PassOver),
         }));
     }
     Ok(())
@@ -519,8 +564,10 @@ impl ScanSession<'_> {
 /// Builds the rows of a list whose coverage is complete from its positions' fixed readings, in
 /// first-seen order: a position read but never fixed is `list_position_unread`, two positions of
 /// one key `list_duplicate_key`; otherwise the rows in ascending byte order of their key.
+/// Workflow #503 LIST-A: a position passed over makes no row and is not unread, so a list whose
+/// every position was passed over is whole with no row.
 pub(super) fn list_rows_of<'p>(
-    positions: impl Iterator<Item = Option<&'p BTreeMap<String, CandidateFeature>>>,
+    positions: impl Iterator<Item = ListPosition<'p>>,
     key_feature: &str,
     key_column: &str,
     columns: &[(String, String)],
@@ -535,10 +582,14 @@ pub(super) fn list_rows_of<'p>(
     let mut rows: BTreeMap<String, BTreeMap<String, FactScalar>> = BTreeMap::new();
     let mut repeated = BTreeSet::new();
     let mut confidence: Option<u16> = None;
-    for features in positions {
-        let Some(features) = features else {
-            unread = unread.saturating_add(1);
-            continue;
+    for position in positions {
+        let features = match position {
+            ListPosition::Row(features) => features,
+            ListPosition::Unread => {
+                unread = unread.saturating_add(1);
+                continue;
+            }
+            ListPosition::PassedOver => continue,
         };
         let key_reading = features.get(key_feature).ok_or_else(invariant)?;
         let Some(FactScalar::String(key)) = row_value(key_reading) else {
@@ -635,7 +686,7 @@ impl PreparedContainedTask {
         )?;
         runtime
             .record(ContainedTaskTrace::ListReading {
-                declaration: prepared.declaration(&operation.id),
+                declaration: prepared.declaration(&operation.id, scanned.passed_over),
                 captured_at: scanned.captured_at,
                 list: scanned.list,
             })
@@ -677,6 +728,11 @@ impl PreparedContainedTask {
             remaining,
         )
         .map_err(|error| at_read_list(error.into()))?;
+        // Workflow #503 LIST-A: a reading that declares `others: pass_over` passes over what the
+        // identity mapping marks none of the wanted keys.
+        if prepared.pass_over {
+            session.passing_over();
+        }
         let draw = step_point_draw(runtime, step_index, &operation.id)?;
         let mut source = RuntimeScanSource::new(
             self,
@@ -688,7 +744,7 @@ impl PreparedContainedTask {
             (step_index, timing, deadline, draw),
             replay,
         )
-        .reading_list();
+        .reading_list(prepared.pass_over);
         let read = session.read_list(&mut source, &prepared.key_column, &prepared.columns);
         let end_captured_at = source.end_captured_at();
         let (latest, _) = source.into_parts();
@@ -717,6 +773,7 @@ impl PreparedContainedTask {
             list,
             viewports: summary.viewports,
             unknown: summary.unknown,
+            passed_over: session.passed_over(),
         })
     }
 }

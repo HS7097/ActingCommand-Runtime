@@ -882,6 +882,8 @@ impl RuntimeContainedTask<'_> {
     /// `read_list` step's list that gave no reading, written on the frame `frame_id` (the step's
     /// last viewport) as a recognition error row of the post-admission phase, without a target,
     /// whose outcome is the warning `contained_task_resource_reading_unresolved` (`outcome`).
+    /// Workflow #503 LIST-A: the same row carries the note of a list that passes over
+    /// (`contained_task_resource_reading_passed_over`, info), on the frame the list is observed on.
     pub(super) fn diagnostic_list_miss(
         &mut self,
         frame_id: IssuedFrameId,

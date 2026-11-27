@@ -5,9 +5,10 @@
 // `control.json` that says who gives its value (`given_by`) is refused at the declaration by every
 // reader before this revision, so a zip that holds one declares `package` 26, which
 // `standard-pack build`'s revision table (`apps/actinglab/src/resource_verify/revision.rs`)
-// counts for such a pack and for no other; this build declares [3, 26] and places it, and an
-// installer of the earlier range ([3, 25]) refuses it at its `package` edge, the contract crate's
-// one rule, which the installer's `place` calls. The zip entries are built in memory as the table
+// counts for such a pack and for no other; this build declares a range that holds 26 ([3, 27]
+// since Workflow #503 LIST-A, register §1.533) and places it, and an installer of the earlier
+// range ([3, 25]) refuses it at its `package` edge, the contract crate's one rule, which the
+// installer's `place` calls. The zip entries are built in memory as the table
 // reads them; every name is made up.
 
 use actingcommand_contract::{
@@ -44,8 +45,9 @@ fn own_package_range() -> [u64; 2] {
 }
 
 /// Ruling 1: a pack whose variable writes `given_by` needs 26, whatever the member holds; the same
-/// pack without the member needs 14, as before. This build's range is [3, 26] and holds both; an
-/// installer of [3, 25] refuses the zip of 26 at its edge and places the zip of 14.
+/// pack without the member needs 14, as before. This build's range is [3, 27] (Workflow #503
+/// LIST-A raised it from this slice's [3, 26]) and holds both; an installer of [3, 25] refuses the
+/// zip of 26 at its edge and places the zip of 14.
 #[test]
 fn tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses_it() {
     let choice = |given_by: Option<Value>| {
@@ -71,7 +73,7 @@ fn tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses
     assert_eq!(revision_of(&choice(None)), VARIABLES_PACKAGE_REVISION);
 
     let own = own_package_range();
-    assert_eq!(own, [3, 26]);
+    assert_eq!(own, [3, 27]);
     let earlier = [3, GIVEN_BY_PACKAGE_REVISION - 1];
     let rule_given = [GIVEN_BY_PACKAGE_REVISION, GIVEN_BY_PACKAGE_REVISION];
     let person_s = [VARIABLES_PACKAGE_REVISION, VARIABLES_PACKAGE_REVISION];

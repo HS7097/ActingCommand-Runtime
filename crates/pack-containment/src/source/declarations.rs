@@ -51,6 +51,23 @@ const READ_LIST_MEMBERS: &[&str] = &[
     "scan",
 ];
 
+/// Workflow #503 LIST-A (`package` revision 27): the optional member of a `read_list` object, and
+/// the one word of its closed vocabulary.
+const READ_LIST_OTHERS: &str = "others";
+const READ_LIST_PASS_OVER: &str = "pass_over";
+
+/// The members a `read_list` object may hold: [`READ_LIST_MEMBERS`] and [`READ_LIST_OTHERS`].
+const READ_LIST_DECLARED: &[&str] = &[
+    "layout_id",
+    "key_feature",
+    "key_column",
+    "columns",
+    "fact_key",
+    "valid_for_ms",
+    "scan",
+    READ_LIST_OTHERS,
+];
+
 /// Workflow #428 S168-4 ("Members of a `read_list` step"): the operation members a `read_list`
 /// step refuses with `UnknownField` (a retry, a recovery, a trusted coordinate, a confirmation
 /// after its moves, a cap of its own, and the `linear_steps` members).
@@ -1392,7 +1409,7 @@ impl Declaration<'_> {
     /// the step's only effect (`InvalidValue` at `read_list` beside another). The step declares
     /// its `guard`, is never retried and takes none of [`READ_LIST_REFUSED_MEMBERS`] (that it
     /// stays on its page is [`Self::list_readings`]', which knows the task's game). Its
-    /// `read_list` holds exactly [`READ_LIST_MEMBERS`]: a
+    /// `read_list` holds every one of [`READ_LIST_MEMBERS`] and may hold [`READ_LIST_OTHERS`]: a
     /// candidate layout id, a key feature, a key column and 0..=63 distinct columns that are
     /// tokens, a `fact_key` under `inventory.list.`, a `valid_for_ms` of a fact's lifetime and a
     /// scan with every member but `early_stop`, which is refused. The task-level rules and the
@@ -1433,7 +1450,7 @@ impl Declaration<'_> {
                 ResourceDeclarationReason::MissingField,
             ));
         }
-        let read = self.object(value, &read_pointer, READ_LIST_MEMBERS)?;
+        let read = self.object(value, &read_pointer, READ_LIST_DECLARED)?;
         for member in READ_LIST_MEMBERS {
             self.required(read, &read_pointer, member)?;
         }
@@ -1497,6 +1514,16 @@ impl Declaration<'_> {
                 &member_pointer("valid_for_ms"),
                 ResourceDeclarationReason::InvalidValue,
             ));
+        }
+        // Workflow #503 LIST-A: `others`, when declared (a `null` is an absent one), is the word
+        // `pass_over`.
+        if declares(read, READ_LIST_OTHERS) {
+            let others_pointer = member_pointer(READ_LIST_OTHERS);
+            let others = &read[READ_LIST_OTHERS];
+            self.string(others, &others_pointer)?;
+            if others.as_str() != Some(READ_LIST_PASS_OVER) {
+                return Err(self.error(&others_pointer, ResourceDeclarationReason::InvalidValue));
+            }
         }
         // Every position is read: the scan declares every member of a select step's but
         // `early_stop`; Runtime admission reads their values and runs a select step's static
