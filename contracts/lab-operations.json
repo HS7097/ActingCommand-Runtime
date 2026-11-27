@@ -2577,6 +2577,27 @@
       "notes": "Workflow #463 V3 (0.12.61): actinglab's own package variables, a core row as standard-pack check is; it reads the control declaration through the Runtime's metadata reader, needs no Runtime, writes nothing and starts nothing"
     },
     {
+      "name": "package list-check",
+      "module": "authoring",
+      "params": [
+        {"name": "package", "form": "option", "type": "path", "required": true, "note": "directory, .zip or .json container, admitted as replay admits it"},
+        {"name": "frames", "form": "option", "type": "dir", "required": true, "note": "every entry a PNG frame, in file-name order, as replay takes them: the step's dispatched frame, then every capture of its scan"},
+        {"name": "step", "form": "option", "type": "string", "required": false, "note": "the operation id of one read_list step; absent: every read_list step of the task, in declaration order, each over the same frames"}
+      ],
+      "help": "Checks a package's list reading over saved frames: what each position was read as, its nearest wanted name and distance, and what the list holds.",
+      "output": "mode offline_list_check, executed false, package_id, task_id, frames_given, production_global_ledger_written false, whole, steps[{operation_id, fact_key, status (whole, not_whole or failed), list{rows, confidence_milli} or null, miss{reading_problem, count} or null, passed_over (null without others), summary{whole, positions, passed_over, unread, wanted_shown, wanted_not_shown}, viewports, positions[{position_index, content_axis_px, cross_px, first_seen_viewport, first_read_viewport, answer{kind: known with key, passed_over, or unread with cause (identity_unread, feature_unread, contradicted or partly_passed_over), identity and identity_unknown}, reads[{viewport, mark, samples[{text, confidence_milli, mark, unread_cause, nearest{key, variant, alias, distance, limit}}]}]}]}, or for a step whose scan failed {operation_id, status failed, outcome}]; a list not whole is package_list_check_not_whole, a scan that failed its own code (the first such step's), each with this answer in details and, for a failed scan, its outcome in details.outcome",
+      "writes": false,
+      "irreversible": false,
+      "runtime": "offline",
+      "entries": ["lab"],
+      "requests": [],
+      "source": [],
+      "new": "#503 (the offline check of a list reading over saved frames)",
+      "slice": "503-LIST-A3",
+      "status": "planned",
+      "notes": "Workflow #503 LIST-A3 (0.12.91; contracts/resource-readings.md, List readings, Offline): offline, no Runtime, no device, nothing written. The package and the frames are read as replay reads them, with the same OCR provider (a pack with an OCR target is refused lab_ocr_unavailable without one); each step is the kernel's dry run of a list reading over the frames (the run's own scan, no wait, nothing pressed or recorded). The marks, the nearest wanted names and their distances are the identity mapping's; the operation computes none. Usage errors, before any frame is read: an option missing, given twice or without its value, or not of the row (validation_failed); one of actinglab's global Runtime or device flags (offline_device_scope_forbidden); the frames' directory unreadable (replay_frames_unreadable), holding a file that is no PNG (replay_frames_invalid) or none (offline_fixture_missing); the package refused (package_invalid); a step the task does not declare (validation_failed, argument --step, not_recognised) or that is no read_list step (--step, unusable); a task without a read_list step (--package, unusable). Exits as replay's: 0 when every list checked is whole, else 1 on actinglab's own line and 2 on a --via line. A card's text is in this answer only: no ledger record, no log, no file; the MCP server's rule for an answer over 24 KiB applies as to every row (a success over it is written whole to a file under the user's temporary folder, a refusal over it answers output_budget_exceeded). Without --json the command line prints the answer as text for a person: a line per step, the wanted keys a card showed and those none showed, a line per position and one per read"
+    },
+    {
       "name": "package view export",
       "module": "authoring",
       "params": [

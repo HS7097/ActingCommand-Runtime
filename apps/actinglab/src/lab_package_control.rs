@@ -239,6 +239,8 @@ pub(super) fn run_package(sub: &str, global: &GlobalOptions, args: &[String]) ->
         "variables" => package_cli::run_variables(&flags),
         // #463 SEL-F: a select of the package converted to the fixed form from its own files.
         "fix-select" => crate::package_tool::run_fix_select(global, &flags),
+        // Workflow #503 LIST-A3: a list reading of the package checked over saved frames, offline.
+        "list-check" => crate::list_check_cli::run_list_check(global, &flags),
         _ => Err(CliError::usage(format!("unknown package command: {sub}"))),
     }
 }

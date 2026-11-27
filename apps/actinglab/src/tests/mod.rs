@@ -327,6 +327,10 @@ mod gate_455_tk1;
 // pack of either mode, and nothing else so.
 #[path = "gate_503_list_a.rs"]
 mod gate_503_list_a;
+// Workflow #503 LIST-A3: `package list-check` checks a list reading over saved frames, offline,
+// and answers every position it read as JSON and as text, writing nothing.
+#[path = "gate_503_list_a3.rs"]
+mod gate_503_list_a3;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

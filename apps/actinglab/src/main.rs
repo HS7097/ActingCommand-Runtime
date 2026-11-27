@@ -197,6 +197,9 @@ mod lab_tables;
 // Workflow #392 DA-L0: `layout probe`, where each template mark of a page went on a saved frame of
 // the base's ratio or wider.
 mod layout_cli;
+// Workflow #503 LIST-A3: `package list-check`, the offline check of a list reading over saved
+// frames.
+mod list_check_cli;
 mod maa_task_graph;
 mod monitor_stream;
 mod offline_ocr;
@@ -292,11 +295,16 @@ fn main() -> ExitCode {
     let help = cli_help::for_people(&invocation);
     // Workflow #434 CLI-COMP: `completion <shell>` without `--json` prints its script as it is.
     let script = cli_completion::for_people(&invocation);
+    // Workflow #503 LIST-A3: `package list-check` without `--json` prints its text for people.
+    let list_check = list_check_cli::for_people(&invocation);
     let (exit, json) = own_line::answer(invocation);
     if help && let Some(text) = cli_help::people(&exit) {
         return cli_module::print_text(&text, &exit);
     }
     if script && let Some(text) = cli_completion::script_text(&exit) {
+        return cli_module::print_text(&text, &exit);
+    }
+    if list_check && let Some(text) = list_check_cli::people(&exit) {
         return cli_module::print_text(&text, &exit);
     }
     cli_module::print(&exit, json)

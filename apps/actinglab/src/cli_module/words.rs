@@ -69,11 +69,12 @@ use serde_json::{Map, Value};
 /// `standard-pack status` (slice `463-S3-14`), since Workflow #477 PC-1 its row
 /// `standard-pack catalog` (slice `477-PC1`), since #463 S2-2 its row `record review`
 /// (slice `463-S22`), since #463 RC-1 its row `resource regression` (slice `463-RC1`), since
-/// Workflow #392 DA-L0 its row `layout probe` (slice `392-DAL0`), and since #463 SEL-F its row
-/// `package fix-select` (slice `463-SELF`). The rescue module's rows are those `crates/lab-rescue`
+/// Workflow #392 DA-L0 its row `layout probe` (slice `392-DAL0`), since #463 SEL-F its row
+/// `package fix-select` (slice `463-SELF`), and since Workflow #503 LIST-A3 its row `package
+/// list-check` (slice `503-LIST-A3`). The rescue module's rows are those `crates/lab-rescue`
 /// serves (Workflow #434 LAB-3: [`rescue_served`]); a reserved row comes with the slice that
 /// opens it.
-pub(crate) const BUILT_SLICES: [&str; 20] = [
+pub(crate) const BUILT_SLICES: [&str; 21] = [
     "392-DAL0",
     "463-RC1",
     "463-S2-13",
@@ -84,6 +85,7 @@ pub(crate) const BUILT_SLICES: [&str; 20] = [
     "463-V3",
     "464-P3",
     "477-PC1",
+    "503-LIST-A3",
     "LAB-1",
     "LAB-1b",
     "LAB-2",

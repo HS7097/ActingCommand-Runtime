@@ -828,14 +828,19 @@ scan's `spacing.columns`.
   `None` for a list without the member and for a field list).
 - **The cost.** A wanted card whose name is read wrong, far from every alias, with confidence,
   every time, reads 0 every time, and the next reading does not correct it. The remedy is an
-  alias for the misreading in the identity's entries. Fix round 1, said as it is: until the Lab's
-  check that prints each passed-over position's text and its distance to the nearest wanted alias
-  on this machine is built (owed, register §1.533; the kernel's dry run of a list reading, "Offline"
-  below, answers the list and the count, and no Lab operation calls it yet), the count in the run's
-  row is the only sign: a count larger than the cards of other items a frame of the step shows
-  means a wanted card was passed over, and a person has to compare the two. Nothing of the Runtime is
-  paused, held or lowered on a reading of zero: a pool read 0 is read, and its goal and its lines
-  take it as any reading.
+  alias for the misreading in the identity's entries. The count in the run's row only says how
+  many positions were passed over; it names none. The check that finds such a misreading is the
+  Lab's offline check of a list reading (Workflow #503 LIST-A3, since 0.12.91; register §1.534):
+  `actinglab package list-check --package <path> --frames <directory> [--step <operation id>]`
+  (MCP `ac_package_list_check`), over frames saved on this machine, prints for every position the
+  step's scan read what it was read as, its confidence, the nearest wanted key and alias with
+  their distance and the limit the distance had to exceed, and the wanted keys no card showed
+  ("Offline" below). A wanted key listed as shown by no card while a position passed over has it
+  as its nearest name is the misreading; the person who writes or accepts the package adds the
+  text it was read as to that key's aliases. The texts go to that answer on this machine and to
+  nothing else: no ledger record, no log, no file. Nothing of the Runtime is paused, held or
+  lowered on a reading of zero: a pool read 0 is read, and its goal and its lines take it as any
+  reading.
 
 A list without the member reads every card as before: an unwanted card is
 `list_position_unread`, and the run writes no count. A selection step that reads the same mark,
@@ -1008,15 +1013,53 @@ first-seen order, its place in content coordinates, the viewport that first read
 a self-check can name the place that was not read: none for a list read whole, and for
 `list_position_unread` exactly the positions its `count` counts; a run records none of them.
 Workflow #503 LIST-A: a position a list that passes over passed over is not among them, and one the
-identity mapping marked none of the wanted keys on one viewport and not on another is, with the
-cause `contradicted`; the declaration carries the count of positions passed over, as the run's
-does. A
+identity mapping marked none of the wanted keys on one viewport and not on another is; the
+declaration carries the count of positions passed over, as the run's does. A
 failure of the scan is the error, with the stage `read_list`, as it ends a run; a move backward (a
 rewind or a corrective) or a capture past the last frame is `selection_scan_replay_frame_missing`,
 never a list. An operation that declares no list reading is
 `contained_task_resource_reading_invalid`, `<operation id>:read_list`; an operation the task does
-not declare is `contained_task_operation_missing`. It is in memory only: no Lab operation calls it
-in 0.12.78.
+not declare is `contained_task_operation_missing`. It is in memory only.
+
+Workflow #503 LIST-A3 (since 0.12.91; register §1.534; the coordinator's rulings on board #503).
+The dry run answers, beside the list, every position the scan read, on a list with `others` and on
+one without:
+
+- **Where it stands**, what the scan tracks a position by: its index in first-seen order, its place
+  in content coordinates (the start of its instance rectangle along the scan's axis and across
+  it), the coverage viewport that first saw it and the one that first read it.
+- **The reads of its name**, one for each coverage viewport that read it: the viewport, the read's
+  mark (`known`, `unread` or `none_of_the_keys`, the one a list that passes over judges by) and,
+  for each OCR sample the projection mapped the identity from, the text as read, its confidence,
+  the mark of that sample, why it names no key when it names none (`low_confidence`,
+  `beyond_distance`, `ambiguous` and the other words of a select's `select_name_unread`), and the
+  nearest wanted name: the key, the alias, the distance and the limit `max_distance +
+  minimum_margin` a distance must exceed for a read to be none of the keys. The distance is the
+  true one, not bounded at the margin. It is the identity mapping's
+  ([business-identity-consensus.md](business-identity-consensus.md), "Identity and readable
+  attributes"); the dry run and the Lab compute none themselves. A near miss is a read whose
+  nearest distance is not above the limit.
+- **What it gives the list**, by the one judgement the rows are built by: its known key; passed
+  over; or unread, with its cause, the identity it kept and, when it kept none, why its identity
+  read Unknown. The causes are the dry run's own words, which no record carries: `identity_unread`
+  (no read of its identity was Known), `feature_unread` (its identity was Known and no reading
+  complete), `contradicted` (a later Known reading of a column's feature differed from the fixed
+  one) and `partly_passed_over` (in a list that passes over, the mapping marked one read of it none
+  of the wanted keys and another not: a known key on one viewport passed over on another). When
+  several hold, the first in the order `contradicted`, `partly_passed_over`, `feature_unread`,
+  `identity_unread` is given. Until 0.12.91 the dry run gave `contradicted` to both of the middle
+  two; `unknown` holds the unread positions with the same causes.
+- **The list's summary**: whether the list is whole, how many positions the scan read, how many it
+  passed over and how many are unread, the wanted keys (the entries of the key feature's identity)
+  a card showed, read Known by some position on some viewport, and those no card showed.
+
+The reads of a name are kept by the dry run only: a run's scan keeps none, and what a run does,
+records and publishes is unchanged. The texts are in the answer only. The Lab's operation over
+them is `package list-check` ([lab-operations.json](lab-operations.json); `--package`, `--frames`
+as `replay` takes them, `--step`), offline: it answers each checked step in its JSON, and as text
+for a person on the command line without `--json`; a list not whole is
+`package_list_check_not_whole`, a scan that failed its own code, each with the whole answer in its
+details.
 
 ### Derived documents
 

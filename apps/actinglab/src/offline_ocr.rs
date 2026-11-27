@@ -99,15 +99,20 @@ pub(super) fn require_pages(resources: &ExternallyVerifiedBundle) -> CliOutcome<
     }
 }
 
-/// Workflow #308 SEL-L6a: refuses when OCR is unavailable and the bundle's recognition pack
-/// declares an OCR target. A whole-package replay may evaluate any target of its pack: page
-/// detection, guards, select steps, post-admission fields and resource readings.
-pub(super) fn require_package(resources: &ExternallyVerifiedBundle) -> CliOutcome<()> {
+/// Workflow #308 SEL-L6a: refuses when OCR is unavailable to `ocr` and the bundle's recognition
+/// pack declares an OCR target. A whole-package replay may evaluate any target of its pack: page
+/// detection, guards, select steps, post-admission fields and resource readings. Workflow #503
+/// LIST-A3: `ocr` is the process's provider ([`lab_ocr`]), or the scripted one a test gives the
+/// offline list check.
+pub(super) fn require_package(
+    resources: &ExternallyVerifiedBundle,
+    ocr: &LabOcr,
+) -> CliOutcome<()> {
     let Some(evaluator) = resources.loaded_bundle().evaluator() else {
         return Ok(());
     };
     let pack = evaluator.pack();
-    lab_ocr().require(
+    ocr.require(
         pack,
         pack.targets.iter().filter_map(|target| match target {
             RecognitionTarget::Ocr(target) => Some(target.id.as_str()),

@@ -69,7 +69,22 @@ identity reads no text and gives the mark to no read. The mark changes no featur
 or decision: a read so marked keeps its `low_confidence` feature. A list reading that declares
 `others: pass_over` takes it ([resource-readings.md](resource-readings.md), "A list of the wanted
 keys only"), from the projection's own recognition evidence of the read (`CandidateLayout::
-name_mark`); no reader judges a distance or sorts the unknown reasons itself. A known `identity` feature carries `value` (business ID), `variant`, `source`,
+name_mark`); no reader judges a distance or sorts the unknown reasons itself.
+
+Workflow #503 LIST-A3 (since 0.12.91, `v012-register.md` §1.534). Beside the mark, the OCR mapping
+gives a read its *nearest wanted name* (`CandidateIdentityDeclaration::nearest_ocr`): the entry
+and the alias whose normalized text lies at the smallest edit distance from the read's normalized
+text, the first in declaration order among equals, with that distance and the limit
+`max_distance + minimum_margin`. The distance is measured as the mark's is, after the same
+normalization and confusions, by the same distance function, here not bounded at the limit: a
+read seven edits from its nearest alias says 7, where the mark's comparison stops at the limit
+plus one. A text that normalizes to nothing (empty or overlong) has none, and an icon identity,
+which reads no text, gives none. The read's confidence plays no part in it. `read_ocr` gives a
+read whole as a reader shows it: its text and confidence, the mark, why it names no key (the words
+of `map_ocr_with_cause`) and the nearest name; the layout hands the mapping the projection's own
+evidence of each sample (`CandidateLayout::name_readings`). The dry run of a list reading shows it
+([resource-readings.md](resource-readings.md), "Offline"); it changes no feature, hash, record or
+decision, and no reader computes a distance itself. A known `identity` feature carries `value` (business ID), `variant`, `source`,
 `distance` and `confidence`; selection-policy consumes `value` through its existing
 `enum_string` field and inline lookup. Its declared enum must equal the identity domain, so
 the policy's enumerated-member limit is 1024 as well. A large domain reads per-identity values
