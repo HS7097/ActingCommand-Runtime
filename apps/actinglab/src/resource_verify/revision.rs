@@ -64,6 +64,8 @@
 //!   operation's `presses` in a `linear_steps` pack, read where the kernel's admission reads it,
 //!   as revisions 13, 17 and 22 read a select step, a key step and a list reading, a row of
 //!   [`ROWS`].
+//! - **A variable a rule gives**, 26 (Workflow #455 TK-1, register §1.532): the member `given_by`
+//!   of an entry of a pack's `control.json` `variables`, whatever it holds, a row of [`ROWS`].
 //! - **A list reading of the wanted keys only**, 27 (Workflow #503 LIST-A, register §1.533): the
 //!   member `others` of an operation's `read_list`, in a pack of either mode, a row of [`ROWS`].
 //!
@@ -72,9 +74,9 @@
 
 use super::bundle::PACKAGE_REVISION;
 use actingcommand_contract::{
-    GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION, STANDARD_PACK_CATALOG_FILE,
-    STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE, TaskSchema,
-    VARIABLES_PACKAGE_REVISION, catalog_package_revision, notice_relative_path,
+    GIVEN_BY_MEMBER, GIVEN_BY_PACKAGE_REVISION, GOALS_PACKAGE_REVISION, NOTICES_PACKAGE_REVISION,
+    STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
+    TaskSchema, VARIABLES_PACKAGE_REVISION, catalog_package_revision, notice_relative_path,
 };
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -282,12 +284,12 @@ const fn when(
 }
 
 /// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
-/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22, (Workflow #477 LR-1) 25
-/// and (Workflow #503 LIST-A) 27 and the register sections they cite, and the B train's sections,
-/// put into a revision: each with its file, its place, what it holds, its condition and its
-/// revision (`contracts/resource-verify.md`, "The `package` revision", lists them with their
-/// sources).
-const ROWS: [Row; 52] = [
+/// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22, (Workflow #477 LR-1) 25,
+/// (Workflow #455 TK-1) 26 and (Workflow #503 LIST-A) 27 and the register sections they cite, and
+/// the B train's sections, put into a revision: each with its file, its place, what it holds, its
+/// condition and its revision (`contracts/resource-verify.md`, "The `package` revision", lists
+/// them with their sources).
+const ROWS: [Row; 53] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -534,6 +536,16 @@ const ROWS: [Row; 52] = [
         Place::Under("operations"),
         Condition::LinearSteps,
         PRESSES_REVISION,
+    ),
+    // 26, Workflow #455 TK-1 (§1.532; contracts/package-variables.md, "A variable a rule gives"):
+    // a variable of a pack's `control.json` that says who gives its value (`given_by`), the member
+    // of an entry of `variables`, whatever it holds: every Runtime before it refuses the member at
+    // the declaration (`variables_invalid` at `/variables/<i>/given_by`), in every pack.
+    row(
+        CONTROL,
+        GIVEN_BY_MEMBER,
+        Place::Under(VARIABLES),
+        GIVEN_BY_PACKAGE_REVISION,
     ),
     // 27, Workflow #503 LIST-A (§1.533; contracts/resource-readings.md, "List readings", "A list
     // of the wanted keys only"): a list reading's `others`, the member of the object an

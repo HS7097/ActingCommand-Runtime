@@ -1409,7 +1409,7 @@ impl Declaration<'_> {
     /// the step's only effect (`InvalidValue` at `read_list` beside another). The step declares
     /// its `guard`, is never retried and takes none of [`READ_LIST_REFUSED_MEMBERS`] (that it
     /// stays on its page is [`Self::list_readings`]', which knows the task's game). Its
-    /// `read_list` holds exactly [`READ_LIST_MEMBERS`]: a
+    /// `read_list` holds every one of [`READ_LIST_MEMBERS`] and may hold [`READ_LIST_OTHERS`]: a
     /// candidate layout id, a key feature, a key column and 0..=63 distinct columns that are
     /// tokens, a `fact_key` under `inventory.list.`, a `valid_for_ms` of a fact's lifetime and a
     /// scan with every member but `early_stop`, which is refused. The task-level rules and the

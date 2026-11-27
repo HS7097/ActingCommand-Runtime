@@ -319,6 +319,10 @@ mod gate_477_cv1;
 // 25, and nothing else so.
 #[path = "gate_477_lr1.rs"]
 mod gate_477_lr1;
+// Workflow #455 TK-1: the revision table counts a variable's `given_by` as `package` 26, and an
+// installer of the earlier range refuses such a zip at its edge.
+#[path = "gate_455_tk1.rs"]
+mod gate_455_tk1;
 // Workflow #503 LIST-A: the revision table counts a list reading's `others` as `package` 27, in a
 // pack of either mode, and nothing else so.
 #[path = "gate_503_list_a.rs"]

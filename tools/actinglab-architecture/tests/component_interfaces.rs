@@ -189,9 +189,12 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   bundle with a version 1 file keeps 16, so [3, 24]. Workflow #477 LR-1 (0.12.79, register
 ///   §1.513) raises it to 25: a `linear_steps` press step's count (`presses`), which every
 ///   Runtime before it refuses at its declaration gate (`UnknownField` at
-///   `/operations/<i>/presses`); a pack without one keeps its revision, so [3, 25]. Workflow #503
-///   LIST-A (0.12.90, register §1.533) raises it to 27: a list reading's `others`, which every
-///   Runtime before it refuses at its declaration gate (`UnknownField` at
+///   `/operations/<i>/presses`); a pack without one keeps its revision, so [3, 25]. Workflow #455
+///   TK-1 (0.12.89, register §1.532) raises it to 26: a variable's `given_by` in a pack's
+///   `control.json`, which every reader before it refuses at the declaration (`variables_invalid`
+///   at `/variables/<i>/given_by`); a pack without it keeps its revision, so [3, 26]. Workflow
+///   #503 LIST-A (0.12.90, register §1.533) raises it to 27: a list reading's `others`, which
+///   every Runtime before it refuses at its declaration gate (`UnknownField` at
 ///   `/operations/<i>/read_list/others`); a pack without one keeps its revision, so [3, 27].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and

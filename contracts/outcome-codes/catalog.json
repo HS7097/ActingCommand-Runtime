@@ -3953,6 +3953,9 @@
         },
         "package_unreadable": {
           "description": "The bound package cannot be read or admitted (Workflow #384 D2-S2)."
+        },
+        "rule_given_variable": {
+          "description": "The bound package declares a variable only a rule gives (given_by rule in its control.json): a fact refresh runs it with no rule, so that variable could never be given its value, and it has no default (Workflow #455 TK-1, since 0.12.89)."
         }
       }
     },
@@ -7935,6 +7938,9 @@
         },
         "variable_undeclared": {
           "description": "A bundle zip whose packs declare variables in their control.json declares a package interface maximum below 14. Refused by the installer's place at interfaces.json (Workflow #463 V1 fix round 1, since 0.12.61)."
+        },
+        "goal_variable_rule_given": {
+          "description": "A variable entry of goals.json places a variable only a rule gives (given_by rule in its declaration in control.json), which is no person's to set, at the entry's name (Workflow #455 TK-1, since 0.12.89). As every problem of goals.json it keeps the file from applying; the root still runs."
         }
       }
     },
@@ -10519,6 +10525,9 @@
         },
         "no_schedule": {
           "description": "Fix round 2: the application's game has no standard pack root with schedule.json (the standard-pack root holds no game root for it, or its game root holds no schedule.json), so there is nothing to check: the composed catalog holds no rule and no pool of the game, no run reads a goal of it, and the page answers no_schedule. No name can be set or cleared, a resource goal that needs no declaration neither (no pool of the game is one the application can target), and nothing is stored; asking again does not help until the game root holds schedule.json."
+        },
+        "rule_given": {
+          "description": "Workflow #455 TK-1 (since 0.12.89): the name is a variable only a rule gives (given_by rule in its declaration): no person sets it, so a set stores nothing; a clear answers it only when the application stores no value under the name, since a value stored before the variable became this kind is an orphan, which clear removes."
         }
       }
     },

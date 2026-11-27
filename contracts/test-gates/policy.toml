@@ -1689,3 +1689,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_503_goal1::goal1_t5_a_document_names_the_files_id_and_a_copy_id_is_refused",
 ]
 incident = ["#503 GOAL-1"]
+
+# Workflow #455 TK-1 (0.12.89; register §1.532; brief rd-1123/brief-455-tk1.md; contracts/package-variables.md, "A variable a rule gives"; contracts/standard-pack-schedule.md, "A rule's variable values"), the policy half, on neutral rules of one package declaring pick (a choice of item_a and item_b, given_by rule, no default) and extra (a switch, default false), no clock read: two rules each carrying its own pick compose, and with nothing stored, and with a value stored under pick (an orphan), each pair's record hands its rule's pick (source rule, no setter) and extra its default, no pair is held back, nothing is a value not applied and the page's resolutions hold extra alone; while pick is a person's variable the same stored value holds the other rule back (t1); a rule of the package that carries another variable's value only, or no member, is refused schedule_invalid at its variables, and a rule of a package whose pick is a person's variable may carry none (t2); composed while pick was a person's variable, the package replaced by one whose pick only a rule gives: the pair of the rule carrying no pick is held back by it with the package and pick, the other not, and neither under the declaration as composed (t3). Adapted, the type of a default moving: gate_463_v2::v2_a_set_value_that_no_longer_fits_reads_the_default_with_its_word (its defaults read with expect)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_tk1::tk1_t1_two_rules_each_carrying_its_own_value_are_both_candidates_with_nothing_stored",
+    "actingcommand-policy::lib::tests::gate_455_tk1::tk1_t2_a_rule_that_carries_no_value_for_it_is_refused_at_its_variables",
+    "actingcommand-policy::lib::tests::gate_455_tk1::tk1_t3_a_rule_without_the_value_the_declaration_in_force_asks_is_held_back",
+]
+incident = ["#455 TK-1"]

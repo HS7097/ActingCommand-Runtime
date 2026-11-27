@@ -123,14 +123,14 @@ fn v1_each_kind_reads_with_its_members() {
         [
             &VariableKind::Choice {
                 options: vec![option("item_a", "Item A"), option("item_b", "Item B")],
-                default: "item_b".to_owned(),
+                default: Some("item_b".to_owned()),
             },
             &VariableKind::Integer {
                 min: 0,
                 max: 200,
                 step: 10,
                 unit: None,
-                default: 0,
+                default: Some(0),
             },
             &VariableKind::Ordered {
                 options: vec![
@@ -140,9 +140,11 @@ fn v1_each_kind_reads_with_its_members() {
                 ],
                 min_count: 0,
                 max_count: 8,
-                default: owned(&["item_b", "item_a"]),
+                default: Some(owned(&["item_b", "item_a"])),
             },
-            &VariableKind::Switch { default: false },
+            &VariableKind::Switch {
+                default: Some(false)
+            },
         ]
     );
     assert_eq!(
@@ -175,7 +177,7 @@ fn v1_each_kind_reads_with_its_members() {
             max: 200,
             step: 10,
             unit: Some(GoalUnit::Time(GoalTimeUnit::Minute)),
-            default: 0,
+            default: Some(0),
         }
     );
     assert_eq!(read[3].help, Some(text(&[("en", "On or off.")])));
@@ -781,6 +783,7 @@ fn v1_a_placement_is_held_to_the_variables_the_root_declares() {
         variables.get("floor"),
         Some(&GoalVariable {
             block: GoalBlock::Number,
+            rule_given: false,
             packages: owned(&["neutral.a", "neutral.b"]),
         })
     );
@@ -821,5 +824,168 @@ fn v1_a_placement_is_held_to_the_variables_the_root_declares() {
             issue(StandardPackProblem::GoalBlockMismatch, "/entries/1/block"),
             issue(StandardPackProblem::GoalVariableUnknown, "/entries/2/name"),
         ]
+    );
+}
+
+/// Workflow #455 TK-1: a choice only a rule gives (`given_by: "rule"`), which writes no default.
+fn rule_pick() -> Value {
+    json!({"name": "pick", "type": "choice", "title": {"en": "Item"},
+           "options": [{"value": "item_a", "title": {"en": "Item A"}},
+                       {"value": "item_b", "title": {"en": "Item B"}}],
+           "given_by": "rule"})
+}
+
+// Workflow #455 TK-1 (register §1.532; contracts/package-variables.md, "A variable a rule gives"):
+// a variable of each kind that writes `given_by: "rule"` and no default reads, with its word and no
+// default, its declaration as written, and judges a value whole as any variable; a switch beside it
+// without the member keeps its default. The reader refuses the member beside a `default` or a
+// `default_origin` at that member, and a word other than `rule` (another text, a boolean) at the
+// member itself, each `variables_invalid`. The root check applies such a variable, and the
+// provenance listing names it in neither list.
+#[test]
+fn tk1_the_reader_takes_given_by_without_a_default_and_refuses_it_beside_one() {
+    let ruled = json!([
+        rule_pick(),
+        {"name": "floor", "type": "integer", "title": {"en": "Keep at least"},
+         "min": 0, "max": 200, "step": 10, "given_by": "rule"},
+        {"name": "order", "type": "ordered", "title": {"en": "Order"},
+         "options": [{"value": "item_a", "title": {"en": "Item A"}}],
+         "min_count": 0, "max_count": 1, "given_by": "rule"},
+        {"name": "extra", "type": "switch", "title": {"en": "Also the extra"}, "given_by": "rule"},
+        switch("other")
+    ]);
+    let read = parse_package_variables(&ruled, &[])
+        .unwrap_or_else(|violation| panic!("the variables a rule gives read: {violation:?}"));
+    assert_eq!(
+        read.iter()
+            .map(|variable| (
+                variable.name.as_str(),
+                variable.given_by,
+                variable.default_value()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("pick", Some(GivenBy::Rule), None),
+            ("floor", Some(GivenBy::Rule), None),
+            ("order", Some(GivenBy::Rule), None),
+            ("extra", Some(GivenBy::Rule), None),
+            ("other", None, Some(json!(false))),
+        ]
+    );
+    assert!(read[..4].iter().all(PackageVariable::rule_given));
+    assert!(!read[4].rule_given());
+    assert_eq!(read[0].declaration, rule_pick());
+    assert_eq!(read[0].takes_whole(&json!("item_a")), Ok(json!("item_a")));
+    assert_eq!(
+        read[0].takes_whole(&json!("item_c")),
+        Err(VariableProblem::NotAnOption)
+    );
+    assert_eq!(GivenBy::Rule.as_str(), "rule");
+
+    let with_rule = |change: fn(&mut Value)| {
+        let mut value = json!([rule_pick()]);
+        change(&mut value);
+        value
+    };
+    let cases = [
+        (
+            "a default beside it",
+            with_rule(|value| value[0]["default"] = json!("item_a")),
+            "/variables/0/default",
+        ),
+        (
+            "a default_origin beside it",
+            with_rule(|value| value[0]["default_origin"] = json!("model")),
+            "/variables/0/default_origin",
+        ),
+        (
+            "a word of another vocabulary",
+            with_rule(|value| value[0]["given_by"] = json!("person")),
+            "/variables/0/given_by",
+        ),
+        (
+            "a word that is no text",
+            with_rule(|value| value[0]["given_by"] = json!(true)),
+            "/variables/0/given_by",
+        ),
+        (
+            "an integer's default beside it",
+            json!([{"name": "floor", "type": "integer", "title": {"en": "Keep at least"},
+                    "min": 0, "max": 200, "default": 0, "given_by": "rule"}]),
+            "/variables/0/default",
+        ),
+    ];
+    for (case, variables, pointer) in cases {
+        assert_eq!(
+            parse_package_variables(&variables, &[]).map(|_| ()),
+            Err(VariablesViolation {
+                problem: VariablesProblem::VariablesInvalid,
+                pointer: pointer.to_owned(),
+            }),
+            "{case}"
+        );
+    }
+
+    let checked = root_check(&[package("neutral.a", ruled, &[])], &BTreeSet::new());
+    assert!(checked.issues.is_empty(), "{:?}", checked.issues);
+    assert_eq!(checked.applied.len(), 5);
+    assert_eq!(
+        checked.provenance(),
+        VariableOrigins {
+            pack: owned(&["other"]),
+            model: Vec::new(),
+        }
+    );
+}
+
+// Workflow #455 TK-1: the references know a variable a rule gives as one, and a placement of it in
+// `goals.json` is `goal_variable_rule_given` at its name; a placement of another variable of the
+// same package is held as before.
+#[test]
+fn tk1_a_placement_of_a_variable_a_rule_gives_is_refused_at_its_name() {
+    let packages = [package(
+        "neutral.a",
+        json!([rule_pick(), switch("extra")]),
+        &[],
+    )];
+    let variables = goal_variables(&packages);
+    assert_eq!(
+        variables.get("pick"),
+        Some(&GoalVariable {
+            block: GoalBlock::Choice,
+            rule_given: true,
+            packages: owned(&["neutral.a"]),
+        })
+    );
+    assert_eq!(
+        variables.get("extra").map(|variable| variable.rule_given),
+        Some(false)
+    );
+    let goals: StandardPackGoals = parse_standard_pack_goals(
+        &serde_json::to_vec(&json!({
+            "schema_version": "actingcommand.goals.v2",
+            "game": "neutral",
+            "entries": [
+                {"name": "pick", "type": "variable"},
+                {"name": "extra", "type": "variable"}
+            ]
+        }))
+        .expect("JSON"),
+        "neutral",
+    )
+    .unwrap_or_else(|issues| panic!("the placements read: {issues:?}"));
+    let mut references = GoalReferences::new(BTreeSet::from(["neutral.a".to_owned()]));
+    references.variables = variables;
+    assert_eq!(
+        check_standard_pack_goal_references(&goals, &references),
+        [StandardPackRootIssue {
+            file: crate::STANDARD_PACK_GOALS_FILE,
+            problem: StandardPackProblem::GoalVariableRuleGiven,
+            pointer: "/entries/0/name".to_owned(),
+        }]
+    );
+    assert_eq!(
+        StandardPackProblem::GoalVariableRuleGiven.as_str(),
+        "goal_variable_rule_given"
     );
 }

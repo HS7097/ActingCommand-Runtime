@@ -704,6 +704,9 @@ pub fn replay_scan_with_tables(
             read_at_unix_ms,
         } => (snapshot.clone(), *read_at_unix_ms),
     };
+    // Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"): a scan
+    // that holds no value of a variable only a rule gives is refused before its first capture.
+    task.refuse_missing_variable(run_parameters)?;
     run_parameters.overlay(&mut snapshot, now_unix_ms);
     if now_unix_ms == 0 || snapshot.validate().is_err() {
         return Err(ContainedTaskError::with_detail(

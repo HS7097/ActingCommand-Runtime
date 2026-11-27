@@ -22119,7 +22119,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.61",
-      "description": "Workflow #463 V3 (contracts/runtime-interface.md, \"Goal request kinds\"): an EditGoal was refused under the fact write gate, after the version comparison (so a request of another version is fact_observation_version_conflict whatever its name and value), against the record it would change, for the reason goal_problem names: the name is no entry of the application's goal page and no variable of its game root (name_unknown), holds no value (holds_no_value), is a tier no reader of this build reads (tier_not_built), a remedy parameter (remedy_parameter), a variable that does not apply in the game root (variable_not_applying, with variable_problem) or one the root declares but no package the active catalog binds on the application (not_offered, fix round 1); or what the page is judged by is not in memory yet, before the Runtime's first check (not_checked_yet, fix round 1: send it again); fix round 2: or the workbench checks the game root and no check since the start could read it (root_failing: the root must be repaired), or the game has no standard pack root with schedule.json (no_schedule: nothing to check); or the value is no JSON (value_not_json), not of the entry's type (wrong_type), outside its range or off its step (out_of_range, off_step, with range_min and range_max), no option (not_an_option), a repeated key (key_repeated), of a count outside its range (count_out_of_range), longer than the store keeps (value_too_large), on a pool the application cannot target or that needs its own step (pool_not_targetable, pool_unvalued, with pool_id), with a deadline (deadline_unsupported); or a clear of a name that holds nothing (value_not_set); or the stored record is no record the readers read (record_unreadable) or the edit would hold more targets or entries than a record keeps (record_out_of_limits). goal_name names the request's name when it has an entry name's form; json_pointer points into the value. Denied; nothing is appended and the stored record is unchanged.",
+      "description": "Workflow #463 V3 (contracts/runtime-interface.md, \"Goal request kinds\"): an EditGoal was refused under the fact write gate, after the version comparison (so a request of another version is fact_observation_version_conflict whatever its name and value), against the record it would change, for the reason goal_problem names: the name is no entry of the application's goal page and no variable of its game root (name_unknown), holds no value (holds_no_value), is a tier no reader of this build reads (tier_not_built), a remedy parameter (remedy_parameter), a variable that does not apply in the game root (variable_not_applying, with variable_problem) or one the root declares but no package the active catalog binds on the application (not_offered, fix round 1), or (Workflow #455 TK-1, since 0.12.89) a variable only a rule gives, for a set and for a clear of a name that holds no stored value (rule_given); or what the page is judged by is not in memory yet, before the Runtime's first check (not_checked_yet, fix round 1: send it again); fix round 2: or the workbench checks the game root and no check since the start could read it (root_failing: the root must be repaired), or the game has no standard pack root with schedule.json (no_schedule: nothing to check); or the value is no JSON (value_not_json), not of the entry's type (wrong_type), outside its range or off its step (out_of_range, off_step, with range_min and range_max), no option (not_an_option), a repeated key (key_repeated), of a count outside its range (count_out_of_range), longer than the store keeps (value_too_large), on a pool the application cannot target or that needs its own step (pool_not_targetable, pool_unvalued, with pool_id), with a deadline (deadline_unsupported); or a clear of a name that holds nothing (value_not_set); or the stored record is no record the readers read (record_unreadable) or the edit would hold more targets or entries than a record keeps (record_out_of_limits). goal_name names the request's name when it has an entry name's form; json_pointer points into the value. Denied; nothing is appended and the stored record is unchanged.",
       "common_causes": "A value written by hand or by an agent that the declaration does not take; a package update that removed the option, narrowed the range or changed the type; a name of another application's game.",
       "handling": "Read the page (goals get) and set a value the entry's declaration takes; for variable_not_applying fix the root as standard-pack check's warning says; for not_offered bind a package that declares the variable on the application, or set nothing; for not_checked_yet send the same request again after the Runtime's next check; for root_failing repair the game root the page's declaration names (asking again does not help); for no_schedule give the game root a schedule.json; for record_unreadable write the whole document with targets set first."
     },
@@ -22193,6 +22193,30 @@
       "description": "Workflow #500 SV-2 fix round 1: task_id's candidate on instance_id is held back as package_id no longer takes its rule's value of variable_name. Register section 1.511, contracts/package-variables.md (\"Carried by the rule\") and contracts/scheduling-blackout.md (\"Order of the deferrals\", position 5a): a dispatch judges each value a task's rule carries by the composer's own judgement under the package's declaration the scheduler workbench holds now; a package replaced since the generation in force was composed (the composition with it refused, the generation in force kept) may refuse one, and the rule then does not run rather than its run reading the package's default unsaid. variable_problem is the judgement's word (not_an_option, out_of_range, off_step, type_changed, key_repeated, count_out_of_range, keys_left_out); it is absent only when the declaration takes the value and the goal store would not keep its text, which no compiled task carries. The candidate's decision and its not-run explanation carry this reason, with no wake of its own; nothing is dispatched, nothing is recorded as a failure, no budget is taken, and the idle plan counts the candidate held back with no time.",
       "common_causes": "The package was replaced by a version whose declaration of the variable no longer offers or allows the value the rule carries, while the composition with it is refused and the scheduler workbench keeps the generation in force.",
       "handling": "Make the rule and the package agree: place the package version that takes the value, or change the rule's variables in schedule.json to a value the new declaration takes (actinglab standard-pack check --root <game root> names the rule and the variable)."
+    },
+    "goal_value_rule_missing": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.89",
+      "description": "Workflow #455 TK-1: task_id's candidate on instance_id is held back as package_id now declares variable_name, which only a rule gives, and the task's rule carries no value for it. Register section 1.532, contracts/package-variables.md (\"A variable a rule gives\") and contracts/scheduling-blackout.md (\"Order of the deferrals\", position 5a, first there): such a variable has no default and no value stored on the application is read for it, so its value is the rule's alone; a package changed since the generation in force was composed (the composition with it refused, the generation in force kept) may declare one the rule does not carry. The candidate's decision and its not-run explanation carry this reason, with no wake of its own; nothing is dispatched, nothing is recorded as a failure, no budget is taken, and the idle plan counts the candidate held back with no time. It ends when the scheduler workbench next reads a package that declares no such variable or a generation whose rule carries the value. Only the resource side can mend it.",
+      "common_causes": "The package was replaced by a version that declares a variable with given_by rule, while the rule in schedule.json carries no value for it, so the composition with the new package is refused and the scheduler workbench keeps the generation in force.",
+      "handling": "Make the rule carry the value: add the variable to the rule's variables in schedule.json, one rule per value (actinglab standard-pack check --root <game root> names the rule and the variable), or place the package version without the variable."
     },
     "standard_pack_goals_not_applied": {
       "category": "warning",
@@ -24384,6 +24408,28 @@
       "description": "A direct run gives a value of the variable variable_name of its package package_id, the variable applies on the instance, and the dispatch's own judgement of the value (the policy crate's resolve_variable, the value as the application's stored entry set through the request's channel) gave neither the value taken nor a word, which cannot happen: given an entry whose setter is known and a variable that applies, that judgement answers the value (set) or the default with its word (Workflow #463 S3-8; the fix round of the 0.12.68 train). Denied in the run's preparation, before any record, claim or lease: nothing ran, and the Runtime and its other instances go on.",
       "common_causes": "A defect of the Runtime: a change of resolve_variable that answers a given value with its default and no word.",
       "handling": "Nothing was performed. Report it with the package and the variable's name; until it is fixed, run without the value, which reads the default."
+    },
+    "run_variable_missing": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "package_id": "required",
+        "variable_name": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.89",
+      "description": "Workflow #455 TK-1 (register section 1.532; contracts/package-variables.md, \"A variable a rule gives\"): a direct run's request gives no value of the variable variable_name, which its package package_id declares with given_by rule: such a variable has no default and no value stored on the application is read for it, so the run would have nothing to read. The first such variable in declaration order is named. Denied in the run's preparation, before any record, claim or lease: nothing ran, and the Runtime and its other instances go on.",
+      "common_causes": "actinglab run start of such a package without --variable <name>=<json> for that variable (standard-pack trial refuses the same in its plan, before anything is sent).",
+      "handling": "Send the run again with --variable <name>=<json>, a value the variable's declaration takes (actinglab package variables --package <dir> lists it)."
     },
     "scheduling_pause_kept_at_shutdown": {
       "category": "info",

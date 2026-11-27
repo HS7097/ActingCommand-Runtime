@@ -33,6 +33,15 @@
 //! type, a list that repeats or drops a key), a value that is not `<name>=<json>`, a name given
 //! twice and `--variable` without `--select` are refused with `validation_failed` naming
 //! `--variable`, never ignored.
+//!
+//! Workflow #455 TK-1 (register §1.532; `contracts/package-variables.md`, "A variable a rule
+//! gives"): the whole replay takes `--variable <name>=<json>` too, with the same parser and the
+//! same refusals ([`given_variable_values`], the kernel's `given_variable_values`, one function for
+//! the scan replay, the whole replay and `package dry-run`); `--variable` without `--select` is
+//! no longer `conflicting`. A run that holds no value of a variable its package declares only a
+//! rule gives (it has no default) ends refused with `contained_task_variable_value_missing`
+//! before its first capture (`replay_run_refused`, `replay_scan_refused`). Without `--variable`
+//! the whole replay reads what it read before, byte for byte.
 
 use super::codes::ActinglabCode;
 use super::{CliError, CliOutcome, ErrorKind, FlagArgs, GlobalOptions};
@@ -96,6 +105,11 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
         );
     }
     let task = admit(&args.package)?;
+    // Workflow #455 TK-1: the package's parameters and variables at their defaults, each
+    // `--variable` replacing its variable's, judged before any frame is read.
+    let parameters = task
+        .default_run_parameters()
+        .with_variables(given_variable_values(&task, &args.variables, "replay")?);
     // Workflow #406 T4: the run draws its points as the Runtime draws a run's, from the seed
     // (`--seed`, else 0) with the touch keys of the root configuration; the dry run's reported
     // seed repeats its points.
@@ -108,17 +122,15 @@ pub(super) fn run_replay(global: &GlobalOptions, flags: &FlagArgs) -> CliOutcome
         &task,
         replay_instant(&facts),
     )?;
-    let result =
-        replay_contained_task_with_tables(&task, frames, facts, draw, tables).map_err(|error| {
-            match error {
-                OfflineReplayError::Frames(error) => error,
-                OfflineReplayError::Invariant(error) => CliError::new(
-                    ErrorKind::UsageValidation,
-                    error.code().as_str(),
-                    error.to_string(),
-                    &[],
-                ),
-            }
+    let result = replay_contained_task_with_tables(&task, frames, facts, draw, tables, parameters)
+        .map_err(|error| match error {
+            OfflineReplayError::Frames(error) => error,
+            OfflineReplayError::Invariant(error) => CliError::new(
+                ErrorKind::UsageValidation,
+                error.code().as_str(),
+                error.to_string(),
+                &[],
+            ),
         })?;
     let mut payload = serde_json::to_value(&result)
         .map_err(|error| CliError::device(format!("failed to encode the replay: {error}")))?;
@@ -151,8 +163,8 @@ struct ReplayArgs {
     select: Option<ScanSelect>,
     /// #411 Lab RP: the `--parameter <name>=<value>` given, in order (read only with `select`).
     parameters: Vec<(String, String)>,
-    /// Workflow #463 V2: the `--variable <name>=<json>` given, in order (read only with
-    /// `select`).
+    /// Workflow #463 V2: the `--variable <name>=<json>` given, in order (Workflow #455 TK-1: read
+    /// by the scan replay and by the whole replay).
     variables: Vec<(String, Value)>,
     /// Workflow #406 T4: the whole replay's seed (`--seed`), 0 without it; read only without
     /// `select`.
@@ -239,13 +251,8 @@ impl ReplayArgs {
                 "replay reads --parameter only with --select <operation> and --scan <file>",
             ));
         }
+        // Workflow #455 TK-1: the whole replay reads `--variable` too.
         let variables = given_variables(flags, "replay")?;
-        if select.is_none() && !variables.is_empty() {
-            return Err(variable_refusal(
-                "conflicting",
-                "replay reads --variable only with --select <operation> and --scan <file>",
-            ));
-        }
         // Workflow #406 T4: the whole replay draws from `--seed`; a scan replay does not read it.
         let seed = crate::lab_draw::seed_flag(flags)?;
         if select.is_some() && seed.is_some() {
@@ -469,24 +476,7 @@ fn given_scan_parameters(
     task: &PreparedContainedTask,
     given: &GivenValues<'_>,
 ) -> CliOutcome<actingcommand_lab::RunParameters> {
-    let variable_values = task
-        .given_variable_values(given.variables)
-        .map_err(|refusal| {
-            let name = &refusal.name;
-            match refusal.problem {
-                GivenVariableProblem::Undeclared => variable_refusal(
-                    "not_recognised",
-                    format!("the package declares no variable {name}"),
-                ),
-                GivenVariableProblem::Unfit => variable_refusal(
-                    "not_recognised",
-                    format!("the value given for {name} is not one its declaration takes as given"),
-                ),
-                GivenVariableProblem::Repeated => {
-                    variable_refusal("repeated", format!("replay takes --variable {name} once"))
-                }
-            }
-        })?;
+    let variable_values = given_variable_values(task, given.variables, "replay")?;
     let run_parameters = task
         .given_run_parameters(given.parameters)
         .map_err(|refusal| {
@@ -506,6 +496,39 @@ fn given_scan_parameters(
             }
         })?;
     Ok(run_parameters.with_variables(variable_values))
+}
+
+/// Workflow #455 TK-1 (register §1.532): the variables an offline run of `task` reads, each at its
+/// declared default and each of `variables` (`--variable`, as [`given_variables`] read them)
+/// replacing its own, by the kernel's one function (`given_variable_values`, the value judged
+/// whole): the one reading of `--variable` of the scan replay, the whole replay and `package
+/// dry-run` (`command` the command its messages name). A variable the package does not declare,
+/// a value its declaration does not take as given and a name given twice are `validation_failed`
+/// naming `--variable` (`not_recognised`, `repeated`), before any frame is read. A variable only a
+/// rule gives that is not given is not among the values: the run is then refused with
+/// `contained_task_variable_value_missing` before its first capture.
+pub(crate) fn given_variable_values(
+    task: &PreparedContainedTask,
+    variables: &[(String, Value)],
+    command: &str,
+) -> CliOutcome<Vec<(String, actingcommand_contract::FactValue)>> {
+    task.given_variable_values(variables).map_err(|refusal| {
+        let name = &refusal.name;
+        match refusal.problem {
+            GivenVariableProblem::Undeclared => variable_refusal(
+                "not_recognised",
+                format!("the package declares no variable {name}"),
+            ),
+            GivenVariableProblem::Unfit => variable_refusal(
+                "not_recognised",
+                format!("the value given for {name} is not one its declaration takes as given"),
+            ),
+            GivenVariableProblem::Repeated => variable_refusal(
+                "repeated",
+                format!("{command} takes --variable {name} once"),
+            ),
+        }
+    })
 }
 
 /// The `--scan` file: one scan declaration of a select step (selector model S0 v2.1 §2.1), as

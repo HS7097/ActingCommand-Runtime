@@ -772,6 +772,10 @@ read and before any record, claim or lease (`check_run_variables`), each value i
 name, each refusal Denied with `invalid_request`, the package's `package_id` and the value's
 `variable_name`, nothing run:
 
+0. Workflow #455 TK-1 (since 0.12.89, register §1.532; [package-variables.md](package-variables.md),
+   "A variable a rule gives"), before the values, whether the request gives any or none: a variable
+   the package declares only a rule gives (`given_by: "rule"`, no default) that the request gives
+   no value of, the first in declaration order: `run_variable_missing`;
 1. a name the package declares no variable of: `run_variable_undeclared`;
 2. a variable that does not apply on the instance now, as the variable table a dispatch reads says
    it (`VariableTable::root_word` for the instance's game, as the policy's inputs bind it; with a
@@ -788,6 +792,11 @@ name, each refusal Denied with `invalid_request`, the package's `package_id` and
    setter is known and a variable that applies, `resolve_variable` answers the value or the default
    with its word): `run_variable_unjudged` (the 0.12.68 train's fix round), this run alone refused
    and the Runtime going on.
+
+Workflow #455 TK-1: a given value of a variable only a rule gives, of which no stored value is read
+(the resolution answers none for it), is judged at 3 by the contract crate's one check of a value
+taken whole (`PackageVariable::takes_whole`, which that resolution's judgement of a stored entry
+amounts to), with the same code and words.
 
 **The overlay.** The values pass into the run's parameters where a dispatch's values pass
 (`execute_contained_task_with_lease`: `dispatched_variable_values` and `with_variables`, one

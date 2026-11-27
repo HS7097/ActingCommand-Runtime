@@ -811,7 +811,13 @@ scan's `spacing.columns`.
   which every card was passed over writes the empty list, at the confidence 1000 an empty list
   carries, where the rules above write one. Every other rule of this section holds as written:
   both checks, every miss and its order, the 1025th position read (passed over or not, the scan's
-  bound counts every position it read), the bytes, the publication and its staleness.
+  bound counts every position it read), the bytes, the publication and its staleness. Fix round 1
+  (the independent review): with the member, a screen that shows only cards nobody wants is an
+  empty list where it was `list_position_unread`. So the rule above, that a package makes its start
+  and end checks specific to the list page, reaches further for such a list: the checks must be
+  specific to the tab and the filter the wanted cards show under too, since on another tab of the
+  same page, or under a filter that hides them, both checks may pass, every card is passed over,
+  and every wanted key reads 0.
 - **What the run says.** A list that declares the member says how many positions it passed over,
   whole or not: a task diagnostic row of the existing shape (a recognition error row of the
   post-admission phase, without a target), whose outcome is the info code
@@ -822,11 +828,12 @@ scan's `spacing.columns`.
   `None` for a list without the member and for a field list).
 - **The cost.** A wanted card whose name is read wrong, far from every alias, with confidence,
   every time, reads 0 every time, and the next reading does not correct it. The remedy is an
-  alias for the misreading in the identity's entries, found by checking the step's saved frames
-  offline ("Offline" below: the dry run answers the list and the count of positions it passed
-  over; the Lab's check that prints each passed-over position's text and its distance to the
-  nearest wanted alias on this machine is owed, register §1.533); a count in the run's row larger
-  than the cards of other items the screen shows is the sign to look. Nothing of the Runtime is
+  alias for the misreading in the identity's entries. Fix round 1, said as it is: until the Lab's
+  check that prints each passed-over position's text and its distance to the nearest wanted alias
+  on this machine is built (owed, register §1.533; the kernel's dry run of a list reading, "Offline"
+  below, answers the list and the count, and no Lab operation calls it yet), the count in the run's
+  row is the only sign: a count larger than the cards of other items a frame of the step shows
+  means a wanted card was passed over, and a person has to compare the two. Nothing of the Runtime is
   paused, held or lowered on a reading of zero: a pool read 0 is read, and its goal and its lines
   take it as any reading.
 

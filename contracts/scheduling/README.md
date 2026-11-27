@@ -939,7 +939,9 @@ read it, and the candidate waits.
   task's, under the Runtime-owned task spec, and runs the kept package by its
   location. Before any input the run checks that the package still qualifies as
   a reader; one that no longer does (a designated operation, no marks,
-  `recognize_only`, a stability termination) fails the run with
+  `recognize_only`, a stability termination, or, Workflow #455 TK-1 since 0.12.89,
+  a variable only a rule gives, `rule_given_variable`, which a refresh run can
+  never be given) fails the run with
   `fact_reader_binding_invalid` and its `reader_problem`, which counts as one of
   R_I's failures. The readings are published as instance facts before the run's
   terminal, and the next round scores the candidates that read them. The fact

@@ -738,7 +738,8 @@ fn json_entry(
 /// declaration, [`PackageVariable::judge`], and taken only exactly as given) or its default. A
 /// name given twice, a name the package does not declare and a value the declaration does not
 /// take as given are refused (`validation_failed` naming `--variable`, its `variable_name` and,
-/// for a value, the judgement's `variable_problem`).
+/// for a value, the judgement's `variable_problem`). Workflow #455 TK-1: so is a variable only a
+/// rule gives that is not given (`value_missing`): it has no default.
 fn trial_variables(
     declared: &[PackageVariable],
     given: &[(String, Value)],
@@ -790,21 +791,35 @@ fn trial_variables(
             }
         }
     }
-    Ok(declared
-        .iter()
-        .map(|variable| match taken.remove(variable.name.as_str()) {
-            Some(value) => TrialVariable {
-                name: variable.name.clone(),
-                value,
-                source: TrialValueSource::Given,
+    let mut variables = Vec::with_capacity(declared.len());
+    for variable in declared {
+        let (value, source) = match taken.remove(variable.name.as_str()) {
+            Some(value) => (value, TrialValueSource::Given),
+            None => match variable.default_value() {
+                Some(default) => (default, TrialValueSource::Default),
+                // Workflow #455 TK-1 (register §1.532): a variable only a rule gives has no
+                // default, so the trial's run must be given its value; the plan says so.
+                None => {
+                    return Err(variable_refused(
+                        &variable.name,
+                        VALUE_MISSING,
+                        None,
+                        format!(
+                            "{} is a variable only a rule gives, which has no default; give its \
+                             value with --variable {}=<json>",
+                            variable.name, variable.name
+                        ),
+                    ));
+                }
             },
-            None => TrialVariable {
-                name: variable.name.clone(),
-                value: variable.default_value(),
-                source: TrialValueSource::Default,
-            },
-        })
-        .collect())
+        };
+        variables.push(TrialVariable {
+            name: variable.name.clone(),
+            value,
+            source,
+        });
+    }
+    Ok(variables)
 }
 
 /// The ends the entry task `task` of the admitted package `prepared` declares, in mapping order:

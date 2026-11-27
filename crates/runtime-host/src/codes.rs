@@ -1800,6 +1800,14 @@ actingcommand_contract::outcome_codes! {
         /// the run alone is refused instead of a panic that would stop the Runtime.
         RunVariableUnjudged => "run_variable_unjudged": error / none,
         // ---- Workflow #463 S3-8: end
+        // ---- Workflow #455 TK-1 (`contracts/package-variables.md`, "A variable a rule gives"):
+        // begin
+        /// Error (since 0.12.89). The request gives no value of a variable its package declares
+        /// only a rule gives (`given_by: "rule"`), which has no default to read (keys
+        /// `package_id`, `variable_name`, the first such variable in declaration order). Denied in
+        /// the run's preparation, before any record, claim or lease; nothing runs.
+        RunVariableMissing => "run_variable_missing": error / none,
+        // ---- Workflow #455 TK-1: end
         // ---- #480 PG-1 fix round 1 (`contracts/scheduling-pause.md`, "Instance pause: three
         // stages", (c)): begin
         /// Info (an error before #480 PG-2c). A shutdown came within the caller's time of a
@@ -3676,6 +3684,13 @@ actingcommand_contract::outcome_codes! {
         /// package was replaced since the generation in force was composed. A decision's reason
         /// at position 5a, with no wake of its own; nothing is dispatched, nothing fails.
         RuleRefused => "goal_value_rule_refused": warning / none,
+        /// Warning (Workflow #455 TK-1, since 0.12.89). The candidate of the task (`task_id`) on
+        /// the application (`instance_id`) is held back: the declaration in force of its package
+        /// (`package_id`) declares a variable (`variable_name`) only a rule gives, and the task's
+        /// rule carries no value for it: the package was changed since the generation in force
+        /// was composed. A decision's reason at position 5a, first there, with no wake of its
+        /// own; nothing is dispatched, nothing fails. Only the resource side can mend it.
+        RuleMissing => "goal_value_rule_missing": warning / none,
     }
 }
 
