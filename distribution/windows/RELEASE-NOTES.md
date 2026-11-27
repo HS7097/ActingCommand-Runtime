@@ -9,6 +9,46 @@ Cargo.lock hash, Rust toolchain, target, build profile, Actions run/attempt and
 file identities are recorded in the accompanying `BUILD-MANIFEST.json`; the zip
 and artifact names bind the complete source SHA.
 
+## v0.12.89
+
+本版是 v0.12.88 之后的 1 张 PR：#455 TK-1 #1907，登记是 §1.532。
+**生产上跑的是 v0.12.88（2026-11-27 18:27 JST 起）。**
+`package` 接口升到修订 26（区间 [3, 26]），别的接口区间没有动。新增 3 个结果码、3 个词；配置键没加，账本的记录形状没变。
+**使用中的安装会碰到的**：没有包声明这种变量时，什么都不变。
+
+- **为什么有这一版**（看板 #455、#500）：
+  - 包的参数有三种：人设的、包自己定死的、规则给的。第三种（比如「这条规则买哪一样」，一样东西一条规则）此前只能写成普通变量：它会出现在目标页上让人去设，没人设时一趟运行还会读默认值。
+  - v0.12.81 起规则已经能带变量的值；这一版补上声明这一头：变量可以声明「只由规则给值」。
+
+- **新的写法（资源侧）**：
+  - 包的 `control.json` 里，变量声明加 `"given_by": "rule"`，同时不许写 `default` 和 `default_origin`。
+  - 这个包的每条规则都要在 `schedule.json` 里带上这个变量的值（`variables`）。缺了，根在组合时被拒（`schedule_invalid`，指到那条规则），`standard-pack check` 退出码 2，打包也拒。
+  - `goals.json` 里摆这种变量被拒（`goal_variable_rule_given`）；绑成 `recognition_package` 的包不许声明它（`check-config` 拒，词是 `rule_given_variable`）。
+  - 带这种变量的包，bundle 声明 `package` [26, 26]；v0.12.88 及以前的安装器在计划阶段拒这种 bundle。
+
+- **运行时怎么对待它**：
+  - 值只有一个来源：派发它的那条规则。它没有默认值，也不读应用上存着的值；存着的同名值不再挡规则。
+  - 目标页和 `GoalView` 不列它。`goals set` 被拒（`goal_value_invalid`，`goal_problem` 是 `rule_given`）；`goals clear` 能清掉它变成这种变量之前存下的值（页面上显示为孤儿值）。
+  - 规则没带值时（包改了、根还没重新组合好）：这条规则的候选被按住，`goal_value_rule_missing`（警告，点名实例、任务、包、变量），不派发、不算失败、不占次数；改好包或规则以后，下一次检查自己解除。
+  - 一趟运行手里没有这个值时（派发之后包被换了，或者是主机自己起的运行）：在这个包的任何截图和点按之前失败，`contained_task_variable_value_missing`。派发带来的默认值或存值不算数，只收规则给的。
+  - 直跑（`run start`）用 `--variable <名>=<json>` 给值；不给就拒，`run_variable_missing`。
+  - 离线：整包 `replay` 和 `package dry-run` 现在也收 `--variable`（扫描回放本来就收）；不给值的离线运行同样被拒。`package variables` 对这种变量不给 `default_json`。
+
+- **部署和退路**：
+  - 没有要配的，没有要搬的。现有的根都不带这种变量，装上以后行为不变。
+  - 可以退回 v0.12.88。一个根用了 `given_by` 以后就不能再退：旧版在声明处拒这种包。
+
+- **上线后在生产上看什么**：
+  - 第一个带这种变量的根放置以后：它的每条规则各带各的值；目标页上没有这个变量；候选的理由里这个变量值的来源是 `rule`。
+  - 状态和日志里不应出现 `goal_value_rule_missing`；出现就是某条规则缺值，由资源侧补。
+
+- **已知的、留下的**：
+  - 入口的拒绝发生在运行已经开始之后（租约已持有，真机的起门已过），所以它是一趟失败，会照重跑的规矩再试，直到下一次检查把这条规则按住；把它挪到起门之前，留给后面的切片。
+  - 启动包、梯子包声明这种变量时，离线检查不拒（运行入口会拒）。
+  - 值来自「存着的记录」（一条记录一趟）是后面的设计，这一版没有。
+  - 没有被测试证明的：睡着的实例不会因为这个按住被叫醒；`package dry-run --variable` 的命令行；拒绑定那条路；重跑每趟扣的次数。
+  - v0.12.88 留下的几条照旧。
+
 ## v0.12.88
 
 本版是 v0.12.87 之后的 1 张 PR：#503 GOAL-1 #1905，登记是 §1.531。
