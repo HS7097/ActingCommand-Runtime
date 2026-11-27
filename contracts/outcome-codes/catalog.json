@@ -10566,7 +10566,7 @@
           "description": "A clear of a name that holds no stored value: nothing to clear (Workflow #455 RR2, since 0.12.94: a records entry without stored records among them)."
         },
         "record_unreadable": {
-          "description": "The application's stored record is neither a v2 nor a v3 record the readers read (a v1 policy, or rows the reader refuses): write its whole document with targets set first. Workflow #455 RR2 (since 0.12.94): for a records entry, its stored session.goal_records record is no record the reader reads, which only a fault of the Runtime writes."
+          "description": "The application's stored record is neither a v2 nor a v3 record the readers read (a v1 policy, or rows the reader refuses): write its whole document with targets set first. Workflow #455 RR2 (since 0.12.94): for a records entry, its stored session.goal_records record is no record the reader reads, which only a fault of the Runtime writes: clear a records entry of the page, which rewrites that record empty, then set again."
         },
         "record_out_of_limits": {
           "description": "The edited record would hold more targets (16) or entries (96) than a record keeps (range_max). Workflow #455 RR2 (since 0.12.94): or the application would hold more records over all its records entries than its session.goal_records record keeps (128)."

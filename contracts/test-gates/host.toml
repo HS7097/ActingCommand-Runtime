@@ -4956,6 +4956,7 @@ incident = ["#455 RR1"]
 coverage = "Y"
 tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr2::rr2_p1_each_word_of_a_records_value_at_its_cause_and_the_instance_s_bound",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr2::rr2_p2_a_clear_rewrites_a_record_the_reader_does_not_read_as_the_header_alone",
     "actingcommand-runtime-host::lib::tests::gate_455_rr2::rr2_h1_records_are_set_read_back_replaced_cleared_and_kept_across_starts",
     "actingcommand-runtime-host::lib::tests::gate_455_rr2::rr2_h2_the_page_keeps_one_version_over_both_records",
     "actingcommand-runtime-host::lib::tests::gate_455_rr2::rr2_h3_a_fact_publication_of_the_key_is_refused",

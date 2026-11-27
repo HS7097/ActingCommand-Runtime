@@ -566,6 +566,69 @@ fn rr2_p1_each_word_of_a_records_value_at_its_cause_and_the_instance_s_bound() {
     );
 }
 
+// Fix round 1 (the review): a stored record the reader does not read, which only a fault of the
+// Runtime writes, has an end a person can reach. A set of `raise` passes its checks and is refused
+// by the record (`record_unreadable`), as before. A clear of a records entry the page declares,
+// applied (`raise`) or not (`spare`), is a change of the goal records record, and it composes the
+// header alone, which reads back as a record that holds nothing. A clear of a name the page does
+// not declare is judged on the other record, as before (`name_unknown`).
+#[test]
+fn rr2_p2_a_clear_rewrites_a_record_the_reader_does_not_read_as_the_header_alone() {
+    use GoalProblem as P;
+    let page = pure_page();
+    let tables = pure_tables();
+    let unread = StoredGoalRecords::Unreadable;
+    let one = json!([{"key": "hero_a", "to": {"grade": [1]}}]).to_string();
+    let change = checked(
+        &page,
+        Some(&tables),
+        &unread,
+        EditRequest::Set {
+            name: RECORDS,
+            value_json: &one,
+        },
+    )
+    .expect("the value passes its checks");
+    let change = match change {
+        GoalChange::Records(change) => change,
+        other @ GoalChange::Record(_) => {
+            panic!("a change of the goal records record: {other:?}")
+        }
+    };
+    let refusal =
+        compose(&unread, INSTANCE_A, &change, setter()).expect_err("a set over it is refused");
+    let refusal = GoalRefusal::of_records(refusal).expect("a refusal of the value");
+    assert_eq!(refusal.problem, P::RecordUnreadable);
+
+    for name in [RECORDS, "spare"] {
+        let cleared = RecordsChange::Clear {
+            entry: name.to_owned(),
+        };
+        assert_eq!(
+            checked(&page, Some(&tables), &unread, EditRequest::Clear { name }),
+            Ok(GoalChange::Records(cleared.clone())),
+            "{name}"
+        );
+        let composed =
+            compose(&unread, INSTANCE_A, &cleared, setter()).expect("the clear is composed");
+        assert_eq!(composed.rows.len(), 1, "{name}: the header alone");
+        assert_eq!(
+            StoredGoalRecords::read(Some(composed.rows.as_slice()), INSTANCE_A),
+            StoredGoalRecords::Read(Vec::new()),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        refused_with(
+            &page,
+            Some(&tables),
+            &unread,
+            EditRequest::Clear { name: "nowhere" }
+        ),
+        (P::NameUnknown, None, None)
+    );
+}
+
 // ---- The host part. ----
 
 /// Places the game root below `packs`: its bundle, its `schedule.json` with the one rule (due at

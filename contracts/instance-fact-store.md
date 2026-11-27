@@ -593,7 +593,9 @@ them in this release**: no evaluation reads them ("Projection", below).
 - The reader is strict: exactly one leading header of this version naming the fact's instance,
   then rows of exactly their fields and forms, no key twice under one entry; anything else is
   unreadable, which only a fault of the Runtime writes (a set of a records entry is then refused
-  `goal_value_invalid` with `record_unreadable`). It holds the rows to their form only, never to
+  `goal_value_invalid` with `record_unreadable`; fix round 1: a clear of a records entry the page
+  declares rewrites the record as the header alone, the way out of it,
+  [runtime-interface.md](runtime-interface.md), "Goal request kinds"). It holds the rows to their form only, never to
   the root in force: a record whose entry, key, column or position the root no longer declares is
   read back as it is (judging it is a later slice's).
 

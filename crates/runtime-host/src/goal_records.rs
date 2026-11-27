@@ -235,6 +235,9 @@ pub(crate) fn compose(
     let kept: &[StoredRecordRow] = match stored {
         StoredGoalRecords::Absent => &[],
         StoredGoalRecords::Read(records) => records,
+        // Fix round 1 (the review): a clear rewrites a record the reader does not read as the
+        // header alone, the one way out of it; a set of it is refused, as before.
+        StoredGoalRecords::Unreadable if matches!(change, RecordsChange::Clear { .. }) => &[],
         StoredGoalRecords::Unreadable => return Err(RecordsRefusal::Unreadable),
     };
     let entry = match change {
