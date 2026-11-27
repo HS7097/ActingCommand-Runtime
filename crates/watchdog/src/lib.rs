@@ -914,7 +914,9 @@ fn tick_once(
 
 /// Row 7f: the start record is saved before the spawn, so a crash mid-start still counts. Its
 /// result replaces `watchdog_start_pending`: `watchdog_started_runtime` or the start's failure,
-/// each with its values (state.json v2).
+/// each with its values (state.json v2). #503 HALT-1: the tick keeps the record only when the
+/// start spawned a process; a start that failed before any process existed writes its line and
+/// leaves the state as the tick found it, so nothing of it counts against the budget (row 7e).
 fn start_runtime(
     seams: &dyn TickSeams,
     tick: &Tick,
@@ -926,7 +928,8 @@ fn start_runtime(
     let installation = &tick.installation;
     let start_log = directory.join(format!("actingd-{now}.log"));
     let log_plain = observe::plain_path(&start_log).display().to_string();
-    state.push_start(StartRecord {
+    let mut with_start = state.clone();
+    with_start.push_start(StartRecord {
         at_unix_ms: now,
         method: if from_task { "breakaway" } else { "wmi" }.to_owned(),
         log: log_plain.clone(),
@@ -934,11 +937,11 @@ fn start_runtime(
         generation: installation.generation(),
         ..StartRecord::default()
     });
-    state::save(directory, state)?;
+    state::save(directory, &with_start)?;
     let attempt = start::start(seams, installation, &start_log, now, from_task);
     let finished = seams.now_unix_ms();
     // The record saved above; were it gone, the state is not what this tick wrote.
-    let record = state
+    let record = with_start
         .starts
         .last_mut()
         .filter(|record| record.at_unix_ms == now)
@@ -977,6 +980,11 @@ fn start_runtime(
             )
         }
     };
+    // #503 HALT-1: a start whose method failed or timed out spawned no process and leaves no
+    // record; whether a daemon came of it is what the next tick's P answers.
+    if attempt.spawned {
+        *state = with_start;
+    }
     let outcome = decision.outcome();
     let mut fields = Vec::new();
     if let Some(generation) = installation.generation() {

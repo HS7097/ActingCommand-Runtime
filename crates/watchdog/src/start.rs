@@ -58,6 +58,10 @@ const CMD_UNSAFE: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"'];
 pub struct Attempt {
     pub method: &'static str,
     pub result: Result<LiveOwner, Outcome>,
+    /// #503 HALT-1: whether a process was spawned. A start that failed before any process
+    /// existed (the fixed entry missing, the log not created, the method refused, failed or
+    /// timed out) spawned none, and a tick's start counts against the budget only when it did.
+    pub spawned: bool,
 }
 
 /// Workflow #382 A-4 (test plan v2.2 APPS-I3): the watchdog's seams to the machine.
@@ -71,7 +75,7 @@ pub trait TickSeams {
     /// P and the last boot time (`observe::host_probe`).
     fn host_probe(&self, root_plain: &Path) -> Result<HostProbe, Outcome>;
     /// Spawns the fixed entry `entry` with stdout and stderr in `log` (created as `log_file`):
-    /// the method it used and the started process, or the failed start.
+    /// the method it used and the started process, or the failed start, which spawned no process.
     fn spawn(
         &self,
         target: &Target<'_>,
@@ -226,10 +230,12 @@ impl StartedProcess for WmiCmd {
     }
 }
 
+/// A start that failed before any process existed.
 fn failed(method: &'static str, failure: Outcome) -> Attempt {
     Attempt {
         method,
         result: Err(failure),
+        spawned: false,
     }
 }
 
@@ -345,6 +351,7 @@ fn start_with(
     Attempt {
         method,
         result: wait_ready(seams, installation, started, log, spawn_at_unix_ms),
+        spawned: true,
     }
 }
 

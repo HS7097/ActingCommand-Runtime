@@ -49725,8 +49725,9 @@ keeps up to 64 per pair, back to the pair's last root blocked run) a start's fir
 
 It ships in 0.12.87. [read-session-resource-close.md](read-session-resource-close.md) (the closes
 under a held key), [runtime-outcomes.md](runtime-outcomes.md) ("Device and kernel failures") and
-[runtime-watchdog.md](runtime-watchdog.md) ("Observation" item 5, "Decision" rows 7b and 7f and
-the sentence on a failed probe, "Gap grace", "Files") are the contract. No setting, no outcome code,
+[runtime-watchdog.md](runtime-watchdog.md) ("Observation" item 5, "Decision" rows 7b, 7e and 7f
+and the sentence on a failed probe, "Budget", "Gap grace", "Start", "Files") are the contract. No
+setting, no outcome code,
 no record type and no interface revision is added; no rule of how leases are granted, renewed or
 expired changes.
 
@@ -49823,6 +49824,43 @@ to 11:52.
   4. Rows 7b and 7f and the sentence on a failed probe say so, with the rule that nothing is
      started while either way may see a process that is this root's daemon.
 
+**Fix round 1 (the independent review of 11-27).**
+- *What the review found.* With this slice a tick whose first way fails and whose second sees no
+  daemon goes on to start the Runtime (row 7f). On the production machine the task's job refuses
+  the breakaway, so the start falls back to WMI; while WMI as a whole does not answer, which is
+  what made the first way fail, each such start fails at its 60 s timeout, and its start record had
+  been saved before the spawn: after three of them the watchdog was in row 7e, which only a
+  person's formal start ends. On 0.12.86 the same machine state started nothing, used no budget,
+  and the Runtime came back by itself when WMI answered again; so the slice as first built could
+  turn an outage that ends by itself into one that waits for a person.
+- *The ruling (the coordinator's).* A start counts against the start budget only when it spawned
+  a process. A start whose method failed before any process existed (the breakaway refused and
+  WMI failing or timing out, or any other failure to launch) writes its `watchdog_start_failed`
+  line with its cause at every tick it happens, leaves nothing row 7e counts, and the next tick
+  decides again from what it sees. A start whose method timed out is not counted either: whether a
+  daemon came of it is what the next tick's P answers, either way, and a daemon it sees is not
+  started beside. A start that spawned a process that then did not become ready counts as before;
+  the installer keeps the same rule for a deploy's start. Rulings A and B, the start methods and
+  their order stay as they are.
+- *As built* (`crates/watchdog/src/start.rs`, `lib.rs`). Of the two forms the ruling offered, the
+  first: the record that counts is kept only once a process is known. `start::Attempt` says
+  whether its start spawned a process (`spawned`: false for the entry missing, the log not
+  created and every refusal, failure or timeout of the start method; true once the readiness wait
+  runs). `start_runtime` still saves the pending record before the spawn, so a crash mid-start
+  still counts, but into a copy of the state, which the tick takes over only when the start
+  spawned a process; otherwise the tick keeps the state it found and its final save holds no
+  record. Marking a record that spawned nothing was not smaller: a new member of state.json's
+  start record, a filter in every reader that counts records (the budget, the day's count, the
+  terminal outcomes of a run-out budget), and the marked records would fill the ten kept slots
+  and push out records that count. Saving the record only after the spawn, the first form taken
+  literally, would have needed a hook between the spawn and the readiness wait of the start
+  `actingctl start` shares, and a crash between the spawn and the save would leave a daemon with
+  no record, read as a formal start that clears the budget. Taking the record back out of the kept
+  list would drop the oldest of the ten at every such tick, so the copy is taken instead.
+- Left as it is: the start log is created before the spawn, so a start that spawned no process
+  leaves an empty `actingd-<unix_ms>.log` in `<root>\watchdog\`, one a tick while such an outage
+  lasts.
+
 **Tests** (incident `#503 HALT-1`; the host's in `crates/runtime-host/src/tests/gate_458_close_isolates.rs`,
 host gate map, on its fixture and its hook that lets a lease lapse right before the next close that
 finds a session; the watchdog's in `crates/watchdog/src/gate_503_halt1.rs`, apps gate map, whole
@@ -49839,8 +49877,12 @@ ticks over `gate_382_a4`'s root on a scripted machine; no clock read, no sleep).
 | `halt1_b2_every_tick_that_cannot_probe_writes_its_line_and_the_first_that_can_starts` (B2, ruling 3) | Two ticks whose both ways fail: each `watchdog_start_failed` caused by `process_probe_failed`, each with its ERROR line (until 0.12.87 the second wrote none), nothing spawned; the next tick, which reads P empty, starts the Runtime |
 | `halt1_after_a_start_that_failed_the_next_tick_that_sees_no_runtime_starts_it` (ruling 3) | After a start whose process exited first, the next tick starts the Runtime |
 | `halt1_after_a_tick_that_could_not_probe_a_hold_or_the_grace_still_forbids_a_start` (ruling 3) | After a tick that could not probe, the installer's writer lock held is `watchdog_installer_busy` and a task tick after a five-minute gap is `watchdog_grace`; nothing is spawned |
+| `halt1_fix1_starts_that_spawned_no_process_use_no_budget_and_the_first_that_spawns_starts` (fix round 1) | Six ticks whose first way fails and whose second lists no daemon. At the first five the start's method fails before any process exists (`wmi_start_failed` with `timeout_ms`): each tick is `watchdog_start_failed` caused by it with its own ERROR line, the method ran at each, and state.json holds no start record and no `exhausted_since_unix_ms`, so the fourth and the fifth start again (before the round the fourth was row 7e). At the sixth the method works: `watchdog_started_runtime`, and its start is the one record kept |
 
-No existing test changes its assertions; `gate_382_a4.rs`'s root builder is visible to the new
+A start whose process spawned and exited still counts: the existing
+`watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close`
+(`apps/actingctl/tests/watchdog_process.rs`) runs three such starts into `watchdog_budget_exhausted`
+and is not changed. No existing test changes its assertions; `gate_382_a4.rs`'s root builder is visible to the new
 watchdog gate. The emulator control's close and the policy driver's own loop are not driven by a
 test: the first test's host stands for the driver (actingd's monitor and driver end only on a
 latched condition, which the test shows absent, and another instance's run is admitted and
@@ -49850,15 +49892,23 @@ with the tested ones.
 **What is not changed.** How leases are granted, renewed and expired; the end grace of a run; the
 renewal before a preparation and the opens' bound (reported above); the A64 path of a run in its
 end phase; every outcome code, setting, record type and interface revision; the watchdog's
-decision rows other than 7b and 7f, its budget, its grace, its start methods; actingctl's
-installer probe (`crates/lab-rescue`). No game, package, instance or alias is named in code or
-contract.
+decision rows other than 7b, 7e and 7f, its budget's limit and window, its grace, its start
+methods and their order; actingctl's installer probe (`crates/lab-rescue`). No game, package,
+instance or alias is named in code or contract. Left alone as the review lists it: the daemon's
+own preparation at its start runs on a dedicated lease, its opens have no deadline, and a close
+after that lease lapsed still stops the Runtime (left to the slice that bounds a preparation's
+opens and renews its lease while they wait); the path the incident took (the emulator control's
+start, its clean-up refused) and the control's ready phase have no test of their own.
 
 **At deploy.** Nothing to configure. On production: a lapse in a preparation shows as the
 instance's `lease_expired` record at the session close and its fence, the request's failure not
 fatal, and the Runtime running on; the fence is lifted by the instance's next passing self-check.
-In `watchdog.log` every tick whose process probe failed has its ERROR line; one whose first way
-failed and whose second answered writes none of its own and decides as before.
+In `watchdog.log` every tick whose process probe failed has its ERROR line. A tick whose first
+way failed and whose second answered does not decide as before: it decides from what the second
+way read, so a process with the daemon's name that the list holds is row 7b, and when the list
+holds none the tick starts the Runtime (row 7f). A start that spawns no process (on the
+production machine, WMI not answering) writes its ERROR line at every tick and uses no budget;
+`watchdog_budget_exhausted` comes only of starts that spawned a process.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

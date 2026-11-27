@@ -191,7 +191,7 @@ Each decision is one registered code; its category sets the exit (Workflow #378 
 | 7b′ | P present for 10 minutes or more | `watchdog_runtime_process_without_owner` | 1 | ERROR |
 | 7c | exhaustion recorded | `watchdog_budget_exhausted` or `panic_unrecovered` (see "Budget") | 1 or 2 | ERROR |
 | 7d | task tick inside the gap grace | `watchdog_grace` | 0 | INFO |
-| 7e | 3 starts in the last 30 minutes | as row 7c, recorded | 1 or 2 | ERROR |
+| 7e | 3 starts in the last 30 minutes, each of which spawned a process (see "Budget") | as row 7c, recorded | 1 or 2 | ERROR |
 | 7f | otherwise (J active: a crash, a closed window, Task Manager, a reboot), P read by either way and empty | start: `watchdog_started_runtime` or `watchdog_start_failed` | 0 or 1 | WARN `watchdog_started_runtime` or ERROR `watchdog_start_failed`, every attempt, and every tick whose P is unknown (both ways failed) |
 
 Row 5 precedes row 6 because a stop by a condition also writes `active=false`. A
@@ -279,6 +279,18 @@ link (Workflow #378 A6a). `status` answers `watchdog_budget_exhausted` in both c
 `watchdog_fatal_hold` starts nothing, so a fatal terminal outcome never uses the
 budget.
 
+**A start counts only when it spawned a process** (#503 HALT-1, 0.12.87). A start whose method
+failed before any process existed (the fixed entry missing, the start log not created, the
+breakaway refused and WMI failing or timing out, any other failure to launch) writes its ERROR
+`watchdog_start_failed` line with its cause at every tick it happens, leaves no start record, so
+nothing row 7e counts, and the next tick decides again from what it reads. A start whose method
+timed out is not counted either: whether a daemon came of it is what the next tick's P answers,
+either way, and a daemon P sees is not started beside (row 7b). A start that spawned a process
+that then exited or did not answer within the start window counts, as before. On the production
+machine the task's job refuses the breakaway, so its starts go through WMI; while WMI as a whole
+does not answer, which is also what fails P's first way, three starts failing at their timeout
+would otherwise run the budget out and row 7c would hold until a person's formal start.
+
 **Gap grace.** A task tick whose previous task tick ended more than 90 s earlier (one
 and a half tick periods: a logon, a resume), or ended before the current boot (a
 reboot; a scheduled reboot leaves gaps of only about 100-180 s), holds starts for
@@ -320,7 +332,8 @@ first is `exited_during_startup` (`log`, and the child's `exit_code` or the `cmd
 left running.
 
 The start record is saved before the spawn, so a crash mid-start still counts. The
-line on success:
+tick keeps it only when the start spawned a process ("Budget": a start that spawned none
+leaves no record). The line on success:
 
 `WARN watchdog_started_runtime generation=<g> method=<breakaway|wmi> owner_epoch=<e> pid=<actingd pid> log=<path> previous_epoch=<J epoch> previous_pid=<J pid> ready_ms=<n>`
 
@@ -453,8 +466,8 @@ Without the product, a registered task fails every minute (the launcher is gone,
 | File | Content |
 |---|---|
 | `watchdog.log` | UTF-8 lines `<RFC3339 UTC> <unix_ms> <LEVEL> <code> key=value…`, written on a decision change, a start, an error; a decision line's fields are its outcome's values and one `cause` field per link, then developer fields (Workflow #378 A5). The launcher's own failures and the tick's stderr land here too; a task tick prints no per-tick summary there, and repeats a misconfiguration only when the last structured line is a different one; a tick whose process probe failed (`watchdog_start_failed` caused by `process_probe_failed`) writes its line every time (#503 HALT-1). A quiet day writes nothing. |
-| `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v2` (Workflow #378 A5): `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (`{code, values}`, the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `start_result` `{code, values}`: `watchdog_start_pending` until the start ends, then `watchdog_started_runtime`, `start_timeout` or the failure's code; `generation`, absent for a single-location root; `actingd_pid`, `owner_epoch`). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. `run-once` and `install` rename a document of another schema version (version 1 included) `state.json.other-schema-<ms>` with a WARN `watchdog_state_reset` line and replace it by a fresh state, so the budget restarts; a corrupt document is `watchdog_state_unreadable` (row 1). |
-| `actingd-<unix_ms>.log` | stdout and stderr of each start. |
+| `state.json` | Operational memory across ticks, schema `actingcommand.runtime-watchdog-state.v2` (Workflow #378 A5): `root`, the last tick and task tick, `grace_until_unix_ms`, `last_decision` (`{code, values}`, the log-on-change key), `decision_since_unix_ms`, `exhausted_since_unix_ms`, `formal_start_at_unix_ms`, `process_present_since_unix_ms` and the last 10 `starts` (`at_unix_ms`, `method`, `log`, `start_result` `{code, values}`: `watchdog_start_pending` until the start ends, then `watchdog_started_runtime`, `start_timeout` or the failure's code; `generation`, absent for a single-location root; `actingd_pid`, `owner_epoch`), each of a start that spawned a process (#503 HALT-1: a start that spawned none leaves no record once its tick ends). Written to a temporary file, flushed to disk and renamed. Readers ignore unknown fields. `run-once` and `install` rename a document of another schema version (version 1 included) `state.json.other-schema-<ms>` with a WARN `watchdog_state_reset` line and replace it by a fresh state, so the budget restarts; a corrupt document is `watchdog_state_unreadable` (row 1). |
+| `actingd-<unix_ms>.log` | stdout and stderr of each start; created before the spawn (a start whose method then spawned no process leaves it empty). |
 | `run.lock` | Held exclusively by a tick; a second concurrent tick answers `watchdog_run_in_progress` (exit 0). `actingctl start` and `restart` hold it through their start (Workflow #389 MCP-10). |
 | `task.xml` | The definition `install` registered last. |
 

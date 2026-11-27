@@ -12,9 +12,14 @@
 // last record is active while nothing holds the owner lock, so a tick considers a start), on a
 // scripted machine: each tick's probe is a pair of answers, the first way's and the second
 // way's, put together by the product's own `observe::probe_with_second_way`; each spawn exits at
-// once or answers at the first health poll. The machine's clock moves only when the test moves it
-// (one minute a tick, a task tick's period) or a readiness poll pauses. No clock is read and
-// nothing sleeps.
+// once or answers at the first health poll, or its method fails before any process exists. The
+// machine's clock moves only when the test moves it (one minute a tick, a task tick's period) or a
+// readiness poll pauses. No clock is read and nothing sleeps.
+//
+// The fix round of the review: a start counts against the start budget only when it spawned a
+// process. On the production machine the task's job refuses the breakaway, so a start goes through
+// WMI; while WMI did not answer, each start would fail after its timeout and, its record saved
+// before the spawn, three of them would reach row 7e, which only a person's formal start ends.
 
 use super::decide::LiveOwner;
 use super::gate_382_a4::install_root;
@@ -266,6 +271,87 @@ fn halt1_after_a_tick_that_could_not_probe_a_hold_or_the_grace_still_forbids_a_s
     assert_eq!(machine.spawns.get(), 0, "nothing is spawned");
 }
 
+// The fix round's ruling: six ticks whose first way fails and whose second sees no daemon. At the
+// first five the start's method fails before any process exists (the breakaway refused and WMI
+// timing out, `wmi_start_failed` with its `timeout_ms`). Each tick is `watchdog_start_failed` caused
+// by it and writes its ERROR line; the state keeps no start record and no exhaustion, so the fourth
+// and the fifth tick start again (before this round the fourth was row 7e). At the sixth the method
+// works and the Runtime is started; its start is the one record kept. A start whose process spawned
+// and exited still counts, as before: apps/actingctl/tests/watchdog_process.rs,
+// `watchdog_follows_a_live_owner_a_kill_the_budget_a_fatal_and_a_formal_close`, runs three such
+// starts into `watchdog_budget_exhausted`.
+#[test]
+fn halt1_fix1_starts_that_spawned_no_process_use_no_budget_and_the_first_that_spawns_starts() {
+    let base = TempDir::new().expect("tempdir");
+    let root = install_root(base.path());
+    let machine = ScriptedMachine::new(
+        std::iter::repeat_with(first_way_failed_and_no_daemon_listed).take(6),
+        [
+            Spawned::NoProcess,
+            Spawned::NoProcess,
+            Spawned::NoProcess,
+            Spawned::NoProcess,
+            Spawned::NoProcess,
+            Spawned::Answers,
+        ],
+    );
+
+    for tick in 1..=5_u32 {
+        let report = run_once_with(&machine, &root, true);
+        assert_eq!(
+            report.outcome.code().as_str(),
+            "watchdog_start_failed",
+            "tick {tick}: {}",
+            describe(&report)
+        );
+        assert_eq!(
+            report.outcome.value("failure_code"),
+            Some(&serde_json::json!("wmi_start_failed")),
+            "tick {tick}: {}",
+            describe(&report)
+        );
+        assert_eq!(
+            machine.spawns.get(),
+            tick,
+            "the start's method ran at tick {tick}"
+        );
+        assert_eq!(
+            log_lines(&root, START_FAILED_LINE),
+            tick as usize,
+            "every such tick writes its line"
+        );
+        let state = saved_state(&root);
+        assert_eq!(
+            state["starts"],
+            serde_json::json!([]),
+            "tick {tick}: {state}"
+        );
+        assert!(
+            state.get("exhausted_since_unix_ms").is_none(),
+            "tick {tick}: {state}"
+        );
+        machine.next_tick(TICK_MS);
+    }
+    let started = run_once_with(&machine, &root, true);
+
+    assert_eq!(
+        started.outcome.code().as_str(),
+        "watchdog_started_runtime",
+        "{}",
+        describe(&started)
+    );
+    assert_eq!(machine.spawns.get(), 6);
+    assert_eq!(log_lines(&root, STARTED_LINE), 1);
+    let state = saved_state(&root);
+    let starts = state["starts"].as_array().expect("the start records");
+    assert_eq!(starts.len(), 1, "{state}");
+    assert_eq!(
+        starts[0]["start_result"]["code"],
+        serde_json::json!("watchdog_started_runtime"),
+        "{state}"
+    );
+}
+
 // --- helpers ---
 
 fn named(pid: u32, image_path: Option<&str>) -> NamedProcess {
@@ -282,6 +368,22 @@ fn probe_timed_out() -> Outcome {
 
 fn list_failed() -> Outcome {
     Outcome::new(ActingctlCode::ProcessProbeFailed)
+}
+
+// The fix round's tick: the first way fails as on 11-27 and the process list holds no daemon.
+fn first_way_failed_and_no_daemon_listed() -> ScriptedProbe {
+    (Err(probe_timed_out()), Ok(Vec::new()))
+}
+
+// A start whose WMI call did not answer within its 60 s, as `powershell::run` answers it.
+fn wmi_timed_out() -> Outcome {
+    Outcome::new(ActingctlCode::WmiStartFailed).timeout_ms(Duration::from_secs(60))
+}
+
+// The state the last tick saved.
+fn saved_state(root: &Path) -> serde_json::Value {
+    let bytes = fs::read(root.join("watchdog").join("state.json")).expect("the saved state");
+    serde_json::from_slice(&bytes).expect("the state is JSON")
 }
 
 // The first way's answer on a machine with no Runtime process, booted a day before.
@@ -328,6 +430,8 @@ enum Spawned {
     Exits,
     // Its owner answers at the first health poll.
     Answers,
+    // The start's method fails before any process exists (the breakaway refused, WMI timing out).
+    NoProcess,
 }
 
 // A probe as a tick reads it: the first way's answer and the second way's.
@@ -406,6 +510,13 @@ impl TickSeams for ScriptedMachine {
             .borrow_mut()
             .pop_front()
             .expect("a scripted spawn");
+        if matches!(spawned, Spawned::NoProcess) {
+            return Err(Attempt {
+                method: "wmi",
+                result: Err(wmi_timed_out()),
+                spawned: false,
+            });
+        }
         self.answering.set(matches!(spawned, Spawned::Answers));
         let process: Box<dyn StartedProcess> = Box::new(ScriptedProcess { spawned });
         Ok((if from_task { "breakaway" } else { "wmi" }, process))
@@ -429,7 +540,8 @@ impl StartedProcess for ScriptedProcess {
     fn state(&mut self) -> Result<StartedState, Outcome> {
         Ok(match self.spawned {
             Spawned::Exits => StartedState::Exited(Some(1)),
-            Spawned::Answers => StartedState::Running,
+            // A start whose method failed has no process to ask (`spawn` above).
+            Spawned::Answers | Spawned::NoProcess => StartedState::Running,
         })
     }
 }
