@@ -4908,3 +4908,15 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_458_close_isolates::halt1_an_explicit_release_whose_lease_lapses_at_its_close_fences_only_its_instance",
 ]
 incident = ["#503 HALT-1"]
+
+# #503 GOAL-1 (0.12.88; register §1.531; contracts/resource-targets.md, "A target's pool" and "One value by name"; contracts/runtime-interface.md, "Goal request kinds"), the host's half, in composer mode over one game root with two instances of its game on one server (the composition gives every rule and pool the copies <id>@<alias>), a manual Runtime clock and fake devices, the pool read 10 on each instance, goals.json's resource entry on the pool by the file's id, no package run, no clock read: A's page lists the pool once by the file's id with A's copy of the rule and its default step and importance, nothing not targetable; an other target naming A's copy id, expected_version 0, as production sent it on 11-27, is goal_value_invalid wrong_type at /resource, nothing appended, version 0, nothing latched, the next request answered, a cycle evaluated; the premise: the record cannot hold that edit (Inconsistent, which 0.12.87 answered with a fatal) (t1); the resource entry set {at_least: 50} is taken, the stored row names the file's id, A's view shows it active with gap 40, A's candidate carries it applied, B has no record and B's candidate no target (t2); an other target by the file's id is taken with the same result and cleared by its name (t3); a v3 document naming the file's id is taken and applied to A's copy alone, one naming A's or B's copy id resource_targets_rejected unknown_resource at /targets/0/resource, nothing appended, nothing latched (t5); a composed record that does not read back, forced by the test-only switch unreadable_goal_edit_for_test: resource_targets_record_invalid, Denied, nothing appended, version 0, nothing latched, the next request answered, a cycle evaluated; the switch off, the same request taken (t6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_goal1::goal1_t1_an_other_target_by_a_copy_id_is_refused_and_the_runtime_goes_on",
+    "actingcommand-runtime-host::lib::tests::gate_503_goal1::goal1_t2_a_resource_entry_is_set_by_the_files_id_and_applies_to_its_own_copy_alone",
+    "actingcommand-runtime-host::lib::tests::gate_503_goal1::goal1_t3_an_other_target_by_the_files_id_is_taken_and_cleared_by_its_name",
+    "actingcommand-runtime-host::lib::tests::gate_503_goal1::goal1_t5_a_v3_document_names_the_files_id_and_a_copy_id_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_503_goal1::goal1_t6_a_composed_record_that_does_not_read_back_is_refused_and_the_runtime_goes_on",
+]
+incident = ["#503 GOAL-1"]

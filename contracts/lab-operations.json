@@ -1183,7 +1183,7 @@
       "module": "core",
       "params": [
         {"name": "instance", "form": "positional", "type": "instance", "required": true, "note": "on the command line also --instance <x>, in place of the positional"},
-        {"name": "name", "form": "positional", "type": "string", "required": true, "note": "an entry's or a variable's name; a name no entry has with the value {resource, at_least} sets an other resource target"},
+        {"name": "name", "form": "positional", "type": "string", "required": true, "note": "an entry's or a variable's name; a name no entry has with the value {resource, at_least} sets an other resource target, resource naming the pool as the game root's files write its id (as goals lists it, never a composed copy's id with @)"},
         {"name": "value", "form": "positional", "type": "json", "required": true, "note": "the value as JSON: a string for a choice, a number, true or false, a list of option values, or {at_least} for a resource entry"},
         {"name": "expected_version", "form": "option", "type": "integer", "required": false, "note": "the version goals answered; 0 while the application has no record; absent: compare nothing"}
       ],

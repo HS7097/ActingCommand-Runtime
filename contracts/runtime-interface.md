@@ -725,8 +725,12 @@ and `off_step` with `range_min` and `range_max`, `not_an_option` (a key a dispat
 included), `key_repeated` and the ordered item's `json_pointer`, `count_out_of_range`); the
 store's bound (`value_too_large`, 1024 bytes of canonical text); a resource entry's `{at_least}`
 and an other target's `{resource, at_least}` (`by_unix_ms` is `deadline_unsupported`; another
-member `wrong_type` at it; `at_least` from 1 to the pool's capacity, `out_of_range`;
-`pool_not_targetable`, `pool_unvalued` with `pool_id`). A `clear` removes what is stored under the
+member `wrong_type` at it; #503 GOAL-1, since 0.12.88: `resource` names the pool as the game
+root's files write its id, a scheduling identifier, and any other text, a composed copy's
+`<id>@<alias>` among them, is `wrong_type` at `/resource`; `at_least` from 1 to the pool's capacity, `out_of_range`;
+`pool_not_targetable`, `pool_unvalued` with `pool_id`, which names the pool by that same id,
+the one the page's targetable list names it by: [resource-targets.md](resource-targets.md), "A
+target's pool"). A `clear` removes what is stored under the
 name whatever its entry is (a resource entry's target on its pool, else the entry row of the name,
 else the target of that id); with nothing stored under it the name's own word answers
 (`holds_no_value`, `tier_not_built`, `value_not_set` for a resource entry or a bound variable,
@@ -737,6 +741,16 @@ the request's origin; `fact_observation_not_newer` as for every observation. The
 Runtime's clock at the request, the request's channel and, for the Lab, the initiator its
 connection declared. A resource entry's `set` replaces the target on its pool whatever its id
 (`replaced_target_id` names the one replaced). A refusal is Denied and appends nothing.
+
+**No value of a request stops the Runtime** (#503 GOAL-1, since 0.12.88; register §1.531). A value
+the record cannot hold is refused under the gate before anything is composed, with
+`goal_value_invalid` and its word. Should a composed record still not read back, that is a refusal
+of the one request: Denied with `resource_targets_record_invalid` (an error, its daemon line written
+as before), nothing appended, the stored record as it was, nothing latched; the Runtime and its
+other instances go on. Until 0.12.88 it latched the Runtime's fatal state (on 11-27 a copy's id in
+an other target's `resource` did, and the watchdog started the Runtime again). A fatal that only a
+fault of the Runtime reaches (its ledger, its store, a lock, the encoding of a record it built) or
+that lies after the append stays fatal, here and in `ApplyResourceTargets`.
 
 The client (`runtime-client` 9): `goal_view` and `edit_goal`. A Runtime that declares at most 8
 drops either request: the read reports `runtime_operation_unsupported`; the instruction a

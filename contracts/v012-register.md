@@ -49910,6 +49910,186 @@ holds none the tick starts the Runtime (row 7f). A start that spawns no process 
 production machine, WMI not answering) writes its ERROR line at every tick and uses no budget;
 `watchdog_budget_exhausted` comes only of starts that spawned a process.
 
+### 1.531 Slice #503 GOAL-1 (0.12.88): on a game with two instances a goal names its pool as the game root's files write it, and no value of a request stops the Runtime (board #503; the rulings 1 to 5 are the coordinator's of 11-27, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-goal1.md`; on main `7e7883c5`, v0.12.87)
+
+It ships in 0.12.88. [resource-targets.md](resource-targets.md) ("A target's pool", the v1 table's
+`resource` row, "One value by name", the read-only view's lists),
+[runtime-interface.md](runtime-interface.md) ("Goal request kinds": the edit's checks and "No value
+of a request stops the Runtime"), [standard-pack-goals.md](standard-pack-goals.md) ("Governs"),
+[standard-pack-schedule.md](standard-pack-schedule.md) (composition step 4, "Ids"),
+[scheduling/README.md](scheduling/README.md) ("Lines for one instance"), the `goals set` row of
+[lab-operations.json](lab-operations.json) and the text of `resource_targets_record_invalid` in the
+host's outcome fragment are the contract. No setting, no outcome code or word, no member, no record
+type, no ledger revision and no client interface revision is added; the record's format is
+unchanged.
+
+**What happened** (production, v0.12.86, 11-27 15:46 JST, read by the coordinator). The installation
+has two instances of one game, so the composition gives every pool of that game two copies,
+`<id>@<alias>`; the game root's `goals.json` has `resource` entries whose `governs.pool` is the
+file's id.
+1. `EditGoal`, `set` of a resource entry's name, value `{at_least}`, on each of the two instances:
+   refused `goal_value_invalid` `pool_not_targetable`, while the same instance's goal page listed the
+   pool as targetable under its copy's id, with a producing task and its default step and importance.
+2. `EditGoal`, `set` of a name no entry has, value `{resource: <the copy's id>, at_least}`,
+   `expected_version` 0 (the id the page had just answered): `resource_targets_record_invalid`, and
+   the whole Runtime stopped (`runtime_stopped`; the closeout monitor named the host's error during
+   `edit_goal`). The watchdog started it again 31 s later; it was ready 61 s after the stop. Nothing
+   had been appended: the instance's goal record was still version 0.
+
+So on a game with two instances no goal on a pool could be set by either form, and one of them
+halted production.
+
+**The causes, established by reading main `7e7883c5`.**
+- *1.* The goal page's check looks the pool up in its targetable list by exact text, and the list
+  named every catalog pool by its catalog id, a copy's id on such a game; the file's id was in no
+  entry.
+- *2.* The same lookup found the copy's id, so the check made an edit naming it. The record's reader
+  takes only scheduling identifiers (`[a-z0-9][a-z0-9._:-]*`) for a target's `resource`, so the
+  composed record did not read back (`GoalRecordRefusal::Inconsistent`), which the host answered with
+  the fatal `resource_targets_record_invalid` and latched.
+- *Beneath both.* A target's pool was the catalog pool whose id equals the target's `resource`
+  exactly (`resolve_target_pool`). So a record naming the file's id resolved on no instance of such a
+  game, and a record can never name a copy's id. Found besides: a v2 or v3 document through
+  `ApplyResourceTargets` that named the instance's own copy's id was taken and stored a record its
+  reader refuses (`malformed_rows`: the instance then ran on base scheduling and its target view and
+  goal page were refused `resource_target_view_policy_unreadable` until another document replaced
+  it); one that named another instance's copy was `resource_out_of_scope`; the same held for a copy's
+  id in a target's `tasks`.
+
+**The rulings, as built.**
+- *Ruling 1, a goal names its pool as the game root's files write it* (`crates/policy/src/
+  resource_targets.rs`, `target_pool`, `file_pool_id`). One function gives the catalog pool a
+  target's `resource` names for one instance: the pool of that id whose scope covers the instance,
+  else the instance's copy `<id>@<alias>`, else the first pool the files name so (whose scope then
+  refuses it); a text that is no scheduling identifier, a copy's id among them, names none. With no
+  copy in the catalog it is the pool of that id, as before. Its readers: `resolve_target_pool`
+  (changed: it now takes the pool from `target_pool`), and through it the entry check of v1, v2 and
+  v3 documents, the targetable judgement, the conditions of the view and of a v1 or v2 receipt
+  (`active_resource_targets`, the checks), the evaluation that applies a v1 target and scores its
+  tasks (`target_effects`) and that resolves a v2 or v3 record (`resolve_v2`); changed to call it:
+  `weighed_tasks` (the tasks an expired v2 policy names), `v3::lapsed_coverage` (the tasks a lapsed
+  v3 target covered) and `v3::pool_capacity` (the goal page's capacity). Read and not changed,
+  because they compare names with names or catalog ids with catalog ids: the goal page's check and
+  its resource entry's current reading (`crate::goals`, `check_target`, `resource_entry`: by the
+  targetable list's names), the clear of a resource entry and the view's `other_targets` (a stored
+  target's `resource` with a `governs.pool`), the edit's replacement of a target on its pool
+  (`edit_goal_record`, stored names with the edit's name), the capacities' keys (the list's names),
+  SS-6's gap of a dispatch (`goal_gap`, the resolved pool's catalog id with the task's produced
+  pool), a v2 candidate's weights and its `resource_targets` items (the resolved pool, by catalog
+  id), and the record's readers (`decode_rows*`), which keep refusing what is no identifier. The
+  per-instance lines read a pool by the same rule in the other direction (from a catalog pool to the
+  name an instance's set gives it: `InstancePoolLines::get`, `instance_valued_pool_ids`, two inline
+  expressions, no function); they cannot be the one function, which goes from a name to a pool and
+  keeps the refusals' order (`unknown_resource`, `resource_not_observable`, `resource_out_of_scope`),
+  and they are not changed. The record's format does not change, so a record written while the game
+  had one instance names the same pool after a second instance is added, and the other way round.
+- *Ruling 2, what an answer names, a request takes* (`targetable_resources_with_readings`). The view's
+  and the goal page's `targetable` and `not_targetable` name each pool once by the file's id
+  (`file_pool_id`: a copy's id without `@<alias>`) and judge it as a target of that name. After it:
+  `targetable` lists each pool of the instance, its own copy under the file's id, with its producing
+  tasks (the catalog's task ids, the instance's copies on such a game); `not_targetable` lists each
+  other name once with the reason a target of that name meets: another instance's copy of a pool this
+  instance has is not listed (it is no second pool of the instance), and the copies of a pool of other
+  instances are one entry by the file's id (`resource_out_of_scope`, or `resource_not_observable`
+  first). A refusal's `pool_id` is the value's or the entry's text, the file's id. No member is added
+  or removed; no reader of this repository matched these texts against copies' ids (the Lab's
+  `resources list` passes the view through; the console is not of this repository and no contract
+  tells it to match them).
+- *Ruling 3, the tasks a target names* (`target_task`). Naming a rule as the file writes it would need
+  every reader of `tasks` (the entry check, `target_effects`, `resolve_v2`, `weighed_tasks`,
+  `lapsed_coverage`, the expired policy's named tasks, the candidates' coverage) to translate the
+  name to a catalog task id at each comparison: more than calling the function, so it is left. A copy's
+  id there is no identifier and is refused `unknown_task` at `/targets/i/tasks/j`, never stored, never
+  a halt.
+- *Ruling 4, a request's value never stops the Runtime* (`crates/runtime-host/src/goals.rs`,
+  `check_target`; `host/goals.rs`, `record_not_read_back`). Under the gate and before anything is
+  composed, an other target's `resource` that is no scheduling identifier is `goal_value_invalid`
+  `wrong_type` at `/resource`; an identifier that no pool of the instance has is
+  `pool_not_targetable`, as before. The last line of defence: an edit whose composed record does not
+  read back is answered Denied `resource_targets_record_invalid` (an error; `runtime_code`
+  `invalid_request`; its daemon lines written as the latched condition's were) and marks nothing:
+  nothing has been appended and the stored record is as it was. The `fatal`s of the two handlers,
+  down to the publication:
+
+  | Handler | Where | A caller's bytes reach it? | Now |
+  |---|---|---|---|
+  | `EditGoal` | `edit_goal_record` refused `Inconsistent` (`resource_targets_record_invalid`) | yes, until 0.12.88 (a copy's id) | a refusal, nothing latched |
+  | both | `policy_record`'s `record_invalid` (the identity's prefix, its encoding, the record's own `validate`) | no: every string of the rows is an identifier, a catalog id or an entry's checked text, and a v1 or v2 lifetime lies within the fact TTL's bounds | fatal |
+  | `ApplyResourceTargets` | `resource_targets_error`'s `Internal` (`resource_targets_parser_code_unexpected`, `resource_targets_canonical_encode_failed`) | no: the parser gives only the five diagnostics it maps, and every number and entry is bounded before the canonical writer meets it | fatal |
+  | both | `lock`, `runtime_clock_sample`, `policy()`, the outcome keys, the projection, `connection_channel`, `synchronize_fact_store_under_gate` | no: the Runtime's own state | fatal |
+  | both | `publish_facts_under_gate` before the append (capacity report, clock, `preview_observation`'s store reads, `fact_publication_sequence_missing`, `fact_scope_instances`) | no: its refusals of a value are request-level (not newer, capacity, authority) | fatal |
+  | both | `publish_facts_under_gate` at and after the append (the ledger's write, the store's synchronization and capacity report after it) | no, and after an append | fatal |
+
+  `publish_facts`'s own check of the key's one formal record (fatal at `publish_facts`) is not on
+  these paths: both handlers publish under the gate they hold. Not widened beyond these two kinds:
+  `resource_target_view_internal` and `resource_target_view_invalid` are request-level already.
+- *Ruling 5.* Nothing else moves.
+
+**Tests** (incident `#503 GOAL-1`; the host's in `crates/runtime-host/src/tests/gate_503_goal1.rs`,
+host gate map, in composer mode over one game root with two instances of its game on one server, a
+manual Runtime clock and fake devices, the pool read 10 on each instance, `goals.json`'s resource entry
+on the pool by the file's id; the policy's in `crates/policy/src/tests/gate_503_goal1.rs`, policy gate
+map, on a neutral V2 catalogue written as the composer writes it for one instance and for two; no
+clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `goal1_t1_an_other_target_by_a_copy_id_is_refused_and_the_runtime_goes_on` (host) | A's page lists the pool once by the file's id with A's copy of the rule and the valuation's step and importance, nothing not targetable. The request of 11-27 (an other target by A's copy id, `expected_version` 0): `goal_value_invalid` `wrong_type` at `/resource`, no `fact.published` appended, version 0, nothing latched, the next request answered and a cycle evaluated. How it shows that 0.12.87 stopped there: its page listed that copy's id, so its check made of the value the edit the premise builds, which the record cannot hold (`Inconsistent`, no refusal of the record's: `GoalRefusal::of_record` is none), the case 0.12.87 answered with the fatal |
+| `goal1_t2_a_resource_entry_is_set_by_the_files_id_and_applies_to_its_own_copy_alone` (host) | The resource entry `{at_least: 50}` (0.12.87: `pool_not_targetable`) is taken; the stored row names the file's id; A's page shows it active with gap 40 on the entry and in the view's condition; A's candidate carries it applied at gap 40 on A's copy; B's page has no record and B's candidate no target |
+| `goal1_t3_an_other_target_by_the_files_id_is_taken_and_cleared_by_its_name` (host) | `{resource: <the file's id>, at_least: 50}` under a name no entry has: the same result; cleared by its name, A has no active target and its candidate none |
+| `goal1_t5_a_v3_document_names_the_files_id_and_a_copy_id_is_refused` (host) | Through `ApplyResourceTargets`, a v3 document naming A's copy id or B's: `resource_targets_rejected`, `unknown_resource` at `/targets/0/resource`, nothing appended, nothing latched; one naming the file's id: taken, applied to A's copy alone |
+| `goal1_t6_a_composed_record_that_does_not_read_back_is_refused_and_the_runtime_goes_on` (host) | With the test-only switch `unreadable_goal_edit_for_test` the edit of the resource entry names A's copy id, as 0.12.87's checks did, so its record does not read back: Denied `resource_targets_record_invalid`, nothing appended, version 0, nothing latched, the next request answered and a cycle evaluated; the switch off, the same request taken |
+| `goal1_t4_the_same_rows_give_the_instances_pool_for_one_instance_and_for_two` (policy) | The same stored rows under the catalogue for one instance and for two: A's condition computed on A's pool and named by the file's id in both (fix round 1), gap 40; the goal page's capacity under the file's id; A's targetable list names the pool once by the file's id with A's task, nothing else; the evaluation applies it to A's task at gap 40; for two, B's list is the same pool by the same id with B's task, B has no record and B's task no target |
+| `goal1_t5_a_document_names_the_files_id_and_a_copy_id_is_refused` (policy) | A v3 document of A by the file's id is taken, its condition read on A's copy and named by the file's id (fix round 1); by A's or B's copy id `unknown_resource` at `/targets/0/resource`; a task by a copy's id `unknown_task` at `/targets/0/tasks/0` |
+
+A game with one instance answers and stores as before; the gates that hold it, unchanged:
+`gate_463_v3` (policy and host: every check, the view, a target by name and its clear), `gate_455_b3p`
+(both halves: the targetable list and a goal set by `{at_least}`), `gate_455_gr2a` (v1, v2 and v3
+documents' bytes and weights), `gate_455_p2` (a pool read from rows of a list in the targetable list
+and the conditions), `gate_390_pool1` (the targetable list's reading of a regenerating pool),
+`gate_455_gr2s` and `gate_ss1` (the evaluation's weights of a target). Two answers change on such a game: an `EditGoal` value whose
+`resource` is no identifier is `wrong_type` at `/resource` where it was `pool_not_targetable`; and
+(the review's finding) in an installation that also has a game with two instances, a
+`not_targetable` list names each pool of that other game once, by the file's id, where it named
+each copy. No existing test pins either. No existing test is changed.
+
+**What is not changed, and what is left.** The record's format and its readers; every outcome code,
+word, setting, member and interface revision; the per-instance lines; what a target's `tasks` name
+(ruling 3, left: the catalog's task ids; on a game with two instances the targetable list's
+`producing_tasks` are the instance's copies, which a document's `tasks` cannot take). What an
+evaluation says of a candidate (its `resource_targets` items, a pool line's values) names the catalog
+pool, the instance's copy on a game with two instances: those are compared with the catalog's ids
+inside the evaluation and are no answer of the two views or of the two requests. A stored record
+that names a copy's id, which only a document of 0.12.87 or earlier could have written, stays
+unreadable; none can be written now. Where one stands, the instance's evaluation weighs no target,
+both views and the goal page refuse it and so does every `EditGoal` of the instance, a clear by name
+among them (`resource_target_view_policy_unreadable`); a new document through `ApplyResourceTargets`,
+a withdrawal among them, replaces it. No game, alias, pool name or amount is named in code or
+contract.
+
+**Fix round 1 (the coordinator, after the one review; no second review).** The review found no path
+on which a request's value stops the Runtime and none that puts a goal on the wrong pool, and one
+thing to change, which the coordinator had ruled while the review ran: **an answer about a target
+names its pool as the target does.** A condition's `resource` is the target's own `resource`, the
+file's id, in the v1 and v2 checks' receipts, in the view's `active` and in the v3 check
+(`resource_targets.rs`, `resource_targets/v3.rs`: four places wrote the catalog pool's id, the
+instance's copy on a game with two instances); the goal page pairs a condition with its target by
+`target_id`, so no reader follows. The two policy gates that pinned the copy's id on a condition now
+pin the file's id, and the host gate `goal1_t2` pins it on the view's condition. The contract's
+"A target's pool" says so, and also, from the review: which word refuses the third step's pool
+(`resource_not_observable` is judged before the scope), how an unreadable record of an earlier
+version is taken away, and the second answer that changes on a game with one instance. Not proven
+by a test, as the review lists: the ERROR line of the refused edit (no reporter is attached in the
+gate), `weighed_tasks` and `lapsed_coverage` under copies beyond what `goal1_t2` and `goal1_t4`
+drive, instances on two servers of one game, and the merged `not_targetable` entry.
+
+**At deploy.** Nothing to configure. On production, on the game with two instances: each instance's
+goal page lists its pools by the file's ids; `goals set` of a resource entry with `{at_least}` is
+taken, and the instance's candidates that produce the pool carry it (`resource_targets` on its copy),
+the other instance's do not; an other target by a copy's id is refused `wrong_type` at `/resource`
+and the Runtime goes on. A `resource_targets_record_invalid` line in the daemon's log no longer
+precedes a `runtime_stopped`.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

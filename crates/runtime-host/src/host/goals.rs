@@ -31,7 +31,10 @@
 //!   whole record as one `fact.published` keeping the request's origin. So a request of another
 //!   version is a version conflict whatever its value. The row it writes names the Runtime's clock
 //!   at the request, the request's channel and, for a request from the Lab, the initiator its
-//!   connection declared.
+//!   connection declared. #503 GOAL-1 (0.12.88): a target names its pool as the game root's files
+//!   write it, the id the targetable list names it by; a composed record the v3 reader does not
+//!   read back is a refusal of the request (`resource_targets_record_invalid`), nothing appended
+//!   and nothing latched: no value of a request stops the Runtime.
 
 use super::facts::{FactPublication, FactPublicationPurpose};
 use super::planning::planning_request_failure;
@@ -284,6 +287,8 @@ impl HostShared {
             );
             let change = check_edit(&read.page, &stored, request, set_by)
                 .map_err(|refusal| goal_value_invalid(op.name(), &refusal))?;
+            #[cfg(test)]
+            let change = self.unreadable_edit_for_test(change, instance_alias);
             let edited = edit_goal_record(
                 record.rows.as_deref(),
                 record.expires_at_unix_ms,
@@ -293,11 +298,7 @@ impl HostShared {
             )
             .map_err(|refusal| match GoalRefusal::of_record(refusal) {
                 Some(refusal) => goal_value_invalid(op.name(), &refusal),
-                None => RuntimeHostError::fatal(
-                    HostCode::ResourceTargetsRecordInvalid,
-                    EDIT_OPERATION,
-                    RuntimeErrorCode::RuntimeHalted,
-                ),
+                None => self.record_not_read_back(),
             })?;
             let fact = policy_record(&scope, &edited.composed, sample.unix_ms)?;
             let publication = self.publish_facts_under_gate(
@@ -531,6 +532,59 @@ impl HostShared {
             resolved_parameters,
             record,
         })
+    }
+
+    /// #503 GOAL-1 (ruling 4; `contracts/runtime-interface.md`, "Goal request kinds"): the answer
+    /// to an edit whose composed record the v3 reader does not read back. Nothing is appended and
+    /// the stored record is as it was, so it is a refusal of this request alone,
+    /// `resource_targets_record_invalid` (an error, Denied): its daemon lines are written as the
+    /// latched condition's were until 0.12.87, and nothing is latched, so the Runtime goes on.
+    fn record_not_read_back(&self) -> RuntimeHostError {
+        let refusal = RuntimeHostError::request(
+            HostCode::ResourceTargetsRecordInvalid,
+            EDIT_OPERATION,
+            RuntimeErrorCode::InvalidRequest,
+        );
+        self.fatal.report_warning(&refusal.daemon_outcome());
+        refusal
+    }
+
+    /// #503 GOAL-1, test only: while `RuntimeHost::unreadable_goal_edit_for_test` is on, the target
+    /// an edit sets names its pool by the instance's copy id `<pool>@<instance alias>`, as the
+    /// checks of 0.12.87 took it from the targetable list, so the record composed of it is one the
+    /// v3 reader does not read back; any other edit is as it is.
+    #[cfg(test)]
+    fn unreadable_edit_for_test(
+        &self,
+        change: actingcommand_policy::GoalRecordEdit,
+        instance_alias: &str,
+    ) -> actingcommand_policy::GoalRecordEdit {
+        match change {
+            actingcommand_policy::GoalRecordEdit::SetTarget {
+                id,
+                resource,
+                at_least,
+            } if self.unreadable_goal_edit_for_test.load(Ordering::Acquire) => {
+                actingcommand_policy::GoalRecordEdit::SetTarget {
+                    id,
+                    resource: format!("{resource}@{instance_alias}"),
+                    at_least,
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+#[cfg(test)]
+impl RuntimeHost {
+    /// #503 GOAL-1, test only: while `on`, the record an `EditGoal` that sets a target composes
+    /// does not read back (`HostShared::unreadable_edit_for_test`).
+    pub(crate) fn unreadable_goal_edit_for_test(&self, on: bool) -> RuntimeHostResult<()> {
+        self.shared_ref(EDIT_OPERATION)?
+            .unreadable_goal_edit_for_test
+            .store(on, Ordering::Release);
+        Ok(())
     }
 }
 
