@@ -50913,6 +50913,186 @@ resource side prepares every root's version 3 file, checks it offline with this 
 and places it at once. On production the workbench's records show
 `standard_pack_goals_not_applied` with `goal_version_retired` for such a root until then.
 
+### 1.536 Slice #503 LIST-B (0.12.93): a list reading over cards that carry a picture and no name: the picture decides, and a card is passed over only when it is recognised as a known card that is none of the keys (board #503; the rulings 1 to 12 and Addendum 1, A1 to A9, are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-list-b.md` after the read-only study `rd-1123/study-list-b-icon-grids.md` and the coordinator's dispositions at its end, which replaced the study's rule; on #455 RR1's branch `df39227a`, which merges first)
+
+It ships in 0.12.93 and takes `package` 29, written over row 28 of §1.535. Another slice of the
+same days (#455 RR2) may merge after it; nothing of goals is touched.
+[business-identity-consensus.md](business-identity-consensus.md) ("A layout's pool", and the
+exception of the evidence sentence), [selection-graph.md](selection-graph.md) ("Rules": the
+`repeated_anchor` feature row and three new rows), [resource-readings.md](resource-readings.md)
+("Declaration": `key_feature` and `others`; "A list of the wanted keys only": the mark's note and
+"A passed-over position is judged on its identity alone"; the new "A list of cards identified by
+pictures"; "Offline": the reads' `pictures`), [component-interfaces.md](component-interfaces.md)
+(the `package` row 29), [resource-verify.md](resource-verify.md) (row 29) and the row `package
+list-check` of [lab-operations.json](lab-operations.json) are the contract.
+
+**The problem** (the work order's, taken as given). On most inventory screens a card carries a
+picture, a count and a rarity colour, and no name; the name shows only in a panel for the one
+selected card, and an item held at zero has no card. Since 0.12.90 a list reading may want only
+the keys it declares, but that judgement reads a card's name as text, and a list reading took only
+a layout of repeated anchors, on which an identity read from pictures was refused. So every wanted
+item of such a screen was read by a single reading that looks for its picture, an item held at
+zero was not found, its fact stayed missing, and a goal on it waited for ever exactly when the lack
+was greatest.
+
+**The stop, and Addendum 1.** The first reading of the work order found that a budget of the
+contract forbids 128 × 64 as ruling 10 feared: the projection's recognition evidence holds a
+picture sample's scores, 1 to 16 of them (`CandidateProjection::validate_shape`, on every
+projection made and every one decoded), and the projection's 32 KiB counts that evidence (about 23
+cards a viewport at 128 entries with a count column). Moving either moves the ledger's side (the
+projection is embedded whole in `task.selection_evaluated`). The implementer stopped and reported
+before building; the coordinator's Addendum 1 decided: A1, no limit of the projection moves and
+nothing of the ledger's side (the options of raising the bound, narrowing the pool or raising the
+32 KiB were refused); A2, a layout's pool is scored and judged beside the projection, and its full
+scores go nowhere else; A3, one function of the layout gives every reader a position's mark; A4,
+diagnostics in aggregate; A5, the pool's templates without `mask`, `scales`, `unique` or
+`luma_floor`; A6, ruling 12 corrected to §1.533's fix round (no `requires`, no
+`config.subsystems`); A7, ruling 6 pinned and extended; A8, the bound stated; A9 (from the
+resource side's measurements on saved frames: several kinds of card carry one drawing in different
+colours, and a gray template scores them 0.95 against each other), pictures that differ only in
+colour told apart by their colour checks.
+
+**What it rests on** (read in the code at `df39227a`; none of the stop conditions holds after
+Addendum 1).
+- *Scored at a rectangle of each instance.* `SceneEvaluation::evaluate_template_regions` matches a
+  template's image inside a requested region, and a `template_relative` colour check at the match;
+  the feature's region is placed at each instance as an offset is. Nothing but the recognition pack
+  and the kernel's projection moved; no provider interface and no request kind.
+- *One judgement, beside the projection.* The mapping judges a read from every score
+  (`CandidateIdentityDeclaration::read_pool`); the projection returns its judgements beside it
+  (`CandidatePoolJudgements`), as `project_candidates_read` returns a select's name reads; the
+  layout's `name_mark` gives a position's mark from them for a picture identity and from the
+  projection's evidence for a text identity, so no reader compares scores.
+- *The evidence's smallest form.* The projection's evidence is optional per feature; a layout
+  pool's feature carries none (no new variant, no new meaning of a member), so no consumer of a
+  sample's scores meets one. The consumers of `CandidateRecognitionInput::Icons` were read: the
+  projection's own shape check and the slot pool's producer; `name_mark` and `name_readings`
+  ignore icon samples, and a select's confirmation keeps a projection with evidence (no select
+  reads such a layout).
+- *Ruling 6 held for text.* `ScanSession::list_position` judges a position passed over by its
+  identity's marks before its state: a position marked none of the keys on every read is passed
+  over whatever its columns read. No record changes for it.
+- *The colour check, built.* In a slot's pool an entry is its target evaluated whole; a failed
+  colour check changes only the target's own pass (and, for a relative check, which match the
+  score is taken at), never whether the entry competes. A9 needed more, built in the mapping: an
+  entry whose target's colour check failed does not compete.
+
+**The rulings, as built.**
+- *1, the layout* (`crates/recognition-pack/src/candidate_layout.rs`, `CandidateLayout::
+  identity_templates`, `CandidateFeatureDeclaration::region`, `layout_pool`, `pool_region`,
+  `validate_layout_pool`, `validate_pools_wire`; `crates/pack-containment/src/source/declarations.rs`,
+  `layout_pools`; `source/mod.rs`, the derivation). A picture identity of a `repeated_anchor`
+  layout declares `region`, a rectangle relative to its instance's origin (corner scaled as an
+  offset, size kept, a sample's jitter shifting it), inside `instance_rect`; the layout declares
+  its pool once in its own `identity_templates`, 1 to 128 entries (`MAX_LAYOUT_IDENTITY_TEMPLATES`);
+  a slot's pool keeps 1 to 16. Of each template its image and its colour check are used; its own
+  region is not, and its own threshold decides nothing (it only picks the match a colour check is
+  read at, as for every relative check).
+- *2, two kinds of entry* (`CandidatePoolTemplate`, `key`). `{id, variant?, target_id}` and
+  `{"other": true, target_id}`; at least one key entry, no target twice, an `other` entry names no
+  `id` or `variant` and `other` is written only `true`; a slot's pool (`CandidateIdentityTemplate`,
+  unchanged) refuses `other` at its pointer on the wire and at the declaration gate.
+- *3, one judgement* (`read_pool`, `CandidatePictureReading`). As the contract's list says; with no
+  `other` entry and every entry competing it answers `map_icons`'s feature (a test over a table).
+  A read none of the keys keeps an Unknown feature, `out_of_domain`: the mapping is new, so it takes
+  the reason that says the read names something outside the identity's domain; the text mark keeps
+  the `low_confidence` its mapping gave before LIST-A.
+- *4, no rule "far below every key".* A card no picture recognises is unread whatever its scores.
+- *5, the list* (`list_reading.rs`, `prepare_list_readings`). `read_list` takes such a layout;
+  LIST-A's rules stand; `others: pass_over` over a pool without an `other` entry is refused,
+  `contained_task_resource_reading_invalid`, `<operation id>:read_list/others`.
+- *6, judged on its identity alone.* Pinned for text and pictures by a test; no correction of
+  LIST-A was needed.
+- *7, selection not opened* (`selection.rs`, `prepare_select_steps`, `CandidateLayout::
+  reads_pictures`). A select step, with a scan or without, over such a layout:
+  `contained_task_select_invalid`, `operation=<id> select/layout_id layout=<id> identity=pictures`.
+  Left open, not closed off.
+- *8, the offline check* (`ListPositionRead::pictures`, `ScanNameRead::pictures`,
+  `list_check_cli::picture_text`). The dry run and `package list-check` carry each picture read's
+  judgement (mark, cause, best key with its target and score, best `other` by its target and score,
+  threshold, margin, entries out of the competition for their colour); they compute nothing. The
+  answer grows by `pictures`, absent for a text identity; the row's `notes` say so.
+- *9, what the run says.* LIST-A's count row, unchanged.
+- *10 and A8, the bound.* At most 128 templates each scored over at most 64 instances on a
+  viewport, bounded only by the step's deadline (checked before each evaluation); no budget of the
+  projection counts them; the cost was not measured.
+- *11, the cost*, written in the contract in the ruling's terms.
+- *12 and A6.* `package` 29 alone; no `requires` name, no `config.subsystems` name, no ledger word,
+  no client interface, no setting.
+- *A2, beside the projection* (`project_candidates_judged_with_samples`, `project_candidates_judged`,
+  `JudgedProjection`; the kernel's `project_transaction_judged`, `TransactionProjection`). The
+  projection carries the mapped feature and no evidence of the pool's feature; the judgements go
+  beside it; a run's scan keeps them for the viewport only, its dry run keeps them as reads.
+- *A3, one function* (`CandidateLayout::name_mark`, which takes the judgements).
+- *A4, diagnostics* (`ContainedTaskRuntime::record_candidate_pool`, the host's `task_timing`). A
+  pool's evaluations on a projection are one evaluation of the run's timing, their time together; an
+  evaluated template writes no diagnostic row (a task diagnostic row has no member for "a pool of N
+  templates over M instances", so none is written beyond the timing); a failed one is recorded as
+  any failed evaluation is and fails the projection, `candidate_feature_failed`.
+- *A5* (`validate_layout_pool`), refused at the entry's `target_id`; a fixed colour check too.
+- *A9, colour* (`CandidatePoolScore::colour_held`, `pool_score`). The producer hands the colour
+  check's own verdict; the mapping excludes an entry whose check failed.
+
+**Decided here.** The rectangle is the feature's `region`, not an `offset` with a size, so a
+feature holds one member for it; a fixed (not `template_relative`) colour check on a pool's
+template is refused, since it cannot follow the instances (the region batch ignores it); a read
+with no key entry competing is `low_confidence`; the timing's sample starts at the pool's first
+evaluation on the projection; the projection without sampling (a layout without consensus, identity
+or integer) records no timing, as it records no evaluation; the fixtures' names are made up.
+
+**Codes and words.** None added: the refusals use `resource_declaration_invalid`, the recognition
+pack's invalid package, `contained_task_resource_reading_invalid` and `contained_task_select_invalid`
+with their details. The outcome index does not change.
+
+**The `package` revision.** A Runtime before this one (0.12.92, read at `df39227a`) refuses either
+member at its declaration gate (`UnknownField` at `/candidate_layouts/<i>/identity_templates` and
+`…/features/<j>/region`), before `PackageAdmitted`; its installer, whose range ends at 28, refuses a
+bundle that declares 29. This build declares [3, 29].
+
+**Tests** (exec gate map row "#503 LIST-B", host gate map row "#503 LIST-B"; no clock read in a gate
+file).
+
+| Test | What it shows |
+|---|---|
+| `candidate_layout::gate_503_list_b::list_b_the_mapping_judges_a_key_none_of_the_keys_and_unread_from_the_pool` (1) | a key clear of the best `other` (and at the margin) known; an `other` at the threshold and the margin none of the keys, `out_of_domain`; key and `other`, two keys within the margin `ambiguous`; nothing at 900 `low_confidence`; a colour that failed out of the competition; the reading's evidence |
+| `…::list_b_a_pool_without_other_entries_answers_as_a_slots_pool_over_a_table_of_inputs` (2) | fourteen rows, `read_pool`'s feature equal to `map_icons`'s |
+| `…::list_b_a_layout_pool_is_admitted_and_each_wrong_declaration_is_refused_at_its_pointer` (3) | admitted, 128 admitted, 129, no key, a repeated target, an `other` with an id, scales, a fixed colour check, a region outside, no region refused at their pointers; on the wire `other: false`, a slot's `other`, a `fixed_slots` layout's pool |
+| `…::list_b_a_pool_of_128_over_64_instances_projects_within_the_projections_limits` (4) | 64 candidates, within 32 KiB, no evidence of the pool, one judged read each, `name_mark` as judged, 8192 evaluations in aggregate |
+| `…::list_b_pictures_of_one_drawing_in_two_colours_are_told_apart_by_their_colour_checks` (5) | red and blue read as their entries, green unread `low_confidence`, both keys out |
+| `contained_task::gate_503_list_b::list_b_eighty_cards_over_thirteen_viewports_give_the_six_keys_shown_and_a_whole_list` (6) | six rows, 74 passed over, three keys not shown; a key's and an `other`'s evidence |
+| `…::list_b_a_card_no_picture_recognises_leaves_the_list_unread` (7) | `list_position_unread` count 1, the card `identity_unread` `low_confidence`, its scores below 900 |
+| `…::list_b_a_card_read_as_a_key_on_one_viewport_and_as_other_on_another_is_unread` (8) | `partly_passed_over`, keeping `member-g` |
+| `…::list_b_a_passed_over_card_is_judged_on_its_identity_alone_for_pictures_and_for_text` (9) | an `other` whose count does not read passed over, a key's `feature_unread`, both identity kinds |
+| `…::list_b_the_run_says_how_many_positions_it_passed_over` (10) | the run's list, 2 passed over, the dry run's equal |
+| `…::list_b_passing_over_a_pool_without_others_and_a_select_over_pictures_are_refused` (11) | `read_members:read_list/others`; `operation=pick select/layout_id layout=layout/cards identity=pictures` |
+| `apps/actinglab` `gate_503_list_b::list_b_a_layouts_picture_pool_needs_revision_29_and_nothing_else_does` (12) | 29 for `identity_templates` and `region` in either mode; a slot's pool and a plain layout 3 |
+| `apps/actinglab` `gate_503_list_b::list_b_the_list_check_answers_the_pictures_evidence_of_each_kind_of_position` (13) | `package_list_check_not_whole`; each position's `pictures` in the JSON and a text line of each |
+| `crates/runtime-host` `gate_503_list_b::list_b_a_pool_of_nine_rows_sums_the_six_the_list_holds_and_counts_the_three_absent_0` (host) | the six rows of test 6 read 72 by a pool of the nine keys |
+
+Adapted, the requirement moving the shipped `package` range to [3, 29]: `gate_463_kp1`
+(`KEY_REVISION + 12`), `gate_463_sel2l` (`SHARED_READ_REVISION + 9`), the Lab's
+`gate_463_sel2l_rows`, actinglab-architecture's `component_interfaces`, the rescue module's
+`gate_463_v1`, `gate_477_cv1`, `gate_455_tk1` and `gate_455_rr1`. No golden re-recorded; no test
+leaves the gate maps.
+
+**What is not changed.** A package without the members: its bytes, its sealed task, its identity,
+its admission, its projection and its hash, every run and every record; a slot's pool and its
+mapping (`map_icons`); the projection's shape and limits; the ledger, `runtime-client`,
+`actingd-config`, `runtime-outcomes`; every setting.
+
+**What was left.** The rule "far below every key" (not built, and not to be: it would read an item
+never held 0 at every run once its card appears); a selection step or a scan that selects over such
+a layout (refused, left open); an abbreviated count (a key's card whose count is abbreviated is
+unread, so such an item stays out of such a list); the cost of the evaluations (not measured: the
+first real package measures it); a row of a task diagnostic that names a pool (no member for it).
+
+**At deploy.** Nothing to configure, and nothing changes until a package declares the members: none
+in production does. A package with them is adopted only once this build is live; a rollback below
+0.12.93 meets it as an older Runtime does (its installer refuses the bundle at the `package` edge,
+a placed one is refused at every admission), so the rollback stays open while no root is placed
+from such a bundle. In the release notes' language:
+列表读数（`read_list`）可以读"只有图、没有名字"的卡片格子：`repeated_anchor` 版式的图片身份特征声明 `region`（每张卡内打分的矩形），版式在 `identity_templates` 里为它声明一个对每张卡都一样的图池，最多 128 张，图池里既有想要的键的图（`{id, target_id}`），也有"已知但不是任何键"的卡的图（`{"other": true, target_id}`）。身份映射一次判定：认出是某个键、认出是"不是任何键"的已知卡（这才略过），其余都算没读成，整表不写；没有"分数都很低就略过"这条规则，所以图池里没有图的卡第一次出现时，整表停读，直到补上它的图。只差颜色的同一张图靠各自模板的颜色检查分开，颜色没对上的条目不参加比较。图池的分数不进投影、不进账本，只在投影旁边判定；离线的 `package list-check` 对每个图片位置给出最好的键和分数、最好的"其他"条目和分数、阈值和边距。代价：视图里出现的每一种卡都要有图；把某个键的图误标成"其他"，这个键每次都读 0，验收时要逐个对帧。图池上的选择步这一版先拒。包的修订升到 29：带这两个成员的包要本版以上的 Runtime。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

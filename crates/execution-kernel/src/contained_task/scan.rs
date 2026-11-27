@@ -68,7 +68,9 @@ use actingcommand_contract::{
     TaskSelectionUnknownCheck,
 };
 use actingcommand_recognition::color_digest::{self, ColorDigest};
-use actingcommand_recognition_pack::{CandidateLayout, CandidateNameMark, CandidateNameReading};
+use actingcommand_recognition_pack::{
+    CandidateLayout, CandidateNameMark, CandidateNameReading, CandidatePictureReading,
+};
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, FieldDomain, ScalarValue, SelectionDecision, SelectionFactSnapshot,
     SelectionOutcome, SelectionPolicy, SelectionTables, SortDirection, TieBreakKey, UpperBound,
@@ -346,10 +348,13 @@ pub(super) struct ScanReadInstance {
 /// of an instance's name as the identity mapping judged it: the read's mark
 /// (`CandidateLayout::name_mark`) and the mapping's reading of each OCR sample the projection mapped
 /// it from (`CandidateLayout::name_readings`). Kept in memory by a list reading's dry run only.
+/// Workflow #503 LIST-B: and, for a picture identity read from the layout's pool, what the mapping
+/// judged of each sample beside the projection (`CandidatePoolJudgements::samples`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ScanNameRead {
     pub(super) mark: CandidateNameMark,
     pub(super) samples: Vec<CandidateNameReading>,
+    pub(super) pictures: Vec<CandidatePictureReading>,
 }
 
 /// A settled viewport frame, read once: its instances, the start and end checks, and the frame's
@@ -2227,6 +2232,7 @@ impl<'a> ScanSession<'a> {
                 viewport,
                 mark: name.mark,
                 samples: name.samples.clone(),
+                pictures: name.pictures.clone(),
             });
         }
         match instance.features.get(identity_feature) {

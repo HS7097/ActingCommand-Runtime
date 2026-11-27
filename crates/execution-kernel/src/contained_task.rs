@@ -107,6 +107,9 @@ mod gate_503_list_a;
 // Workflow #503 LIST-A3: the dry run of a list reading answers every position it read.
 #[cfg(test)]
 mod gate_503_list_a3;
+// Workflow #503 LIST-B: a list reading over cards identified by pictures.
+#[cfg(test)]
+mod gate_503_list_b;
 // Workflow #450 FL-1a and FL-1b: a list grouped from fields read one position per frame.
 mod field_list;
 // Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.
@@ -3063,6 +3066,20 @@ pub trait ContainedTaskRuntime {
             Some(result),
             ContainedTaskGuardEvaluation::of_sample(result),
         )
+    }
+
+    /// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool"): the
+    /// template evaluations of the picture pool of the layout feature `feature` on one projection,
+    /// in aggregate: their time together, one evaluation of the run's timing. No row is written
+    /// for the templates that were evaluated (a failed one comes through
+    /// [`Self::record_candidate_evaluation`]). The default records nothing: a runtime without the
+    /// run's timing has nothing to add it to.
+    fn record_candidate_pool(
+        &mut self,
+        _feature: &str,
+        _timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        Ok(())
     }
 
     /// ACT-4 (Workflow #407, register §1.254): one evaluation of a target an operation's

@@ -4950,3 +4950,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr1::rr1_h2_the_page_lists_no_records_entry_and_a_set_of_its_name_holds_no_value",
 ]
 incident = ["#455 RR1"]
+
+# Workflow #503 LIST-B (0.12.93; register §1.536; brief rd-1123/brief-503-list-b.md; contracts/scheduling/README.md, "A pool read from rows of a list"): the six rows the kernel's gate reads from its grid of eighty cards identified by pictures (member-a to member-f, counts 5, 7, 11, 13, 17 and 19); a pool that reads the rows of all nine keys at the factor 1 reads their sum 72, the three keys no card showed counting 0, observed and expiring as the list
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_list_b::list_b_a_pool_of_nine_rows_sums_the_six_the_list_holds_and_counts_the_three_absent_0",
+]
+incident = ["#503 LIST-B"]

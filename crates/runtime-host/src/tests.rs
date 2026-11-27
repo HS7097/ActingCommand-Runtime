@@ -259,6 +259,9 @@ mod gate_455_p2;
 // Workflow #503 LIST-A (0.12.90; register §1.533): a pool read from rows of a list that holds the
 // wanted keys only counts a wanted key the list does not hold 0.
 mod gate_503_list_a;
+// Workflow #503 LIST-B (0.12.93; register §1.536): a pool read from the rows of a list of cards
+// identified by pictures sums the rows the list holds and counts the keys no card showed 0.
+mod gate_503_list_b;
 // #477 CV-2 (0.12.80; register §1.508): the scheduler workbench composes a game root whose
 // `schedule.json` names `catalog_business` with its `pack-catalog.json`, watches that file, and
 // keeps the game's last good rules when it is refused or gone.

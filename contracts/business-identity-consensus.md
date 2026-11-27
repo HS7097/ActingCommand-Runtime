@@ -43,7 +43,85 @@ Icon recognition instead declares `{"kind":"icon_templates","minimum_score_milli
 "minimum_margin_milli":50}` and each slot supplies `identity_templates[feature_name]`, with
 1..=16 `{id, variant?, target_id}` entries naming existing template targets. Thresholds are
 1..=1000, margins 1..=1000. The template score is normalized integer milli. Each pool closes
-against the feature's identity domain and contains no repeated target ID.
+against the feature's identity domain and contains no repeated target ID. A slot's entry is
+evaluated as its target is, in the target's own region; its target's colour check changes only
+the target's own pass (and, for a check relative to the match, which match the score is taken
+at), never whether the entry competes. A slot's pool takes no `other` entry (`UnknownField` at
+`…/slots/k/identity_templates/<feature>/<n>/other`); a `repeated_anchor` layout declares its pool
+on the layout ("A layout's pool" below).
+
+**A layout's pool** (Workflow #503 LIST-B, since 0.12.93; [v012-register.md](v012-register.md)
+§1.536). A `repeated_anchor` layout may declare a picture identity feature: an `identity` feature with `icon_templates` recognition and a `region`, the
+rectangle relative to each instance's origin in which its pictures are scored (its corner moves
+with the instance as a feature's `offset` does, scaled by the factor the anchor matched at; its
+size is kept; a sample's jitter shifts it). The layout declares the feature's pool once, for every
+instance, in its own `identity_templates` (a map from the feature's name to its entries, as a
+slot's): 1 to 128 entries, of two kinds:
+
+- `{id, variant?, target_id}`, the picture of a key, an entry of the feature's identity;
+- `{"other": true, target_id}`, the picture of a known card that is none of the keys; it names no
+  `id` and no `variant`, and `other` is written only as `true`.
+
+The pool holds at least one key entry and names no target twice. Every entry's target is a raw
+`template` target without `mask`, `scales`, `unique` or `luma_floor`, whose `color_check`, when it
+declares one, is `template_relative`. Of the target the pool uses its image and its colour check;
+its own region (its search region) is not used, and its own threshold decides nothing (for a target
+with a colour check it only decides which match the check is read at, as a template with a relative
+check always takes the best match that passes both); the identity's `minimum_score_milli` and
+`minimum_margin_milli` judge. Each refusal names its pointer
+(`/candidate_layouts/<i>/identity_templates/<feature>/<n>/…`, `…/features/<j>/region`).
+
+**The judgement, one place.** On each actionable instance every entry is scored in the feature's
+region (`SceneEvaluation::evaluate_template_regions`, the image matched inside the region), and the
+identity mapping judges the read once, with every score
+(`CandidateIdentityDeclaration::read_pool`):
+
+- an entry whose target declares a colour check that failed where the template matched does not
+  compete at all: it is neither the best key nor the best `other`, so two entries of one drawing in
+  two colours are told apart by their colour checks, and the margin is judged among the entries
+  that remain;
+- **a key**: the key entries that compete judged as a slot's pool is (the best at
+  `minimum_score_milli` or above and clear of every other key by `minimum_margin_milli`), with the
+  best `other` entry counted as one more competitor of a different identity for the margin;
+- **none of the keys** only when the best `other` entry's score is at least `minimum_score_milli`
+  and exceeds the best key entry's by at least `minimum_margin_milli`; its feature is Unknown
+  `out_of_domain`;
+- **unread** in every other case, with the reasons that exist: `low_confidence` when no key reached
+  the threshold or none competed, `ambiguous` for a key and an `other` within the margin or two
+  keys within it.
+
+A pool without an `other` entry whose entries all compete answers the feature a slot's pool answers
+over the same scores. There is no rule that passes over a card whose every score is low: a card no
+picture recognises is unread.
+
+**Beside the projection.** The full scores go nowhere else: not into the projection, not into a
+hash, not into a record. The projection carries the mapped feature (the known key, or Unknown with
+its reason) and no recognition evidence of the feature (the evidence is optional per feature, and
+the shape admits no smaller form without a new variant). What the mapping judged of each sample
+(its mark, the best key and the best `other` entry with their scores, the threshold and the
+margin) is handed beside the projection (`CandidatePoolJudgements`), as a select's dry run is
+handed the reads of a name; the layout's one function gives every reader a position's mark from
+it (`CandidateLayout::name_mark`), and only a list reading's dry run keeps it past its viewport.
+
+**The bound and the diagnostics.** One viewport needs at most 128 × 64 = 8192 template evaluations
+(entries × instances), bounded only by the step's deadline, checked before each evaluation; the
+projection's limits do not count them (they are no OCR or NN evaluation, and nothing of them enters
+the projection). The run's timing counts a pool's evaluations on a projection in aggregate, as one
+evaluation of their time together; a template that was evaluated writes no diagnostic row of its
+own (a slot pool's entry writes one), and the row a task diagnostic writes has no member that could
+say "a pool of N templates over M instances", so none is written for the pool beyond the timing. A
+template whose evaluation fails is recorded as any failed evaluation is (its diagnostic row with
+the recognition error) and fails the projection, `candidate_feature_failed` naming the target. A
+person diagnosing a slow pool reads the run's timing (its evaluations' count and time); one
+diagnosing a wrong read runs the Lab's `package list-check` over saved frames
+([resource-readings.md](resource-readings.md), "Offline"). The cost of the evaluations was not
+measured.
+
+A select step, with a scan or without, over such a layout is refused in this release
+([selection-graph.md](selection-graph.md), "Rules"). A pack that declares the members needs
+`package` revision 29 ([component-interfaces.md](component-interfaces.md)): a Runtime before 0.12.93
+refuses them at its declaration gate (`UnknownField` at `/candidate_layouts/<i>/identity_templates`
+and `…/features/<j>/region`).
 
 A destination may also read a chosen identity back from images (Workflow #308 SEL-L4b-T,
 [selection-graph.md](selection-graph.md), "Expected identity"): an `expect_identity` with
@@ -192,7 +270,9 @@ transactions, geometry changes, effects, or H1/H2.
 mapping. Samples missing because of a provider, capture, recognition or ledger failure fail
 the operation; they are never negative votes. The typed `recognition_evidence` in the core
 projection includes each frame index/RGB8 SHA-256, input text/confidence, icon scores or scalar
-reading, and its mapped value. Aggregation is a pure function of these recorded values.
+reading, and its mapped value; Workflow #503 LIST-B: but a layout's pool, whose scores are judged
+beside the projection and go nowhere else: not into the projection, not into a hash, not into a
+record ("A layout's pool" above). Aggregation is a pure function of these recorded values.
 The original artifact and projection byte limits apply; a refusal never truncates a decision.
 
 The kernel owns capture and waiting under its existing Runtime lease/cancellation checks.
