@@ -50641,6 +50641,7 @@ model as `replay` does. In the release notes' language: 新增 Lab 离线操作 
 `ac_package_list_check`）：拿一个包和一个存下的帧目录（同 `replay` 的读法），对一个或全部
 `read_list` 步做列表读数的离线试读，逐个位置列出它在哪、每次读到的文字和置信度、身份映射给的标记、离最近的想要名字（键和别名）的距离和必须超过的界限，以及它在表里算什么（认出的键、略过、没读成及原因），再列出哪些想要的键有卡、哪些没卡。卡上的字只打印在本机这次的回答里，不进账本、不写日志、不落文件。列表没读成整表时答 `package_list_check_not_whole`。离线试读给"一个视口认出、另一个视口略过"的位置一个新词 `partly_passed_over`，`contradicted` 只留给列值前后不一致。运行本身不变。
 
+## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
 readers in one PR.
