@@ -21,8 +21,9 @@ use super::*;
 use crate::RootGoalTables;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    DeclaredInitiator, GoalDeclarationRead, GoalEdit, GoalEntryType, GoalProblem, GoalView,
-    Initiator, RuntimeChannel, RuntimeLifecyclePhase, RuntimePayload, StandardPackProblem,
+    DeclaredInitiator, GoalDeclarationRead, GoalEdit, GoalEntryType, GoalProblem, GoalTableNames,
+    GoalView, Initiator, RuntimeChannel, RuntimeLifecyclePhase, RuntimePayload,
+    StandardPackProblem, say_goal_position,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -117,6 +118,22 @@ fn tables(amount: u64, class: &str) -> Value {
             "keys": {"hero_a": {"class": class}}
         }]
     })
+}
+
+/// Workflow #455 RR4a (0.12.100; register §1.546): [`tables`] of `amount` and the class `common`,
+/// with the names a person reads of its item, its key and its column, and how the column's
+/// positions are said.
+fn named_tables(amount: u64) -> Value {
+    let mut named = tables(amount, "common");
+    named["names"] = json!({
+        "items": {"coin": {"en": "Coin"}},
+        "tables": {"heroes": {
+            "keys": {"hero_a": {"en": "First hero"}},
+            "columns": {"grade": {"en": "Grade"}},
+            "positions": {"grade": [{"prefix": [], "text": {"en": "Grade {0}"}}]}
+        }}
+    });
+    named
 }
 
 /// Rewrites the package's control declaration one byte longer (its `timeout_ms` 8000 becomes
@@ -411,12 +428,18 @@ fn refused_word(receipt: &RuntimeReceipt) -> Option<String> {
 // `standard_pack_goal_tables_not_applied`, and no `standard_pack_goals_not_applied` is recorded
 // for it; a `goals.json` refused afterwards is `standard_pack_goals_not_applied` naming
 // `goals.json`, and the tables' code still names only `goal-tables.json`, once.
+//
+// Extended by Workflow #455 RR4a (0.12.100; register §1.546), tests 4 and 6: the first file
+// writes `names`, which the workbench keeps with the tables for the generation in force (its item
+// named, its column's position said), the same shared value after the root is read again with the
+// same content. The same file without `names`, another content, is read again: its sha256
+// another, its tables those the named file read to, its names none, and nothing is recorded.
 #[test]
 fn rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_applies_no_records() {
     let scene = Scene::with(|packs| {
         place_game_root(packs);
         write_json(&goals_path(packs), &goals(true));
-        write_json(&tables_path(packs), &tables(10, "common"));
+        write_json(&tables_path(packs), &named_tables(10));
     });
     let next = scene.evaluate_and_run(POLICY_NOW_UNIX_MS, 6);
     let first = scene.kept_tables();
@@ -431,6 +454,17 @@ fn rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_app
     assert_eq!(
         first_tables.table_names(),
         BTreeSet::from(["heroes".to_owned()])
+    );
+    let localized = |text: &str| vec![("en".to_owned(), text.to_owned())];
+    assert_eq!(first_tables.names.item("coin"), Some(&localized("Coin")));
+    let heroes = first_tables
+        .names
+        .table("heroes")
+        .expect("the names of the table are kept");
+    assert_eq!(heroes.key("hero_a"), Some(&localized("First hero")));
+    assert_eq!(
+        say_goal_position(heroes, "grade", None, &[1]),
+        Some(localized("Grade 1"))
     );
 
     one_byte_longer(scene.packs.path());
@@ -450,8 +484,28 @@ fn rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_app
         "the same content is not parsed again"
     );
 
+    // Workflow #455 RR4a: the same file without `names`.
+    write_json(&tables_path(scene.packs.path()), &tables(10, "common"));
+    let plain_at = next.max(again_at + CHECK_INTERVAL_MS);
+    let next = scene.evaluate_and_run(plain_at, 12);
+    let plain = scene.kept_tables();
+    let RootGoalTables::Accepted {
+        sha256: plain_sha,
+        tables: plain_tables,
+    } = &plain
+    else {
+        panic!("accepted tables: {plain:?}");
+    };
+    assert_ne!(plain_sha, first_sha);
+    assert!(!Arc::ptr_eq(first_tables, plain_tables));
+    assert_eq!(plain_tables.game, first_tables.game);
+    assert_eq!(plain_tables.items, first_tables.items);
+    assert_eq!(plain_tables.tables, first_tables.tables);
+    assert_eq!(plain_tables.names, GoalTableNames::default());
+    assert!(scene.tables_not_applied().is_empty());
+
     write_json(&tables_path(scene.packs.path()), &tables(200, "common"));
-    let other_at = next.max(again_at + CHECK_INTERVAL_MS);
+    let other_at = next.max(plain_at + CHECK_INTERVAL_MS);
     let next = scene.evaluate_and_run(other_at, 8);
     let other = scene.kept_tables();
     let RootGoalTables::Accepted {

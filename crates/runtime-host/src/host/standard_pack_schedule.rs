@@ -256,7 +256,8 @@ pub enum RootGoalTables {
     /// The root holds none.
     Absent,
     /// The reader accepted it: the parsed tables, shared with the read it was kept from, and the
-    /// sha256 of its bytes.
+    /// sha256 of its bytes. Workflow #455 RR4a: the parsed tables carry the names the file writes
+    /// (`StandardPackGoalTables::names`), kept with them by the same rule; nothing here reads them.
     Accepted {
         sha256: String,
         tables: Arc<StandardPackGoalTables>,

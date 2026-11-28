@@ -323,6 +323,9 @@ mod gate_455_sl1;
 // pool it produced unread, the needs' holding of it included, until a reading after its end; a
 // start rebuilds the same from the ledger.
 mod gate_455_rr3c;
+// #455 RR4a (0.12.100; register §1.546): a tables file that writes the names a person reads gives
+// the needs of the same file without them, its sha256 aside.
+mod gate_455_rr4a;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;
