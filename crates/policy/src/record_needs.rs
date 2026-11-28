@@ -154,7 +154,9 @@ pub enum RecordNeedsNote {
     /// applies no table of the root's accepted tables, its key is no key of that table, or its
     /// target names a column or a position the key's ladder does not hold; `record` none for a
     /// stored record its reader does not read), with the word a goal edit of it would be refused
-    /// with now. The record adds nothing.
+    /// with now; or, fix round 1, a record whose table and key an earlier stored record names
+    /// already under another entry (`key_repeated`, which no edit refuses: a key is walked once).
+    /// The record adds nothing.
     NotApplied {
         record: Option<RecordRef>,
         problem: GoalProblem,
@@ -170,8 +172,16 @@ pub enum RecordNeedsNote {
         fact_key: String,
         reason: ProgressListUnknown,
     },
-    /// `goal_records_reading_missing`: the list is known and holds no reading of the column's
-    /// reading column `reading` for the key (no row of the key, or a row without the column).
+    /// `goal_records_row_missing` (fix round 1, the review: its own cause): the list is known and
+    /// holds no row of the key (a list other than the table's `held_by` one): its reading has not
+    /// covered the character.
+    RowMissing {
+        record: RecordRef,
+        column: String,
+        fact_key: String,
+    },
+    /// `goal_records_reading_missing`: the list holds the key's row without the column's reading
+    /// column `reading`: the package that reads the list does not write it.
     ReadingMissing {
         record: RecordRef,
         column: String,
@@ -259,6 +269,16 @@ impl RecordNeedsNote {
                 writer.text(column.as_deref().unwrap_or(""));
                 writer.text(fact_key);
                 writer.text(unknown_token(reason.reason()));
+            }
+            Self::RowMissing {
+                record,
+                column,
+                fact_key,
+            } => {
+                writer.text("row_missing");
+                writer.record(Some(record));
+                writer.text(column);
+                writer.text(fact_key);
             }
             Self::ReadingMissing {
                 record,
@@ -399,7 +419,8 @@ impl InstanceRecordNeeds {
     /// The reasons that say the set's notes on every candidate of the instance, at most one for
     /// each code and value: `goal_records_not_applied` (by `goal_problem`), `goal_records_not_held`,
     /// `goal_records_progress_unknown` (by `fact_key` and `unknown_reason`),
-    /// `goal_records_reading_missing` (by `fact_key`), `goal_records_position_unknown`,
+    /// `goal_records_row_missing` and `goal_records_reading_missing` (each by `fact_key`),
+    /// `goal_records_position_unknown`,
     /// `goal_records_holding_unknown` (one for each pool, `pool_id` and the `unknown_reason` of
     /// its observation), `goal_records_item_unweighed` and `goal_records_condition`, in this order;
     /// each lists its records, columns or items in the order computed.
@@ -407,6 +428,7 @@ impl InstanceRecordNeeds {
         let mut not_applied = BTreeMap::<GoalProblem, Vec<String>>::new();
         let mut not_held = Vec::new();
         let mut progress = BTreeMap::<(&str, &'static str), (UnknownReason, Vec<String>)>::new();
+        let mut row = BTreeMap::<&str, Vec<String>>::new();
         let mut reading = BTreeMap::<&str, Vec<String>>::new();
         let mut position = Vec::new();
         let mut holding = Vec::new();
@@ -438,6 +460,14 @@ impl InstanceRecordNeeds {
                             None => record.item(),
                         });
                 }
+                RecordNeedsNote::RowMissing {
+                    record,
+                    column,
+                    fact_key,
+                } => row
+                    .entry(fact_key.as_str())
+                    .or_default()
+                    .push(format!("{}/{column}", record.item())),
                 RecordNeedsNote::ReadingMissing {
                     record,
                     column,
@@ -484,6 +514,12 @@ impl InstanceRecordNeeds {
                 outcome: Outcome::new(PolicyCode::GoalRecordsProgressUnknown)
                     .fact_key(*fact_key)
                     .unknown_reason(UnknownReasonToken(*unknown)),
+                detail: listed(items.as_slice()),
+            });
+        }
+        for (fact_key, items) in &row {
+            reasons.push(DecisionReason {
+                outcome: Outcome::new(PolicyCode::GoalRecordsRowMissing).fact_key(*fact_key),
                 detail: listed(items.as_slice()),
             });
         }

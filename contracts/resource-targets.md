@@ -1071,7 +1071,8 @@ records"). The evaluator stacks it on the instance's stored record for that eval
   evaluation does not know it. Then every candidate of the instance carries the notes of the
   computed set, one reason for each code and value: `goal_records_not_applied` (warning,
   `goal_problem`), `goal_records_not_held`, `goal_records_progress_unknown` (`fact_key`,
-  `unknown_reason`), `goal_records_reading_missing` (`fact_key`), `goal_records_position_unknown`,
+  `unknown_reason`), `goal_records_row_missing` (`fact_key`; fix round 1, apart from the next),
+  `goal_records_reading_missing` (`fact_key`), `goal_records_position_unknown`,
   `goal_records_holding_unknown` (`pool_id`, `unknown_reason` when the observation gives one),
   `goal_records_item_unweighed` and `goal_records_condition`, each listing its records, columns or
   items. Nothing goes to a log.

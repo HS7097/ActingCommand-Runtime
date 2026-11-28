@@ -51322,8 +51322,8 @@ computed", which replaces "What arrives later"; "Who reads it"), [resource-targe
 ("Needs computed from the records"), [standard-pack-goals.md](standard-pack-goals.md) ("The records
 entry": what the records do), [scheduling/README.md](scheduling/README.md) ("Needs computed from
 the records"), [instance-fact-store.md](instance-fact-store.md) ("Goal records facts": the
-sentences that said no evaluation computed from the records), and the policy fragment's ten codes
-are the contract.
+sentences that said no evaluation computed from the records), and the policy fragment's eleven
+codes (ten, and `goal_records_row_missing` since fix round 1) are the contract.
 
 **What it is for.** A person has said whom to raise and to which grade (§1.537 stores it), and the
 root carries the game's rules for it (§1.535). This slice makes the scheduler act on it: before
@@ -51359,14 +51359,17 @@ computed is stored. With no record set, nothing changes by a byte.
   known takes no step and asks nothing; a `condition` is named (`goal_records_condition`).
 - *3, not known is pending*. A missing, expired, zero-confidence or unkeyed list:
   `goal_records_progress_unknown` (`fact_key`, `unknown_reason`), the `held_by` list's pending
-  holding the whole record; a known list without a reading of the column for the key (no row of the
-  key, or a row without the reading column): `goal_records_reading_missing`; readings forming no
+  holding the whole record; a known list, other than the `held_by` one, without a row of the key:
+  `goal_records_row_missing` (fix round 1; first built under the next code); a row of the key
+  without the reading column: `goal_records_reading_missing`; readings forming no
   position (a value of another kind, a tuple equal to none): `goal_records_position_unknown`. A
   `held_by` list read whole without the key: `goal_records_not_held`, known. A record whose entry,
   key or target the root in force does not declare: `goal_records_not_applied` with the word the
   goal edit's own check (`check_records`' parts, `check_to`) would refuse it with now
   (`name_unknown`, `not_an_option`, `out_of_range`, `wrong_type`), and `record_unreadable` for a
-  stored record its reader does not read. Each adds nothing: the result is a lower bound.
+  stored record its reader does not read; since fix round 1 also a record whose table and key an
+  earlier stored record names under another entry (`key_repeated`). Each adds nothing: the result
+  is a lower bound.
 - *4, summing, then taking apart once*. The records' needs are summed by item; the items are taken
   in the recipes' topological order from the top (Kahn's order over `from` and `cost`): an item with
   a recipe is covered by its holding up to its need (`Covered` on its pool), the rest made, rounded
@@ -51411,10 +51414,11 @@ computed is stored. With no record set, nothing changes by a byte.
 | Code | The one cause | Category |
 |---|---|---|
 | `goal_records_need` | a pool has a computed need and its stacked goal covers the candidate (`pool_id`) | info |
-| `goal_records_not_applied` | a stored record the root in force does not declare (`goal_problem`) | warning |
+| `goal_records_not_applied` | a stored record is not applied, `goal_problem` saying why: the root in force does not declare it, or (fix round 1, `key_repeated`) an earlier record names its table and key | warning |
 | `goal_records_not_held` | the `held_by` list, read whole, holds no row of the key | info |
 | `goal_records_progress_unknown` | a list a column (or the `held_by` list) reads gives no reading (`fact_key`, `unknown_reason`) | info |
-| `goal_records_reading_missing` | a known list holds no reading of the column for the key (`fact_key`) | info |
+| `goal_records_row_missing` (fix round 1) | a known list other than the `held_by` one holds no row of the key (`fact_key`) | info |
+| `goal_records_reading_missing` | a known list holds the key's row without the column's reading column (`fact_key`) | info |
 | `goal_records_position_unknown` | the readings form no position of the ladder | info |
 | `goal_records_holding_unknown` | an item with a recipe whose holding is not known (`pool_id`, `unknown_reason` when given) | info |
 | `goal_records_item_unweighed` | an item without a recipe and without a pool is needed | info |
@@ -51433,7 +51437,8 @@ All are decision reasons of the policy fragment, of ladder class `none`; none re
 | `rr3_t3_the_computed_set_is_in_the_decision_identity_and_an_instance_without_needs_is_as_before` (policy) | no set and an empty set alike byte for byte; the set changes the intent's identity, the same set keeps it, another need or other tables change it |
 | `rr3_p1_an_item_with_a_recipe_is_covered_by_its_holding_and_the_rest_is_made` (host, pure) | need 10 held 4, 4 for 1 and 300: 4 covered, 24 and 1800 landing; an unpooled item noted; the sha256 and the freshness; no records, no set |
 | `rr3_p2_the_walk_counts_what_the_targets_ask_from_the_progress_and_sums_before_taking_apart` (host, pure) | a step before `from` asks nothing, one at it raises the required column, a target behind asks nothing, a key's own item, 17 summed then taken apart (21, not 15), the conditions named |
-| `rr3_p3_each_cause_adds_nothing_with_its_own_note_and_the_need_is_a_lower_bound` (host, pure) | twelve cases, one note each and no pool; a holding not known; a pending column under the known need |
+| `rr3_p3_each_cause_adds_nothing_with_its_own_note_and_the_need_is_a_lower_bound` (host, pure) | twelve cases, one note each and no pool (fix round 1: a list without the key's row and a row without the reading column are two notes); a holding not known; a pending column under the known need |
+| `rr3_p3_b_a_key_recorded_under_two_entries_of_one_table_is_walked_once` (host, pure; fix round 1) | two entries of one table, one key under both: 100 and 100 landing, not 500; the later record not applied `key_repeated` |
 | `rr3_p4_two_instances_of_one_root_compute_apart` (host, pure) | 300 and 200, two identities |
 | `rr3_h1_the_host_computes_the_needs_and_the_producer_of_the_pool_is_pushed` (host) | no records no set; 3000 landing on #455 P2's pool, fresh until the roster's expiry; the producer's `goal_records_need` (3000, 0, 1400, 1400, 1600) |
 | `rr3_h2_an_intent_is_stale_once_a_progress_list_the_records_or_the_tables_change` (host) | each change moves the set's identity and the earlier intent is `policy_facts_stale` |
@@ -51455,6 +51460,41 @@ reads no void; a reading is not made old by a run that produced into it since; t
 and needs (`runtime-client` 15) and a character's own page are later slices'. A list's rows are
 looked up linearly per reading, which a table near its bounds (1024 keys, 128 records) multiplies;
 not measured.
+
+**Fix round 1 (the independent review and the first builds; the coordinator's).** The review found
+the algorithm, the numbers and the identities right, an instance without records unchanged byte
+for byte, and two things to change before the merge.
+(1) *A need counted twice.* The root's check lets two `records` entries name one table (§1.535),
+and a key recorded under both was walked once for each record, its need added twice: no longer a
+lower bound. Now a table's key is walked once, for the first of its records in the stored order
+(the entry set first: an entry's records stand where its first one stood); a later record of the
+same table and key is not applied, said with the code such records already have,
+`goal_records_not_applied`, and the existing word `key_repeated` of `goal_problem`. No edit refuses
+that record (each entry's value is checked on its own), which the code's texts now say; the word
+names what a person mends, the key held under two entries. The targets are not merged to the
+further of the two: a record that applies nothing and says so is plainer than one whose target
+silently grew, and the result stays a lower bound. `instance_needs` carries it, and
+`rr3_p3_b_a_key_recorded_under_two_entries_of_one_table_is_walked_once` pins it.
+(2) *One code, two causes.* `goal_records_reading_missing` said both a list without the key's row
+and a row without the reading column. The first mends itself at a reading that covers the
+character; the second is a package that does not write the column the tables file names, which the
+resource side mends. They are two codes now: `goal_records_row_missing` (new; a list other than the
+`held_by` one, whose missing row is `goal_records_not_held`) and `goal_records_reading_missing` (the
+row is there, the column is not), each by `fact_key`, in that order after
+`goal_records_progress_unknown`; `RecordNeedsNote::RowMissing` is in the set's identity under its
+own tag. The fragment has eleven codes (info 9, warning 2).
+(3) *The first builds.* The determinism guard of the gate maps took the host gate's fixture time,
+a function named `now`, for a read of the wall clock; it is `t0`. Then `rr3_h2` failed where it
+publishes its change: the fact store takes an observation of a key under another snapshot only
+when it is newer than the one it holds (`fact_observation_not_newer`, an old rule), and the
+fixture's second roster and second records carried the first ones' instant. The fixture now reads
+its first roster and records ten seconds before the host's time and its changes a second later;
+the product is as it was, and the review had named this helper as the one thing it could not check
+without a build.
+Left as the review found them, for later slices: an admission reads the workbench's roots for an
+instance without records too (one lock more, nothing computed); `goal_records_need`'s `needed` on
+the pool of an item with a recipe is the part its holding covers; a stored v1 policy and an expired
+v2 policy with needs have no test; the computation is not in the cycle's timing line.
 
 **At deploy.** Nothing to configure, and nothing changes for an instance until records are set on
 it. In the release notes' language: 新增：存了“练谁、练到哪”记录的实例，调度器每轮评估前按根的 `goal-tables.json`、进度列表和库存算出各池还缺多少，按 `max(0, 需求 + 囤货 − 持有)` 叠在已存的目标上（不存盘，目标页照旧显示人设的值），产出所缺物品的任务得到加权；读不到的部分不加，原因写在候选的理由里（`goal_records_*`）。

@@ -18,10 +18,13 @@
 //!   `at_least` as well; a condition is noted and asks nothing.
 //! - **Not known adds nothing**, each part with its own note: a list that is missing, expired, of
 //!   confidence 0 or not keyed by its key column (the table's `held_by` list: the whole record); a
-//!   known list without a reading of the column for the key; readings that form no position. A
-//!   `held_by` list read whole without the key: not held, known. A record whose entry, key or
-//!   target the root in force does not declare is not applied, with the word a goal edit of it
-//!   would be refused with now (the edit's own check). The result is a lower bound of the need.
+//!   known list without the key's row; a row of the key without the column's reading column;
+//!   readings that form no position. A `held_by` list read whole without the key: not held,
+//!   known. A record whose entry, key or target the root in force does not declare is not
+//!   applied, with the word a goal edit of it would be refused with now (the edit's own check);
+//!   nor is one whose table and key an earlier stored record names already under another entry
+//!   (`key_repeated`: two entries may name one table, and a key is walked once). The result is a
+//!   lower bound of the need.
 //! - **Taking apart**: the records' needs are summed by item, then the items are taken in the
 //!   recipes' topological order from the top: an item with a recipe is covered by its holding up
 //!   to its need and the rest is made (rounded up by `makes`), adding its `from` and `cost`; one
@@ -115,6 +118,11 @@ pub(crate) fn instance_needs(
         fresh_until_unix_ms: None,
     };
     let mut raw = BTreeMap::<String, u128>::new();
+    // Fix round 1 (the review): two records entries may name one table, and a key recorded under
+    // both would be walked twice and its need added twice. The first record of a table's key, in
+    // the stored order, is walked; a later one is not applied (`key_repeated`), so the result
+    // stays a lower bound of the need.
+    let mut walked = BTreeSet::<(String, String)>::new();
     for stored_record in records {
         let record = RecordRef {
             entry: stored_record.entry.clone(),
@@ -125,6 +133,14 @@ pub(crate) fn instance_needs(
                 record: Some(record),
                 problem,
             }),
+            Ok((table, _, _))
+                if !walked.insert((table.name.clone(), stored_record.key.clone())) =>
+            {
+                notes.push(RecordNeedsNote::NotApplied {
+                    record: Some(record),
+                    problem: GoalProblem::KeyRepeated,
+                });
+            }
             Ok((table, key, to)) => {
                 let mut walk = Walk {
                     table,
@@ -527,7 +543,18 @@ impl Walk<'_, '_, '_> {
                     return None;
                 }
             };
-            match row_of(rows, &list.key_column, &self.key.name).and_then(|row| row.get(reading)) {
+            // Fix round 1 (the review): two causes, two notes. A list without the key's row has
+            // not covered the character, which its next reading may; a row without the reading
+            // column is a package that does not write it, which no later reading mends.
+            let Some(row) = row_of(rows, &list.key_column, &self.key.name) else {
+                self.notes.push(RecordNeedsNote::RowMissing {
+                    record: self.record.clone(),
+                    column: lane.label.clone(),
+                    fact_key: list.fact_key.clone(),
+                });
+                return None;
+            };
+            match row.get(reading) {
                 Some(FactScalar::Integer(value)) => position.push(*value),
                 None => {
                     self.notes.push(RecordNeedsNote::ReadingMissing {

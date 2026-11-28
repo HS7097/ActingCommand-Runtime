@@ -2684,9 +2684,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.95",
-      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a record stored in the instance's session.goal_records that the game root in force does not declare adds nothing, and goal_problem is the word a goal edit of it would be refused with now: name_unknown (its entry applies no table of the root's accepted goal-tables.json: no such records entry, no accepted tables file, or its table is not there), not_an_option (its key is no key of the table), out_of_range or wrong_type (its target names a column or a position the key's ladder does not hold), record_unreadable (the stored record is one its reader does not read, which only a fault of the Runtime writes; then no record applies). Its text lists the records (entry/key). On every candidate of the instance; the record stays stored.",
-      "common_causes": "A placement changed the root's goals.json or goal-tables.json after the records were set.",
-      "handling": "Set the entry's records again (goals set), or clear them; for record_unreadable, clear the entry."
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a record stored in the instance's session.goal_records that the game root in force does not declare adds nothing, and goal_problem is the word a goal edit of it would be refused with now: name_unknown (its entry applies no table of the root's accepted goal-tables.json: no such records entry, no accepted tables file, or its table is not there), not_an_option (its key is no key of the table), out_of_range or wrong_type (its target names a column or a position the key's ladder does not hold), record_unreadable (the stored record is one its reader does not read, which only a fault of the Runtime writes; then no record applies). Fix round 1, one word that no edit refuses: key_repeated, a record whose table and key an earlier stored record names already under another records entry of the root (two entries may name one table); the key is walked once, for the first of them in the stored order, and the later one adds nothing. Its text lists the records (entry/key). On every candidate of the instance; the record stays stored.",
+      "common_causes": "A placement changed the root's goals.json or goal-tables.json after the records were set; for key_repeated, one character is recorded under two entries that name the same table.",
+      "handling": "Set the entry's records again (goals set), or clear them; for record_unreadable, clear the entry; for key_repeated, keep the character under one of the two entries."
     },
     "goal_records_not_held": {
       "category": "info",
@@ -2730,6 +2730,27 @@
       "common_causes": "The package that reads the list has not run yet, or its reading expired.",
       "handling": "None: the list's next reading wakes an evaluation, which computes the column."
     },
+    "goal_records_row_missing": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3 fix round 1, register section 1.538): the progress list fact_key, a list of the table other than its held_by list, is known and holds no row of a record's key, so the columns it gives are not read for that key. Pending: those columns add nothing until a reading of the list holds the row. Its text lists them (entry/key/column). One for each list, on every candidate of the instance. Apart from goal_records_reading_missing (the row is there and the reading column is not) and from goal_records_not_held (the held_by list, read whole, holds no row of the key).",
+      "common_causes": "The list's last reading did not reach the character's row: it stopped before it, or the character was not on the pages it walked.",
+      "handling": "None: the list's next reading that holds the row wakes an evaluation, which computes the column. One that stays is the reading package's to look at (which rows its reading covers)."
+    },
     "goal_records_reading_missing": {
       "category": "info",
       "ladder_class": "none",
@@ -2747,9 +2768,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.95",
-      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the progress list fact_key is known and holds no reading of a column a record's column reads for its key (no row of the key, or a row without that reading column). Pending: that column adds nothing. Its text lists them (entry/key/column:reading column). One for each list, on every candidate of the instance.",
-      "common_causes": "The package that reads the list does not read the column, or did not see the character's card.",
-      "handling": "The list's reading package reads the column; until then the column adds nothing."
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538; fix round 1: one cause): the progress list fact_key is known and holds the row of a record's key without a reading column the record's column reads. Pending: that column adds nothing. Its text lists them (entry/key/column:reading column). One for each list, on every candidate of the instance. A list without the key's row is goal_records_row_missing.",
+      "common_causes": "The package that reads the list does not write the reading column the tables file names: the two do not agree.",
+      "handling": "The resource side makes the list's reading package write the column, or the tables file name the column it writes; no later reading of the same package mends it."
     },
     "goal_records_position_unknown": {
       "category": "info",

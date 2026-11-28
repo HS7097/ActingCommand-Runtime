@@ -510,11 +510,16 @@ fn rr3_p3_each_cause_adds_nothing_with_its_own_note_and_the_need_is_a_lower_boun
             lists: vec![roster_a()],
             note: pending(Some("skill"), SKILLS, ProgressListUnknown::FactMissing),
         },
+        // Fix round 1 (the review): its own note, apart from a row without the reading column.
         Case {
             name: "a skills list without the key",
             given: skill_2,
             lists: vec![roster_a(), skills(&[("unit_b", FactScalar::Integer(1))])],
-            note: reading_missing.clone(),
+            note: RecordNeedsNote::RowMissing {
+                record: record("unit_a"),
+                column: "skill".to_owned(),
+                fact_key: SKILLS.to_owned(),
+            },
         },
         Case {
             name: "a row without the reading column",
@@ -631,6 +636,51 @@ fn rr3_p3_each_cause_adds_nothing_with_its_own_note_and_the_need_is_a_lower_boun
         );
     }
     assert!(full.pools().len() > partial.pools().len());
+}
+
+// Test 3b (fix round 1, the review). Two records entries of a root may name one table. A key
+// recorded under both is walked once, for the first of them in the stored order: the later record
+// is not applied (`key_repeated`) and adds nothing, so its need is not counted twice; another key
+// of the second entry is walked as any. `unit_a` to grade 1 under the first entry and `unit_b` to
+// grade 1 under the second need 100 `gold` each: 200, not the 500 a second walk of `unit_a` to
+// grade 2 would make it.
+#[test]
+fn rr3_p3_b_a_key_recorded_under_two_entries_of_one_table_is_walked_once() {
+    const SECOND: &str = "raise_too";
+    let mut both = root(tables(&walk_tables()), SHA);
+    both.entries.insert(SECOND.to_owned(), TABLE.to_owned());
+    let sources = Sources {
+        lists: BTreeMap::from([(ROSTER.to_owned(), roster(&[("unit_a", 0), ("unit_b", 0)]))]),
+        holdings: BTreeMap::new(),
+    };
+    let needs = instance_needs(
+        &stored(
+            ALIAS,
+            &[
+                (ENTRY, "unit_a", r#"{"grade":[1]}"#),
+                (SECOND, "unit_a", r#"{"grade":[2]}"#),
+                (SECOND, "unit_b", r#"{"grade":[1]}"#),
+            ],
+        ),
+        NOW,
+        Some(&both),
+        &sources,
+    )
+    .expect("an instance with records has needs");
+    assert_eq!(
+        needs.pools(),
+        &pools(&[("pool.gold", 200, PoolNeedKind::Lands)])
+    );
+    assert_eq!(
+        needs.notes(),
+        [RecordNeedsNote::NotApplied {
+            record: Some(RecordRef {
+                entry: SECOND.to_owned(),
+                key: "unit_a".to_owned(),
+            }),
+            problem: GoalProblem::KeyRepeated,
+        }]
+    );
 }
 
 // Test 4, two instances of one root (ruling 1). The same record on two instances whose rosters
@@ -863,16 +913,21 @@ fn listed() -> FactRecord {
     fact
 }
 
-/// The roster with `unit_a` at `grade`, under the snapshot `snapshot`.
-fn roster_at(grade: i64, snapshot: &str) -> FactRecord {
+/// The roster with `unit_a` at `grade`, under the snapshot `snapshot`, read `later_ms` after
+/// [`READ_AT`]. Fix round 1: the fact store takes an observation of a key under another snapshot
+/// only when it is newer than the one it holds (`fact_observation_not_newer` otherwise, which the
+/// first build's second reading at the same instant met), and none after the host's time.
+fn roster_at(grade: i64, snapshot: &str, later_ms: u64) -> FactRecord {
     let mut fact = roster(&[("unit_a", grade)]);
     fact.source_snapshot_id = snapshot.to_owned();
+    fact.observed_at_unix_ms = READ_AT + later_ms;
     fact
 }
 
 /// The instance's `session.goal_records` record of one record of `unit_a` to `to`, as the goal
-/// edit stores it (no expiry), its identity the hash of `to`.
-fn records(to: &str, snapshot: &str) -> FactRecord {
+/// edit stores it (no expiry), its identity the hash of `to`, written `later_ms` after
+/// [`READ_AT`] (as [`roster_at`]: a second edit is a later one, and none is after the host's time).
+fn records(to: &str, snapshot: &str, later_ms: u64) -> FactRecord {
     let mut fact = stored_fact(
         own_scope(),
         GOAL_RECORDS_FACT_KEY,
@@ -880,6 +935,7 @@ fn records(to: &str, snapshot: &str) -> FactRecord {
         snapshot,
         Vec::new(),
     );
+    fact.observed_at_unix_ms = READ_AT + later_ms;
     fact.expires_at_unix_ms = None;
     fact.ttl_policy = None;
     fact.confidence_milli = 1_000;
@@ -888,13 +944,13 @@ fn records(to: &str, snapshot: &str) -> FactRecord {
 }
 
 /// Publishes the pool's list (1400), the roster with `unit_a` at grade 0 and the records raising
-/// it to grade 2.
+/// it to grade 2, each at [`READ_AT`].
 fn publish_inputs(host: &RuntimeHost) {
     host.publish_list_reading_for_test(listed())
         .expect("the pool's list");
-    host.publish_list_reading_for_test(roster_at(0, "snapshot:rr3-roster-a"))
+    host.publish_list_reading_for_test(roster_at(0, "snapshot:rr3-roster-a", 0))
         .expect("the roster");
-    host.publish_goal_records_for_test(records(r#"{"grade":[2]}"#, "snapshot:rr3-records-a"))
+    host.publish_goal_records_for_test(records(r#"{"grade":[2]}"#, "snapshot:rr3-records-a", 0))
         .expect("the records");
 }
 
@@ -973,13 +1029,15 @@ fn rr3_h2_an_intent_is_stale_once_a_progress_list_the_records_or_the_tables_chan
         let (intent, reasons) = intent_and_chain(&evaluation);
         record_policy_approval(&host, &intent);
         let before = host.record_needs_for_test(t0()).expect("the needs");
+        // Each change is observed a second after what it replaces, and before the host's time.
         let changed = match change {
             Change::List => host
-                .publish_list_reading_for_test(roster_at(1, "snapshot:rr3-roster-b"))
+                .publish_list_reading_for_test(roster_at(1, "snapshot:rr3-roster-b", 1_000))
                 .map(|_| ()),
             Change::Record => host.publish_goal_records_for_test(records(
                 r#"{"grade":[1]}"#,
                 "snapshot:rr3-records-b",
+                1_000,
             )),
             Change::Tables => {
                 host.set_goal_record_roots_for_test(Some(coin_roots(500, "fixture-tables-b")))

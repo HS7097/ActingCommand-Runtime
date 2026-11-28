@@ -344,6 +344,12 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   the goal edit's own check takes now. Any other record adds nothing: `goal_records_not_applied`
   with the word the edit would refuse it with (`name_unknown`, `not_an_option`, `out_of_range`,
   `wrong_type`; `record_unreadable` for a stored record its reader does not read).
+- **A key is walked once** (fix round 1). Two `records` entries may name one table, and one key may
+  be recorded under both. The first of its records in the stored order (the entry set first) is
+  walked; a later record of the same table and key adds nothing and is said with the same code,
+  `goal_records_not_applied` with `key_repeated` (a word no edit refuses it with: each entry's
+  records are checked on their own), so a character's need is never counted twice. Keeping the
+  character under one of the two entries ends it.
 - **The progress lists.** A list is read when it is present, of a confidence above 0, a record list
   each of whose rows holds a text under the list's `key_column` (the rule a list a pool is read from
   obeys), not invalidated by a timeline reset at or after its observation and not past its expiry.
@@ -355,8 +361,11 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   `per: "sub"`), the current position is the tuple of the column's reading columns in the key's row,
   equal member for member to one of the ladder's `positions`. Not known, that column adds nothing,
   each cause with its own code: its list not known (`goal_records_progress_unknown`); its list known
-  without a reading of the column for the key, no row or a row without the reading column
-  (`goal_records_reading_missing`); readings that form no position, a value of another kind or a
+  without a row of the key (`goal_records_row_missing`, fix round 1: a list other than the `held_by`
+  one, whose reading has not covered the character, which a later reading may); a row of the key
+  without the reading column (`goal_records_reading_missing`: the package that reads the list does
+  not write the column this file names, which no later reading of that package mends); readings
+  that form no position, a value of another kind or a
   tuple equal to none (`goal_records_position_unknown`). Known, the need is the sum of the steps from
   the current position to the target in the order of `positions` (a key's override of its class's
   step taken instead, a step's `@<role>` the key's own item); a target at or behind the current

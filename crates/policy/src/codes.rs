@@ -379,7 +379,8 @@ actingcommand_contract::outcome_codes! {
         /// `goal_problem` the word a goal edit of it would be refused with now: `name_unknown` for
         /// an entry that applies no table, `not_an_option` for a key, `out_of_range` or
         /// `wrong_type` for its target, `record_unreadable` for a stored record the reader does
-        /// not read).
+        /// not read), or, fix round 1, a record whose table and key an earlier stored record
+        /// names already under another entry (`key_repeated`: a key is walked once).
         GoalRecordsNotApplied => "goal_records_not_applied": warning / none,
         /// Info. The table's `held_by` list, read whole, holds no row of a record's key: the
         /// character is not held, and the record adds nothing (no keys).
@@ -389,9 +390,14 @@ actingcommand_contract::outcome_codes! {
         /// `fact_low_confidence` or `type_mismatch`): that column, or the whole record, adds
         /// nothing until it is read.
         GoalRecordsProgressUnknown => "goal_records_progress_unknown": info / none,
-        /// Info. A list a record's column reads is known and holds no reading of the column for
-        /// the key: no row of the key, or a row without the reading column (key `fact_key`); that
-        /// column adds nothing.
+        /// Info (fix round 1: its own cause). A list a record's column reads, other than the
+        /// table's `held_by` list, is known and holds no row of the key: its reading has not
+        /// covered the character (key `fact_key`); that column adds nothing until a reading holds
+        /// the row.
+        GoalRecordsRowMissing => "goal_records_row_missing": info / none,
+        /// Info. A list a record's column reads holds the key's row without the column's reading
+        /// column: the package that reads the list does not write it, which no later reading of
+        /// the same package mends (key `fact_key`); that column adds nothing.
         GoalRecordsReadingMissing => "goal_records_reading_missing": info / none,
         /// Info. A record's column reads a position its ladder does not hold (a reading that is
         /// no whole number, or a tuple equal to no position); that column adds nothing (no
