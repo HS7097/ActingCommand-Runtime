@@ -913,6 +913,9 @@ mod gate_455_gr2s;
 // Workflow #498 FACT-CAP (register §1.496): the instance fact store's bound follows its scopes, an
 // instance near its bound is said so, and a reading the store refuses fails its run with its cause.
 mod gate_498_factcap;
+// #503 FACT-R (0.12.103; register §1.555): a scope at its bound takes a publication's new keys in
+// the room of its facts expired for more than seven days, each removed by its own record.
+mod gate_503_factr;
 mod home_entry;
 mod input;
 mod input_failure;

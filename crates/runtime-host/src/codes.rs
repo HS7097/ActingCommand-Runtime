@@ -3966,6 +3966,13 @@ actingcommand_contract::outcome_codes! {
         /// the share, and once more after a start that finds it at or past it. Nothing is
         /// refused; the instance takes new keys up to its bound.
         ShareReached => "fact_store_capacity_share_reached": warning / none,
+        /// Warning (Workflow #503 FACT-R, since 0.12.103). A scope at its bound took a
+        /// publication's new keys in the room of its records that had been expired for more than
+        /// seven days: one Warning `runtime.failed` under the system links (`instance_id` the
+        /// alias, or `server` or `game`; `count` the records removed; `limit_count` the scope's
+        /// bound), each removed record's `fact.invalidated` naming it as its trigger. The
+        /// publication goes on.
+        ExpiredFactsReclaimed => "fact_store_expired_facts_reclaimed": warning / none,
     }
 }
 // ---- #498 FACT-CAP: end ----

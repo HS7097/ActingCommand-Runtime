@@ -54058,6 +54058,204 @@ a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It rea
 codes in the records as text it does not know. The gate's memory was memory only and is gone; the
 older build starts automatic emulators with no gate, as before.
 
+### 1.555 Slice #503 FACT-R (0.12.103): a scope of the instance fact store at its bound takes a publication's new keys in the room of its facts that have been expired for more than seven days, each removed by its own record; `ledger` 11, one way (board #503; the owner's decisions of 11-28 and 11-29, in neutral words below; the rulings are the coordinator's, after a read-only study of the store's capacity on main `cdc3e0b4`, v0.12.99; built on that main, merged with main `924f4034`, which holds §1.546; §1.545 and §1.547 to §1.554 are slices of the same days)
+
+It ships in 0.12.103 and takes `ledger` 11. [instance-fact-store.md](instance-fact-store.md)
+("Expiry reclamations", new; "Accept first, revisions and tagged load", "Capacity ledger": "Counted
+once", "What counts", "Where it is checked", "Booking"), [ledger-observer.md](ledger-observer.md)
+(§1, the instance fact store's bound), [component-interfaces.md](component-interfaces.md) (the
+`ledger` row 11 and the paragraph on the planned rows) and the outcome code
+`fact_store_expired_facts_reclaimed` (`contracts/outcome-codes/runtime-host.json`) are the contract.
+
+**The problem** (the work order's, in neutral words). A scope of the store holds a bounded number of
+facts: 224 for an instance, 16 for a server, 16 for a game (§1.496). An expired fact stays active
+and counts until a newer observation of its key or an invalidation replaces it; nothing removes a
+fact because it expired. A key that is written no more (a package unloaded or no longer bound, a
+key a package's new version renamed, a reading retired, a priority offset that outlived its task)
+and whose fact lists no trigger therefore holds its room for ever, and a scope at its bound refuses
+every key it does not hold (`fact_store_capacity_exceeded`). With list readings of several
+applications arriving, each of them a key, the owner called this a main problem.
+
+**The owner's decisions** (11-28 and 11-29, on board #503; the words here are the coordinator's).
+The communication protocol's size limits are not touched; a scope near its bound reclaims keys
+that expired long ago; and the change ships in one release, reader and writer together, accepting
+that the installation cannot go back below that release.
+
+**The designs compared.** *Implicit reclamation* (the check skips expired facts and the reducers
+recompute the same decision) is ruled out: the start's tagged load cannot reproduce it without
+replaying the whole ledger, a build before it would bring every reclaimed fact back, and nothing
+in the ledger would say what was dropped. *Explicit records* (built): the decision is made once,
+live, and each removed fact is a `fact.invalidated` of the existing shape, so the store stays a
+pure function of the ledger; it changes the rule of an existing record, so `ledger` moves.
+*The same in two releases, reader first*, which would have kept a way back from the writer to the
+reader, is set aside by the owner's decision of one release. A dedicated trigger type that facts
+list (the ordinary rule would drop unexpired ones too, and older decoders refuse a new type),
+counting only unexpired facts (a snapshot could pass 256 and halt the Runtime) and a request that
+retires a key (the same rule change, and not automatic) are rejected.
+
+**What it rests on** (read on main; none of the stop conditions holds).
+- *`ledger` 11 is free* on main (`[3, 10]` since §1.529, `924f4034` included); raising it needs no
+  migration and no fresh state root: no record shape, type, table, index or view changes.
+- *Every path of this build rebuilds the store the live one holds.* The live store and the full
+  replay apply each record through `replay_event` and `apply_invalidation`, which accept the third
+  form. The start's tagged load: a reclaimed key's `state` row names its invalidation (the latest
+  record of the key), so its publication is not loaded for it, the invalidation files the
+  tombstone and sets `latest_observed` to its time, the fact's expiry, which is what the live store
+  sets (the maximum of the fact's observation and its expiry). The history at a position replays
+  every event and applies the form where it stands, as an adjustment's. The State projection
+  verifies it inside the invalidation's transaction. Test 4 compares the load, the replay and the
+  live store (LN-2's view), and the history at every position from the first warning on.
+- *An older build does not stop at its start.* Builds 0.12.76 to 0.12.102 decode the records (no
+  shape changed); their tagged load files a reclaimed key's tombstone without checking the trigger
+  again (the State row's identity and origin only), and a start reads no history at a position (the
+  strategic report, the policy input identity and the console's paged read are requests). They stop
+  at the first reclamation in range when such a request reads history
+  (`fact_invalidation_source_mismatch`).
+- *The State projection takes the request-published facts.* Every `fact.published` the store writes
+  has the fact store's module; the facts published under a request's source and actor are priority
+  offsets, pack schedules, remedy choices, resource targets and goal records; the last four are the
+  keys the plan excludes, and a priority offset is taken (test 7). No other key is published under a
+  request's origin.
+- *A failure half way leaves a store a start loads as it is.* The warning and each invalidation with
+  its tombstone are records of their own, each one transaction, in one hold of the fact write gate
+  (no other fact write between them). A failure or a stop between them leaves the facts reclaimed
+  so far reclaimed and the rest active, the publication not appended; a start loads exactly that
+  (every path above), and the next publication that needs the room reclaims again.
+
+**The rulings, as built.**
+- *1, when* (`HostShared::publish_facts_under_gate`, `crates/runtime-host/src/host/facts.rs`). Only
+  inside a publication, when its observation brings keys its scope does not hold and they would pass
+  the bound: the plan (`InstanceFactStore::plan_expiry_reclamation`) is made with the publication's
+  clock, the check counts the room it frees (`preview_observation_freeing`, the two bound checks
+  alone), every other check follows as before, and only then are the records written
+  (`reclaim_expired_under_gate`), the check run again without the room, and the publication appended.
+- *2, which and how many.* The scope's facts whose expiry lies more than
+  `FACT_RECLAIM_AFTER_EXPIRY_MS` (seven days, a contract constant) before the plan, but the
+  observation's keys, facts without an expiry, facts that list `runtime.failed` (the warning drops
+  them by the ordinary rule; they count as freed) and `session.pack.schedule`,
+  `session.remedy.choices`, `session.resource_targets`, `session.goal_records`
+  (`RECLAIM_EXCLUDED_KEYS`), and (fix round 1) every key of the scope a condition of the active
+  catalog reads (`CatalogReadFacts`); ascending expiry, then the sequence of the fact's publication,
+  then the key; exactly `active + new − bound − dropped`. Fewer candidates: nothing is written, and
+  the refusal is the one of before.
+- *3, the records.* One Warning `runtime.failed` `fact_store_expired_facts_reclaimed` (warning,
+  ladder `none`) under the system links, `instance_id` the alias, or `server` or `game` the scope's
+  id, `count` the facts the plan reclaims, `limit_count` the bound, disposition `not_performed` as
+  the share warning's, drafted first and appended only when the plan made again at its time is the
+  same (fix round 1); the store follows it and the invalidations it derives are written; then per
+  fact one `fact.invalidated` (trigger the warning's id and type, `invalidated_at_unix_ms` the
+  fact's expiry) with its State tombstone in one transaction
+  (`InstanceFactStore::prepare_expiry_reclamation`), the store following each; then the daemon's log
+  line, with how many were written (fix round 1). The publication's answer is unchanged; no
+  decision reads the code.
+- *4, the third form* (`actingcommand_contract::is_expiry_reclamation`): the trigger's type is
+  `runtime.failed` and the fact does not list it, the fact has an expiry and the invalidation's
+  time is that expiry. Accepted by `apply_invalidation`, `HistoricalFactProjection::replay` and
+  `::invalidate`, and `verify_sources` (`crates/runtime-state/src/store/fact.rs`), which for this
+  form also requires the expiry to lie more than the margin before the trigger, compares that
+  instead of the trigger's time, and takes a published event of any source and actor of the fact
+  store's module.
+- *5, what replaces the old protection.* "Refuse, never evict" stays for every unexpired fact and
+  every fact without an expiry. Only facts no condition of the active catalog reads (fix round 1)
+  and every reader already takes as unknown, and has for at least the margin, are reclaimed, and
+  each one is a record.
+
+**Decided here.** When the facts the warning would drop cover the whole need, nothing is reclaimed
+or written and the publication is refused as before (a warning that reclaims nothing is not
+written); when the warning would drop the fact of one of the observation's own keys, the same (the
+key would then be new and its observation older than the drop). A plan that does not hold at its
+warning's own time (the wall clock stepped back between the plan and the warning) writes nothing,
+and the publication is refused `fact_store_capacity_exceeded`, a request's refusal (fix round 1;
+before it, the reclamation stopped there with the warning and the first invalidations written). The
+margin at the trigger's time is checked by the State projection alone: a reducer has the record and
+not the trigger's time, and every invalidation reaches the ledger through that check. The fact store's
+one-record check (`preview_publish`) is now the form its unit tests call; the store checks through
+the observation's check.
+
+**Fix round 1** (an independent review of the pull request, findings F1 to F9; the coordinator's
+rulings on them). *Acted on.* F1: a probe (`on_unknown: probe`) dates its unknown period from the
+fact's expiry and from nothing once the key is missing, so a task whose package stayed closed for
+longer than the margin would never be admitted again after its key was reclaimed; every key of the
+scope that a condition of the active catalog reads is now excluded (every `fact`, `record_deadline`
+and `fact_time_reached` predicate of a trigger or a feedback stop, and the facts a `fact` or a
+`resource_projection` predicate compares with). The set (`CatalogReadFacts`) is made from the
+compiled catalog when it becomes active, at the start and at each transition under the policy's
+lock, and kept beside it under a leaf lock of the host (`HostShared::catalog_read_facts`); a
+publication reads it, without the policy's lock and without a walk of the catalog, only once its
+plan needs room (the plan takes it as a call it makes after its count), so a publication that needs
+no room costs nothing more and one that does costs one leaf lock and one shared pointer. No record
+carries it and no reader computes it again; `ledger` stays 11. F3: the warning is drafted first,
+nothing written; the plan is made again at the warning's own time and must be the plan the check
+counted, or nothing is written and the publication is refused as one with too few candidates
+(`InstanceFactStore::confirm_expiry_reclamation`). The warning is therefore appended by the ledger
+and wakes the driver directly, as the store's own invalidations are; the other steps of a Runtime
+record's append (device details, the stability count, the agent wake tap) read an instance link or
+a lifecycle failure, which the warning has not. F2: the contract and the catalogue entry say that
+`count` is the facts the plan reclaims, that the facts removed are those whose invalidation names
+the warning, and that a publication missing after them means a stop or a failure came between and
+the next one plans again; the daemon's log line follows the invalidations, with how many were
+written. F7: "At deploy" says what the plan of an installation checks. F6: tests 12 to 15 (a plan
+that fails at its warning's time, a server scope, the host with a catalog, the host with too few
+candidates) and the gate row's words on the clock. *Left as they are, in the contract's "Known
+limits".* F4: a wall clock set far ahead reclaims facts live in real time, whose keys then refuse
+readings observed before the old expiry until real time passes it, as "not newer" already does.
+F8: every key ever reclaimed stays in the tagged load and in `latest_observed`, so a start's cost
+grows with the reclamations ever made. What F1's exclusion leaves open: a key no condition of the
+active catalog reads and a person still wants (a priority offset or a client key with an expiry, a
+list only a selection reads) is a candidate once expired for the margin; of the records a person
+sets, the four excluded keys never are. F5 and F9 were notes; nothing changed for them. No record
+shape, code, setting or interface revision changed in this round.
+
+**Tests** (host gate map row "#503 FACT-R"; the store-driven tests read only the fixture's clock and
+test 14 the host's manual clock; tests 9 and 15 use the S168-4 gate's host, which runs on the wall
+clock, and read it through the crate's `unix_ms_now`, as that gate does).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_factr::factr_a_a_full_instance_takes_a_new_key_in_the_room_of_its_longest_expired_fact` (1) | at 224 with facts expired one, two and three days after the base, ten days after it a new key reclaims the first; warning, invalidation (trigger the warning, time the expiry) and publication in that order; still 224; gone from the store and the snapshot |
+| `…::factr_b_three_new_keys_take_three_and_too_few_candidates_write_nothing` (2) | three new keys reclaim three by expiry under one warning; two candidates for three keys: `fact_store_capacity_exceeded`, not fatal, head unchanged, no warning, no invalidation |
+| `…::factr_c_the_margin_and_the_exclusions_keep_their_facts_and_ties_go_by_sequence_then_key` (3) | the four excluded keys, the observation's own key, a fact expired six days before and facts without expiry stay; among equal expiries the earlier publication, then the smaller key |
+| `…::factr_d_a_start_a_replay_and_the_history_rebuild_the_live_store_after_reclamations` (4) | after two reclamations the tagged load and the replay equal the live store (LN-2's view), each reclaimed key's `latest_observed` its expiry; the history at every position from the first warning equals the live store there |
+| `…::factr_e_a_made_up_reclamation_is_refused_by_the_state_the_store_the_history_and_the_replay` (5) | another trigger type, a fact expired less than the margin before the trigger, a time other than the expiry, a fact without expiry: the State projection refuses each, fatal, nothing appended; the three a record shows are refused by the live reducer, the history and the replay too |
+| `…::factr_f_a_reading_captured_before_the_reclamation_is_a_new_key_after_it` (6) | the reclaimed snapshot `fact_source_snapshot_invalidated`; a reading at the expiry `fact_observation_not_newer`; one observed after the expiry and before the reclamation taken as a new key |
+| `…::factr_g_a_full_game_reclaims_an_expired_offset_a_request_published` (7) | a game at 16 reclaims a priority offset published under the operator's origin; the warning names the game; the offset's snapshot is refused afterwards |
+| `…::factr_h_a_store_past_its_bound_reclaims_back_to_it_or_is_refused` (8) | 240 facts of one instance from before 0.12.76: with 20 expired long ago a new key reclaims 17; with 10, refused and nothing written |
+| `…::factr_i_a_runs_new_list_on_a_full_instance_takes_the_room_of_expired_facts` (9) | on the S168-4 host, a run's new list on an instance full of facts expired eight days before completes and is published; one warning under the system links (`instance_id`, `count` 1, `limit_count` 224), one invalidation naming it, the first fill at its expiry |
+| `…::factr_j_a_fact_that_lists_runtime_failed_is_dropped_by_the_warning_and_counted_as_freed` (10) | two new keys reclaim one fact: the listing fact is dropped at the warning's time by the ordinary rule, the reclaimed one at its expiry; the plan frees two |
+| `…::factr_k_the_declaration_and_the_ledger_row_say_3_to_11` (11) | `component-interfaces.json` and the `ledger` row 11 say [3, 11] |
+| `…::factr_l_a_plan_that_no_longer_holds_at_its_warnings_time_writes_nothing` (12, fix round 1) | two new keys plan two facts at the publication's time; their warning drafted where the second lies less than the margin before it: `fact_store_capacity_exceeded`, not fatal, head unchanged, no warning, no invalidation; with the warning at the next millisecond the same plan is written |
+| `…::factr_m_a_full_server_takes_a_new_key_in_the_room_of_its_longest_expired_fact` (13, fix round 1) | a server at 16 reclaims the fact expired first; the warning names the server and `limit_count` 16; the invalidation the fact at its expiry |
+| `…::factr_n_a_key_the_active_catalog_reads_is_kept_until_a_catalog_reads_it_no_more` (14, fix round 1) | a host with the fixture catalog whose feedback stop reads one key: a new key reclaims the other fact, not the one expired first; with only the read one left, refused as before, nothing written; after the next version, which reads it no more, it is reclaimed |
+| `…::factr_o_a_runs_new_list_on_a_full_instance_without_candidates_is_refused_and_writes_nothing` (15, fix round 1) | on the S168-4 host, an instance full of facts expired one day before: the run's new list is refused (`read_members:fact_store_capacity_exceeded`), not published, no reclamation's warning, the instance's facts unchanged |
+
+Adapted, the requirement moving the shipped `ledger` range to [3, 11]: actinglab-architecture's
+`component_interfaces` (`V0120`). No golden re-recorded; no test leaves the gate maps; every other
+existing test (the factcap, S168-4, S168-LK, FL-2 and LN-2 gates, the store's unit tests, the
+adjustment gate) is unchanged: their fills have no expiry, so no plan is made. Fix round 1 changes
+no test of the gate; the fixture's copy of the host's sequence (`Store::publish`, `reclaim`) follows
+the host's new order (the warning drafted, the plan made again at its time, then written), as a host
+without an active catalog.
+
+**What is not changed.** The three bounds, the share warning and the 256 per scope of the commit and
+the history; every record shape and type, the tag index, the tagged load and `latest_observed`'s
+rule; every other refusal; a store with nothing to reclaim, byte for byte; the protocol's limits,
+every read and what clients are shown; `runtime-client`, `actingd-config` and `package`.
+`runtime-outcomes` stays 1 with one code added.
+
+**At deploy.** Nothing to configure. One way: no going back below this build; once it has run, the
+installation does not go back to an earlier one, whether or not a reclamation was written. No record
+shape changed, so a console that declares the earlier range ([3, 10]) still decodes every record,
+and no step of an installation's update or rollback checks the console's range; the console's
+declaration of 11 follows in its own release (the interface table's rule for the combination stays
+as the table states it). On production a scope at its bound with facts expired for more than seven
+days, that no condition of the active catalog reads, writes one warning
+`fact_store_expired_facts_reclaimed` per publication that needs the room; the same scope recurring
+means it is too small for what its packages write.
+
+**Rollback.** Refused below this build by the `ledger` edge's one-way rule (Rp.max in R\*): builds
+0.12.76 to 0.12.102 would load the same store at their start but stop at the first history read that
+crosses a reclamation. In the release notes' language: 实例事实库的一个范围满额时，新键可以占用其中过期超过七天的事实的位置，每回收一条都单独记一条失效记录（告警码 `fact_store_expired_facts_reclaimed`）；没有到期时间、刚过期不满七天、或当前生效目录里有条件在读的事实照旧不动，照旧拒绝。账本修订升到 11、单向：装上后不能退回 0.12.103 以前；记录形状没有变，控制台不必先换。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

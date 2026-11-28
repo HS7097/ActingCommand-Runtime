@@ -127,7 +127,11 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   [3, 9], one way. #503 CYC-3 (0.12.86, register §1.529) raises `max` to 10: the optional
 ///   member `window_until_unix_ms` of the policy admission record's activity sample
 ///   (`PolicyActivitySample`, in `policy.dispatch_admitted` and `policy.dispatch_completed`);
-///   revision-3 to revision-9 ledgers are still read, so [3, 10], one way.
+///   revision-3 to revision-9 ledgers are still read, so [3, 10], one way. #503 FACT-R (0.12.103,
+///   register §1.555) raises `max` to 11: a `fact.invalidated` of the existing shape that reclaims
+///   a record expired for more than seven days, its trigger a `runtime.failed` the record does not
+///   list, a changed rule of an existing record that an older history read refuses; revision-3 to
+///   revision-10 ledgers are still read, so [3, 11], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -263,7 +267,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 36]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 10]),
+    ("ledger", [3, 11]),
     ("package", [3, 32]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
