@@ -653,9 +653,12 @@ that spend it**, beside their fixed values. Until a line is set they run as they
 consumption costs nothing and never makes a rule wait for a valuation, so a rule of value `V` that
 spends only the currency is still `B = V` ([scheduling/README.md](scheduling/README.md), "Net
 benefit within a tier", "A declared 0"). Write no `target_defaults` and no valuation on that pool
-(either beside `spend_line` is refused), and put no `resource` entry on it in `goals.json`: a goal on
-such a pool will be its line, set in a later build, never a weight on its producers. A rule that
-also reserves the pool is held by the reserve gate as for any pool.
+(either beside `spend_line` is refused). Until 0.12.101 no `resource` entry was to be put on it in
+`goals.json`; since #455 SL2 (register §1.547) a `resource` entry on it offers the pool's line: a
+goal on such a pool is its line, `{at_least}` alone, never a weight on its producers
+([resource-targets.md](resource-targets.md), "A pool's line"), and the pressing of the rules that
+spend it below the line is a later build's. A rule that also reserves the pool is held by the
+reserve gate as for any pool.
 
 **A goal's gap in two parts** (#455 RR3b, since 0.12.98; register §1.542). On a pool a goal may be
 set on, a pack may write `goal_tiers` (`{"need_importance_milli": I_n, "stock_cap_milli": C}` from

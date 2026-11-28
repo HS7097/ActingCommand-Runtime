@@ -4995,11 +4995,11 @@ tests = [
 ]
 incident = ["#455 RR3a"]
 
-# #455 SL1 (0.12.97; register §1.540; brief rd-1123/brief-455-sl1.md, ruling 5 and test 5), the host half, on the goal page's pure check over the targetable list the policy crate gives for a catalogue of one task producing a pool that writes spend_line and a valued pool (step 5, gap weight 700), no clock read: the list gives the first no step and no importance and requires both, the valued one its valuation's; {at_least: 40} on the resource entry of the first is pool_unvalued with its pool, so is a target by its pool id, and the same value on the valued pool's entry is SetTarget as today (test 5)
+# #455 SL1 (0.12.97; register §1.540; brief rd-1123/brief-455-sl1.md, ruling 5 and test 5), the host half, on the goal page's pure check over the targetable list the policy crate gives for a catalogue of one task producing a pool that writes spend_line and a valued pool (step 5, gap weight 700), no clock read: the list gave the first no step and no importance and required both, the valued one its valuation's; {at_least: 40} on the resource entry of the first was pool_unvalued with its pool, so was a target by its pool id, and the same value on the valued pool's entry SetTarget (test 5). #455 SL2 (0.12.101; register §1.547, ruling 2) moves it on purpose and renames it: the list gives the first its spend_line's 6000 and 33 333 and requires neither, and {at_least: 40} on its entry and by its pool id are each SetTarget, the valued pool's as before
 [[gate]]
 coverage = "Y"
 tests = [
-    "actingcommand-runtime-host::lib::tests::gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least",
+    "actingcommand-runtime-host::lib::tests::gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_its_line_by_at_least",
 ]
 incident = ["#455 SL1"]
 
@@ -5047,3 +5047,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_pace::pace_f2_a_failure_settled_at_or_after_its_windows_end_writes_no_record_and_sets_nothing_aside",
 ]
 incident = ["#503 PACE"]
+
+# #455 SL2 (0.12.101; register §1.547; brief rd-1123/brief-455-sl2.md, tests 1 and 7; contracts/resource-targets.md, "A pool's line"; contracts/runtime-interface.md, "Goal request kinds"), the host half, on the goal page's pure check and view over the policy crate's targetable list, its one-row edit and its reading of the stored targets' conditions, for a catalogue of one task producing a valued pool (step 5, gap weight 700) and a pool that writes spend_line no task produces, read at 25, no clock read: the list names that pool, its producers none, its defaults 6000 and 33 333, neither required, its reading 25; {at_least: 40} on its resource entry and by its pool id are SetTarget, the row the record holds the valued entry's row but for its id and pool, with no scale, importance_milli or tasks; by_unix_ms is deadline_unsupported at /by_unix_ms; at_least 0 and 1001 over a capacity of 1000 out_of_range at /at_least with 1 to 1000 and the pool; the view lists the entry with its value, who set it, the reading 25 and the gap 15 (test 1). A page fed the row an older build's list gives (none without a producer, both terms required with one) refuses the set pool_not_targetable or pool_unvalued with the pool, and takes the clear of the stored line as ClearTarget of its id (test 7)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_sl2::sl2_host_a_line_is_set_by_at_least_alone_and_shown_as_a_goal_is",
+    "actingcommand-runtime-host::lib::tests::gate_455_sl2::sl2_host_an_older_page_refuses_to_set_a_line_and_clears_a_stored_one",
+]
+incident = ["#455 SL2"]

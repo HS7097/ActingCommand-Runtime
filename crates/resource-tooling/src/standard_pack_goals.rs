@@ -38,16 +38,18 @@ use crate::standard_pack_schedule::issue_path;
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
-    DeclaredCapabilities, GoalReferences, GoalRule, IrreversiblePackages, LabError, LabResult,
-    MAX_STANDARD_PACK_GOAL_TABLES_BYTES, MAX_STANDARD_PACK_GOALS_BYTES, PACKAGE_CONTROL_FILE,
-    RootGoalDocument, RootPackageVariables, StandardPackRoot, StandardPackRootIssue,
-    VariableOrigins, check_standard_pack_goal_references,
+    DeclaredCapabilities, GoalPool, GoalReferences, GoalRule, IrreversiblePackages, LabError,
+    LabResult, MAX_STANDARD_PACK_GOAL_TABLES_BYTES, MAX_STANDARD_PACK_GOALS_BYTES,
+    PACKAGE_CONTROL_FILE, RootGoalDocument, RootPackageVariables, StandardPackRoot,
+    StandardPackRootIssue, VariableOrigins, check_standard_pack_goal_references,
     check_standard_pack_goal_table_references, goal_variables, judge_root_variables,
     parse_standard_pack_goal_tables, parse_standard_pack_goals, parse_standard_pack_schedule,
     take_catalog_business,
 };
 use actingcommand_execution_kernel::{ContainedTaskError, PreparedContainedTask};
-use actingcommand_policy::{POOL_TARGET_DEFAULTS_MEMBER, standard_pack_schedule_takes_catalog};
+use actingcommand_policy::{
+    POOL_SPEND_LINE_MEMBER, POOL_TARGET_DEFAULTS_MEMBER, standard_pack_schedule_takes_catalog,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -222,7 +224,19 @@ pub(crate) fn goal_issues(
                         if defaults.contains_key("scale") && defaults.contains_key("importance_milli")
                 ),
             };
-            references.pools.insert(pool.id.clone(), valued);
+            // #455 SL2 (register §1.547): any other pool that writes `spend_line` takes its line
+            // from a `resource` entry, and no need lands on it; the one map says which.
+            let offered = if valued {
+                GoalPool::Valued
+            } else if matches!(
+                pool.body.get(POOL_SPEND_LINE_MEMBER),
+                Some(Value::Object(_))
+            ) {
+                GoalPool::Line
+            } else {
+                GoalPool::Unvalued
+            };
+            references.pools.insert(pool.id.clone(), offered);
         }
         for rule in &schedule.rules {
             // G-R1 fix round 1: with the package it runs, which a `tier` entry is held to.

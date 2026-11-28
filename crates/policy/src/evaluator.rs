@@ -2590,9 +2590,11 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // Stored resource target policies are read before the time-validity projection, so a
     // timeline reset never silently withdraws one (Workflow #308 RT-S1b). Workflow #455 RR3
     // (register §1.538, ruling 5): the needs the host computed from each instance's stored
-    // records are stacked on them, in memory, for this evaluation alone.
+    // records are stacked on them, in memory, for this evaluation alone. #455 SL2 (register
+    // §1.547): each record is read without its lines, which weigh nothing, before the needs are
+    // stacked.
     let target_policies = crate::resource_targets::stack_record_needs(
-        crate::resource_targets::instance_target_policies(facts, time)?,
+        crate::resource_targets::weighed_target_policies(catalog, facts, time)?,
         left_out.record_needs(),
         &facts.instances,
     );

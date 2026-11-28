@@ -52593,6 +52593,149 @@ a wait), `instance_task_failure_set_aside` (a candidate's reason until the windo
 `instance_task_failure_set_aside_reported` (a warning record, once per pair and window). In the
 release notes' language: 新增：同一个任务在同一台实例上连续失败（不是靠条件结束、也没被暂停的失败）时，第一次失败照旧马上重跑；从第二次连续失败起，每次失败后都要等一段越来越长的时间才再派（出厂值一、二、四、八、十六分钟，之后每次三十分钟，不超过活动窗结束），每次等待在账本里留一条 `instance_task_failure_waiting`；等待已到最长（出厂值从第七次连续失败起）之后，同一窗口里别的任务在这台实例上成功过、它还接着失败，这样的失败次数到它规则的 `escalation_threshold` 就这个窗口里不再派（`instance_task_failure_set_aside`），并告诉人一次（`instance_task_failure_set_aside_reported`），门槛 2 时约在第一次失败后一小时；几分钟的故障不会让任务停一整天。任务本身不暂停，下一个窗口重新计；激活目录、排程工作台查到包变了（放置新包）、商店更新任务成功或重启立刻解除，在原处改一个工作台不比对的文件不解除。活动窗结束后才结算的失败什么也不记。只在内存里，重启就清零，不需要任何配置。
 
+### 1.547 Slice #455 SL2 (0.12.101): a stored goal on a pool that declares `spend_line` is that pool's line: it is accepted, kept and shown, it has no end of its own, and it never weighs what produces the pool (board #455; the owner's rulings of 11-27 and 11-28, the rulings 1 to 7 the coordinator's of 11-28; coordinator work order `rd-1123/brief-455-sl2.md`; on main `cdc3e0b4`, v0.12.99)
+
+This section takes 1.547 (§1.545 and §1.546 are two slices built beside it). It ships in 0.12.101.
+[resource-targets.md](resource-targets.md) (the new "A pool's line"; the v2 table's row of a line;
+"One value by name"; the targetable list of `ResourceTargetView`),
+[scheduling/README.md](scheduling/README.md) ("A pool whose spending a line governs", the new
+"With a line"; "A declared 0"), [scheduling/v2/README.md](scheduling/v2/README.md),
+[standard-pack-goals.md](standard-pack-goals.md) (the row of `goal_pool_unvalued`),
+[standard-pack-goal-tables.md](standard-pack-goal-tables.md) (the row of `table_pool_unvalued`),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("A currency a line governs") and
+[runtime-interface.md](runtime-interface.md) ("Goal request kinds", the set's refusals) are the
+contract; the catalogue's texts of `goal_pool_unvalued`, `table_pool_unvalued` and `pool_unvalued`
+say it too. No interface revision moves, no code, word, setting or record is new, and no wire
+member; `runtime-client` does not move.
+
+**What could not be said before.** Since §1.540 (0.12.97) a pool that declares no valuation may
+declare `spend_line`: a currency whose spending a line governs, whose consumption costs nothing
+while no line is set. There was no way to give such a pool its line: the goal page's set and the
+pool's targetable row required a step and an importance the pool does not give (`pool_unvalued`),
+the stored document's check asked for them (`missing_field` at `/targets/<i>/scale`), the
+evaluation recorded such a target as `valuation_missing` and ignored it, and the Lab's check of
+`goals.json` refused a `resource` entry on the pool (`goal_pool_unvalued`). And there was a hole:
+a target that carried its own `scale` and `importance_milli` on such a pool was taken, and its
+terms then weighed the tasks that produce the pool.
+
+**The owner's rulings behind it, in neutral words** (11-27 and 11-28, board #455). The layer of
+goals never changes the weights of the business layer; a line on a currency saved for something
+needs no date of expiry: what one saves for does not change, and the line stands until a person
+changes it. So a line is not a goal to produce: it never raises the weight of the tasks that earn
+the currency, and it does not lapse.
+
+**The rulings, as built.**
+- *1, the line* (`crates/policy/src/resource_targets.rs`: `line_pool`, the one place it is read,
+  from the catalogue in force; `check_target_v2`; `resolve_target`). A stored target whose pool
+  writes `spend_line` carries `at_least` and nothing else of a target's terms: a `scale`, an
+  `importance_milli` or `tasks` on it is refused at that member, the first in that order, v2 and
+  v3 alike, with `unknown_field`, the nearest reason (a line has no such member); no word is new.
+  A v1 target always writes its own terms and tasks, so one on such a pool is `unknown_field` at
+  its `scale`, before its tasks (decided here: the v1 check had the same hole). `rule` and `apply`
+  are read as on every target. A line needs no producer: `unmapped_task` is not asked of it.
+- *2, where it is accepted.* The host's set: `check_target` reads the targetable row as before;
+  the row (`targetable_resources_with_readings`) names such a pool whatever its producers, its
+  `default_scale` and `default_importance_milli` the pool's `spend_line.scale` and `price_milli`
+  (`listed_terms`, read where `pool_target_terms` is read, never written in a row), so neither is
+  required and the set takes `{at_least}` on the pool's `resource` entry and by its pool id. The
+  view's own `validate` asks that a term without a default be required; giving the line's two
+  numbers keeps every answer valid for a client of today's revision, which a row with neither a
+  default nor a requirement would not be (decided here). The stored document's check: as ruling 1.
+  The pack's goal check: the references' one map (`GoalReferences::pools`, contract crate) holds
+  for each pool a `GoalPool`, `Valued`, `Line` (writes `spend_line`, not valued) or `Unvalued`, in
+  place of a truth value: `goal_pool_unvalued` refuses `Unvalued` and takes `Line`;
+  `table_pool_unvalued` refuses both for an item without a recipe, so no need lands on a line. For
+  a pool that does not write `spend_line` the map's value is the one the truth value was, so
+  neither word changes for it (the Tools' reader, `crates/resource-tooling/src/standard_pack_goals.rs`).
+- *3, it never weighs* (`weighed_target_policies`, the evaluator's one reading of the stored
+  records, in place of `instance_target_policies`, which the view keeps). Each instance-scoped
+  record is read without its lines, by the record's own reader (v1, v2 or v3, after its own
+  checks, a v3 line with its own lifetime), before the needs computed from the records are
+  stacked; a record of lines alone reads as one that holds no target. So `resolve_v2` and
+  `weigh_production` never see a line (no `Γ`, no `resource_targets` item, no override, no
+  inventory expiry), the gate's goal terms (B1) have none to read, the goal's gap behind
+  `gap_remaining`, `goal_runs` and `run_cap` is absent, no run is told turns for it, so the
+  unread-after-run rule of the produced side never names its pool, the two tiers cannot be written
+  on such a pool (§1.542), the stacking adds no need to a line, and a lapsed line names no candidate
+  expired. A task that produces the currency is judged exactly as with no target on the pool; a
+  task that consumes it as in 0.12.99 (`<pool>:-0`). Nothing of the pressing is built. *Where the
+  next slice reads the line*: the records `weighed_target_policies` reads, the targets its filter
+  leaves out; that slice turns the filter into a partition and hands each instance's lines to the
+  consumption loop of `judge` (`crates/policy/src/evaluator/benefit.rs`, where `spend_line_pool`
+  is asked).
+- *4, no end of its own.* Nothing gives a line a date; the set still refuses `by_unix_ms`
+  (`deadline_unsupported`); a document's own validity and a v3 target's own lifetime apply to it as
+  to every row.
+- *5, shown as a goal is shown.* The goal page's entry, by `resource_entry` as before: the
+  `{at_least}`, who set it, the pool's reading (the targetable row's observation, now present
+  without a producer) and the gap from the target's condition, how far the holding is below the
+  line. `ResourceTargetView`'s `active` lists the line as stored. The schedule's not-running rows
+  and candidates are unchanged.
+- *6, what stays byte for byte*: a catalogue without `spend_line` (its targetable rows, every
+  check, every evaluation); a pool with a valuation or `target_defaults` and every target on it; a
+  `spend_line` pool with no stored target; the stored rows' shape.
+
+**The question of a target with its own terms stored before** (the work order's third stop
+condition; it does not hold). No stored record is checked again: the start loads the records as
+they are, and only `ApplyResourceTargets` checks a document. A record that a build of 0.12.97 to
+0.12.100 took with a target with its own two terms on such a pool (no installed root declares
+`spend_line`, so none is known) loads, reads that target as the pool's line, which weighs nothing,
+and shows it; the same document applied again is refused at its `scale`. That is the gentlest
+handling: nothing is refused at the start and the hole is closed in the evaluation too.
+
+**Tests** (incident `#455 SL2`: `crates/policy/src/tests/gate_455_sl2.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_455_sl2.rs`, host gate map; one test appended to
+`crates/resource-tooling/src/gate_455_gr1.rs`, exec gate map; one to
+`crates/actingcommand-contract/src/standard_pack_goal_tables_tests.rs`, contract gate map; no clock
+read).
+
+| Test | What it shows |
+|---|---|
+| `sl2_host_a_line_is_set_by_at_least_alone_and_shown_as_a_goal_is` (1) | the targetable row of a `spend_line` pool no task produces, whole: no producers, defaults 6000 and 33 333, neither required, its reading; `{at_least: 40}` on its entry and by its pool id `SetTarget`, the row the valued entry's but for id and pool, without `scale`, `importance_milli` or `tasks`; `by_unix_ms` `deadline_unsupported`; 0 and 1001 over a capacity of 1000 `out_of_range` 1..1000 with the pool; the page's entry with its value, who set it, the reading 25 and the gap 15 |
+| `sl2_t2_a_stored_line_carries_at_least_alone_and_needs_no_producer` (2) | with no producer, the line alone taken in v3 and v2, its condition computed; `scale`, `importance_milli`, `tasks` each `unknown_field` at itself, v3 and v2; with a producer, own `scale` and `importance_milli` (taken since SL1) `unknown_field` at `/targets/0/scale`, changed on purpose, and taken on the same catalogue without the member, where the line alone is `missing_field` as on main; a v1 target `unknown_field` at its `scale` |
+| `sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before` (3) | a producer (`V` 800), a reserving consumer (`V` 50 000, `run_cap` 4), a lone consumer (`<pool>:-0`), a producer of a valued pool: the line in v3, the line past its own lifetime, the line in v2 and an earlier build's target with its own terms each evaluate equal, whole, to no record; with the records' needs too |
+| `sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it` (4, 5) | the one map: an item without a recipe on a `Line` pool `table_pool_unvalued`, one with a recipe taken; a `resource` entry on it taken, on an `Unvalued` pool `goal_pool_unvalued` |
+| `sl2_a_resource_entry_on_a_pool_that_writes_spend_line_is_accepted` (5) | on G-R1's root, the map built from `schedule.json`: a `resource` entry on the `spend_line` pool no warning; on a pool with neither, or a valuation without a gap weight, `goal_pool_unvalued` as before |
+| `sl2_t6_a_catalogue_without_spend_line_and_its_stored_targets_read_as_on_main` (6) | without the member: the evaluation's reading of the records equals the view's whole, the targetable list is main's whole, and a target with its own terms weighs its producer as on main, `B = 800 + 150 000` |
+| `sl2_t7_a_reader_that_knows_no_line_ignores_it_and_keeps_the_other_goals` (7) | the older reader's condition, the line's pool read as one with neither a valuation nor `target_defaults`: the line weighs nothing, `unresolved why=valuation_missing gap_weight=0` on its producer, `no_producing_task` on every candidate without one, the other goal applied |
+| `sl2_host_an_older_page_refuses_to_set_a_line_and_clears_a_stored_one` (7) | fed an older build's row (none without a producer, both required with one): the set `pool_not_targetable` or `pool_unvalued`; the clear of a stored line `ClearTarget` |
+
+Test 8, the existing tests touched, each because ruling 2 moves what it pins:
+`gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least` (host)
+is adapted and renamed `…_takes_its_line_by_at_least`, its former name retired in
+`ci/retired-gates.toml`; the contract crate's `standard_pack_goals` tests
+`goals_neutral_example_reads_to_typed_entries` and `goals_each_type_reads_its_members` and
+`standard_pack_goal_tables`' `references` helper take the map's new value type (`Valued` for
+`true`, `Unvalued` for `false`). No other test pins a targetable row or a goal check's verdict on a
+`spend_line` pool; no golden is re-recorded. Test 9, not verified by reading alone: that the four
+whole-evaluation equalities of test 3 hold (nothing else of the evaluation reads the record; the
+decision identity hashes the snapshot id, not the facts), and the arithmetic of test 6's
+`150 800`; CI is the first build.
+
+**What is not changed.** Every reader of a consumption, the pressing (none), the catalogue and its
+hash, the stored rows' shape, `EditGoal`'s and `ApplyResourceTargets`' wire, `ResourceTargetView`'s
+shape and validation, every interface revision, record, code, word and setting; the view's and the
+page's reading of a stored record (lines shown as stored). No game, package, pool or alias is
+named in code.
+
+**At deploy.** Nothing to configure. No installed package declares `spend_line` yet, so nothing
+changes until a resource root does and a person sets a line. In the release notes' language:
+写了 `spend_line` 的池子现在可以设一条线：在目标页上对它的条目填 `{at_least}`（或按池子 id 设），不用填步长和重要度、也不要求有任务产出它；目标页像别的资源目标一样显示这条线、当前读数和差多少。线没有自己的到期时间，也从不给产出这种货币的任务加权；消耗它的任务照旧按上一版判（这份消耗记 0），按线压低花费在后面一版。旧版接受过的、在这种池子上自带步长和重要度的目标，新版照常读入、当成这条线、不再加权；再次提交同一份文档会在 `scale` 处被拒。
+
+**Rollback.** A build before this one (0.12.97 to 0.12.100; below 0.12.97 the installer refuses
+the rollback while a root requires `pool_spend_line`, §1.540) with a stored record that holds a
+line: the start loads the record (no check of a stored record, nothing fatal); the first
+evaluation reads the line as a target on a pool with neither a valuation nor `target_defaults`: it
+weighs nothing, says `<id>@<pool>:unresolved why=valuation_missing gap_weight=0` in the
+`resource_targets` reason of each task that produces the pool, and, when no task of the instance
+produces it, `resource_target_tasks_unevaluable` `<id>@<pool>:no_producing_task` on every
+candidate of the instance, a record a person sees; the instance's other targets still apply. Its
+goal page lists the entry with its `{at_least}` and the gap, the reading only while a task produces
+the pool (else the pool is not targetable there); a set on it is refused `pool_unvalued` (with a
+producer) or `pool_not_targetable` (without), and a clear is taken. Before going back a person
+clears the lines (`EditGoal` `clear` of each line's entry or name), so nothing is shown that the
+older build cannot set again.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
