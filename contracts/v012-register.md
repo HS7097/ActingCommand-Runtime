@@ -52452,9 +52452,8 @@ owner lock) may.
   kind run too: a handed run's lane is ended and the driver told the run was dropped; a probe of an
   unavailable instance ends its probes and tells a person with the error's own code as
   `failure_code` (`end_panicked_unavailable_probe` takes the cause, `panic_caught` after a panic); a
-  recovery ladder an entry block waits for is noted ended with `worker_panicked`, the one word of
-  `entry_recovery_end` for a ladder its worker ended (nothing climbs again in that block, a person is
-  told; the worker's own record names the error).
+  recovery ladder an entry block waits for is noted ended with `worker_failed` (fix round 1, below;
+  nothing climbs again in that block, a person is told; the error's own record names the error).
 - *R-A1-3, the panic's locks* (`host/failure_scope.rs`, `clear_instance_lock_poison`). At a panic,
   first of all, the poison is cleared on the payload's instance's admission guard and queue-order
   lock, each tested and cleared on the lock itself, without locking or waiting for it. After the
@@ -52513,6 +52512,7 @@ fenced, as a member's own fault is fenced today.
 | `…::iso_a_h4_a_panic_holding_a_shared_lock_latches_at_the_next_touch` | a panic holding the scheduler's lock latches `runtime_state_poisoned` at the next touch; nothing fenced |
 | `…::iso_a_h5_two_availability_writes_in_one_millisecond_are_both_taken` | on a clock that does not move, the start's withdrawal and restore and a person's self-check's, each one millisecond after the one before; nothing latches |
 | `…::iso_a_h6_writes_after_a_clock_step_back_are_taken_and_a_fence_completes` | the clock a second back: a person's self-check's withdrawal and restore after the stored record, a fence's withdrawal one millisecond after it and the fence complete, the next passing self-check lifts it |
+| `…::iso_a_h7_an_entry_recovery_whose_payload_fails_ends_worker_failed_and_climbs_no_more` | (fix round 1, on `gate_490_entry_a`'s replay) an entry block's held recovery whose ladder's payload ends with an operation's error its worker contains: the error's one record, one `instance_entry_blocked_recovery_failed` with `worker_failed` and no next climb, the block holding nothing, no climb then or two hours later, the worker going on, nothing stopped |
 
 Every existing test passes unchanged; none moves. The worker's own (`instance_workers`' panic before
 any lock: recorded, nothing fenced, the next payload runs), the panicked probe's and the panicked
@@ -52528,6 +52528,29 @@ request door; the fact store's rules and every client's fact. Left for a later s
 take the two locks still take them through the shared helper (converting them to `lock_instance`,
 with containment at the sweep's, the watch's and the policy admission's touch, closes the moment
 between the unwind and the clear); the memory gate before an emulator start is another slice.
+
+**Fix round 1** (the coordinator's work order of 11-29 after the first CI round; one code, one
+cause). The finding: after a payload's error its worker contained, the end of an entry block's
+recovery ladder was written `worker_panicked`, so `instance_entry_blocked_recovery_failed` told a
+person that the worker which climbed the ladder panicked when nothing had. The vocabulary
+`entry_recovery_end` gains one word, `worker_failed` (`EntryRecoveryEnd::WorkerFailed`, since
+0.12.102): the work that climbed the ladder ended with an error its worker contained, the error's
+own record under the same links saying which; `contain_worker_failure` writes it, and the panic
+path keeps `worker_panicked`. Every reader of the word decides for it exactly as for
+`worker_panicked` (`host/entry_blocks.rs`: the match of `EntryBlocks::recovery_ended`, which sets
+the block's flag, still named `panicked` and now said to hold for both, and lets its held
+recovery go; `worker_ended`, which `note_entry_recovery_failed` and `block_instance_entry` read to
+leave such a climb out of the stretch's count; the update dialog's test is false for both). No other
+word, record shape, key or interface revision moves: an outcome's values reach every reader as a
+map of text, which spells a word it does not know and refuses none (the `ledger` rows of
+[component-interfaces.md](component-interfaces.md): codes and value words the reader only spells;
+the precedent of a word added to an existing value vocabulary, §1.511's `rule` of
+`variable_source`), and nothing parses this vocabulary back into its enum, so an older build reads
+the new word as a word. The catalog's entry of the word and the texts of the code and the
+vocabulary say it; the index was regenerated and checked current. One test more, h7 in the table
+above, built on `gate_490_entry_a`'s replay, whose helpers it calls are made `pub(super)` for it
+(nothing else of that file changes); ENTRY-A's R5 (b), a panicked worker's `worker_panicked`,
+passes unchanged.
 
 **At deploy.** Nothing to configure or migrate: no record, setting or revision moves.
 

@@ -460,9 +460,11 @@ claim's work, a handed scheduled run) and is their boundary:
   way: a scheduled run's lane is ended and the driver told the run was dropped (its registration
   left for the reconciliation, as after a panic); a probe of an unavailable instance ends its
   probes and tells a person with `instance_unavailable_awaiting_person` whose `failure_code` is the
-  error's own code; a recovery ladder that an entry block waits for is noted ended as a panicked
-  worker's (`entry_recovery_end` `worker_panicked`: nothing climbs again in that block, a person is
-  told). A payload that ended with an error is a finished payload. The worker goes on.
+  error's own code; a recovery ladder that an entry block waits for is noted ended by its worker's
+  contained error (`entry_recovery_end` `worker_failed`, fix round 1: one cause, one word, so the
+  record no longer says the worker panicked), which decides as `worker_panicked` does: nothing
+  climbs again in that block, a person is told, and the error's own record names it. A payload
+  that ended with an error is a finished payload. The worker goes on.
 - *A panic*: first of all, before any record, the poison is cleared on the payload's instance's
   two locks above, without waiting for either. Then the panic's ends and its `panic_caught` record
   (thread, boundary, raw text), as before; the payload is dropped, not retried, and its key lapses

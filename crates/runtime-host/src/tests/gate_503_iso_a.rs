@@ -22,10 +22,16 @@
 //! - h6: after the wall clock stepped back a second, a person's self-check withdraws and restores
 //!   the availability, a fence withdraws it and the fence completes, and the next passing self-check
 //!   lifts the fence; each write is taken after the stored one.
+//! - h7 (fix round 1): an entry block's recovery whose payload ends with an operation's error its
+//!   worker contains is noted ended `worker_failed`, not `worker_panicked`: one warning, no next
+//!   climb, the block holding nothing and climbing no more; the worker goes on and the Runtime is
+//!   not stopped (ENTRY-A's replay, `gate_490_entry_a`).
 //!
 //! The hosts run on a manual Runtime clock; the waits only bound a broken run.
 
+use super::gate_373_nav3a::{RETURN_HOME, route};
 use super::gate_403::{assert_fence, fence_records, status_fence};
+use super::gate_490_entry_a::{ATTENTION_AFTER_MS, BACK_STEPS, COOLDOWN_LEFT_MS, replay};
 use super::instance_workers::{all_events, wait_until};
 use super::*;
 use crate::codes::HostCode;
@@ -701,4 +707,71 @@ fn iso_a_h6_writes_after_a_clock_step_back_are_taken_and_a_fence_completes() {
         "the Runtime latched"
     );
     fixture.host.close().expect("close host");
+}
+
+/// h7 (fix round 1; ENTRY-A's replay on a manual clock, as its R5 (b)): the policy instance's run
+/// fails at its entry while the ladder's cool-down window is open, so its block holds the run's
+/// recovery until the window's end. The next host claim of the instance's device, that recovery's
+/// ladder admitted at the window's end, ends with an operation's error its worker contains: the
+/// error's own record, and one `instance_entry_blocked_recovery_failed` with `worker_failed` (not
+/// `worker_panicked`) and no next climb; the instance stays blocked holding nothing, nothing climbs
+/// then or two hours later, the worker goes on and the Runtime is not stopped.
+#[test]
+fn iso_a_h7_an_entry_recovery_whose_payload_fails_ends_worker_failed_and_climbs_no_more() {
+    let fixture = replay(&route(RETURN_HOME, "away", "menu", BACK_STEPS, None), true);
+    let until_unix_ms = fixture.hold_a_recovery(COOLDOWN_LEFT_MS);
+    fixture
+        .host
+        .fail_next_host_claim_for_test(POLICY_INSTANCE_ALIAS, operation_failure())
+        .expect("arm the recovery's failure");
+    fixture.tick_at(until_unix_ms);
+
+    let recovery_failed = HostCode::InstanceEntryBlockedRecoveryFailed.as_str();
+    wait_until("the failed recovery's warning", || {
+        !failed_with(&all_events(&fixture.host), recovery_failed).is_empty()
+    });
+    let events = all_events(&fixture.host);
+    let warnings = failed_with(&events, recovery_failed);
+    let [(_, outcome)] = warnings.as_slice() else {
+        panic!("one recovery that ended without recovering: {warnings:#?}");
+    };
+    assert_eq!(
+        (
+            value(outcome, "entry_recovery_end"),
+            value(outcome, "next_occurrence_unix_ms"),
+        ),
+        (json!("worker_failed"), Value::Null),
+        "the worker's contained error ended the climb; no further climb"
+    );
+    assert_eq!(
+        failed_with(&events, HostCode::FactObservationNotNewer.as_str()).len(),
+        1,
+        "the error's own record"
+    );
+    assert!(failed_with(&events, "panic_caught").is_empty(), "no panic");
+    let (_, told, held) = fixture.block();
+    assert!(told);
+    assert_eq!(held, None, "nothing held");
+    assert_worker_runs(&fixture.host, POLICY_INSTANCE_ALIAS);
+
+    fixture.tick_at(until_unix_ms + 2 * ATTENTION_AFTER_MS);
+    assert!(
+        fixture.ladders().is_empty(),
+        "no climb, then or later: {:?}",
+        fixture.ladders()
+    );
+    assert!(fixture.blocked(), "the instance stays blocked");
+    assert_eq!(
+        failed_with(&all_events(&fixture.host), recovery_failed).len(),
+        1,
+        "once per block"
+    );
+    assert!(
+        !fixture
+            .host
+            .is_shutdown_requested()
+            .expect("shutdown state"),
+        "a shutdown was requested"
+    );
+    fixture.close();
 }

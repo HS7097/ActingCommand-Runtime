@@ -24,7 +24,7 @@
 //!   one of the instance fences it with the fence's own records; one of the operation is
 //!   recorded once (`runtime.failed` with its own code). Then the ends a panic runs for its kind
 //!   run too (a policy run's lane, a probe's unavailability with the error's code, an entry
-//!   recovery), and the worker goes on.
+//!   recovery, ended `worker_failed`), and the worker goes on.
 //! - At a panic, first of all, the poison the unwind left on the payload's own two locks (its
 //!   device's admission guard and queue-order lock, which guard no data) is cleared without
 //!   blocking; when either was poisoned the instance is fenced with `instance_lock_poisoned`
@@ -568,9 +568,10 @@ impl HostShared {
     /// the error's own code at stage `operation_cleanup` (nothing more when its path recorded it
     /// already). Then `ends` run as a panic runs them: a policy run's lane is ended and its sink
     /// told the run was dropped, a probe's unavailability tells a person with the error's code
-    /// and probes no more, and a recovery ladder of an entry block is noted ended as a panicked
-    /// worker's is (`worker_panicked`: nothing climbs again in that block). Any other `Err` is a
-    /// failure of those records or ends, which its caller marks fatal.
+    /// and probes no more, and a recovery ladder of an entry block is noted ended by its worker's
+    /// contained error (fix round 1: `worker_failed`, whose effect is a panicked worker's: nothing
+    /// climbs again in that block). Any other `Err` is a failure of those records or ends, which
+    /// its caller marks fatal.
     fn contain_worker_failure(
         &self,
         error: RuntimeHostError,
@@ -596,7 +597,7 @@ impl HostShared {
             self.end_panicked_unavailable_probe(instance_id, probe, &cause)
         });
         let ladder_ended = ends.ladder.as_ref().map_or(Ok(()), |ladder| {
-            self.note_entry_recovery_failed(ladder, crate::codes::EntryRecoveryEnd::WorkerPanicked)
+            self.note_entry_recovery_failed(ladder, crate::codes::EntryRecoveryEnd::WorkerFailed)
         });
         probe_ended.and(ladder_ended)
     }
