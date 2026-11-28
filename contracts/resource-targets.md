@@ -1029,6 +1029,65 @@ An integer yield is bounded as before, and a task with no goal on what it produc
 `run_cap` of before. A target needs nothing new: its pool is observed by a fact under `inventory.`
 or `resource.` (or rows of a list), as every target's.
 
+## Needs computed from the records
+
+Workflow #455 RR3 (since 0.12.95; register §1.538; the coordinator's rulings of 11-28, on the
+owner's words that a goal on a material has two layers, the stock a person wants and what a
+character being raised still needs and does not have, and that what is in hand goes to the
+character first). Before every evaluation the host computes, for each instance that holds stored
+records (`session.goal_records`), what the recorded characters still need of each pool
+([standard-pack-goal-tables.md](standard-pack-goal-tables.md), "What is computed"), and gives it to
+the evaluator in memory, one more kind beside the left-out facts and the readings of the pools read
+from rows of a list ([scheduling/README.md](scheduling/README.md), "Needs computed from the
+records"). The evaluator stacks it on the instance's stored record for that evaluation alone:
+
+- **The gap.** On a pool, `max(0, need + stock − held)`: what is in hand goes to the characters
+  first, and the stock a person asked for is counted on what is left. With a need of 30, a stock of
+  200 and 50 held the gap is 180 (30 of the 50 go to the characters, 20 count for the stock); with
+  10 held it is 220.
+- **A pool with a stored goal** (a v2 record's target, a v3 record's live target) keeps that goal's
+  step, importance, mode and coverage and is judged as if it asked `stock + need`.
+- **A pool without one**, on which a need lands (the pool of an item without a recipe), is judged
+  as if it held a goal of `need`, adjusting every producing candidate, with the pool's own step and
+  importance ("Who gives a goal its step and importance"); its `resource_targets` item names it
+  `goal_records@<pool>`. The pool of an item with a recipe gains no goal of its own: its need is the
+  part its holding covers, which only stacks on a stored goal there.
+- **No stored goal at all.** An instance with records and no stored record (or a record of entries
+  alone) is evaluated for goals all the same: it reads as an active v2 policy of the computed goals
+  alone, whose `resource_weights` names it `goal-records:<identity>` at the time its records were
+  set. A v2 policy past its lifetime (every target of a v3 record lapsed) reads as one of the
+  computed goals with its own targets kept as lapsed, so a candidate they covered still says
+  `resource_target_policy_expired`. On a v1 policy, which weighs its named tasks alone, nothing is
+  stacked, and every candidate of the instance says `goal_records_not_stacked` (warning); an
+  unreadable record stacks nothing either (`resource_target_policy_unreadable` says that the
+  instance runs base scheduling).
+- **Nothing a person stored is replaced.** The stored record is not rewritten, a computed goal is
+  never stored, and the sixteen targets a record holds count no computed one. `ResourceTargetView`
+  and the goal page show the stored record as it is.
+- **What the run says.** Each candidate a stacked goal covers carries, after its own reasons,
+  `goal_records_need` (info, `pool_id`) for each such pool: what the characters need, the stock, the
+  holding, how much of it goes to the characters, the gap and the tables' sha256, in its text, as
+  the existing reasons' numbers are; the holding and what follows from it read `pending` while the
+  evaluation does not know it. Then every candidate of the instance carries the notes of the
+  computed set, one reason for each code and value: `goal_records_not_applied` (warning,
+  `goal_problem`), `goal_records_not_held`, `goal_records_progress_unknown` (`fact_key`,
+  `unknown_reason`), `goal_records_row_missing` (`fact_key`; fix round 1, apart from the next),
+  `goal_records_reading_missing` (`fact_key`), `goal_records_position_unknown`,
+  `goal_records_holding_unknown` (`pool_id`, `unknown_reason` when the observation gives one),
+  `goal_records_item_unweighed` and `goal_records_condition`, each listing its records, columns or
+  items. Nothing goes to a log.
+- **Identity, freshness, wakes.** The computed set's identity is hashed into the decision identity
+  of every candidate of the instance, and into the instance's view at admission
+  ([scheduling/README.md](scheduling/README.md)), so an intent evaluated on other progress, other
+  records or other tables is refused `policy_facts_stale`. The stacked policy's lifetime ends no
+  later than the set's freshness (the earliest expiry among the lists and holdings it read), so a
+  candidate it moves is that fresh and the evaluation wakes a millisecond after, as for a fact
+  that expires.
+- **A game whose root cannot be composed** voids the computed goals with the stored ones ("A game
+  whose root cannot be composed").
+- **Nothing moved.** An instance without stored records is given no set: every byte of its
+  evaluation, its identities and its dispatches is as before.
+
 ## Who gives a goal its step and importance
 
 #455 B3-P (since 0.12.82; register §1.522; the coordinator's rulings of 11-23, not the owner's

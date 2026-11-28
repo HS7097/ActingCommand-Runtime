@@ -284,6 +284,9 @@ mod gate_455_rr1;
 // `session.goal_records`, which only the goal edit writes and a fact reader reads back, under the
 // page's one version; nothing is computed from them.
 mod gate_455_rr2;
+// #455 RR3 (0.12.95; register §1.538): what the stored records still need is computed before every
+// evaluation, stacked on the stored goals in memory, and part of the decision and the instance view.
+mod gate_455_rr3;
 // #503 SD-1 (0.12.83; register §1.525): a shutdown request that finds only lifecycle work in flight
 // opens a settling window and is answered `runtime_shutdown_settling` with `retry_after_ms`;
 // every other refusal is answered at once and opens none.

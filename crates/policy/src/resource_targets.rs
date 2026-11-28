@@ -51,6 +51,9 @@ use crate::evaluator::{
     Amounts, ConsumptionAmounts, activity_scope_specificity, pool_bound, project_given_validity,
     project_pool_value, project_time_validity, scope_matches_instance, with_values,
 };
+use crate::record_needs::{
+    InstanceRecordNeeds, PoolNeedKind, RecordNeeds, need_reason, not_stacked_reason,
+};
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
     CatalogDiagnostic, CatalogDiagnosticCode, CompiledCatalog, ConsumptionFact, DecisionReason,
@@ -1754,6 +1757,175 @@ pub(crate) struct InstanceTargetPolicy {
     /// A server- or game-scoped record of the key covering the instance, which only an
     /// ordinary publication before RT-S1a could have written: `(scope kind, observed_at)`.
     pub(crate) ignored: Option<(&'static str, u64)>,
+    /// Workflow #455 RR3: the needs computed from the instance's stored records, as
+    /// [`stack_record_needs`] stacked them on `state`; `None` without stored records.
+    pub(crate) needs: Option<Box<StackedNeeds>>,
+}
+
+/// Workflow #455 RR3 (register §1.538, ruling 5; `contracts/resource-targets.md`, "Needs computed
+/// from the records"): the needs computed for one instance and what [`stack_record_needs`] did
+/// with them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StackedNeeds {
+    pub(crate) needs: InstanceRecordNeeds,
+    /// The stock the stored target of each stacked pool asked, by the pool's file id; a pool
+    /// without a stored target has none (0).
+    stocks: BTreeMap<String, u64>,
+    /// Whether the stored record is a v1 policy, on which nothing is stacked
+    /// (`goal_records_not_stacked`).
+    not_stacked: bool,
+}
+
+impl StackedNeeds {
+    /// The stock the stored target on `resource` asked, 0 without one.
+    fn stock(&self, resource: &str) -> u64 {
+        self.stocks.get(resource).copied().unwrap_or(0)
+    }
+}
+
+/// The id of a target the computed needs give a pool no stored target names: in memory only,
+/// never stored, never counted among a record's targets.
+const COMPUTED_TARGET_ID: &str = "goal_records";
+
+/// Workflow #455 RR3 (register §1.538, ruling 5; `contracts/resource-targets.md`, "Needs computed
+/// from the records"): `policies` with the computed `needs` of each instance stacked on its stored
+/// record, in memory, for one evaluation. On a pool the gap is `max(0, need + stock − held)`:
+///
+/// - an active v2 policy (a v2 record, or a v3 record's live targets): each target on a pool with
+///   a computed need asks `stock + need` (its own `at_least` the stock, its own step and
+///   importance kept), and each pool on which a need lands (an item without a recipe) that no
+///   target names gains a target of `need` with the pool's own step and importance; the policy's
+///   lifetime ends no later than the needs' freshness;
+/// - no record, or one that holds no target: such a policy of the landing needs alone, its identity
+///   `goal-records:<identity>` and its time the records' own;
+/// - an expired v2 policy (every target lapsed): such a policy of the landing needs, the lapsed
+///   targets kept as lapsed, so a candidate they covered says the expiry as before;
+/// - a v1 policy, which weighs its named tasks alone, stacks nothing (`goal_records_not_stacked`);
+///   an unreadable record stacks nothing either (`resource_target_policy_unreadable` says that the
+///   instance runs base scheduling).
+///
+/// Nothing stored is rewritten, and no computed target counts among a record's sixteen. Needs of
+/// an alias none of `instances` has are passed over.
+pub(crate) fn stack_record_needs(
+    mut policies: BTreeMap<String, InstanceTargetPolicy>,
+    needs: &RecordNeeds,
+    instances: &[InstanceSnapshot],
+) -> BTreeMap<String, InstanceTargetPolicy> {
+    for (instance_id, computed) in needs.iter() {
+        if !instances
+            .iter()
+            .any(|instance| instance.instance_id == *instance_id)
+        {
+            continue;
+        }
+        let policy = policies.entry(instance_id.clone()).or_default();
+        let mut stocks = BTreeMap::new();
+        let mut not_stacked = false;
+        let fresh_until_unix_ms = computed.fresh_until_unix_ms();
+        policy.state = match policy.state.take() {
+            None => Some(TargetPolicyState::ActiveV2 {
+                policy_sha256: computed.policy_word(),
+                applied_at_unix_ms: computed.records_observed_at_unix_ms(),
+                valid_until_unix_ms: fresh_until_unix_ms,
+                targets: landing_targets(computed, &[]),
+                lapsed: Vec::new(),
+            }),
+            Some(TargetPolicyState::ActiveV2 {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                mut targets,
+                lapsed,
+            }) => {
+                for target in &mut targets {
+                    let Some(need) = computed.pools().get(&target.resource) else {
+                        continue;
+                    };
+                    let TargetCondition::AtLeast { amount } = target.condition;
+                    stocks.insert(target.resource.clone(), amount);
+                    target.condition = TargetCondition::AtLeast {
+                        amount: amount
+                            .saturating_add(need.need)
+                            .min(MAX_RESOURCE_TARGET_AMOUNT),
+                    };
+                }
+                let landing = landing_targets(computed, &targets);
+                targets.extend(landing);
+                Some(TargetPolicyState::ActiveV2 {
+                    policy_sha256,
+                    applied_at_unix_ms,
+                    valid_until_unix_ms: min_expiry(valid_until_unix_ms, fresh_until_unix_ms),
+                    targets,
+                    lapsed,
+                })
+            }
+            Some(TargetPolicyState::ExpiredV2 {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms,
+                targets,
+            }) => Some(TargetPolicyState::ActiveV2 {
+                policy_sha256,
+                applied_at_unix_ms,
+                valid_until_unix_ms: fresh_until_unix_ms,
+                targets: landing_targets(computed, &[]),
+                lapsed: targets
+                    .into_iter()
+                    .map(|target| LapsedTarget {
+                        target,
+                        valid_until_unix_ms,
+                    })
+                    .collect(),
+            }),
+            other => {
+                not_stacked = matches!(
+                    other,
+                    Some(TargetPolicyState::Active { .. } | TargetPolicyState::Expired { .. })
+                );
+                other
+            }
+        };
+        policy.needs = Some(Box::new(StackedNeeds {
+            needs: computed.clone(),
+            stocks,
+            not_stacked,
+        }));
+    }
+    policies
+}
+
+/// The targets of `computed`'s landing needs (each pool of an item without a recipe whose need
+/// is above 0) that no target of `existing` names: `at_least` the need, the pool's own step and
+/// importance, adjusting every producing candidate.
+fn landing_targets(
+    computed: &InstanceRecordNeeds,
+    existing: &[ResourceTargetSpecV2],
+) -> Vec<ResourceTargetSpecV2> {
+    computed
+        .pools()
+        .iter()
+        .filter(|(resource, need)| {
+            need.kind == PoolNeedKind::Lands
+                && need.need > 0
+                && !existing.iter().any(|target| target.resource == **resource)
+        })
+        .map(|(resource, need)| ResourceTargetSpecV2 {
+            id: COMPUTED_TARGET_ID.to_owned(),
+            resource: resource.clone(),
+            condition: TargetCondition::AtLeast {
+                amount: need.need.min(MAX_RESOURCE_TARGET_AMOUNT),
+            },
+            scale: None,
+            importance_milli: None,
+            rule: None,
+            apply: TargetApplicationV2 {
+                mode: TargetMode::Adjust,
+                weight: TargetWeight::ScoreStage,
+                manual_offset: None,
+            },
+            tasks: None,
+        })
+        .collect()
 }
 
 /// Reads every stored `session.resource_targets` record of `facts` as given, before the
@@ -2310,6 +2482,9 @@ pub(crate) struct ResourceTerm {
     /// Workflow #455 G-R2a: the own lifetime of the first lapsed v3 target that covered the
     /// candidate, which then says what an expired v2 policy says; `None` under a v2 record.
     lapsed_until_unix_ms: Option<u64>,
+    /// Workflow #455 RR3: one `goal_records_need` for each target covering the candidate whose
+    /// pool has a need computed from the instance's stored records, in target order.
+    needs: Vec<DecisionReason>,
 }
 
 /// SS-2b: one pool of a candidate's resource term as its net benefit reads it
@@ -2438,8 +2613,9 @@ impl ResourceTerm {
 }
 
 /// `prefix` followed by `items` joined with `separator`, counted while joining so the detail
-/// takes at most 1010 bytes; the items that do not fit fold into `+<n>more`.
-fn bounded_list(prefix: String, items: &[String], separator: &str) -> String {
+/// takes at most 1010 bytes; the items that do not fit fold into `+<n>more`. Workflow #455 RR3:
+/// the notes of computed needs list their items with it too.
+pub(crate) fn bounded_list(prefix: String, items: &[String], separator: &str) -> String {
     const DETAIL_BUDGET_BYTES: usize = 1_010;
     let mut detail = prefix;
     for (index, item) in items.iter().enumerate() {
@@ -2595,6 +2771,9 @@ pub(crate) struct InstanceTargets {
     /// valued pool weighs, whatever the stored policy. Empty under an active v2 policy, whose
     /// terms already hold the base weights.
     base: BTreeMap<String, ResourceTerm>,
+    /// Workflow #455 RR3: the instance holds stored records whose needs are not stacked on its
+    /// v1 policy (`goal_records_not_stacked` on each of its candidates).
+    not_stacked: bool,
 }
 
 #[derive(Debug)]
@@ -2631,6 +2810,9 @@ struct ResolvedV2 {
     empty: ResourceTerm,
     /// SS-6: each resolved target's gap, in target order.
     gaps: Vec<TargetGap>,
+    /// Workflow #455 RR3: the notes of the needs computed from the instance's stored records,
+    /// which every candidate of the instance carries after its own reasons.
+    notes: Vec<DecisionReason>,
 }
 
 /// SS-6: one resolved v2 target as a dispatch's `gap_remaining` reads it.
@@ -2702,6 +2884,16 @@ impl ResolvedTargetV2<'_> {
     /// `scale`, else the pool's ([`pool_target_terms`]); `None` when neither gives one.
     fn step(&self) -> Option<u64> {
         self.target.scale.or(pool_target_terms(self.pool).0)
+    }
+
+    /// Workflow #455 RR3: the holding and the gap the target resolved to while its inventory is
+    /// known; `None` while it is pending or its weight does not resolve.
+    fn held_and_gap(&self) -> Option<(u64, u64)> {
+        match self.status {
+            TargetStatus::Applied { current, gap, .. } => Some((current.unsigned_abs(), gap)),
+            TargetStatus::Satisfied { current } => Some((current.unsigned_abs(), 0)),
+            TargetStatus::Pending { .. } | TargetStatus::Unresolved { .. } => None,
+        }
     }
 
     /// `Γ` of a covered candidate.
@@ -2844,6 +3036,7 @@ pub(crate) fn resolve_instance_targets(
             },
             targets,
             lapsed,
+            policy.needs.as_deref(),
         )?)),
     };
     // SS-1 (Alice's ruling 100): without an active v2 policy (none, withdrawn, expired,
@@ -2857,6 +3050,10 @@ pub(crate) fn resolve_instance_targets(
         ignored: policy.ignored,
         policy: resolved,
         base,
+        not_stacked: policy
+            .needs
+            .as_ref()
+            .is_some_and(|stacked| stacked.not_stacked),
     })
 }
 
@@ -2894,6 +3091,7 @@ fn base_terms(
                 unmapped: None,
                 items: weighed.items,
                 lapsed_until_unix_ms: None,
+                needs: Vec::new(),
             },
         );
     }
@@ -3052,10 +3250,15 @@ fn weighed_tasks(
 /// `lapsed` targets weigh nothing; each task one of them covered carries its lifetime, for the
 /// reason an expired v2 policy gives (empty under a v2 record). The error names a state only a
 /// bug reaches.
+///
+/// Workflow #455 RR3: `stacked`, the needs computed from the instance's stored records as
+/// [`stack_record_needs`] stacked them on `targets`, gives each covered candidate the
+/// `goal_records_need` of each covering target's pool that has one, and the policy its notes.
 fn resolve_v2(
     context: &TargetContext<'_>,
     targets: &[ResourceTargetSpecV2],
     lapsed: &[LapsedTarget],
+    stacked: Option<&StackedNeeds>,
 ) -> Result<ResolvedV2, &'static str> {
     use ResourceTargetsRejectionReason as Reason;
     let TargetContext {
@@ -3198,6 +3401,7 @@ fn resolve_v2(
         unmapped: None,
         items: Vec::new(),
         lapsed_until_unix_ms: None,
+        needs: Vec::new(),
     };
     let lapsed = v3::lapsed_coverage(catalog, instance, lapsed);
     let pools = instance_pools(catalog, instance);
@@ -3219,6 +3423,19 @@ fn resolve_v2(
                 continue;
             }
             term.targets.push(target.item());
+            // Workflow #455 RR3 (ruling 8): the need computed for the target's pool, with the
+            // numbers its stacking gave.
+            if let Some(stacked) = stacked
+                && let Some(need) = stacked.needs.pools().get(&target.target.resource)
+            {
+                term.needs.push(need_reason(
+                    &target.target.resource,
+                    *need,
+                    stacked.stock(&target.target.resource),
+                    target.held_and_gap(),
+                    stacked.needs.tables_sha256(),
+                ));
+            }
             let overriding = target.target.apply.mode == TargetMode::Override
                 && matches!(target.status, TargetStatus::Applied { .. });
             if overriding {
@@ -3267,6 +3484,9 @@ fn resolve_v2(
         unevaluable,
         empty,
         gaps,
+        notes: stacked
+            .map(|stacked| stacked.needs.note_reasons())
+            .unwrap_or_default(),
     })
 }
 
@@ -3500,7 +3720,10 @@ impl InstanceTargets {
     /// one (the first of ignored, unreadable, expired and tasks_unevaluable that applies), the
     /// target-level one (applied, satisfied, pending or unmapped) and, for an applied override,
     /// the selection score and manual offset it supersedes. Under an active v2 policy, at most
-    /// five: the policy-level one, then those of [`ResourceTerm`].
+    /// five: the policy-level one, then those of [`ResourceTerm`]. Workflow #455 RR3: then, under
+    /// an active v2 policy with needs computed from the instance's stored records, one
+    /// `goal_records_need` for each covering pool that has one and the instance's notes; under a
+    /// v1 policy of an instance with stored records, `goal_records_not_stacked` last.
     pub(crate) fn reasons(
         &self,
         effect: &TargetEffect,
@@ -3566,6 +3789,12 @@ impl InstanceTargets {
         reasons.extend(policy_reason);
         if let TargetEffect::Resources(term) = effect {
             reasons.extend(term.reasons(score_milli, offset_milli));
+            // Workflow #455 RR3 (ruling 8): the needs computed from the instance's stored records:
+            // each covering pool's, then the notes of the instance.
+            reasons.extend(term.needs.iter().cloned());
+            if let ResolvedPolicy::ActiveV2(resolved) = &self.policy {
+                reasons.extend(resolved.notes.iter().cloned());
+            }
             return reasons;
         }
         reasons.extend(effect.target_reason());
@@ -3580,6 +3809,10 @@ impl InstanceTargets {
                     score_milli.map_or_else(|| "none".to_owned(), |score| score.to_string())
                 ),
             });
+        }
+        // Workflow #455 RR3: the stored records' needs are not stacked on a v1 policy.
+        if self.not_stacked {
+            reasons.push(not_stacked_reason());
         }
         reasons
     }
@@ -3623,7 +3856,7 @@ fn resolution_why(reason: ResourceTargetsRejectionReason) -> Result<&'static str
     })
 }
 
-const fn pending_name(reason: ResourceTargetPendingReason) -> &'static str {
+pub(crate) const fn pending_name(reason: ResourceTargetPendingReason) -> &'static str {
     match reason {
         ResourceTargetPendingReason::Missing => "missing",
         ResourceTargetPendingReason::Expired => "expired",

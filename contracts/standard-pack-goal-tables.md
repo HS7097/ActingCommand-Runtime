@@ -9,8 +9,8 @@ root file of the game root, beside `goals.json`, whose `records` entries name it
 costs and how the costs come apart; it never holds what an account has or wants.
 
 This slice gives the file its reader, its checks, its place in a bundle and in an installation,
-and the Runtime's reading of it. **Nothing is computed from it yet, and no evaluation changes**
-("What arrives later").
+and the Runtime's reading of it. Since Workflow #455 RR3 (0.12.95, §1.538) the Runtime computes
+from it, before every evaluation, what the recorded characters still need ("What is computed").
 
 The core stays game-neutral: every name of the file is an opaque string, compared for equality
 and measured in bytes.
@@ -60,7 +60,7 @@ two optional members:
 
 - **`pool`**: the pool of the root's `schedule.json` that holds it (an id, 1 to 128 bytes). An item
   without a recipe and without a pool is shown and weighs nothing. A pool is named by one item at
-  most (fix round 1: a holding has one name in the file, and what a later slice subtracts of a
+  most (fix round 1: a holding has one name in the file, and what the computation subtracts of a
   pool's holding it subtracts once; a later item that names it is `table_pool_duplicate`).
 - **`recipe`**: how the item is made: one making turns out `makes` of it from the items of `from`
   (1 to 16) and costs the items of `cost` (0 to 16), each with its amount. **An item with a recipe
@@ -114,7 +114,8 @@ column its column reads, in their order, and a column's `read` (and a sub's read
 list columns that hold whole numbers. The reader holds the file's own positions to that (a number
 with a fraction, a text or a truth value in a position is `malformed`); what a list's column holds
 is declared by the packages that write the list, which the reader does not see. A reading of
-another kind never equals a position: the later slice then takes the position as not known.
+another kind never equals a position: the computation then takes the position as not known
+(`goal_records_position_unknown`, "What is computed").
 
 ### Prerequisites
 
@@ -321,18 +322,81 @@ Every reader calls the two functions above; none has a copy.
   gave the file this code of its own: `standard_pack_goals_not_applied`, with the same values, is
   `goals.json`'s alone, whose failure applies none of its entries, so a reader tells the two
   consequences apart by the code, not by `path`. The offline readers that read
-  a root as the workbench does keep nothing between reads. Nothing in an evaluation reads the
-  tables in this release.
+  a root as the workbench does keep nothing between reads. Since Workflow #455 RR3 (0.12.95) the
+  needs computed before every evaluation read the tables the workbench keeps for the generation in
+  force, from memory, with their sha256 ("What is computed").
 
-## What arrives later
+## What is computed
 
-The Runtime will compute, at every evaluation, each material pool's need from the records a person
-or an agent sets on a `records` entry, this file's rules and the account's readings: the ladder
-from each record's current position to its target, its prerequisites, the taking apart of what is
-made by the recipes, and the stock the pool's own goal asks, stacked. Those are later slices'; this
-file's shape does not change for them. Since Workflow #455 RR2 (0.12.94) a records entry's records
-are stored ([instance-fact-store.md](instance-fact-store.md), "Goal records facts"); until the
-computing slice no evaluation reads them or the file.
+Workflow #455 RR3 (0.12.95; [v012-register.md](v012-register.md) §1.538). A records entry's records
+are stored on an instance ([instance-fact-store.md](instance-fact-store.md), "Goal records facts",
+since 0.12.94). Before every evaluation, and again at the admission of an intent, the Runtime
+computes for each instance that holds records, with one pure function, how much of each item the
+recorded characters still need and do not have, from: the instance's stored records (read by their
+own reader); this file as the workbench keeps it for the generation in force; the instance's
+progress lists as the fact store holds them; and the holdings, as the evaluator reads a target's
+inventory. The result lives one evaluation: it is given to the evaluator in memory, stacked on the
+stored goals there ([resource-targets.md](resource-targets.md), "Needs computed from the
+records"), and nothing of it is stored. This file's shape is unchanged for it.
+
+- **Applied records.** A record applies when its entry is a `records` entry of the root's accepted
+  `goals.json` whose table is a table of this file, its key a key of that table, and its `to` one
+  the goal edit's own check takes now. Any other record adds nothing: `goal_records_not_applied`
+  with the word the edit would refuse it with (`name_unknown`, `not_an_option`, `out_of_range`,
+  `wrong_type`; `record_unreadable` for a stored record its reader does not read).
+- **A key is walked once** (fix round 1). Two `records` entries may name one table, and one key may
+  be recorded under both. The first of its records in the stored order (the entry set first) is
+  walked; a later record of the same table and key adds nothing and is said with the same code,
+  `goal_records_not_applied` with `key_repeated` (a word no edit refuses it with: each entry's
+  records are checked on their own), so a character's need is never counted twice. Keeping the
+  character under one of the two entries ends it.
+- **The progress lists.** A list is read when it is present, of a confidence above 0, a record list
+  each of whose rows holds a text under the list's `key_column` (the rule a list a pool is read from
+  obeys), not invalidated by a timeline reset at or after its observation and not past its expiry.
+  The table's `held_by` list decides first: not known, the whole record adds nothing
+  (`goal_records_progress_unknown`, with the list and its `unknown_reason`); known and without a row
+  of the key, the character is not held and the record adds nothing (`goal_records_not_held`), which
+  is known, not pending.
+- **The walk.** For each column the record's `to` names (each named sub of a column of
+  `per: "sub"`), the current position is the tuple of the column's reading columns in the key's row,
+  equal member for member to one of the ladder's `positions`. Not known, that column adds nothing,
+  each cause with its own code: its list not known (`goal_records_progress_unknown`); its list known
+  without a row of the key (`goal_records_row_missing`, fix round 1: a list other than the `held_by`
+  one, whose reading has not covered the character, which a later reading may); a row of the key
+  without the reading column (`goal_records_reading_missing`: the package that reads the list does
+  not write the column this file names, which no later reading of that package mends); readings
+  that form no position, a value of another kind or a
+  tuple equal to none (`goal_records_position_unknown`). Known, the need is the sum of the steps from
+  the current position to the target in the order of `positions` (a key's override of its class's
+  step taken instead, a step's `@<role>` the key's own item); a target at or behind the current
+  position asks nothing.
+- **Prerequisites** ("Prerequisites", above). A step the walk takes that asks a prerequisite of
+  another column (every step without `from`; a step that arrives at `from` or beyond with it) takes
+  that column to `at_least` as well, when the record's own target for it does not reach it; the
+  required column's walk then counts from its own current position, and its own prerequisites
+  follow. A requiring column whose position is not known takes no step and asks nothing. A
+  `condition` is named (`goal_records_condition`) and asks nothing.
+- **Taking apart, once.** The needs of all records are summed by item; then, in the topological
+  order of the recipes from the top, an item with a recipe is covered by its holding up to its
+  need, and what is not covered is made (rounded up by `makes`), adding its `from` and its `cost` to
+  those items' needs. An item with a recipe whose holding is not known adds nothing below itself
+  (`goal_records_holding_unknown`). What remains on an item without a recipe is its pool's need;
+  an item without a recipe and without a pool is shown (`goal_records_item_unweighed`) and weighs
+  nothing.
+- **A lower bound.** What is not known adds nothing, so the result never exceeds the true need: a
+  pending part never raises a gap.
+- **The set** of one instance: each pool's need (by the id the root's files write it; the part a
+  holding covers on the pool of an item with a recipe, the whole need while that holding is not
+  known), every part that added nothing with its cause, this file's sha256, when the records were
+  set, and when its freshness ends: the earliest expiry among the lists and holdings it read. Its
+  identity hashes all of it.
+
+For example, on the contract's first example above, with `hero_a` at phase `[0]` and a record
+`{"phase": [2]}`: the walk takes the phase ladder's two steps (`hero_a`'s own first step, then the
+class's second): 3 `badge_a`, 2 `gel_3`, 120000 `gold`, 3 `core_5` and 8 `ore_4`. With 1 `core_5`
+and 2 `ore_4` held, 1 `core_5` is covered and 2 are made (2 `ore_4`, 4 `gel_3` and 800 `gold`
+more), so `ore_4` is needed 10 times, 2 covered and 8 made (32 `ore_3` and 2400 `gold`): the needs
+landing are 3 `badge_a`, 6 `gel_3`, 32 `ore_3` and 123200 `gold`.
 
 ## Interface
 

@@ -563,8 +563,11 @@ Workflow #455 RR2 (since 0.12.94; [v012-register.md](v012-register.md) §1.537;
 [standard-pack-goals.md](standard-pack-goals.md), "The records entry"). A `records` entry of a
 game root's `goals.json` takes records, each whom to raise (a key of the entry's table in the
 root's `goal-tables.json`) and to where (a position of each of the key's ladders it names). An
-instance's records of all its records entries are one instance fact. **Nothing is computed from
-them in this release**: no evaluation reads them ("Projection", below).
+instance's records of all its records entries are one instance fact. Since Workflow #455 RR3
+(0.12.95, §1.538) the host computes from them, before every evaluation, what the recorded
+characters still need, and gives it to the evaluator in memory
+([standard-pack-goal-tables.md](standard-pack-goal-tables.md), "What is computed"); no evaluator
+reads the record itself ("Projection", below).
 
 | Key | Value | Scope |
 | --- | --- | --- |
@@ -597,7 +600,8 @@ them in this release**: no evaluation reads them ("Projection", below).
   declares rewrites the record as the header alone, the way out of it,
   [runtime-interface.md](runtime-interface.md), "Goal request kinds"). It holds the rows to their form only, never to
   the root in force: a record whose entry, key, column or position the root no longer declares is
-  read back as it is (judging it is a later slice's).
+  read back as it is (the computation of needs applies no such record and says why,
+  `goal_records_not_applied`).
 
 The record: `scope` the instance and `key` `session.goal_records`; inline content; observed at
 the Runtime's clock at the request; no expiry and no TTL policy; `confidence_milli` 1000;
@@ -627,12 +631,15 @@ version is the greater of it and the `session.resource_targets` record's
 record is an ordinary overlaid instance fact, so it reaches `EvaluationFacts.facts`, the combined
 `fact_snapshot_id`, the instance's view in admission staleness (`policy_facts_stale`), the
 `FactsChanged` trigger and forward projections, and is loaded at the start as every tagged
-instance record. Nothing of the evaluation reads it: no policy code names the key, and it weighs
-no candidate and changes no decision. What it does is in the identities only: a change of an
-instance's records between an evaluation and an admission makes that instance's evaluated intents
-`policy_facts_stale` and wakes a cycle, as a change of its resource targets does. As for
-`session.resource_targets`, the catalog compile does not refuse a predicate that names the key.
-An instance without the record projects, hashes and decides exactly as before.
+instance record. No policy code reads the record itself: the key names nothing the evaluator
+reads. Since Workflow #455 RR3 (0.12.95) the host reads it from the store with its own reader,
+before every evaluation and at an admission, and the needs it computes from it weigh the
+producers of what the recorded characters lack ([resource-targets.md](resource-targets.md),
+"Needs computed from the records"); their identity is in the instance's decision identities and
+its view. A change of an instance's records between an evaluation and an admission makes that
+instance's evaluated intents `policy_facts_stale` and wakes a cycle, as a change of its resource
+targets does. As for `session.resource_targets`, the catalog compile does not refuse a predicate
+that names the key. An instance without the record projects, hashes and decides exactly as before.
 
 **Where the two keys differ.** The goal records record has no expiry and no withdrawal: its
 version is always its own sequence (`EditGoal`'s, not `ResourceTargetView`'s judgement); it has

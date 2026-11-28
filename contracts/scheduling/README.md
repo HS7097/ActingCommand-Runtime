@@ -2629,6 +2629,52 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
 - **Identity.** A pool without the kind serializes, hashes and decides exactly as before; a
   catalog without it compiles byte for byte as before.
 
+## Needs computed from the records (Workflow #455 RR3, since 0.12.95)
+
+Register §1.538; the coordinator's rulings of 11-28. A person says, on an instance, whom to raise
+and to which grade (a `records` entry's records, the instance fact `session.goal_records`), and the
+game root carries the game's rules for what that takes (`goal-tables.json`). Before every
+evaluation the host computes, for each instance that holds records, how much of each pool the
+recorded characters still need and do not have
+([../standard-pack-goal-tables.md](../standard-pack-goal-tables.md), "What is computed"); the
+evaluator stacks it on the instance's stored goals and raises the producers of what is lacking
+([../resource-targets.md](../resource-targets.md), "Needs computed from the records").
+
+- **Who computes it, and when.** The host, with one pure function, under the fact write gate the
+  evaluation's inputs are projected under, right after the projection: from the instance's stored
+  records, the root's tables as the scheduler workbench keeps them for the generation in force
+  (read from memory before the gates), the instance's progress lists as the fact store holds them
+  (they enter neither the projection nor the evaluation's `facts`, as every list reading), and the
+  holdings, read as the evaluator reads a target's inventory (the time-validity projection of the
+  same facts and readings, the same observation). The admission of an intent computes it again for
+  the intent's instance, the same way, at the intent's evaluation time.
+- **What the evaluator is given.** Beside the left-out facts, the readings of the pools read from
+  rows of a list and the handed runs, in memory only: per instance, each pool's need (by the id
+  the root's files write it), every part that added nothing with its cause, the tables' sha256,
+  when the records were set and when the set's freshness ends. It lives one evaluation; nothing of
+  it is stored and nothing enters a snapshot.
+- **Goals raise producers.** A pool's stacked goal asks `stock + need`; a pool on which a need
+  lands without a stored goal is judged as if it held one of `need` with its own step and
+  importance. Each covers the pool's producing candidates as a target without `tasks` does, so the
+  pool's shortfall weight `Γ` raises them ("Resource weights (v2)" there); when the gap closes the
+  push is gone. What a goal changes is which task is worth running: when one runs stays with its
+  trigger and the pool's lines.
+- **Identities.** The set's identity is hashed into the decision identity of every candidate of
+  the instance (a change of the tables appends nothing to the ledger, and one identity must never
+  name two decisions) and into the instance's view (`dispatch_view_identity`) after the rest; the
+  admission compares it with the set computed again, so an intent taken on other progress, other
+  records or other tables is `policy_facts_stale` whatever the snapshot's identity. An instance
+  without records has no set: its identities and the bytes they hash are those of before.
+- **Freshness and wakes.** The set's freshness ends with the earliest expiry among the lists and
+  holdings it read; a candidate its goals move is no fresher, and the evaluation wakes a
+  millisecond after, as for a fact that expires. A list's publication wakes an evaluation as every
+  fact publication does.
+- **Known limits.** The forward projection reads no computed need (as it reads no void, "A game
+  whose root cannot be composed" in [../resource-targets.md](../resource-targets.md)); a reading
+  is not made old by a run that has produced into it since (the gap reads the holding as it was
+  read); a rule that produces an item with a recipe counts for what it produces, not for what it
+  is made from.
+
 ## Pool lines (SS-2h)
 
 Since 0.12.46 (register §1.289). Alice's ruling 138 (11-07, Workflow #428 comment 6706493161)

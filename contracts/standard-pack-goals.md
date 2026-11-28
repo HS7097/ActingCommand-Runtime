@@ -147,7 +147,8 @@ what that takes are the root's `goal-tables.json` ([standard-pack-goal-tables.md
   `[{"key": "hero_a", "to": {"phase": [2], "level": [2, 2], "mastery": {"1": [2], "2": [2]}}}]`.
 - **Not checked, on purpose.** A position against the account's progress: it is not known when a
   person speaks, and a goal behind the progress asks nothing. And the prerequisites (`requires`):
-  the computation raises a required column itself. Both are the computing slice's.
+  the computation raises a required column itself. Both are the computation's (Workflow #455 RR3,
+  "What the records do", below).
 - **The edit** (`goals set` and `goals clear`, `EditGoal`; [runtime-interface.md](runtime-interface.md),
   "Goal request kinds"). The entry applies when the root in force holds an accepted
   `goal-tables.json` with its table; a set of it replaces the entry's records as a whole, as the
@@ -166,12 +167,19 @@ what that takes are the root's `goal-tables.json` ([standard-pack-goal-tables.md
   ([instance-fact-store.md](instance-fact-store.md), "Goal records facts"), which only the edit
   writes and a fact reader reads back. A change of the root never rewrites it: a record whose
   entry, key, column or position the root in force no longer declares stays stored and is read
-  back as it is (the computing slice will apply no such record, and say why).
+  back as it is; the computation applies no such record and says why (`goal_records_not_applied`).
 - **What a client sees.** The goal page and `GoalView` do not list the entry and gain no member and
   no word, so a client of today's `runtime-client` revision reads the page as it reads it without
   the entry; the page's `version` is the greater of the sequences of the application's two records.
-  Nothing computes from the records yet ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
-  "What arrives later").
+  A stored goal shows what the person stored: nothing computed is shown in it or added to it.
+- **What the records do** (Workflow #455 RR3, since 0.12.95; [v012-register.md](v012-register.md)
+  §1.538). Before every evaluation the Runtime computes from each instance's stored records, the
+  root's tables, the instance's progress lists and its holdings what the recorded characters still
+  need of each pool ([standard-pack-goal-tables.md](standard-pack-goal-tables.md), "What is
+  computed"), and stacks it on the stored goals in memory, for that evaluation alone
+  ([resource-targets.md](resource-targets.md), "Needs computed from the records"): the producers
+  of what is lacking are raised. Nothing computed is stored, and an instance without records is
+  evaluated as before.
 
 ### Neutral example
 

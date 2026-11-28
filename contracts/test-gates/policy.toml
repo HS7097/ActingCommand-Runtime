@@ -1699,3 +1699,13 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_tk1::tk1_t3_a_rule_without_the_value_the_declaration_in_force_asks_is_held_back",
 ]
 incident = ["#455 TK-1"]
+
+# Workflow #455 RR3 (0.12.95; register §1.538; brief rd-1123/brief-455-rr3.md; contracts/resource-targets.md, "Needs computed from the records"), the evaluator's half, on one instance whose valued pool (step 1, base 1000, gap weight 100) is read from its own fact and produced 20 a run by a clock task, the needs given beside the left-out facts as the host gives them, no clock read: with a stored goal of 200 on the pool a computed need of 30 makes it ask 230, held 50 the gap 180 and held 10 the gap 220, and a need of 24 held 5 the gap 219, each covering candidate saying goal_records_need with the pool, the stock, the holding, the part going to the characters, the gap and the tables' sha256 (t1); without a stored goal the producer carries no resource_targets reason and its pool weighs its base alone, and with a need of 30 on a holding of 10 the pool is judged as holding a goal of 30 with its own step and importance (gap 20, shortfall weight 2000), the producer carrying goal_records_need with no stock and the needs' notes (t2); no needs and an empty set evaluate byte for byte alike, the needs change the intent's decision identity, the same needs give the same identity and another need or other tables another (t3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_rr3::rr3_t1_the_two_layers_stack_and_the_holding_goes_to_the_characters_first",
+    "actingcommand-policy::lib::tests::gate_455_rr3::rr3_t2_an_instance_with_records_and_no_stored_goal_is_judged_for_goals_and_pushes_the_producers",
+    "actingcommand-policy::lib::tests::gate_455_rr3::rr3_t3_the_computed_set_is_in_the_decision_identity_and_an_instance_without_needs_is_as_before",
+]
+incident = ["#455 RR3"]
