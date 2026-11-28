@@ -1771,3 +1771,15 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_sl2::sl2_t7_a_reader_that_knows_no_line_ignores_it_and_keeps_the_other_goals",
 ]
 incident = ["#455 SL2"]
+
+# #455 RR3d (0.12.101; register §1.548; brief rd-1123/brief-455-rr3d.md; contracts/scheduling/README.md, "Pool lines"; contracts/resource-targets.md, "A pool a run was told enough to close the gap on"), the policy's half: the production told under a pool's gap adds up since the pool's reading, judged by produced_unread over the noted dispatches in the order noted, each against the gap it was itself told, no clock read. Two dispatches of one pair each short of a gap close it together (6 told 3 and 3; 7 told 3, 3 and 1; 4 told 3 then a smaller gap of 2 told 1; 4 told 3, 8 told 4, then 8 told 1); a reading observed at or after a run's end counts only the dispatches after it; a later dispatch of the pair told no gap on the pool (its run_cap alone, no member, a gap on another pool) does not take the place of the one that closed it; two tasks told three each of a gap of six; a stock of 150 at three a dispatch read through the 49th dispatch and unread at the 50th.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_rr3d::rr3d_t1_two_dispatches_short_of_the_gap_close_it_together",
+    "actingcommand-policy::lib::tests::gate_455_rr3d::rr3d_t2_a_reading_after_a_runs_end_counts_only_the_dispatches_after_it",
+    "actingcommand-policy::lib::tests::gate_455_rr3d::rr3d_t3_a_later_dispatch_told_no_gap_there_does_not_take_the_place_of_one_that_closed_it",
+    "actingcommand-policy::lib::tests::gate_455_rr3d::rr3d_t4_two_tasks_told_three_each_of_a_gap_of_six_close_it_together",
+    "actingcommand-policy::lib::tests::gate_455_rr3d::rr3d_t5_a_stock_of_150_at_three_a_dispatch_is_unread_at_the_fiftieth",
+]
+incident = ["#455 RR3d"]

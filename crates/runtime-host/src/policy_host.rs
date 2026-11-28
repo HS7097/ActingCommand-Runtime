@@ -338,8 +338,9 @@ pub enum SetupCall {
     OutcomeKeys,
     /// The instances a blackout covers.
     Blackouts,
-    /// The pairs whose latest dispatch handed its run a cap (#455 RR3c: or a goal's gap), given to
-    /// the evaluation; since #455 RR3c the list is read with the needs, under the gates.
+    /// The pairs whose latest dispatch handed its run a cap (#455 RR3c and RR3d: and every dispatch
+    /// handed a goal's gap), given to the evaluation; since #455 RR3c the list is read with the
+    /// needs, under the gates.
     HandedRuns,
     /// The cadence's judgement of the trigger.
     Cadence,
@@ -3286,6 +3287,96 @@ pub(crate) fn journal_keeps_a_late_completion_for_test(
     (seen.contains_key("decision-0"), seen.len())
 }
 
+/// #455 RR3d (register §1.548), tests: one synthetic admitted dispatch of the journal: its pair,
+/// its recorded reasons and, once its run ended, the instant its execution was observed with its
+/// outcome.
+#[cfg(test)]
+pub(crate) struct SyntheticHandedDispatch {
+    pub(crate) task_id: &'static str,
+    pub(crate) instance_id: &'static str,
+    pub(crate) reasons: Vec<Outcome>,
+    pub(crate) ended: Option<(u64, PolicyExecutionOutcome)>,
+}
+
+/// #455 RR3d (register §1.548), tests: the handed runs the host gives at the ledger position
+/// `through` ([`handed_runs_of`]) for `dispatches`, admitted one after another in the order given
+/// (dispatch `i` its intent at the sequence 4·i + 1, its admission at 4·i + 2 and, when its run
+/// ended, its completion at 4·i + 4) and kept by the journal's rule after each one
+/// ([`prune_journal`]); their tasks are the ids they name.
+#[cfg(test)]
+pub(crate) fn synthetic_handed_runs_for_test(
+    dispatches: Vec<SyntheticHandedDispatch>,
+    through: u64,
+) -> actingcommand_policy::HandedRuns {
+    let mut seen = BTreeMap::new();
+    let mut order = BTreeMap::new();
+    let mut pruned = BTreeSet::new();
+    for (index, dispatch) in (0_u64..).zip(dispatches) {
+        let decision_id = format!("decision-{index}");
+        let intent_sequence = index * 4 + 1;
+        let data = PolicyDispatchEventData {
+            decision_id: decision_id.clone(),
+            task_id: dispatch.task_id.to_owned(),
+            instance_id: dispatch.instance_id.to_owned(),
+            operation_id: "operation-synthetic".to_owned(),
+            procedure_binding_digest: format!("sha256:{}", "0".repeat(64)),
+            reason_chain_id: format!("chain-{index}"),
+            reasons: dispatch
+                .reasons
+                .into_iter()
+                .map(PolicyReasonRecord)
+                .collect(),
+            catalog_hash: format!("sha256:{}", "1".repeat(64)),
+            catalog_version: 1,
+            input_ledger_position: intent_sequence - 1,
+            fact_snapshot_id: format!("snapshot-{index}"),
+            approval_fact_ids: Vec::new(),
+            urgency_milli: 0,
+        };
+        let execution =
+            dispatch
+                .ended
+                .map(|(observed_at_unix_ms, outcome)| PolicyExecutionEventData {
+                    decision_id: decision_id.clone(),
+                    task_id: data.task_id.clone(),
+                    instance_id: data.instance_id.clone(),
+                    observed_at_unix_ms,
+                    outcome,
+                });
+        let completed = execution.is_some();
+        order.insert(intent_sequence, decision_id.clone());
+        seen.insert(
+            decision_id,
+            SeenDispatch {
+                data,
+                admission: None,
+                execution,
+                completed_run: None,
+                intent_sequence,
+                admitted_sequence: Some(intent_sequence + 1),
+                rejected_sequence: None,
+                completed_sequence: completed.then_some(intent_sequence + 3),
+                lifecycle: if completed {
+                    DispatchLifecycle::Completed
+                } else {
+                    DispatchLifecycle::Admitted
+                },
+                failures: None,
+                expected_duration_ms: None,
+                settled_late: false,
+            },
+        );
+        prune_journal(&mut seen, &mut order, &mut pruned, None);
+    }
+    let tasks = seen
+        .values()
+        .map(|dispatch| dispatch.data.task_id.clone())
+        .collect::<BTreeSet<_>>();
+    handed_runs_of(seen.values(), through, |task_id| {
+        tasks.get(task_id).map(String::as_str)
+    })
+}
+
 /// Workflow #429 R-6b1, tests (register §1.314 R6B-6): what the projections read of one (task,
 /// instance) pair's runs ([`pair_projection_for_test`]): each run's failure count through it,
 /// the pair's settlement (the four settlement facts and the task snapshot's `last_duration_ms`
@@ -4320,11 +4411,13 @@ impl PolicyHost {
     /// latest dispatch it no longer holds is not noted. #455 RR3c (register §1.543): a dispatch
     /// whose recorded `policy_dispatch_parameters` carry `gaps_remaining` is noted too, with the
     /// gaps and its `run_cap` ([`actingcommand_policy::HandedRuns::note_dispatch`]); the same
-    /// recorded reasons, no other read.
+    /// recorded reasons, no other read. #455 RR3d (register §1.548): every admitted dispatch the
+    /// journal holds at `through` is noted, in the order of their admission
+    /// ([`handed_runs_of`]), so the production told under a pool's gap adds up over the pair's
+    /// dispatches and those of other pairs, and a run that failed at its entry is passed over.
     pub(crate) fn handed_runs(&self, through: u64) -> actingcommand_policy::HandedRuns {
-        let mut handed = actingcommand_policy::HandedRuns::default();
         let Some(active) = self.active.as_ref() else {
-            return handed;
+            return actingcommand_policy::HandedRuns::default();
         };
         let task_ids = active
             .compiled
@@ -4335,45 +4428,12 @@ impl PolicyHost {
             .map(|task| task.id.as_str())
             .collect::<BTreeSet<_>>();
         let accounting = accounting_tasks(&active.compiled);
-        let accounted = |task_id: &str| {
+        handed_runs_of(self.seen_dispatches.values(), through, |task_id| {
             task_ids
                 .get(task_id)
                 .copied()
                 .or_else(|| accounting.get(task_id).copied())
-        };
-        let mut latest = BTreeMap::<(&str, &str), (u64, &SeenDispatch)>::new();
-        for dispatch in self.seen_dispatches.values() {
-            let Some(task_id) = accounted(dispatch.data.task_id.as_str()) else {
-                continue;
-            };
-            let Some(sequence) = dispatch
-                .admitted_sequence
-                .filter(|sequence| *sequence <= through)
-            else {
-                continue;
-            };
-            let key = (task_id, dispatch.data.instance_id.as_str());
-            if latest
-                .get(&key)
-                .is_none_or(|(previous, _)| *previous < sequence)
-            {
-                latest.insert(key, (sequence, dispatch));
-            }
-        }
-        for ((task_id, instance_id), (_, dispatch)) in latest {
-            let ended_at_unix_ms = dispatch
-                .completed_sequence
-                .filter(|sequence| *sequence <= through)
-                .and(dispatch.execution.as_ref())
-                .map(|execution| execution.observed_at_unix_ms);
-            handed.note_dispatch(
-                task_id,
-                instance_id,
-                ended_at_unix_ms,
-                dispatch.data.reasons.iter().map(|reason| &reason.0),
-            );
-        }
-        handed
+        })
     }
 
     /// IDLE-3 (#447, register §1.332): whether the latest evaluated cycle's plan for `alias`
@@ -9156,6 +9216,70 @@ fn accounting_tasks(catalog: &CompiledCatalog) -> BTreeMap<&str, &str> {
                 .map(|continued| (continued.as_str(), task.id.as_str()))
         })
         .collect()
+}
+
+/// #477 LF-1, #455 RR3c and #455 RR3d (register §1.509, §1.543, §1.548;
+/// `contracts/scheduling/README.md`, "Pool lines", "At each evaluation"): the handed runs of the
+/// dispatch journal's `dispatches` at the ledger position `through`. Each dispatch admitted at or
+/// before it, of a task `accounted` gives an id for (the task's own id in the active catalog, else
+/// the one its `continues_from` gives), is noted from its recorded reasons in the order of their
+/// admission ([`admission_order`]), so each pair's latest is noted last, with the instant its run
+/// ended (its execution's observation, once completed at or before `through`), or none while it
+/// has not. RR3d ruling 1: a dispatch whose run failed at its entry by `through`
+/// ([`settled_at_entry`]) is passed over, before its pair's latest is chosen and in the sum of
+/// what the runs were told; its pair's previous admitted dispatch then stands.
+fn handed_runs_of<'d, 'a>(
+    dispatches: impl IntoIterator<Item = &'d SeenDispatch>,
+    through: u64,
+    accounted: impl Fn(&str) -> Option<&'a str>,
+) -> actingcommand_policy::HandedRuns {
+    let mut admitted = dispatches
+        .into_iter()
+        .filter_map(|dispatch| {
+            let task_id = accounted(dispatch.data.task_id.as_str())?;
+            let noted = dispatch
+                .admitted_sequence
+                .is_some_and(|sequence| sequence <= through)
+                && !settled_at_entry(dispatch, through);
+            noted.then_some((task_id, dispatch))
+        })
+        .collect::<Vec<_>>();
+    admitted.sort_by_key(|(_, dispatch)| admission_order(dispatch));
+    let mut handed = actingcommand_policy::HandedRuns::default();
+    for (task_id, dispatch) in admitted {
+        let ended_at_unix_ms = dispatch
+            .completed_sequence
+            .filter(|sequence| *sequence <= through)
+            .and(dispatch.execution.as_ref())
+            .map(|execution| execution.observed_at_unix_ms);
+        handed.note_dispatch(
+            task_id,
+            &dispatch.data.instance_id,
+            ended_at_unix_ms,
+            dispatch.data.reasons.iter().map(|reason| &reason.0),
+        );
+    }
+    handed
+}
+
+/// #455 RR3d ruling 1 (register §1.548; `contracts/policy-suspension.md`, "A failure at the
+/// entry"): whether `dispatch`'s run, completed at or before the ledger position `through`, failed
+/// at its entry: its recorded execution is a failure its settlement settled as one its run met at
+/// its entry, the mark ENTRY-A writes into the failure identity, read from the record alone
+/// ([`crate::policy_control::entry_blocked`]). Its main package executed no step, so it consumed
+/// and produced nothing. Every other end (a success, any other failure, a stop, an interrupted
+/// settlement) may have done some turns, and nothing the host holds says how many.
+fn settled_at_entry(dispatch: &SeenDispatch, through: u64) -> bool {
+    dispatch
+        .completed_sequence
+        .is_some_and(|sequence| sequence <= through)
+        && dispatch.execution.as_ref().is_some_and(|execution| {
+            matches!(
+                &execution.outcome,
+                PolicyExecutionOutcome::Failed { failure }
+                    if crate::policy_control::entry_blocked(failure)
+            )
+        })
 }
 
 /// The terminal state a completed dispatch's execution shows in its pair's task snapshot, or

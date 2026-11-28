@@ -505,8 +505,10 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   those items' needs. An item with a recipe whose holding is not known adds nothing below itself
   (`goal_records_holding_unknown`). #455 RR3c (since 0.12.98; register §1.543): nor does one whose
   holding a run left unread, a run that was told enough turns to close a goal's gap on its pool
-  having produced into it after the holding was read; the holding is then not known until a reading
-  observed at or after that run's end (`goal_records_holding_unknown` with `unknown_reason`
+  having produced into it after the holding was read (#455 RR3d, since 0.12.101, register §1.548:
+  or several runs that were told enough together, the production told under the gap summed since
+  the reading); the holding is then not known until a reading observed at or after those runs' end
+  (`goal_records_holding_unknown` with `unknown_reason`
   `fact_stale`; [scheduling/README.md](scheduling/README.md), "Pool lines"). What remains on an item without a recipe is its pool's need;
   an item without a recipe and without a pool is shown (`goal_records_item_unweighed`) and weighs
   nothing.

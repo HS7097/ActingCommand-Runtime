@@ -5056,3 +5056,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_sl2::sl2_host_an_older_page_refuses_to_set_a_line_and_clears_a_stored_one",
 ]
 incident = ["#455 SL2"]
+
+# #455 RR3d (0.12.101; register §1.548; brief rd-1123/brief-455-rr3d.md; contracts/scheduling/README.md, "Pool lines", "At each evaluation"; contracts/policy-suspension.md, "A failure at the entry"), the host's half, no clock read. The list PolicyHost::handed_runs gives, from synthetic journals, equal to the one noted from the dispatches the ruling keeps in the order of their admission: a run that failed at its entry (a condition whose failure identity carries the entry mark) is passed over and its pair's earlier dispatch stands; a success, a failure after the main package started, a failure at the entry its settlement did not mark, one a start's reconciliation settled, an interrupted settlement, a stop, a run still going and a failure at the entry recorded after the inputs' position are noted; a failure at the entry between two that count adds nothing; the list holds the pair's latest 64 admitted dispatches the journal keeps. Through the real admission and settlement path on catalog-a declared V2 (a pool read from rows of a list, 1400): a run handed run_cap 3 that failed at its entry leaves its consumed pool read at the next evaluation, the same run failing after its main package started unread; a run handed gap_remaining 1600 producing 2000 that failed at its entry leaves the pool read and the goal applied, failing after its main package started unread; two runs each handed gap_remaining 1600 producing 1000 leave the pool read after the first and unread after the second (fact_stale suggestion of the list's key, no intent), the same at two evaluations after a start of the host on the same state root; a list read after their end releases the pool.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3d::rr3d_h1_a_run_that_failed_at_its_entry_is_passed_over_and_every_other_end_is_noted",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3d::rr3d_h2_a_dispatch_that_failed_at_its_entry_between_two_that_count_adds_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3d::rr3d_h3_the_list_holds_what_the_journal_keeps_of_a_pair",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3d::rr3d_h4_a_capped_run_that_failed_at_its_entry_leaves_its_consumed_pool_read",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3d::rr3d_h5_a_run_that_failed_at_its_entry_leaves_the_pool_it_was_told_to_close_read",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3d::rr3d_h6_two_runs_short_of_the_gap_leave_the_pool_unread_across_a_start",
+]
+incident = ["#455 RR3d"]

@@ -1069,10 +1069,31 @@ then a target on the pool, on every instance its scope covers, is pending as a s
 it (`<id>@<pool>:pending reason=expired gap_weight=pending`): `Γ = 0`, so it weighs nothing in `W`,
 the goal terms of a fixed value and the capped order, and its gap is unknown, so no goal term of
 `run_cap` and no `gap_remaining` come from it. The one judgement the evaluation's pool values read
-decides it; an observation pending for its own reason keeps that reason. A run told fewer turns
-than its gap needs (a stock gap of 150 at three turns of one unit) leaves the pool read, as before.
-A stale reading would otherwise keep a need of two looking open after the run that met it, and send
-a rule of a negative value of its own first again and again until some scheduled reading came.
+decides it; an observation pending for its own reason keeps that reason. A stale reading would
+otherwise keep a need of two looking open after the run that met it, and send a rule of a negative
+value of its own first again and again until some scheduled reading came.
+
+#455 RR3d (since 0.12.101; register §1.548; the coordinator's rulings of 11-28). **The production
+told under the gap adds up since the pool's reading.** The dispatches counted are every admitted
+dispatch the host's journal holds whose run has not ended, or ended after the reading was observed,
+and that was handed `gap_remaining` on the pool, of any task and pair, in the order of their
+admission; the pool is unread once, for one of them, the turns times the production per run of it
+and of those before it reach the gap it was itself told. With one dispatch this is the rule above,
+byte for byte. So runs that each fall short of the gap but together reach it leave the pool unread
+too: a stock gap of 150 at three turns of one unit is read through its 49th dispatch since the
+reading and unread at its 50th, where until 0.12.100 it was sent on that one reading again and
+again; and a later dispatch of the same pair that carries no `gap_remaining` for the pool (its
+goal pending, or it ran for another pool) no longer takes the place of the one that closed the gap.
+**A run that failed at its entry counts for nothing** (its record a condition whose failure identity
+carries the entry mark, [policy-suspension.md](policy-suspension.md), "A failure at the entry"): its
+main package executed no step, so the reading is as true as before; every other end (a success,
+any other failure, a stop, an interrupted settlement) counts what the run was told, since it may
+have done some turns. Limits: a pair's dispatches older than what the journal keeps of it (its
+latest 64 admitted dispatches) are not counted; a run that still ran when the reading was observed
+is counted whole though the reading may show part of what it produced (the sum errs toward
+unread, at the cost of a reading); a pool whose scope covers several instances is unread on all of
+them, as before ([scheduling/README.md](scheduling/README.md), "Pool lines", "At each
+evaluation").
 
 ## Needs computed from the records
 
@@ -1129,8 +1150,9 @@ records"). The evaluator stacks it on the instance's stored record for that eval
   holding through the judgement the evaluation reads ("Resource weights (v2)", "A pool a run was
   told enough to close the gap on"): the host hands their computation the handed runs the
   evaluation is given, the one list, read once. While a run told enough turns to close a goal's gap
-  on the pool of an item with a recipe has not been followed by a reading observed at or after its
-  end, that holding is not known: the item's whole need is its pool's, nothing below it is taken
+  on the pool of an item with a recipe (#455 RR3d, since 0.12.101: or the runs told under the gap
+  since the reading, together) has not been followed by a reading observed at or after its end,
+  that holding is not known: the item's whole need is its pool's, nothing below it is taken
   apart, and the note is `goal_records_holding_unknown` with `unknown_reason` `fact_stale` (the
   lower bound RR3 keeps). The goal a need of an item without a recipe gives its pool is pending
   then, as every target on the pool is.

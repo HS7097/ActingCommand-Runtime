@@ -52736,6 +52736,174 @@ producer) or `pool_not_targetable` (without), and a clear is taken. Before going
 clears the lines (`EditGoal` `clear` of each line's entry or name), so nothing is shown that the
 older build cannot set again.
 
+### 1.548 Slice #455 RR3d (0.12.101): what leaves a pool unread after a run is judged over all the dispatches since its reading, not the latest one alone; and a run that failed at its entry leaves nothing unread (board #455; the rulings 1 to 6 are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr3d.md` after the read-only study `rd-1123/study-rr3c-gaps-1128.md`; on main `cdc3e0b4`, v0.12.99; §1.545 to §1.547 are #503 PACE's, #455 RR4a's and #455 SL2's, slices of the same days)
+
+This section takes 1.548. It ships in 0.12.101. [scheduling/README.md](scheduling/README.md) ("Pool
+lines", the bullet "At each evaluation": LF-1's paragraph gains the failure at the entry, its
+stated limits stay; RR3c's paragraph is rewritten as the sum, with its limits; "Needs computed from
+the records", "Known limits"), [resource-targets.md](resource-targets.md) ("Resource weights
+(v2)", "A pool a run was told enough to close the gap on", a new paragraph; "Needs computed from
+the records", "A holding a run left unread"), [remedies.md](remedies.md) (section 4, the row
+`gap_remaining`) and [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("Taking apart,
+once") are the contract; the policy fragment's description of `goal_records_holding_unknown` says
+the sum (the index regenerated; it is unchanged). No `package`, `ledger`, `runtime-client` or
+`actingd-config` revision moves, no declared interface range, no configuration key, no code or
+word, no record, event, wire member or catalog member.
+
+**The problem** (the study's claims 1 and 2, confirmed by reading `cdc3e0b4`; neutral numbers).
+Two rules keep the evaluation from believing a reading a run made stale: LF-1's (§1.509) for the
+pools a run consumes, RR3c's (§1.543) for the pool it produced for a goal. Both are judged from the
+list of handed runs the host gives (`PolicyHost::handed_runs`, `HandedRuns`), and the list had
+three weaknesses.
+- *It did not look at how a run ended.* A run handed `run_cap` 3 and `gap_remaining` 2 whose entry
+  failed (its main package executed no step: the mark ENTRY-A writes into the failure identity,
+  §1.494) consumed and produced nothing, yet both its pools were unread: every judged consumer of
+  the consumed pool held `pool_line_held` `capped_cap_unknown` (`fact_stale`), the goal on the
+  produced pool pending with `Γ` 0, until some reading came; for a pool read from rows of a list
+  that is the list's own next run.
+- *Each dispatch was judged alone.* A stock gap of 150 at three turns of one unit a run: each
+  dispatch 3·1000 < 150·1000, so on one reading (a list reading may be valid for many hours) the
+  producer was sent again and again, each told 150 and 3, after the gap was in fact closed at the
+  fiftieth. With RR3b's two tiers (§1.542) that is a rule of a negative value of its own, lifted by a
+  need, that keeps spending after the need is met.
+- *Only a pair's latest dispatch was kept.* A dispatch told 2 of a gap of 2 at 2 turns closed it; a
+  later dispatch of the same pair that carried no gap for the pool (its goal pending, or told only
+  for another pool) took its place, and the pool was believed again on the reading the first run
+  made stale (the mirror of LF-1's stated limit for the consumed side).
+
+**The rulings, as built.**
+- *1, a run that failed at its entry leaves nothing unread* (`crates/runtime-host/src/policy_host.rs`,
+  `handed_runs_of` and `settled_at_entry`). A dispatch whose execution record, completed at or
+  before the inputs' ledger position, is a failure its settlement settled as one at its run's entry
+  is passed over, before a pair's latest is chosen and in the sum of ruling 2; the pair's previous
+  admitted dispatch then stands and is judged by the same rules. The record is read as ENTRY-A's
+  replay reads it, by `crate::policy_control::entry_blocked` (a condition whose failure identity's
+  frame is the entry mark `i…`); no other reader of the mark is written. Every other end leaves its
+  pools unread as before: a success, any other failure (one at the entry of another class, and one
+  a start's reconciliation settled, which carries no identity, included), a stop, an interrupted
+  settlement. A failure at the entry recorded after the inputs' position is a run that has not ended
+  there.
+- *2, the production told under a pool's gap adds up since the pool's reading*
+  (`crates/policy/src/evaluator.rs`, `HandedRuns::produced_unshown`, `ToldRun::gap_on`). For a pool
+  whose current reading was observed at `t`: of the noted dispatches whose run has not ended or
+  ended after `t` and that were told a gap of at least 1 for an entry of their task's `produces` on
+  the pool in the catalogue in force, in the order of their admission, the pool is unread when for
+  one of them the sum over it and those before it of `n·y` reaches `g·1000`, `g` the gap that
+  dispatch was itself told (the least where it was told several on the pool), `n` its turns (its
+  `run_cap`, 1 without one), `y` its task's production of the pool per run in thousandths
+  (`production_milli`; 0 is passed over). Checked arithmetic, an overflow counting as reached. With
+  one dispatch this is RR3c's `closes`, byte for byte: the least gap against one product is RR3c's
+  `any` over the records.
+- *3, a later dispatch erases nothing* (`HandedRuns`, `HandedRuns::note_dispatch`, signature
+  unchanged). The list keeps, beside each pair's latest noted dispatch that carried a `run_cap`
+  (`capped`, which LF-1's `consumed_unshown` reads as before), every noted dispatch that carried
+  `gaps_remaining` (`told`, in the order noted). The host notes every admitted dispatch it holds at
+  the position, in admission order (`admission_order`), so each noting is its pair's latest so far:
+  one with a `run_cap` becomes the pair's capped run and one without takes its place, LF-1's rule
+  and its stated limit unchanged.
+- *4, where it lives.* Memory only, filled from the resident journal at the same position as before:
+  the evaluated cycle reads it once, under the gates the inputs are projected under, and gives it to
+  the needs and the evaluation; an admission's recomputation of the needs reads it at the position
+  of its own inputs; no replay is given it (only these two paths and a test call
+  `PolicyHost::handed_runs`). It reads no clock and enters no snapshot and no decision identity but
+  through what `produced_unread` already enters (the needs' note). Bounded by what the journal keeps
+  of a pair: its latest `REMEDY_JOURNAL_MAX_RUNS` (64) admitted dispatches, beyond which an older
+  dispatch is not counted. Cost, by reading (nothing was measured): each evaluation walks the
+  journal's admitted dispatches once (at most 64 a pair, a few more where a late settlement or a
+  stop keeps one) with one sort and reads each one's recorded reasons once (before: only each
+  pair's latest); the list holds, for each dispatch that carried a gap, its task id, its end, its
+  turns and its gaps; for each pool read from a fact or from a list, one pass over the catalogue's
+  tasks for its producers and one over the list. The list is moved into the left-out facts, never
+  cloned in production.
+- *5, unchanged*: the span (a reading observed at or after a run's end ends its part), the three
+  readers of `produced_unread`, the turns a run is told (`goal_runs`, `run_cap`, `gap_remaining`:
+  RR3b's ruling 4), the matching of a task id across instances (§1.543 ruling 6), every record and
+  every code.
+- *6, not this slice*: a pool left unread asking for its reading (the study's R3), the told gap's
+  two parts (its R4).
+
+**Why only the failure at the entry is passed over.** It is the one end whose record proves that the
+run's main package executed no step (ENTRY-A's own definition, `policy-suspension.md`, "Which
+failures": its entry checked, no main package started), so it consumed and produced nothing and
+the readings are as true as before. A plain failure, a stop and an interrupted settlement may each
+have done some turns, and nothing the host holds counts them: the task terminal's step count and
+its designated-effect tallies are another ledger record the journal does not hold, and the tallies
+exist only on a success. So they keep the protections the two rules give: LF-1's hard line (a run
+that did 2 of its 3 turns and then failed spends as truly as one that succeeded) and RR3c's guard
+against a need-lifted rule overshooting.
+
+**A worked example** (the tests' numbers). One unit a run, a gap of 6 read once: a dispatch told 3
+turns leaves the pool read (3 < 6); a second told 3 since the same reading leaves it unread (6 ≥ 6);
+a reading observed at the first run's end counts only the second (read). A stock of 150 at three
+turns a dispatch is read through the 49th dispatch (147) and unread at the 50th. A pair's dispatch
+told 2 of 2 at 2 turns, then one of the same pair with no gap for the pool: unread until a reading
+after the first run's end. Three dispatches of 3 turns of a gap of 7, the second failed at its
+entry: 6 < 7, read. Through the host, a run producing 1000 handed `gap_remaining` 1600: read after
+it, unread after a second one ten minutes later on the same list reading, and the same after a
+start.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The list and its judgement | `crates/policy/src/evaluator.rs` (`HandedRuns` with `capped` and `told`, `ToldRun::gap_on`, `HandedRuns::note_dispatch`, `consumed_unshown`, `produced_unshown`; `HandedRun`, `HandedRun::closes` and `HandedRuns::misses` are gone) |
+| The host's noting | `crates/runtime-host/src/policy_host.rs` (`PolicyHost::handed_runs` calls `handed_runs_of`; `settled_at_entry`; the test seam `synthetic_handed_runs_for_test`) |
+| Doc comments and contracts saying the sum | `crates/policy/src/record_needs.rs`, `crates/policy/src/resource_targets.rs`, `crates/runtime-host/src/goal_needs.rs`, `crates/runtime-host/src/host/policy_dispatch.rs`; the policy fragment's description of `goal_records_holding_unknown` |
+
+**Decided here.** The failure at the entry is read by ENTRY-A's existing reader of the record, the
+condition and the mark together, rather than by the mark alone: every record this build writes with
+the mark carries its condition, so the two agree, and one function decides it. Where a dispatch was
+told two gaps on one pool (two entries of its `produces` there) its least counts, which for one
+dispatch is RR3c's rule. The study's overflow test is not built: no part can overflow alone (at
+most 2^64 turns times 2^53 units a run in thousandths stays inside 128 bits), and the sum can pass
+128 bits only after a part far above any gap a dispatch can be told (at most 2^63 times 1000), which
+already reaches it; the arithmetic stays checked.
+
+**Tests** (incident `#455 RR3d`: `crates/policy/src/tests/gate_455_rr3d.rs`, policy gate map, and
+`crates/runtime-host/src/tests/gate_455_rr3d.rs`, host gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `rr3d_t1_two_dispatches_short_of_the_gap_close_it_together` (2) | 6 told 3 and 3: read, unread; 7 told 3, 3, 1: read, read, unread; each against its own gap: 4 told 3 then 2 told 1 (unread), 4 told 3, 8 told 4 (read), 8 told 1 (unread) |
+| `rr3d_t2_a_reading_after_a_runs_end_counts_only_the_dispatches_after_it` (2) | 6 told 3 by an ended run and 3 by a running one: unread with a reading before both or during the first, read with one at the first run's end or after |
+| `rr3d_t3_a_later_dispatch_told_no_gap_there_does_not_take_the_place_of_one_that_closed_it` (3) | a closing dispatch, then one of the pair with its `run_cap` alone, with no member, or with a gap on another pool only: unread on the old reading, read on one at the first run's end; the other pool's gap counts there |
+| `rr3d_t4_two_tasks_told_three_each_of_a_gap_of_six_close_it_together` (2) | two tasks, either order: read after the first, unread after the second |
+| `rr3d_t5_a_stock_of_150_at_three_a_dispatch_is_unread_at_the_fiftieth` (2) | fifty dispatches told 150 and 3: read through the 49th, unread at the 50th |
+| `rr3d_h1_a_run_that_failed_at_its_entry_is_passed_over_and_every_other_end_is_noted` (1, host) | a pair's earlier dispatch and its later one ending as each case says: at the entry the list is the earlier one's alone; a success, a failure after the main package started, one at the entry its settlement did not mark, one a reconciliation settled, an interrupted settlement, a stop and a run still going are noted after it; a failure at the entry recorded after the position is noted running |
+| `rr3d_h2_a_dispatch_that_failed_at_its_entry_between_two_that_count_adds_nothing` (1, 2, host) | three dispatches told 3 of 7, the second failed at its entry: the list of the first and the third |
+| `rr3d_h3_the_list_holds_what_the_journal_keeps_of_a_pair` (4, host) | 65 dispatches told one turn of 65: the list of the latest 64 |
+| `rr3d_h4_a_capped_run_that_failed_at_its_entry_leaves_its_consumed_pool_read` (1, host) | through admission and settlement, a run handed `run_cap` 3: failed at its entry (its record a condition with the mark), the next evaluation reads the pool (no `fact_stale`, no `trigger_unknown`, no reserve hold for want of a reading); failed after its main package started, it reads it unknown |
+| `rr3d_h5_a_run_that_failed_at_its_entry_leaves_the_pool_it_was_told_to_close_read` (1, host) | a run handed `gap_remaining` 1600 producing 2000: failed at its entry, the pool read and the goal applied (gap 1600); failed after its main package started, unread |
+| `rr3d_h6_two_runs_short_of_the_gap_leave_the_pool_unread_across_a_start` (2, host) | two runs handed 1600 producing 1000, ten minutes apart on one list reading: read after the first, unread after the second (no intent), the same at two evaluations after a start that rebuilds the journal from the ledger; a list read after their end releases the pool |
+
+The byte-for-byte case: every existing gate passes as it is, none edited, renamed or retired, no
+golden re-recorded: RR3c's `rr3c_t1` to `rr3c_t8`, `rr3c_p1` and `rr3c_h1`, LF-1's `lf1_t1` to
+`lf1_t14` and `lf1_h1` note one dispatch of a pair (each table row of `rr3c_t1` and `rr3c_t2` on a
+list of its own), where the new rule is the old one; `p2_t2`, ENTRY-A's gates (`gate_490_entry_a`:
+their catalogues hand no `run_cap` and no `gap_remaining`, so the list is empty with or without
+ruling 1) and `rr3b_t5` give the list nothing new. What reading could not settle (no compiler, no
+test run here): that each fixture compiles and the catalogues of the policy gate are admitted as
+written (two pools without a valuation writing `target_defaults` and `goal_tiers`, as RR3c's);
+that in h4 a run failing after its main package started is rerun at once (R22, its `F` unique), so
+the next evaluation reads the pool unknown at its reserve gate rather than at its trigger (the test
+accepts either, both readings of the pool); in h5 the same, the goal pending rather than the trigger
+undecided; that the settlement hook's failure at the entry blocks the instance without a fatal
+error on catalog-a's fixture, as on ENTRY-A's budget fixture; and that in h6 the second dispatch is
+due ten minutes after the first, past catalog-a's activity interval, and told the same gap.
+
+**What is not changed.** Every decision of a catalogue in which no pair has two dispatches told a
+gap since a reading and no run failed at its entry: the list's judgement is the old one there;
+`goal_runs`, `run_cap` and `gap_remaining`; LF-1's rule and its limits; the span and the three
+readers; the goal page, `ResourceTargetView` and the receipts of `ApplyResourceTargets`; every
+stored record, request and ledger member, every declared interface range; the fact refresh, which
+still asks for an unread pool only where a trigger or a regenerating pool's cost term reads it.
+
+**At deploy.** Nothing to configure and nothing to migrate: the list is memory only, rebuilt at each
+evaluation from the journal the start rebuilds from the ledger. **Rollback.** An older build meets
+nothing kept on disk: it judges each pair's latest dispatch alone and notes a run that failed at its
+entry as any other. In the release notes' language:
+为目标缺口派出去的几趟，单趟补不上、加起来够了，也算把产出的那个池子的读数用旧了：从这次读数起，按准入先后把每趟被告知的趟数乘每趟产出累加，够到它被告知的缺口，那个池子就算没读过（`fact_stale`），直到这些趟结束之后再读到一次；同一个任务在同一台实例上后来派的、没带这个池子缺口的那一趟，不再把前面那趟抹掉。在入口就失败的一趟（主包一步没走）什么也不算：它消耗的池子和产出的池子都照旧信读数。没有要配置的东西。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
