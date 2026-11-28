@@ -2776,7 +2776,10 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
   (they enter neither the projection nor the evaluation's `facts`, as every list reading), and the
   holdings, read as the evaluator reads a target's inventory (the time-validity projection of the
   same facts and readings, the same observation). The admission of an intent computes it again for
-  the intent's instance, the same way, at the intent's evaluation time.
+  the intent's instance, the same way, at the intent's evaluation time. #455 RR3c (since 0.12.98;
+  register §1.543): with the handed runs at the inputs' ledger position, the list the evaluation of
+  those inputs is given ("Pool lines", "At each evaluation"), so a holding a run left unread is
+  unread to both.
 - **What the evaluator is given.** Beside the left-out facts, the readings of the pools read from
   rows of a list and the handed runs, in memory only: per instance, each pool's need (by the id
   the root's files write it), every part that added nothing with its cause, the tables' sha256,
@@ -2801,8 +2804,12 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
 - **Known limits.** The forward projection reads no computed need (as it reads no void, "A game
   whose root cannot be composed" in [../resource-targets.md](../resource-targets.md)); a reading
   is not made old by a run that has produced into it since (the gap reads the holding as it was
-  read); a rule that produces an item with a recipe counts for what it produces, not for what it
-  is made from.
+  read), unless (#455 RR3c, since 0.12.98) that run was told enough turns to close a goal's gap on
+  the pool: then the holding is unread until a reading observed at or after the run's end ("Pool
+  lines"), the goal on the pool pending and, for an item with a recipe,
+  `goal_records_holding_unknown` with `unknown_reason` `fact_stale`, nothing taken apart below it;
+  a rule that produces an item with a recipe counts for what it produces, not for what it is made
+  from.
 
 ## Pool lines (SS-2h)
 
@@ -2864,6 +2871,33 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   and a pair whose latest admitted dispatch the host's journal no longer holds is not noted; the
   resource targets' conditions and a goal's gap read the pool's observation themselves, as
   before.
+  #455 RR3c (since 0.12.98; register §1.543; the coordinator's rulings of 11-28): **a run told
+  enough to close a goal's gap leaves the pool it produced unread.** For the latest scheduled
+  dispatch of a pair whose recorded `policy_dispatch_parameters` carry `gaps_remaining`, each record
+  `{effect_index: j, gap_remaining: g}` with `g ≥ 1` whose entry `j` of the task's `produces` (as
+  the catalogue in force at the evaluation declares it; an entry the task no longer has is passed
+  over) is on a pool, and for which `n·y ≥ g·1000`, leaves that pool unread: `n` the `run_cap` the
+  same reason carries (1 without one), `y` the task's production of the pool per run in thousandths
+  as the goal term of `run_cap` reads it (its integer amounts times 1000, else its expected yield;
+  a pending amount yields 0 and the record is passed over), checked arithmetic, an overflow counting
+  as enough. Unread means what it means above, for the same span: a pool read from a fact or from
+  rows of a list is unknown to the whole evaluation, `fact_stale` under its own key, for every
+  reader of the pool values (the triggers, which ask the fact refresh for it, the net benefit, the
+  lines, the reserve gate, the spend values), from that dispatch's admission until a reading
+  observed at or after its run's end; and, for this pool alone, also for the two readers that do not
+  read the pool values: a resource target's observation of it (pending, `Γ` 0, no goal term of
+  `run_cap` and no `gap_remaining` from it; [../resource-targets.md](../resource-targets.md),
+  "Resource weights (v2)") and the holdings of the needs computed from the records ("Needs computed
+  from the records" above). One judgement decides all three, and the host hands the needs and the
+  evaluation the one list, read once under the gates the inputs are projected under. A run that was
+  not told enough to close its gap (a gap of 150 at three turns of one unit), and a dispatch that
+  carried no `gaps_remaining`, leave the pool read, as before; the rule above for the pools a run
+  consumes is unchanged, and a pool both name is unknown once. The host notes such a dispatch from
+  its recorded reasons, with its gaps and its `run_cap`, as it notes one that carried a `run_cap`;
+  nothing recorded is new, memory only, and a start reads the same from the ledger. Limits: a pool
+  whose scope covers several instances is unread on all of them after such a run on one; a run
+  that did fewer turns than it was told still leaves the pool unread until it is read; the yield is
+  the catalogue's expectation, so a run with poor drops is read once and sent again.
 - **Below the cap** (SCHED-C1c, since 0.12.53: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
@@ -3829,7 +3863,8 @@ the admission record. Not behind the switch.
 - **The calls of the evaluation's setup** (CYC-2, ruling 1). Each call of `evaluation_setup_ms` is
   timed, each from the end of the one before, on the cycle's lap clock, under a fixed word:
   `outcome_keys`, `blackouts` and `handed_runs` (under the evaluation's policy lock, before the
-  evaluation is entered), then `cadence`, `remedy_table` (the instances waiting for a client update
+  evaluation is entered; #455 RR3c, since 0.12.98: `handed_runs` gives the evaluation the list
+  read once with the needs under the gates, "Pool lines"), then `cadence`, `remedy_table` (the instances waiting for a client update
   and the remedy table when it is due), `evaluation_cost`, `random_delays`, `immediate_retries`,
   `fact_refresh_inputs`, `remedy_plan` (the remedy journal and plan), `variable_plan`, `run_slots`,
   `rerun_plan`, `instance_holds`, `pack_schedule` and `no_progress`. Two waits a call can make are

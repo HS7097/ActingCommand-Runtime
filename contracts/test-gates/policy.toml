@@ -1746,3 +1746,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_a1_c_only_the_goal_terms_of_pools_without_the_member_are_left_out",
 ]
 incident = ["#455 RR3b"]
+
+# #455 RR3c (0.12.98; register §1.543; brief rd-1123/brief-455-rr3c.md; contracts/scheduling/README.md, "Pool lines"; contracts/resource-targets.md, "Resource weights (v2)" and "Needs computed from the records"; contracts/remedies.md, section 4): a run that was told enough turns to close a goal's gap leaves the pool it produced unread until a reading observed at or after its end, no clock read. Ruling 1's arithmetic n·y ≥ g·1000 (one unit a run: a gap of 2 told 2 unread, told 1 read, a gap of 1 without run_cap unread, a gap of 150 told 3 read; half a unit: told 4 unread, told 3 read; a pending amount passed over); the span (unread while the run runs and after it with an older reading or one observed while it ran, read with one at or after its end); the three readers on one fixture (the pool values fact_stale and a trigger asking for the key, the target pending reason=expired with Γ 0, B 9000, no gap_remaining and run_cap 399, the needs' holding Unread, said goal_records_holding_unknown fact_stale); RR3b's numbers (a rule of −100 sent once by a need of 2, B 1900 told 2, not sent again until the pool is read, not sent with the need met, sent again told 1 with 1 lacking); a stock gap of 150 told 3 sent again as before; with LF-1 both pools unread; a pool of the game unread on both instances after a run on one.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t1_a_run_told_enough_turns_to_close_its_gap_leaves_the_pool_unread",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t2_the_pool_is_unread_until_a_reading_observed_at_or_after_the_runs_end",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t3_the_pool_values_the_target_and_the_needs_read_the_pool_as_unread",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t4_a_negative_rule_a_need_sent_is_not_sent_again_until_the_pool_is_read",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t5_a_run_not_told_enough_to_close_the_gap_leaves_the_pool_read",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t6_a_run_that_spends_under_a_run_cap_and_closes_a_gap_leaves_both_pools_unread",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t8_a_pool_whose_scope_covers_two_instances_is_unread_on_both_after_a_run_on_one",
+]
+incident = ["#455 RR3c"]

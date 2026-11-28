@@ -16,8 +16,18 @@ use crate::goal_needs::{NeedsSources, RecordRoots, instance_needs};
 use crate::goal_records::StoredGoalRecords;
 use actingcommand_contract::GOAL_RECORDS_FACT_KEY;
 use actingcommand_policy::{
-    GivenPoolReadings, NeedHolding, NeedsProjection, ProgressListUnknown, RecordNeeds,
+    GivenPoolReadings, HandedRuns, NeedHolding, NeedsProjection, ProgressListUnknown, RecordNeeds,
 };
+
+/// What the needs read of one evaluation's inputs: the facts it projected, the readings of the
+/// pools read from rows of a list of the same projection, and (#455 RR3c, register §1.543) the
+/// handed runs at the facts' ledger position, the list the evaluation itself is given, so a
+/// holding a run left unread is unread to both.
+pub(super) struct NeedsInputs<'i> {
+    pub(super) facts: &'i EvaluationFacts,
+    pub(super) readings: &'i GivenPoolReadings,
+    pub(super) handed: &'i HandedRuns,
+}
 
 /// What the computation reads of one instance: its facts as the store holds them under the gate,
 /// and the evaluator's projection of the evaluation's inputs.
@@ -53,22 +63,27 @@ impl NeedsSources for HostSources<'_, '_> {
 }
 
 impl HostShared {
-    /// The needs computed from the stored records of each instance of `facts` (only the instance
-    /// `only` when it names one) that holds any, with the active catalog of `policy`, the readings
-    /// `readings` of the same projection and the workbench's `roots`, at the evaluation's `time`.
-    /// The caller holds `policy` and the fact write gate under which `facts` were projected, so the
-    /// store holds what the projection read. Without an instance that holds stored records, or
-    /// without an active catalog, nothing is computed. A projection the evaluator cannot make is
-    /// `policy_evaluation_rejected`, as the evaluation itself would be.
+    /// The needs computed from the stored records of each instance of the inputs' `facts` (only
+    /// the instance `only` when it names one) that holds any, with the active catalog of `policy`,
+    /// the inputs' readings of the same projection and (#455 RR3c) handed runs, and the
+    /// workbench's `roots`, at the evaluation's `time`. The caller holds `policy` and the fact
+    /// write gate under which `facts` were projected, so the store holds what the projection read.
+    /// Without an instance that holds stored records, or without an active catalog, nothing is
+    /// computed. A projection the evaluator cannot make is `policy_evaluation_rejected`, as the
+    /// evaluation itself would be.
     pub(super) fn record_needs_under_gate(
         &self,
         policy: &PolicyHost,
-        facts: &EvaluationFacts,
-        readings: &GivenPoolReadings,
+        inputs: NeedsInputs<'_>,
         roots: &RecordRoots,
         time: EvaluationTime,
         only: Option<&str>,
     ) -> RuntimeHostResult<RecordNeeds> {
+        let NeedsInputs {
+            facts,
+            readings,
+            handed,
+        } = inputs;
         let mut needs = RecordNeeds::default();
         let store = lock(&self.facts, HostLocation::ProjectPolicyFacts)?;
         let mut holders = Vec::new();
@@ -101,8 +116,8 @@ impl HostShared {
         let Some(catalog) = policy.active_loaded() else {
             return Ok(needs);
         };
-        let projection =
-            NeedsProjection::new(catalog.compiled(), facts, readings, time).map_err(|error| {
+        let projection = NeedsProjection::new(catalog.compiled(), facts, readings, time, handed)
+            .map_err(|error| {
                 RuntimeHostError::request(
                     HostCode::PolicyEvaluationRejected,
                     HostLocation::ProjectPolicyFacts,
@@ -187,6 +202,12 @@ impl RuntimeHost {
             &outcome_keys,
             None,
         )?;
-        shared.record_needs_under_gate(&policy, &facts, &readings, &roots, time, None)
+        let handed = policy.handed_runs(facts.ledger_position);
+        let inputs = NeedsInputs {
+            facts: &facts,
+            readings: &readings,
+            handed: &handed,
+        };
+        shared.record_needs_under_gate(&policy, inputs, &roots, time, None)
     }
 }

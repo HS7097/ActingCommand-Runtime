@@ -51843,6 +51843,157 @@ refused by the installer's plan while that root, or a generation composed from i
 kept. In the release notes' language:
 池子现在可以在 `schedule.json` 里写 `goal_tiers`（`need_importance_milli`、`stock_cap_milli` 两个数）：这个池子上目标的缺口分两段算权重，记录里角色还缺的那段按 `need_importance_milli` 推得重（库存先给角色），目标在此之外要囤的那段按目标自己的重要度算、最多 `stock_cap_milli`；被缺口派出去的一趟只按角色缺的那段告诉趟数，缺的补齐后才按囤货那段。在可再生池子的触发线以下，这种池子的目标项也算进是否值得花。写了它的文件要在 `requires` 里写 `pool_goal_tiers`；没写这个成员的池子一切照旧。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
 
+### 1.543 Slice #455 RR3c (0.12.98): a run that was told enough turns to close a goal's gap leaves the pool it produced unread, so the gap is judged again only on a fresh reading (board #455; the rulings 1 to 7 are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr3c.md`; on #455 RR3b's branch `b1f103e1`, which merges before this one)
+
+This section takes 1.543. It ships in 0.12.98. [scheduling/README.md](scheduling/README.md) ("Pool
+lines", the bullet "At each evaluation"; "Needs computed from the records", "Who computes it" and
+"Known limits"; "The policy driver's clock and the line of a cycle", the calls of the evaluation's
+setup), [resource-targets.md](resource-targets.md) ("Resource weights (v2)", the new "A pool a run
+was told enough to close the gap on"; "Needs computed from the records", the new "A holding a run
+left unread"), [remedies.md](remedies.md) (section 4, the row `gap_remaining`) and
+[standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("What is computed", "Taking apart,
+once") are the contract; the policy fragment's description of `goal_records_holding_unknown` names
+`fact_stale` (the index regenerated). No `package` revision moves, no declared interface range, no
+configuration key, no code or word, no record, event, wire member or catalog member.
+
+**The problem** (RR3b's numbers, §1.542). A goal's gap is read from the pool's last reading, and a
+run sent for the goal produces into the pool without telling the evaluation. With RR3b a
+character's need weighs by its own importance: with `S` 10 and `I_n` 100 000 a need of 2 open is
+`Γ_n` 20 000, which lifts a rule of −100 of its own to `B` 1900 and sends it first, told 2. Its run
+produced the 2 units, but until the pool was read again the need looked as open as before, so the
+rule was `B` 1900 at the next evaluation and was sent again, and again, until some scheduled
+reading came: turns taken from better rules for nothing. #477 LF-1 (§1.509) solved the mirror case:
+a run told its turns leaves the pools it consumes unread until they are read after its end.
+
+**The rulings, as built.**
+- *1, which runs* (`crates/policy/src/evaluator.rs`, `HandedRun::closes`;
+  `crates/policy/src/resource_targets.rs`, `production_milli`). A pair's latest scheduled dispatch
+  whose recorded `policy_dispatch_parameters` carry `gaps_remaining`: for each record
+  `{effect_index: j, gap_remaining: g}` with `g ≥ 1` whose entry `j` of the task's `produces`, as
+  the catalogue in force at the evaluation declares it, is on a pool, the run was told enough to
+  close the gap when `n·y ≥ g·1000`, `n` the `run_cap` the same reason carries (1 without one) and
+  `y` the task's production of the pool per run in thousandths. `y` is read by `production_milli`,
+  which the goal term of `run_cap` (`goal_runs`) now reads too: the integer amounts times 1000, else
+  the expected yield, 0 for a pending amount (passed over); for an integer production
+  `⌈g·1000 / (a·1000)⌉` is `goal_runs`' `⌈g / a⌉` of before, so its numbers are unchanged. Checked
+  arithmetic, an overflow counts as enough; an entry the task no longer has is passed over.
+- *2, unread* (`produced_unread`, `PoolValues::without_unshown`, `PoolValues::produced`). The span
+  and the reason are LF-1's: a pool read from a fact or from rows of a list is unknown, `fact_stale`
+  under its own key, from that dispatch's admission while its run has not ended and until a reading
+  observed at or after its end; a reading the run wrote while it ran does not end it. Every reader of
+  the pool values sees it, and the fact refresh is asked for it by a reader that needs it, as for an
+  LF-1 pool. A pool LF-1's rule and this one both name is unread once.
+- *3, the two readers that do not read the pool values*. A resource target's observation of its
+  pool (`resource_targets.rs`, `unless_unread`, in `resolve_v2` and the v1 `target_effects`;
+  `resolve_instance_targets` takes the list): a reading that would be known is pending with the
+  reason a stale reading gives (`pending reason=expired`), `Γ` 0, its gap unknown, so no goal term
+  of `run_cap` and no `gap_remaining` come from it. The holdings of the needs computed from the
+  records (`crates/policy/src/record_needs.rs`, `NeedsProjection::new` takes the handed runs,
+  `NeedHolding::Unread`, `RecordNeedsNote::HoldingUnread`; `crates/runtime-host/src/goal_needs.rs`,
+  `take_apart`): the holding of an item with a recipe is not known, `goal_records_holding_unknown`
+  with `unknown_reason` `fact_stale`, the item's whole need on its pool and nothing taken apart below
+  it, the lower bound RR3 keeps. One judgement, `produced_unread`, decides all three readers. The
+  host could be handed the same list without a second reading of the ledger, so the work order's
+  stop condition was not met: `PolicyHost::handed_runs` reads the resident journal, and the evaluated
+  cycle now reads it once, at the inputs' ledger position under the gates they are projected under,
+  before the needs, and gives that one value to the needs
+  (`crates/runtime-host/src/host/record_needs.rs`, `NeedsInputs`) and to the evaluation
+  (`crates/runtime-host/src/host/policy_dispatch.rs`); an admission's recomputation of the needs
+  reads it at the position of its own inputs, as an evaluation of them would be given.
+- *4, what stays read*. A run not told enough to close its gap, and a dispatch that carried no
+  `gaps_remaining`, leave the pool read as before. LF-1's rule for the pools a run consumes is
+  unchanged (`HandedRuns::consumed_unshown`, a dispatch that carried a `run_cap`).
+- *5, nothing recorded is new* (`HandedRuns::note_dispatch`). The host notes a dispatch that carried
+  a `run_cap` or `gaps_remaining` (records of a gap of at least 1), from the dispatch's recorded
+  reasons, with its end, whether it carried a `run_cap`, the turns it was told and its gaps; a start
+  rebuilds the journal from the ledger and gives the same. Memory only. The list enters what LF-1's
+  enters, the evaluation's left-out facts, and the needs' projection built from the same inputs; it
+  enters no snapshot and no decision identity. A holding it leaves unread changes the computed needs
+  set by its note, and that set's identity is hashed into each candidate's decision identity as
+  every note is (§1.538).
+- *6, limits written down*. A pool whose scope covers several instances is unread on all of them
+  after such a run on one (LF-1's own limit); a run that did fewer turns than it was told still
+  leaves the pool unread until it is read; the yield is the catalogue's expectation, so a run with
+  poor drops is read once and sent again. A pool that no trigger or net benefit reads is asked for
+  by nobody: it stays unread until a reading comes, from the fact refresh where another reader asks
+  for its key or from the package that reads it on its own rule.
+- *7*: no interface revision and no new code: `goal_records_holding_unknown` carries `fact_stale` in
+  its existing optional `unknown_reason`, and a target's pending reason is `expired`, as for a stale
+  reading today. No game, package, pool or character is named in code or contracts.
+
+**A worked example** (the tests' numbers, neutral names). A rule of `V` 900 consuming 1 of a valued
+pool read at 500 (cost 1000; its hard line 100) and producing 1 of a pool with `goal_tiers` on which
+the records need 2, held 0: `B` 1900, sent told `gap_remaining` 2 and `run_cap` min(400, 2) = 2;
+2·1000 ≥ 2·1000. Its run ends; the consumed pool is read again after the end, the produced one is
+not: `B` −100 (`Γ` 0, the goal pending), not sent, and a trigger reading the pool suggests its key
+with `fact_stale`. Read after the end at 2: satisfied, not sent; at 1: `Γ_n` 10 000, `B` 900, sent
+told 1. A stock gap of 150 with the need met, `V` 10 000, the consumed pool read at 103: told 150
+and 3, 3·1000 < 150·1000, and sent again without a new reading, `B` 9004 both times. Half a unit a
+run (`expected_amount_milli` 500): a gap of 2 is closed by 4 turns, not by 3.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The noted dispatch and the judgement | `crates/policy/src/evaluator.rs` (`HandedRuns::note_dispatch`, `HandedRun::closes`, `HandedRuns::consumed_unshown` and `produced_unshown`, `produced_unread`, `read_pool`) |
+| The production per run | `crates/policy/src/resource_targets.rs` (`production_milli`, `goal_runs`) |
+| The pool values | `crates/policy/src/evaluator.rs` (`PoolValues::without_unshown`, `PoolValues::produced`; the score stage hands the list to `resolve_instance_targets`) |
+| A target's observation | `crates/policy/src/resource_targets.rs` (`unless_unread`, `TargetContext::unread`, `resolve_v2`, `target_effects`) |
+| The needs' holding | `crates/policy/src/record_needs.rs` (`NeedsProjection::new`, `NeedsProjection::holding`, `NeedHolding::Unread`, `RecordNeedsNote::HoldingUnread` and its reason and identity); `crates/runtime-host/src/goal_needs.rs` (`take_apart`) |
+| One list for both | `crates/runtime-host/src/host/policy_dispatch.rs` (the evaluated cycle and the admission); `crates/runtime-host/src/host/record_needs.rs` (`NeedsInputs`, `record_needs_under_gate`) |
+
+No struct literal of `PoolValues` outside the evaluator changed; the one of its unit tests'
+`r7_evaluate` gains the empty `produced`, and the unit test
+`resource_target_valuation_maps_milli_yields_before_rounding` hands `resolve_instance_targets` the
+empty list. `NeedHolding` and `RecordNeedsNote` gain a variant: their one match each
+(`take_apart`; `RecordNeedsNote::write` and `note_reasons`) gains its arm, and no other match on them
+exists in the workspace.
+
+**Tests** (incident `#455 RR3c`: `crates/policy/src/tests/gate_455_rr3c.rs`, policy gate map, and
+`crates/runtime-host/src/tests/gate_455_rr3c.rs`, host gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `rr3c_t1_a_run_told_enough_turns_to_close_its_gap_leaves_the_pool_unread` (1) | one unit a run: a gap of 2 told 2 unread, told 1 read; a gap of 1 without a `run_cap` unread; a gap of 150 told 3 read; half a unit: a gap of 2 told 4 unread, told 3 read; a pending amount passed over |
+| `rr3c_t2_the_pool_is_unread_until_a_reading_observed_at_or_after_the_runs_end` (2) | unread while the run has not ended, after it with a reading older than its end or observed while it ran; read with one observed at its end or after |
+| `rr3c_t3_the_pool_values_the_target_and_the_needs_read_the_pool_as_unread` (3) | the pool values: a trigger reading the pool suggests its key `fact_stale`; the target pending, its item saying so, the term 0, `B` 9000, no `gap_remaining`, `run_cap` 399 of the spend term alone; the needs' holding `Unread` (known 0 before), and its note said `goal_records_holding_unknown` `fact_stale` |
+| `rr3c_t4_a_negative_rule_a_need_sent_is_not_sent_again_until_the_pool_is_read` (4) | `B` 1900 told 2; the reading unchanged: −100, not sent, the pool asked for; the need met: not sent; 1 lacking: `B` 900, told 1 |
+| `rr3c_t5_a_run_not_told_enough_to_close_the_gap_leaves_the_pool_read` (5) | a stock gap of 150 told 3, `B` 9004, sent again without a new reading, told the same |
+| `rr3c_t6_a_run_that_spends_under_a_run_cap_and_closes_a_gap_leaves_both_pools_unread` (6) | the consumed pool held `capped_cap_unknown` `fact_stale` by LF-1's rule, the produced pool asked for by this one; nothing sent |
+| `rr3c_t8_a_pool_whose_scope_covers_two_instances_is_unread_on_both_after_a_run_on_one` (8) | a game's pool, a run on one instance noted: the goal pending on both |
+| `rr3c_p1_an_unread_holding_adds_nothing_below_its_item` (3, host) | an unread holding: 10 `Unsplit` on its pool, nothing below, the one note `HoldingUnread`; known 4: taken apart as RR3 does |
+| `rr3c_h1_a_run_told_enough_to_close_its_gap_leaves_its_pool_unread_across_a_start` (7, host) | through admission and settlement, a run handed `gap_remaining` 1600 at no `run_cap` producing 2000: the next evaluation holds the task (`fact_stale` suggestion, no intent), the same twice after a start that rebuilds the journal from the ledger; a list read after the end releases the pool |
+
+Test 6, LF-1 unchanged: LF-1's gates pass as they are, `lf1_t1` to `lf1_t14` of
+`crates/policy/src/tests/gate_477_lf1.rs` (`lf1_t8` to `lf1_t14` give the evaluation the handed
+runs) and `lf1_h1_a_run_handed_a_run_cap_leaves_its_pool_unknown_until_read_after_its_end` of the
+host's; their dispatches carry no `gaps_remaining`. No existing gate test is changed, renamed or
+retired, and no golden is re-recorded. What reading could not settle (no compiler, no test run
+here): that each fixture compiles as written (a not judged task producing nothing and consuming
+nothing, a production by `expected_amount_milli` and one `pending` on a pool without a valuation, a
+pool of the game read from a fact of the game's scope), that a trigger left undecided by an unread
+pool keeps its suggestion on the decision (LF-1's `lf1_t9` shows it), that the LF-1 hold is the last
+reason of the held decision in test 6 (as in `lf1_t12`), and in h1 that the dispatch's recorded
+reasons carry `gaps_remaining` after the start, as they carry `run_cap` in LF-1's `lf1_h1`.
+
+**What is not changed.** Every decision of a catalogue in which no dispatch carried a
+`gaps_remaining` its run could close: the list notes nothing more there, and the pool values, the
+targets and the needs read it as before, byte for byte; `goal_runs`' numbers; LF-1's rule; the goal
+page, `ResourceTargetView` and the receipts of `ApplyResourceTargets`, which read a target's
+condition from the pool's observation as before; every stored record, request and ledger member,
+every declared interface range. The cycle reads the handed runs once, under the gates, where it read
+them under the evaluation's policy lock; the setup's `handed_runs` call now gives that list.
+
+**What RR3b left** (§1.542, "What is left") is this slice.
+
+**At deploy.** Nothing to configure. After a run that a goal's gap sent and that was told enough
+turns to close it, the pool it produced is read again before that goal pushes anything from it:
+where a trigger or a net benefit reads the pool, the fact refresh is asked for its key; otherwise
+it waits for the reading its own package's rule brings. A rollback to 0.12.97 or below meets
+nothing kept on disk (the list is memory only) and only stops the re-reading. In the release notes'
+language:
+目标缺口派出去的一趟，如果被告知的趟数够补上缺口，它产出的那个池子在这趟结束后被重新读到之前都算没读过（`fact_stale`）：这个池子上的目标先挂起，既不加推力，也不告诉缺口；按配方拆算时这个持有量也算不知道。补不上缺口的一趟（比如囤货差 150、只跑 3 趟）照旧。没有要配置的东西。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

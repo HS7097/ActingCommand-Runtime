@@ -338,7 +338,8 @@ pub enum SetupCall {
     OutcomeKeys,
     /// The instances a blackout covers.
     Blackouts,
-    /// The pairs whose latest dispatch handed its run a cap.
+    /// The pairs whose latest dispatch handed its run a cap (#455 RR3c: or a goal's gap), given to
+    /// the evaluation; since #455 RR3c the list is read with the needs, under the gates.
     HandedRuns,
     /// The cadence's judgement of the trigger.
     Cadence,
@@ -4312,7 +4313,10 @@ impl PolicyHost {
     /// its run ended (its execution's observation, once completed at or before `through`), or
     /// none while it has not. The evaluation holds a pool such a run's task consumes unknown until
     /// a reading observed at or after that end. Read from the resident journal: a pair whose
-    /// latest dispatch it no longer holds is not noted.
+    /// latest dispatch it no longer holds is not noted. #455 RR3c (register §1.543): a dispatch
+    /// whose recorded `policy_dispatch_parameters` carry `gaps_remaining` is noted too, with the
+    /// gaps and its `run_cap` ([`actingcommand_policy::HandedRuns::note_dispatch`]); the same
+    /// recorded reasons, no other read.
     pub(crate) fn handed_runs(&self, through: u64) -> actingcommand_policy::HandedRuns {
         let mut handed = actingcommand_policy::HandedRuns::default();
         let Some(active) = self.active.as_ref() else {

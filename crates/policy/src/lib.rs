@@ -237,6 +237,11 @@ mod tests {
     // a stored goal's stock beyond it capped.
     mod gate_455_rr3b;
 
+    // #455 RR3c (0.12.98; register §1.543): a run told enough turns to close a goal's gap leaves
+    // the pool it produced unread, for the pool values, a resource target's observation and the
+    // needs' holdings, until a reading observed at or after its end.
+    mod gate_455_rr3c;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

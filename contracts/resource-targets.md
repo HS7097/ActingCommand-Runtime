@@ -1058,6 +1058,20 @@ units' worth of runs, not the stock's hundred and fifty, and the stock is asked 
 its own, judged with the stock's part alone. Both read the one number. A pool without the member is
 told its whole gap as before.
 
+**A pool a run was told enough to close the gap on** (#455 RR3c, since 0.12.98; register §1.543;
+the coordinator's rulings of 11-28). A dispatch handed `gap_remaining` `g` on a pool whose turns
+could close it (the `run_cap` it carried, 1 without one, times the task's production of the pool
+per run in thousandths, at least `g·1000`; [scheduling/README.md](scheduling/README.md), "Pool
+lines") leaves the pool's reading unbelieved until one observed at or after that run's end. Till
+then a target on the pool, on every instance its scope covers, is pending as a stale reading makes
+it (`<id>@<pool>:pending reason=expired gap_weight=pending`): `Γ = 0`, so it weighs nothing in `W`,
+the goal terms of a fixed value and the capped order, and its gap is unknown, so no goal term of
+`run_cap` and no `gap_remaining` come from it. The one judgement the evaluation's pool values read
+decides it; an observation pending for its own reason keeps that reason. A run told fewer turns
+than its gap needs (a stock gap of 150 at three turns of one unit) leaves the pool read, as before.
+A stale reading would otherwise keep a need of two looking open after the run that met it, and send
+a rule of a negative value of its own first again and again until some scheduled reading came.
+
 ## Needs computed from the records
 
 Workflow #455 RR3 (since 0.12.95; register §1.538; the coordinator's rulings of 11-28, on the
@@ -1109,6 +1123,15 @@ records"). The evaluator stacks it on the instance's stored record for that eval
   `goal_records_holding_unknown` (`pool_id`, `unknown_reason` when the observation gives one),
   `goal_records_item_unweighed` and `goal_records_condition`, each listing its records, columns or
   items. Nothing goes to a log.
+- **A holding a run left unread** (#455 RR3c, since 0.12.98; register §1.543). The needs read a
+  holding through the judgement the evaluation reads ("Resource weights (v2)", "A pool a run was
+  told enough to close the gap on"): the host hands their computation the handed runs the
+  evaluation is given, the one list, read once. While a run told enough turns to close a goal's gap
+  on the pool of an item with a recipe has not been followed by a reading observed at or after its
+  end, that holding is not known: the item's whole need is its pool's, nothing below it is taken
+  apart, and the note is `goal_records_holding_unknown` with `unknown_reason` `fact_stale` (the
+  lower bound RR3 keeps). The goal a need of an item without a recipe gives its pool is pending
+  then, as every target on the pool is.
 - **Identity, freshness, wakes.** The computed set's identity is hashed into the decision identity
   of every candidate of the instance, and into the instance's view at admission
   ([scheduling/README.md](scheduling/README.md)), so an intent evaluated on other progress, other

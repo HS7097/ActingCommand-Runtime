@@ -393,7 +393,11 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   order of the recipes from the top, an item with a recipe is covered by its holding up to its
   need, and what is not covered is made (rounded up by `makes`), adding its `from` and its `cost` to
   those items' needs. An item with a recipe whose holding is not known adds nothing below itself
-  (`goal_records_holding_unknown`). What remains on an item without a recipe is its pool's need;
+  (`goal_records_holding_unknown`). #455 RR3c (since 0.12.98; register §1.543): nor does one whose
+  holding a run left unread, a run that was told enough turns to close a goal's gap on its pool
+  having produced into it after the holding was read; the holding is then not known until a reading
+  observed at or after that run's end (`goal_records_holding_unknown` with `unknown_reason`
+  `fact_stale`; [scheduling/README.md](scheduling/README.md), "Pool lines"). What remains on an item without a recipe is its pool's need;
   an item without a recipe and without a pool is shown (`goal_records_item_unweighed`) and weighs
   nothing.
 - **A lower bound.** What is not known adds nothing, so the result never exceeds the true need: a

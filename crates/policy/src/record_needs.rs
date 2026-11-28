@@ -23,7 +23,7 @@
 //!
 //! Nothing here reads a clock, a file, a lock or the ledger.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{GoalProblem, ResourceTargetPendingReason};
@@ -32,15 +32,15 @@ use sha2::{Digest, Sha256};
 
 use crate::codes::PolicyCode;
 use crate::evaluator::{
-    TimelineResets, UnknownReasonToken, project_given_validity, project_time_validity,
-    survives_resets, timeline_resets, unknown_token,
+    TimelineResets, UnknownReasonToken, produced_unread, project_given_validity,
+    project_time_validity, survives_resets, timeline_resets, unknown_token,
 };
 use crate::resource_targets::{
     TargetObservation, bounded_list, observe_target, pending_name, resolve_target_pool,
 };
 use crate::{
     CompiledCatalog, DecisionReason, EvaluationFacts, EvaluationTime, GivenPoolReadings,
-    ListRowsUnknown, PolicyEvaluationResult, ScopeSelector,
+    HandedRuns, ListRowsUnknown, PolicyEvaluationResult, ScopeSelector,
 };
 
 /// The version word the identity of a computed set is hashed under.
@@ -200,6 +200,11 @@ pub enum RecordNeedsNote {
         pool_id: String,
         reason: Option<ResourceTargetPendingReason>,
     },
+    /// #455 RR3c (register §1.543): `goal_records_holding_unknown` with `unknown_reason`
+    /// `fact_stale`: the holding of an item with a recipe is unread, a run told enough turns to
+    /// close a goal's gap on its pool having produced into it after its reading
+    /// ([`NeedHolding::Unread`]), so nothing below the item is taken apart.
+    HoldingUnread { item: String, pool_id: String },
     /// `goal_records_item_unweighed`: an item without a recipe and without a pool: shown with
     /// what the characters need of it, weighing nothing.
     ItemUnweighed { item: String, need: u64 },
@@ -307,6 +312,12 @@ impl RecordNeedsNote {
                 writer.text(item);
                 writer.text(pool_id);
                 writer.text(reason.map_or("unresolved", pending_name));
+            }
+            Self::HoldingUnread { item, pool_id } => {
+                writer.text("holding_unknown");
+                writer.text(item);
+                writer.text(pool_id);
+                writer.text("stale");
             }
             Self::ItemUnweighed { item, need } => {
                 writer.text("item_unweighed");
@@ -423,7 +434,8 @@ impl InstanceRecordNeeds {
     /// `goal_records_row_missing` and `goal_records_reading_missing` (each by `fact_key`),
     /// `goal_records_position_unknown`,
     /// `goal_records_holding_unknown` (one for each pool, `pool_id` and the `unknown_reason` of
-    /// its observation), `goal_records_item_unweighed` and `goal_records_condition`, in this order;
+    /// its observation; #455 RR3c, `fact_stale` for an unread holding),
+    /// `goal_records_item_unweighed` and `goal_records_condition`, in this order;
     /// each lists its records, columns or items in the order computed.
     pub(crate) fn note_reasons(&self) -> Vec<DecisionReason> {
         let mut not_applied = BTreeMap::<GoalProblem, Vec<String>>::new();
@@ -485,7 +497,11 @@ impl InstanceRecordNeeds {
                     item,
                     pool_id,
                     reason,
-                } => holding.push((item.as_str(), pool_id.as_str(), *reason)),
+                } => holding.push((item.as_str(), pool_id.as_str(), reason.map(pending_unknown))),
+                RecordNeedsNote::HoldingUnread { item, pool_id } => {
+                    let stale = Some(UnknownReason::FactStale);
+                    holding.push((item.as_str(), pool_id.as_str(), stale));
+                }
                 RecordNeedsNote::ItemUnweighed { item, need } => {
                     unweighed.push(format!("{item}:{need}"));
                 }
@@ -539,7 +555,7 @@ impl InstanceRecordNeeds {
         for (item, pool_id, reason) in holding {
             let mut outcome = Outcome::new(PolicyCode::GoalRecordsHoldingUnknown).pool_id(pool_id);
             if let Some(reason) = reason {
-                outcome = outcome.unknown_reason(UnknownReasonToken(pending_unknown(reason)));
+                outcome = outcome.unknown_reason(UnknownReasonToken(reason));
             }
             reasons.push(DecisionReason {
                 outcome,
@@ -619,13 +635,16 @@ pub(crate) fn not_stacked_reason() -> DecisionReason {
 
 /// What the host reads of one evaluation's inputs to compute the needs (module doc): the facts and
 /// the readings given to the pools read from rows of a list as the evaluator projects them at the
-/// evaluation's time, and the timeline's resets at that time.
+/// evaluation's time, and the timeline's resets at that time. #455 RR3c (register §1.543): and the
+/// pools a run told enough turns to close a goal's gap on left unread, judged from the evaluation's
+/// handed runs as the evaluator judges them ([`produced_unread`]).
 pub struct NeedsProjection<'a> {
     catalog: &'a CompiledCatalog,
     projected: EvaluationFacts,
     given: GivenPoolReadings,
     resets: TimelineResets<'a>,
     time: EvaluationTime,
+    unread: BTreeSet<String>,
 }
 
 /// The holding of a pool as the evaluator reads a target's inventory.
@@ -639,28 +658,47 @@ pub enum NeedHolding {
     /// Not known: the observation's reason, none when the id names no pool of the instance (or
     /// one that is not observable or out of its scope).
     Unknown(Option<ResourceTargetPendingReason>),
+    /// #455 RR3c (register §1.543): not known because a run told enough turns to close a goal's
+    /// gap on the pool produced into it after its reading, which would be known otherwise: the
+    /// evaluation reads the pool as unknown, `fact_stale`, until it is read after that run's end.
+    Unread,
 }
 
 impl<'a> NeedsProjection<'a> {
-    /// The projection of `facts` and `readings` an evaluation of `catalog` at `time` reads.
+    /// The projection of `facts` and `readings` an evaluation of `catalog` at `time` reads; #455
+    /// RR3c: with the handed runs `handed` that evaluation is given.
     pub fn new(
         catalog: &'a CompiledCatalog,
         facts: &EvaluationFacts,
         readings: &GivenPoolReadings,
         time: EvaluationTime,
+        handed: &HandedRuns,
     ) -> PolicyEvaluationResult<Self> {
+        let projected = project_time_validity(catalog, facts, time)?;
+        let given = project_given_validity(catalog, readings, &facts.instances, time)?;
+        let bundle = catalog.catalog();
+        let unread = produced_unread(
+            &bundle.pools.pools,
+            &projected,
+            &given,
+            &bundle.tasks.tasks,
+            handed,
+        );
         Ok(Self {
             catalog,
-            projected: project_time_validity(catalog, facts, time)?,
-            given: project_given_validity(catalog, readings, &facts.instances, time)?,
+            projected,
+            given,
             resets: timeline_resets(catalog, time)?,
             time,
+            unread,
         })
     }
 
     /// The holding on the instance `instance_id` of the pool the root's files write `resource`:
     /// the pool a target of that id names on the instance, observed as a target's inventory is
-    /// (`observe_target`), the one reading the evaluator reads.
+    /// (`observe_target`), the one reading the evaluator reads; #455 RR3c: unread while a run told
+    /// enough turns to close a goal's gap on it left it so (the evaluator's target reads it
+    /// pending then).
     pub fn holding(&self, instance_id: &str, resource: &str) -> NeedHolding {
         let Some(instance) = self
             .projected
@@ -681,6 +719,9 @@ impl<'a> NeedsProjection<'a> {
             &fact_key,
             self.time,
         ) {
+            TargetObservation::Known { .. } if self.unread.contains(&pool.id) => {
+                NeedHolding::Unread
+            }
             TargetObservation::Known {
                 current,
                 fresh_until_unix_ms,

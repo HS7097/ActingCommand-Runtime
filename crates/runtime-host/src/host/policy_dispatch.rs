@@ -2031,6 +2031,7 @@ impl HostShared {
             availability_withdrawals,
             pool_readings,
             record_needs,
+            handed_runs,
             dispatches_read,
             queue_wait_starts,
             entry_blocked,
@@ -2105,13 +2106,21 @@ impl HostShared {
                 Some(time.unix_ms),
             )?;
             let projection_micros = crate::policy_host::micros_since(projection_started);
+            // #477 LF-1 (register §1.509): the pairs whose latest dispatch at the inputs' position
+            // carried a `run_cap`, with when that run ended; #455 RR3c (register §1.543): or
+            // `gaps_remaining`. Read once, here: the needs below and the evaluation read the one
+            // list, so a pool a run left unread is unread to both.
+            let handed_runs = policy.handed_runs(facts.ledger_position);
             // Workflow #455 RR3 (register §1.538, rulings 1 and 6): the needs computed from each
             // instance's stored records, under the gate these inputs were projected under, with
             // the holdings through the evaluator's own projection of them.
             let record_needs = self.record_needs_under_gate(
                 &policy,
-                &facts,
-                &pool_readings,
+                super::record_needs::NeedsInputs {
+                    facts: &facts,
+                    readings: &pool_readings,
+                    handed: &handed_runs,
+                },
                 &record_roots,
                 time,
                 None,
@@ -2132,6 +2141,7 @@ impl HostShared {
                 availability_withdrawals,
                 pool_readings,
                 record_needs,
+                handed_runs,
                 dispatches_read,
                 queue_wait_starts,
                 entry_blocked,
@@ -2300,8 +2310,10 @@ impl HostShared {
             setup.lap(SetupCall::Blackouts, policy.catalog_costs());
             // #477 LF-1 (register §1.509): the pairs whose latest dispatch at the inputs' position
             // carried a `run_cap`, with when that run ended; a pool such a run's task consumes is
-            // unknown in the evaluation until it is read after that end.
-            left_out.give_handed_runs(policy.handed_runs(facts.ledger_position));
+            // unknown in the evaluation until it is read after that end. #455 RR3c (register
+            // §1.543): the list read with the needs, under the gates; so is a pool a run told
+            // enough turns to close a goal's gap on produced into.
+            left_out.give_handed_runs(handed_runs);
             setup.lap(SetupCall::HandedRuns, policy.catalog_costs());
             let evaluating = crate::policy_host::lap_instant();
             let cycle = policy.evaluate(
@@ -3499,11 +3511,16 @@ impl HostShared {
                     )?;
                 // Workflow #455 RR3 (register §1.538, ruling 6): the needs of the intent's
                 // instance computed again from what the store holds now, at its evaluation's
-                // time, under the same gate.
+                // time, under the same gate. #455 RR3c (register §1.543): with the handed runs at
+                // the position of these inputs, as an evaluation of them would be given.
+                let current_handed = policy.handed_runs(current_facts.ledger_position);
                 let current_needs = self.record_needs_under_gate(
                     &policy,
-                    &current_facts,
-                    &current_readings,
+                    super::record_needs::NeedsInputs {
+                        facts: &current_facts,
+                        readings: &current_readings,
+                        handed: &current_handed,
+                    },
                     &record_roots,
                     trusted.evaluation_time,
                     Some(&intent.instance_id),
