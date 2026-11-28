@@ -54058,6 +54058,652 @@ a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It rea
 codes in the records as text it does not know. The gate's memory was memory only and is gone; the
 older build starts automatic emulators with no gate, as before.
 
+### 1.555 Slice #503 FACT-R (0.12.103): a scope of the instance fact store at its bound takes a publication's new keys in the room of its facts that have been expired for more than seven days, each removed by its own record; `ledger` 11, one way (board #503; the owner's decisions of 11-28 and 11-29, in neutral words below; the rulings are the coordinator's, after a read-only study of the store's capacity on main `cdc3e0b4`, v0.12.99; built on that main, merged with main `924f4034`, which holds §1.546; §1.545 and §1.547 to §1.554 are slices of the same days)
+
+It ships in 0.12.103 and takes `ledger` 11. [instance-fact-store.md](instance-fact-store.md)
+("Expiry reclamations", new; "Accept first, revisions and tagged load", "Capacity ledger": "Counted
+once", "What counts", "Where it is checked", "Booking"), [ledger-observer.md](ledger-observer.md)
+(§1, the instance fact store's bound), [component-interfaces.md](component-interfaces.md) (the
+`ledger` row 11 and the paragraph on the planned rows) and the outcome code
+`fact_store_expired_facts_reclaimed` (`contracts/outcome-codes/runtime-host.json`) are the contract.
+
+**The problem** (the work order's, in neutral words). A scope of the store holds a bounded number of
+facts: 224 for an instance, 16 for a server, 16 for a game (§1.496). An expired fact stays active
+and counts until a newer observation of its key or an invalidation replaces it; nothing removes a
+fact because it expired. A key that is written no more (a package unloaded or no longer bound, a
+key a package's new version renamed, a reading retired, a priority offset that outlived its task)
+and whose fact lists no trigger therefore holds its room for ever, and a scope at its bound refuses
+every key it does not hold (`fact_store_capacity_exceeded`). With list readings of several
+applications arriving, each of them a key, the owner called this a main problem.
+
+**The owner's decisions** (11-28 and 11-29, on board #503; the words here are the coordinator's).
+The communication protocol's size limits are not touched; a scope near its bound reclaims keys
+that expired long ago; and the change ships in one release, reader and writer together, accepting
+that the installation cannot go back below that release.
+
+**The designs compared.** *Implicit reclamation* (the check skips expired facts and the reducers
+recompute the same decision) is ruled out: the start's tagged load cannot reproduce it without
+replaying the whole ledger, a build before it would bring every reclaimed fact back, and nothing
+in the ledger would say what was dropped. *Explicit records* (built): the decision is made once,
+live, and each removed fact is a `fact.invalidated` of the existing shape, so the store stays a
+pure function of the ledger; it changes the rule of an existing record, so `ledger` moves.
+*The same in two releases, reader first*, which would have kept a way back from the writer to the
+reader, is set aside by the owner's decision of one release. A dedicated trigger type that facts
+list (the ordinary rule would drop unexpired ones too, and older decoders refuse a new type),
+counting only unexpired facts (a snapshot could pass 256 and halt the Runtime) and a request that
+retires a key (the same rule change, and not automatic) are rejected.
+
+**What it rests on** (read on main; none of the stop conditions holds).
+- *`ledger` 11 is free* on main (`[3, 10]` since §1.529, `924f4034` included); raising it needs no
+  migration and no fresh state root: no record shape, type, table, index or view changes.
+- *Every path of this build rebuilds the store the live one holds.* The live store and the full
+  replay apply each record through `replay_event` and `apply_invalidation`, which accept the third
+  form. The start's tagged load: a reclaimed key's `state` row names its invalidation (the latest
+  record of the key), so its publication is not loaded for it, the invalidation files the
+  tombstone and sets `latest_observed` to its time, the fact's expiry, which is what the live store
+  sets (the maximum of the fact's observation and its expiry). The history at a position replays
+  every event and applies the form where it stands, as an adjustment's. The State projection
+  verifies it inside the invalidation's transaction. Test 4 compares the load, the replay and the
+  live store (LN-2's view), and the history at every position from the first warning on.
+- *An older build does not stop at its start.* Builds 0.12.76 to 0.12.102 decode the records (no
+  shape changed); their tagged load files a reclaimed key's tombstone without checking the trigger
+  again (the State row's identity and origin only), and a start reads no history at a position (the
+  strategic report, the policy input identity and the console's paged read are requests). They stop
+  at the first reclamation in range when such a request reads history
+  (`fact_invalidation_source_mismatch`).
+- *The State projection takes the request-published facts.* Every `fact.published` the store writes
+  has the fact store's module; the facts published under a request's source and actor are priority
+  offsets, pack schedules, remedy choices, resource targets and goal records; the last four are the
+  keys the plan excludes, and a priority offset is taken (test 7). No other key is published under a
+  request's origin.
+- *A failure half way leaves a store a start loads as it is.* The warning and each invalidation with
+  its tombstone are records of their own, each one transaction, in one hold of the fact write gate
+  (no other fact write between them). A failure or a stop between them leaves the facts reclaimed
+  so far reclaimed and the rest active, the publication not appended; a start loads exactly that
+  (every path above), and the next publication that needs the room reclaims again.
+
+**The rulings, as built.**
+- *1, when* (`HostShared::publish_facts_under_gate`, `crates/runtime-host/src/host/facts.rs`). Only
+  inside a publication, when its observation brings keys its scope does not hold and they would pass
+  the bound: the plan (`InstanceFactStore::plan_expiry_reclamation`) is made with the publication's
+  clock, the check counts the room it frees (`preview_observation_freeing`, the two bound checks
+  alone), every other check follows as before, and only then are the records written
+  (`reclaim_expired_under_gate`), the check run again without the room, and the publication appended.
+- *2, which and how many.* The scope's facts whose expiry lies more than
+  `FACT_RECLAIM_AFTER_EXPIRY_MS` (seven days, a contract constant) before the plan, but the
+  observation's keys, facts without an expiry, facts that list `runtime.failed` (the warning drops
+  them by the ordinary rule; they count as freed) and `session.pack.schedule`,
+  `session.remedy.choices`, `session.resource_targets`, `session.goal_records`
+  (`RECLAIM_EXCLUDED_KEYS`), and (fix round 1) every key of the scope a condition of the active
+  catalog reads (`CatalogReadFacts`); ascending expiry, then the sequence of the fact's publication,
+  then the key; exactly `active + new − bound − dropped`. Fewer candidates: nothing is written, and
+  the refusal is the one of before.
+- *3, the records.* One Warning `runtime.failed` `fact_store_expired_facts_reclaimed` (warning,
+  ladder `none`) under the system links, `instance_id` the alias, or `server` or `game` the scope's
+  id, `count` the facts the plan reclaims, `limit_count` the bound, disposition `not_performed` as
+  the share warning's, drafted first and appended only when the plan made again at its time is the
+  same (fix round 1); the store follows it and the invalidations it derives are written; then per
+  fact one `fact.invalidated` (trigger the warning's id and type, `invalidated_at_unix_ms` the
+  fact's expiry) with its State tombstone in one transaction
+  (`InstanceFactStore::prepare_expiry_reclamation`), the store following each; then the daemon's log
+  line, with how many were written (fix round 1). The publication's answer is unchanged; no
+  decision reads the code.
+- *4, the third form* (`actingcommand_contract::is_expiry_reclamation`): the trigger's type is
+  `runtime.failed` and the fact does not list it, the fact has an expiry and the invalidation's
+  time is that expiry. Accepted by `apply_invalidation`, `HistoricalFactProjection::replay` and
+  `::invalidate`, and `verify_sources` (`crates/runtime-state/src/store/fact.rs`), which for this
+  form also requires the expiry to lie more than the margin before the trigger, compares that
+  instead of the trigger's time, and takes a published event of any source and actor of the fact
+  store's module.
+- *5, what replaces the old protection.* "Refuse, never evict" stays for every unexpired fact and
+  every fact without an expiry. Only facts no condition of the active catalog reads (fix round 1)
+  and every reader already takes as unknown, and has for at least the margin, are reclaimed, and
+  each one is a record.
+
+**Decided here.** When the facts the warning would drop cover the whole need, nothing is reclaimed
+or written and the publication is refused as before (a warning that reclaims nothing is not
+written); when the warning would drop the fact of one of the observation's own keys, the same (the
+key would then be new and its observation older than the drop). A plan that does not hold at its
+warning's own time (the wall clock stepped back between the plan and the warning) writes nothing,
+and the publication is refused `fact_store_capacity_exceeded`, a request's refusal (fix round 1;
+before it, the reclamation stopped there with the warning and the first invalidations written). The
+margin at the trigger's time is checked by the State projection alone: a reducer has the record and
+not the trigger's time, and every invalidation reaches the ledger through that check. The fact store's
+one-record check (`preview_publish`) is now the form its unit tests call; the store checks through
+the observation's check.
+
+**Fix round 1** (an independent review of the pull request, findings F1 to F9; the coordinator's
+rulings on them). *Acted on.* F1: a probe (`on_unknown: probe`) dates its unknown period from the
+fact's expiry and from nothing once the key is missing, so a task whose package stayed closed for
+longer than the margin would never be admitted again after its key was reclaimed; every key of the
+scope that a condition of the active catalog reads is now excluded (every `fact`, `record_deadline`
+and `fact_time_reached` predicate of a trigger or a feedback stop, and the facts a `fact` or a
+`resource_projection` predicate compares with). The set (`CatalogReadFacts`) is made from the
+compiled catalog when it becomes active, at the start and at each transition under the policy's
+lock, and kept beside it under a leaf lock of the host (`HostShared::catalog_read_facts`); a
+publication reads it, without the policy's lock and without a walk of the catalog, only once its
+plan needs room (the plan takes it as a call it makes after its count), so a publication that needs
+no room costs nothing more and one that does costs one leaf lock and one shared pointer. No record
+carries it and no reader computes it again; `ledger` stays 11. F3: the warning is drafted first,
+nothing written; the plan is made again at the warning's own time and must be the plan the check
+counted, or nothing is written and the publication is refused as one with too few candidates
+(`InstanceFactStore::confirm_expiry_reclamation`). The warning is therefore appended by the ledger
+and wakes the driver directly, as the store's own invalidations are; the other steps of a Runtime
+record's append (device details, the stability count, the agent wake tap) read an instance link or
+a lifecycle failure, which the warning has not. F2: the contract and the catalogue entry say that
+`count` is the facts the plan reclaims, that the facts removed are those whose invalidation names
+the warning, and that a publication missing after them means a stop or a failure came between and
+the next one plans again; the daemon's log line follows the invalidations, with how many were
+written. F7: "At deploy" says what the plan of an installation checks. F6: tests 12 to 15 (a plan
+that fails at its warning's time, a server scope, the host with a catalog, the host with too few
+candidates) and the gate row's words on the clock. *Left as they are, in the contract's "Known
+limits".* F4: a wall clock set far ahead reclaims facts live in real time, whose keys then refuse
+readings observed before the old expiry until real time passes it, as "not newer" already does.
+F8: every key ever reclaimed stays in the tagged load and in `latest_observed`, so a start's cost
+grows with the reclamations ever made. What F1's exclusion leaves open: a key no condition of the
+active catalog reads and a person still wants (a priority offset or a client key with an expiry, a
+list only a selection reads) is a candidate once expired for the margin; of the records a person
+sets, the four excluded keys never are. F5 and F9 were notes; nothing changed for them. No record
+shape, code, setting or interface revision changed in this round.
+
+**Tests** (host gate map row "#503 FACT-R"; the store-driven tests read only the fixture's clock and
+test 14 the host's manual clock; tests 9 and 15 use the S168-4 gate's host, which runs on the wall
+clock, and read it through the crate's `unix_ms_now`, as that gate does).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_factr::factr_a_a_full_instance_takes_a_new_key_in_the_room_of_its_longest_expired_fact` (1) | at 224 with facts expired one, two and three days after the base, ten days after it a new key reclaims the first; warning, invalidation (trigger the warning, time the expiry) and publication in that order; still 224; gone from the store and the snapshot |
+| `…::factr_b_three_new_keys_take_three_and_too_few_candidates_write_nothing` (2) | three new keys reclaim three by expiry under one warning; two candidates for three keys: `fact_store_capacity_exceeded`, not fatal, head unchanged, no warning, no invalidation |
+| `…::factr_c_the_margin_and_the_exclusions_keep_their_facts_and_ties_go_by_sequence_then_key` (3) | the four excluded keys, the observation's own key, a fact expired six days before and facts without expiry stay; among equal expiries the earlier publication, then the smaller key |
+| `…::factr_d_a_start_a_replay_and_the_history_rebuild_the_live_store_after_reclamations` (4) | after two reclamations the tagged load and the replay equal the live store (LN-2's view), each reclaimed key's `latest_observed` its expiry; the history at every position from the first warning equals the live store there |
+| `…::factr_e_a_made_up_reclamation_is_refused_by_the_state_the_store_the_history_and_the_replay` (5) | another trigger type, a fact expired less than the margin before the trigger, a time other than the expiry, a fact without expiry: the State projection refuses each, fatal, nothing appended; the three a record shows are refused by the live reducer, the history and the replay too |
+| `…::factr_f_a_reading_captured_before_the_reclamation_is_a_new_key_after_it` (6) | the reclaimed snapshot `fact_source_snapshot_invalidated`; a reading at the expiry `fact_observation_not_newer`; one observed after the expiry and before the reclamation taken as a new key |
+| `…::factr_g_a_full_game_reclaims_an_expired_offset_a_request_published` (7) | a game at 16 reclaims a priority offset published under the operator's origin; the warning names the game; the offset's snapshot is refused afterwards |
+| `…::factr_h_a_store_past_its_bound_reclaims_back_to_it_or_is_refused` (8) | 240 facts of one instance from before 0.12.76: with 20 expired long ago a new key reclaims 17; with 10, refused and nothing written |
+| `…::factr_i_a_runs_new_list_on_a_full_instance_takes_the_room_of_expired_facts` (9) | on the S168-4 host, a run's new list on an instance full of facts expired eight days before completes and is published; one warning under the system links (`instance_id`, `count` 1, `limit_count` 224), one invalidation naming it, the first fill at its expiry |
+| `…::factr_j_a_fact_that_lists_runtime_failed_is_dropped_by_the_warning_and_counted_as_freed` (10) | two new keys reclaim one fact: the listing fact is dropped at the warning's time by the ordinary rule, the reclaimed one at its expiry; the plan frees two |
+| `…::factr_k_the_declaration_and_the_ledger_row_say_3_to_11` (11) | `component-interfaces.json` and the `ledger` row 11 say [3, 11] |
+| `…::factr_l_a_plan_that_no_longer_holds_at_its_warnings_time_writes_nothing` (12, fix round 1) | two new keys plan two facts at the publication's time; their warning drafted where the second lies less than the margin before it: `fact_store_capacity_exceeded`, not fatal, head unchanged, no warning, no invalidation; with the warning at the next millisecond the same plan is written |
+| `…::factr_m_a_full_server_takes_a_new_key_in_the_room_of_its_longest_expired_fact` (13, fix round 1) | a server at 16 reclaims the fact expired first; the warning names the server and `limit_count` 16; the invalidation the fact at its expiry |
+| `…::factr_n_a_key_the_active_catalog_reads_is_kept_until_a_catalog_reads_it_no_more` (14, fix round 1) | a host with the fixture catalog whose feedback stop reads one key: a new key reclaims the other fact, not the one expired first; with only the read one left, refused as before, nothing written; after the next version, which reads it no more, it is reclaimed |
+| `…::factr_o_a_runs_new_list_on_a_full_instance_without_candidates_is_refused_and_writes_nothing` (15, fix round 1) | on the S168-4 host, an instance full of facts expired one day before: the run's new list is refused (`read_members:fact_store_capacity_exceeded`), not published, no reclamation's warning, the instance's facts unchanged |
+
+Adapted, the requirement moving the shipped `ledger` range to [3, 11]: actinglab-architecture's
+`component_interfaces` (`V0120`). No golden re-recorded; no test leaves the gate maps; every other
+existing test (the factcap, S168-4, S168-LK, FL-2 and LN-2 gates, the store's unit tests, the
+adjustment gate) is unchanged: their fills have no expiry, so no plan is made. Fix round 1 changes
+no test of the gate; the fixture's copy of the host's sequence (`Store::publish`, `reclaim`) follows
+the host's new order (the warning drafted, the plan made again at its time, then written), as a host
+without an active catalog.
+
+**What is not changed.** The three bounds, the share warning and the 256 per scope of the commit and
+the history; every record shape and type, the tag index, the tagged load and `latest_observed`'s
+rule; every other refusal; a store with nothing to reclaim, byte for byte; the protocol's limits,
+every read and what clients are shown; `runtime-client`, `actingd-config` and `package`.
+`runtime-outcomes` stays 1 with one code added.
+
+**At deploy.** Nothing to configure. One way: no going back below this build; once it has run, the
+installation does not go back to an earlier one, whether or not a reclamation was written. No record
+shape changed, so a console that declares the earlier range ([3, 10]) still decodes every record,
+and no step of an installation's update or rollback checks the console's range; the console's
+declaration of 11 follows in its own release (the interface table's rule for the combination stays
+as the table states it). On production a scope at its bound with facts expired for more than seven
+days, that no condition of the active catalog reads, writes one warning
+`fact_store_expired_facts_reclaimed` per publication that needs the room; the same scope recurring
+means it is too small for what its packages write.
+
+**Rollback.** Refused below this build by the `ledger` edge's one-way rule (Rp.max in R\*): builds
+0.12.76 to 0.12.102 would load the same store at their start but stop at the first history read that
+crosses a reclamation. In the release notes' language: 实例事实库的一个范围满额时，新键可以占用其中过期超过七天的事实的位置，每回收一条都单独记一条失效记录（告警码 `fact_store_expired_facts_reclaimed`）；没有到期时间、刚过期不满七天、或当前生效目录里有条件在读的事实照旧不动，照旧拒绝。账本修订升到 11、单向：装上后不能退回 0.12.103 以前；记录形状没有变，控制台不必先换。
+
+### 1.557 Slice #455 RR4b-1 (0.12.104): the goal page's records with their positions, a table's options and one ladder's positions, read in pages by a new read, `GoalPageView`, so that a person can choose in the console whom to raise and how far; `GoalView` stays byte for byte (board #455; the rulings 1 to 8 and Addendum 1 are the coordinator's of 11-29, after a read-only study of the goal page's records and of reads in pages and the console side's statement of what its page needs; coordinator work order `rd-1123/brief-455-rr4b1.md`; on main `924f4034`, merged with main `698dc268`, the release of 0.12.100, which brought §1.545; §1.547 to §1.556 are slices of the same days under review, and whichever merges later keeps the sections in order)
+
+It ships in 0.12.104 and takes `runtime-client` 15, written over row 14 of §1.493.
+[runtime-interface.md](runtime-interface.md) ("Goal request kinds": the kind's row and the new
+"The goal page in pages"), [standard-pack-goals.md](standard-pack-goals.md) ("The records entry",
+"What a client sees"), [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("Who reads
+it"), [component-interfaces.md](component-interfaces.md) (the `runtime-client` row 15),
+[lab-two-entries.md](lab-two-entries.md) (§3, the UI list) and `lab-operations.json` (`ui_kinds`,
+`not_exposed`) are the contract.
+
+**The problem.** A root may declare goal tables and a `records` entry, and a person's records ("this
+key, to this position") push what the scheduler farms (§1.538). But the goal page's view lists no
+records entry (RR1's ruling 7), and the Lab's `goals get` of one answers `not_recognised`: a console
+can neither show the stored records nor offer a key and a position to choose; only an agent can, by
+writing the whole array. What a person needs to see (each lane's current and target position, the
+position a prerequisite raises it to, whether the key is held, why a record does not apply) is
+computed by each evaluation's walk of the records and then dropped.
+
+**Why a new read and a frozen view.** Every type of `GoalView`'s answer refuses unknown members, and
+a connection negotiates no revision: the Runtime cannot tell which revision a client reads. So a
+member added to `GoalView` would make every installed console of revision 14 refuse the first page
+that carried it. The only way that keeps the installed console working is to leave every answer it
+asks for exactly as it is and to put everything new into the answer of a request it never sends:
+one new read kind, in parts, in pages.
+
+**The rulings, as built.**
+- *1, `GoalView` frozen* (`crates/runtime-host/src/host/goals.rs`). Its request and its answer are
+  byte for byte those of revision 14, records entries skipped as before. The one change in its file
+  is that three of its judgements are now functions `GoalPageView` calls too, unchanged in what
+  they decide: the instance's game (`page_game`), the remedy table the next evaluation keeps
+  (`kept_remedy_table`) and whether the page is in memory (`page_sources`); `page_version`,
+  `unchecked_state` and `goal_declaration` are shared as they are.
+- *2, one new read kind* (`RuntimeOperation::GoalPageView {instance_alias, part, cursor?, limit?}`,
+  `RuntimeResult::GoalPageViewed {page}`; `crates/actingcommand-contract/src/runtime/goals.rs`;
+  `crates/runtime-host/src/host/goal_page_view.rs`; `crates/runtime-host/src/goal_page.rs`). Block
+  general, class read, records nothing, no G14 copy; on the `ui` list (`ui_allows`, `ui_kinds` with
+  `console_today: false`); in `not_exposed` (`unsent`): no Lab operation sends it in this slice.
+  Success `request_goal_page_view_completed`.
+- *3, three parts.* `records`, `options` of one entry, `positions` of one ladder (shapes below).
+- *4, one walk* (`crates/runtime-host/src/goal_needs.rs`). The walk of the needs' computation is
+  split: `walk_records` judges each stored record in its order (the edit's word, or `key_repeated`
+  for a key an earlier record of the same table names), walks an applied one (`Walk::need`) and
+  answers, besides the notes and what the walked records need, each record's judgement, its key's
+  held state and each lane's own target, the index the walk takes it to and its current position or
+  the note of why not. `instance_needs` calls it and does what it did after the walk, so its pools,
+  notes, freshness and identity are what they were (the identity is a function of those, of the
+  tables' sha256 and of the records' time). A key's held state and current positions for `options`
+  are read by the walk's own `held` and `read_current` (`read_key`). The read takes the gates the
+  evaluation computes the needs under, in the host's order (policy outcome gate, policy, fact write
+  gate, the fact store), the authoritative projection, the handed runs at its position and the
+  evaluator's own `NeedsProjection`, so freshness is judged as the evaluation judges it. A list's
+  rows are looked up by an index built once per read and per key column (`ProgressLists::key_row`),
+  which keeps the first row of each key as the walk of the rows did; the needs read through it too.
+- *5, the cursor refuses instead of mixing two states, one code for each source.* A cursor of
+  `records` whose records version moved is `goal_page_view_records_moved`; a cursor of any part
+  whose tables' sha256 or records entries' digest moved is `goal_page_view_declaration_moved`;
+  each Denied with `current_version`, the page's version now.
+- *6, codes.* `request_goal_page_view_completed` and `invalid_goal_page_view` (contract);
+  `goal_page_view_refused`, `goal_page_view_records_moved`, `goal_page_view_declaration_moved`
+  (host, `GoalPageCode`); each catalogue entry says the result (Denied, nothing answered, nothing
+  recorded) and the operation (read again from the first page; or send a cursor of the same part).
+- *7, unchanged*: `GoalView`, `EditGoal` and every other request and answer a client of 14 sends or
+  reads; the needs' computation's output; every record; `ledger`, `package`, `actingd-config` and
+  `runtime-outcomes`. Nothing is stored.
+- *8, not this slice*: the Lab's `goals get` of a records entry, the pools' needs and lifted tasks,
+  the line's mark, facts in pages and a guard for oversize reads, a search or a held-only filter of
+  keys, amounts of what a record lacks.
+- *Addendum 1* (the console side's reading of the shapes): the cursor of `options` and `positions`
+  carries no records version (`GoalPageCursor::records_version` is written by `records` alone, and
+  the request's check refuses a cursor that has it on another part or lacks it on `records`): those
+  parts say nothing of the stored records, so an edit of them between two of their pages is
+  answered with the next page; only the declaration's code refuses their cursor.
+
+**The shapes.** `part`: `{part: records}` (default `limit` 512), `{part: options, entry}` (64),
+`{part: positions, entry, ladder}` (512), `ladder` `{of: class, class, column}` or `{of: key, key,
+column, sub?}`. The page: `instance_alias`, `game_id`, `version`, `declaration`, `tables {state,
+sha256?, standard_pack_problem?, json_pointer?}`, `read_at_unix_ms`, `fresh_until_unix_ms?`,
+`records_state?`, `ladder? {source, class?, positions}`, `rows`, `rows_total`, `cut?`
+(`count`|`bytes`), `next?`. Rows: `entry {name, declared, after_entry?, entry?, applies, problem?,
+records_total}`; `record {entry, key, key_name?, to, set, applied, problem?, held?, lanes,
+texts_left_out?}`, a lane `{column, sub?, column_name?, sub_name?, source, target?, raised_to?,
+current?, unknown? {code, fact_key?, reading?, unknown_reason?}, conditions?}`, a position `{index,
+position, said?}`; `column {column, name?, per, subs?, requires}`; `class {class, name?}`; `key
+{key, name?, class, held, lanes [{column, sub?, source, positions, current?, unknown?}]}`; `position
+{index, position, said?}`. The cursor: `{records_version?, tables_sha256?, entries_sha256,
+part_sha256, after}`; `part_sha256` digests the part's members length-prefixed, `entries_sha256`
+the root's records entries (name, table, `max_records`) in file order, each `sha256:` and 64
+lowercase hex digits. A text is an object of locale to string in the pack's order; a position is
+said only by `say_goal_position`.
+
+**Sizes and pages.** A page holds the rows after the cursor, at most `limit`, cut before the row that
+would make it pass 786,432 bytes, at least one; a row is at most 262,144 bytes. Worst cases at the
+contract's bounds (serialized JSON, by hand):
+
+| Row | Worst | Realistic |
+|---|---|---|
+| a text (16 locales of 35 bytes, strings of 128 bytes, every byte escaped) | about 4.8 KiB | about 0.1 KiB |
+| a said position (16 locales) | about 12 KiB | about 0.1 KiB |
+| `column` (named, 8 subs named, 4 requirements each said twice) | about 140 KiB | about 1 KiB |
+| `class` | about 5 KiB | 0.1 KiB |
+| `key` (64 lanes) | about 32 KiB | about 0.3 KiB |
+| `position` | about 12.2 KiB | about 0.1 KiB |
+| `entry` (help of 16 locales) | about 40 KiB | about 0.5 KiB |
+| `record` with its texts / without | can pass 2 MiB / about 50 KiB | about 3 KiB |
+
+A record row that would pass the row bound is built again without its texts (`texts_left_out`); no
+other row passes it within the contract's bounds. At the page bound a page holds at least 24 key rows
+or 62 position rows in the worst case, and the limit in practice.
+
+**Decided here.** A cursor past the part's rows is `invalid_goal_page_view` (the host's own check of
+the contract code; the request's form is the contract's). `next` and `cut` are counted at their
+largest when a page is measured. A record whose entry the root does not declare has no lanes and no
+held state; one whose table the root does not apply has none either. A key's current positions in
+`options` are read only for a key the `held_by` list holds, as the walk reads them. A page not in
+memory answers `GoalView`'s word and no row to a request without a cursor (one with a cursor: fix
+round 1, below); `tables` is then what the workbench holds of the root, `not_read` without it. The part's digest is not the JSON of the part, so a
+client's own spelling of the request cannot move it. A stored row the reader took that gives back no
+setter or target (none does) is `goal_records_record_invalid`, and a page that does not serialize
+`runtime_frame_encode_failed`, each Denied for that request alone.
+
+**Tests** (host gate map row "#455 RR4b-1", contract gate map row "#455 RR4b-1"; no clock read in a
+gate file). What reading could not verify is said beside each.
+
+| Test | What it shows |
+|---|---|
+| runtime-host `gate_455_rr4b1::rr4b1_p1_the_needs_and_the_page_take_their_judgement_from_one_walk` | the needs' pools, notes and freshness are the walk's; each record's judgement, held state and lanes (a target raised by a prerequisite, the condition); the records part's rows in order, lanes said in two languages, nothing lacked (not run: the fixture files' reading) |
+| `…::rr4b1_p2_a_lane_not_known_says_why_with_the_walks_own_code` | a key not held or not known has its targets alone; each unknown lane says the walk's note code with its list, reading and `unknown_reason` |
+| `…::rr4b1_p3_a_record_row_past_its_cap_is_answered_without_its_texts` | 57 lanes with 16-language texts are answered without them, under 256 KiB (not run: the sizes are estimated by hand) |
+| `…::rr4b1_p4_a_page_is_cut_by_bytes_and_by_count_and_next_is_there_exactly_when_rows_remain` | 512 said positions cut by bytes under 768 KiB, the rest on the next page, a limit cuts by count, a cursor past the rows is invalid |
+| `…::rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word` | records cursor: moved records, moved tables, moved entries each its word; options and positions cursors take a records edit (Addendum 1) and refuse a moved declaration; the request's form refusals; fix round 1 (F6): an options cursor sent to positions, and to the options of another entry on the same table, refused by the part's digest alone |
+| `…::rr4b1_p6_options_and_positions_and_what_the_root_does_not_have` | the options' rows (requirements said, keys held, not held, a lane not known), positions of a class ladder and of a key's sub, each refusal at its pointer |
+| `…::rr4b1_p7_an_options_page_cut_by_bytes_stays_under_the_bound_with_its_freshness` | fix round 1 (F3): 600 keys named in 16 languages, `options` with a limit of 512 cut by bytes under 768 KiB with the lists' freshness, the next row would not have fit, the next page holds the rest, together in the table's order (not run: the row sizes are estimated by hand) |
+| `…::rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_goal_page` | in composer mode, the page's version and declaration are `GoalView`'s, the record's lanes from a published list (fix round 1, F4: in the table's order, `grade`, `skill`, `mastery` sub `1`), options and positions in pages (not run: the list's freshness through the evaluator's projection) |
+| `…::rr4b1_h2_a_records_edit_moves_the_records_cursor_alone_and_a_new_tables_file_moves_every_cursor` | ruling 5 and Addendum 1 on the host, with `current_version` (not run: the workbench's re-read of a shorter file at the next check) |
+| `…::rr4b1_h3_a_page_not_in_memory_an_undeclared_name_and_what_the_root_does_not_have` | `not_checked_yet` and no row before the first check; `goal_page_view_refused` at `/part/entry`; a cursor past the rows; undeclared records listed `declared: false`; `instance_unknown` |
+| `…::rr4b1_h4_a_cursor_sent_to_a_page_not_in_memory_is_refused_with_its_own_code` | fix round 1 (F1): in composer mode, after a first page of `options`, another procedure manifest in place takes the page out of memory; its cursor is `goal_page_view_declaration_absent` with `not_checked_yet` and `current_version`, and a first page answers `not_checked_yet`, no row and the same tables (not run: that nothing between the two requests builds the remedy table again) |
+| runtime-client `gate_455_rr4b1::rr4b1_c1_goal_page_view_sends_its_members_as_given_and_answers_the_page` | the request member by member, `cursor` and `limit` absent when `None`; the page answered |
+| `…::rr4b1_c2_an_older_runtime_is_unsupported_and_another_instances_page_unexpected` | a Runtime that drops the kind gives `runtime_operation_unsupported`; another instance's page is unexpected |
+
+The gates that pin today's page and must stay green unchanged (they prove the page of 14 byte for
+byte): `gate_455_rr1`, `gate_455_rr2`, the `gate_463_v3` host tests, `gate_455_tk1`, `gate_500_sv2`,
+`gate_503_goal1`, `gate_455_p2`, the MCP `serve_calls` goal rows, and every `gate_455_rr3*` and
+`gate_455_rr4a` test (the walk split). Adapted, the requirement adding a kind and raising the range:
+`gate_434_lab6s3`'s UI list (34 kinds); the rescue module's `gate_429_r0b_pairing` and
+`gate_480_pg2e`, their first tests renamed for [12, 15] (retirements in `ci/retired-gates.toml`);
+actinglab-architecture's `component_interfaces` ([12, 15]) and `workspace_guards`'
+`RUNTIME_OPEN_ORIGIN_OPERATIONS` (the new kind takes no origin gate). No golden is re-recorded.
+
+**What is not changed.** `GoalView` and `EditGoal`, every earlier request and answer, the needs'
+computation and its identity, every record, the ledger, the configuration and every setting.
+
+**At deploy.** Nothing to configure. The installed console keeps working: it sends only revision-14
+requests, whose answers are unchanged, and shows no records until a console that asks the new read
+is installed. The installer's edges pass both ways ([12, 14] and [12, 15] meet).
+
+**Rollback.** Nothing is stored, so nothing is undone. A console that asks the new read of an older
+Runtime has its connection dropped (that Runtime cannot decode the kind); its client reports
+`runtime_operation_unsupported`, and the console shows the page of 14. In the release notes'
+language: 新增：只读的分页读取 `GoalPageView`（`runtime-client` 升到 15）：目标页的记录条目连同每条记录每条梯的目标、被前置拉到的位置、当前位置或读不到的原因、键是否持有（`records`），一张表的列、类别和键及其梯的大小和当前位置（`options`），一条梯的全部位置（`positions`），名字和位置的念法都照包里写的；每页最多 512 行、768 KiB，游标在记录或表变了时拒绝并说明是哪个变了；页不在内存时带游标的请求也拒绝（`goal_page_view_declaration_absent`），不会被当成最后一页。`GoalView` 一字节不变，已装的界面照常可用。
+
+**Fix round 1** (the independent review of pull request #1944, findings F1 to F10; the
+coordinator's rulings of 11-29). Acted on: *F1*, a page not in memory looked like a part's last
+page while its `tables` kept an unmoved sha256, so a console that keeps options by that digest could
+keep an empty or cut list: the contract now says such a page (`not_checked_yet`, `root_failing`,
+`no_schedule`) holds nothing of its part, and a request with a cursor that meets one is refused with
+a code of its own, `goal_page_view_declaration_absent` (`goal_problem` the state's word,
+`current_version` as the two moved codes carry it, under the locks the read takes already), not the
+declaration's code, because the digest did not move and the operation differs (keep what was kept,
+read again from the first page once it is in memory); a request without a cursor is answered as
+before, and `GoalView` is not touched. *F3*, an `options` page is measured with
+`fresh_until_unix_ms` at its largest, since its lists are read as the page's keys are, and given its
+value after. *F4*, a record row's lanes come in the table's order (`key_lanes`), a raised lane in its
+column's place, in the row's construction alone: the walk, its map and the needs are byte for byte
+as before; h1, which pinned the name order, is adapted. *F6*, the two refusals only the part's
+digest makes are asserted (an `options` cursor sent to `positions`, and to `options` of another
+entry on the same table). *F9*, the contract code's comment names the cursor past the part's rows.
+Read (the review could not tell): under the console's `codes` detail, `goal_problem` (a vocabulary
+word) and `current_version` (kept at a denied receipt's top since 0.12.36) reach the console and
+`json_pointer` (a pointer) does not; keeping it would change what `EditGoal`'s refusals carry to a
+console of 14, so nothing is registered and the contract says the console asks `detail: full` for
+the pointer. Left for later slices, changed by nothing here: *F2* (each page holds the four locks
+while it builds and measures its rows, and `positions` pays a projection it does not need; a known
+limit in the contract, with "never poll pages in a loop"), *F5* (a stored row's setter and target
+parsed a second time), *F7* (a golden of the revision-14 form of `GoalView`; a needs fixture with
+one key's row twice in a list), *F8* (titles, help and other entries are outside the cursor),
+*F10* (a sub given on an unknown column refused at `/part/ladder/sub`; with a small `limit`,
+`records` costs grow with the square of its rows; `max_records` moves the entries' digest for
+`options` and `positions` too). Tests p7 and h4 are new, p5 gains the two asserts.
+
+### 1.558 Slice #455 MAKE (0.12.104): the part of an item with a recipe that the items in hand can make now is asked of the rules that make it, and of them alone (board #455; the rulings are the coordinator's of 11-29, on its read-only study of the same day, which named the slice RR3e; on main `75e3c7e9`, which holds §1.547 to §1.551, merged with main `cec07ec4`, which holds §1.552 to §1.554 and §1.556, slices of the same days, before this one; §1.555 and §1.557 are other slices of the same days)
+
+This section takes 1.558. It ships in 0.12.104.
+[standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("Items", the bullet `recipe`;
+"What is computed", the new bullet "The made part", "A lower bound", "The set", the example),
+[resource-targets.md](resource-targets.md) ("Needs computed from the records", the bullets "A pool
+without one" and "What the run says"), [scheduling/README.md](scheduling/README.md) ("Needs
+computed from the records", the bullets "Goals raise producers" and "Known limits") and
+[standard-pack-schedule.md](standard-pack-schedule.md) (the new paragraph "A rule that makes an
+item with a recipe") are the contract; the policy fragment's description of `goal_records_need`
+says the made part (the index regenerated; it is unchanged). No `package`, `ledger`,
+`runtime-client` or `actingd-config` revision moves, no declared interface range, no configuration
+key, no code or word, no record, event, wire member or catalog member, and nothing is stored.
+
+**The problem** (the study's claims, confirmed by reading). Since §1.538 the needs of the recorded
+characters are summed by item and taken apart once: an item with a recipe is covered by its
+holding up to its need (`Covered`), and what is not covered is added to its recipe's items' needs.
+The item's own pool gains no goal. So the rules that bring the recipe's items are lifted, and no
+rule that makes the item is ever asked for it: a rule that turns the items into the item, or one
+that exchanges a currency for it, is neither lifted by the need nor handed a gap, whether the items
+are in hand or not. Nothing compared an item's holding with its recipe. The item was made only by a
+rule that would run anyway (a base valuation on its pool, a rule not judged, a chain's follower),
+or when a person stored a goal on its pool, which worked as a pump by accident: its gap stays the
+stored amount while the need is open, its need tier is always 0, and an instance holds sixteen
+stored goals at most. When the item's holding is not known (`Unsplit`) nothing below it is taken
+apart, and nothing is asked at all.
+
+**Three forms compared.** In each, the recipe's items keep the needs the taking apart gives them.
+On the study's numbers (an item needed 10, held 4, made 1 from 4 of a lower item and 300 of a
+cost item, 8 and 1000 of those in hand):
+- *A*, the whole part not covered on the item's pool (6), its goal covering every producer: the set
+  asks 6 of the item and 16 and 800 of its items at once, so the same units are asked twice; a
+  maker is told 6 although its items pay for 2, and is sent again and again on one reading; and the
+  rules that buy the item ready-made are lifted, among them those that pay in a currency whose
+  spending costs nothing while no line presses it, for the whole part, with or without the items.
+- *B*, the made part (2) on the item's pool, its goal covering every producer: nothing is asked
+  twice and no maker is told more than it can do, but a buyer is lifted while the items for those
+  makings are in hand, and buys what could have been made.
+- *C*, the made part, its computed goal covering only the item's makers: the maker is lifted
+  exactly when its items pay and told no more than they pay for; the items' gaps ask exactly what
+  cannot be made yet; buyers and direct farms are as before; an instance whose catalogue has no
+  maker decides as before; no existing test moves. **This slice builds C.**
+
+**The rulings, as built** (the study's R1 to R7).
+- *1, the made part* (`crates/runtime-host/src/goal_needs.rs`, `take_apart`, the new
+  `makings_in_hand` and `TakenApart`; `instance_needs`' last lines give the set the new member).
+  For an item with a recipe whose holding `h` is known and below its need `n`, the makings stay
+  `m = ⌈(n − h)/makes⌉`, added to its items as before. The holdings of the recipe's `from` and `cost`
+  items are read through the same `NeedsSources::holding` as the item's own; `k = min(m, ⌊held_i /
+  per_i⌋ over every item)`, an item whose holding is not `Known` (not known, or unread under
+  §1.543 and §1.548) or that names no pool giving `k = 0`. Holdings are taken whole. The made part
+  is `made = min(n − h, k·makes)`. Above 0 the pool's need is `h + made`, of the new kind
+  `Making { made }`, the set's freshness is lowered by each of those holdings' expiries, and the
+  set carries the pools of the recipe's `from` items for the pool. At 0 the pool is `Covered` with
+  need `h`, byte for byte as before, and no item's holding bounds the freshness. `Unsplit`, `Lands`
+  and an item without a pool are unchanged.
+- *2, the set* (`crates/policy/src/record_needs.rs`). `PoolNeedKind` gains `Making { made: u64 }`
+  and stays `Copy`. The identity writes it as the word `making` and the made part; a set without
+  such a pool hashes as before and the identity's version word does not move. The pools of the
+  recipe's `from` items are given by a builder after `new` (`with_making_from`, `new` keeping its
+  five arguments) and read by `making_from`; they follow from the tables, whose sha256 the identity
+  holds, and are not hashed again. Before the slice the kind had two readers, the identity writer
+  and `landing_targets`; the slice adds its own: `need_reason`, `StackedNeeds::making_from` and
+  (fix round 1) `stored_part`.
+- *3, stacking* (`crates/policy/src/resource_targets.rs`, `landing_targets`; fix round 1:
+  `stack_record_needs` stacks `stored_part`). A `Making` pool without a stored goal gains the
+  computed goal `goal_records` of its need, with the pool's own step and importance, as a `Lands`
+  pool does. Fix round 1 (its ruling 2, which replaces the first build's sentence here): a stored
+  goal on it stacks the part the holding covers alone, `stock + h`, as on a `Covered` pool, and its
+  tiers and `goal_records_need` read that part (`StackedNeeds::stacked_need`): its gap is `T`, its
+  need tier 0, its stock tier `T`, exactly as before the slice. `Covered` and `Unsplit` gain none,
+  as before.
+- *4, who the made part is asked of* (`resolve_v2`, `StackedNeeds::making_from`, the new
+  `pool_makers`). The computed goal of a `Making` pool covers only the pool's makers: the catalogue's
+  tasks that can run on the instance (fix round 1: its scope covers it and no instance override
+  disables it, `task_on_instance`, as the lapse of a target without `tasks` reads its producers),
+  that produce the pool (one run's production at least 1) and whose `consumes` names a pool one of
+  the set's `from` pools resolves to on the instance (`target_pool`). The tasks' declarations,
+  scopes and overrides decide it, never a run state; a task an override disables has no candidate,
+  so which makers are disabled moves no pool weight and no other task's term (SS-1's one-way
+  guard). Fix round 1: with no maker the host makes nothing (below); the evaluation still passes
+  such a goal over before anything is resolved, a second guard: no `resource_targets` item, no
+  `goal_records_need`, no `resource_target_tasks_unevaluable` lapse, no gap. Nor does it land on a
+  pool that writes `spend_line` (`line_pool`). A stored goal keeps its own coverage, the person's.
+- *5, what a maker is told*: the members that tell any goal's gap (`spend_values_with`,
+  `goal_runs`), unchanged: `gaps_remaining` on its entry for the pool is the made part, the need
+  tier on a pool that writes `goal_tiers`, and the goal term of `run_cap` divides it. §1.543's and
+  §1.548's unread rule reads it as any goal's: once the production told under it since the pool's
+  reading reaches it, the item's pool is unread, its holding `Unread` to the needs, and the item
+  `Unsplit` with no goal, until it is read again.
+- *6, the view*: `goal_records_need` on a `Making` pool ends with ` made=<made>`, there only; every
+  other text is unchanged and no code is new.
+- *7, the contracts* above, and this section.
+
+**Why the made part and not the whole part not covered** (ruling 2). The part not covered on the
+item's pool would ask the same units of the makers and of the producers of the recipe's items at
+once; it would tell a maker more makings than its items in hand pay for, so that it is sent again
+and again on one reading; and it would lift the rules that buy the item ready-made, among them
+those that pay in a currency whose spending costs nothing while no line presses it. The made part
+asks a maker exactly when it can work and for no more than it can do, and the items' gaps are
+exactly what cannot be made yet.
+
+**The known limits** (ruling 3, written down). A rule that buys or farms the item ready-made is not
+lifted by the need (the study's F3): it stays as before, a later slice's once the line slices price
+such currencies. Holdings are taken whole, not shared out among several items that use one of them:
+two makers that consume one item are then ordered by their benefit, and the lines' count of the
+consumption a reading does not show yet holds the second; the totals asked stay bounded, since the
+lower item's need already counts every use. A making run leaves the items it consumed read (unless
+it was handed a `run_cap`, §1.509): this is not needed for the needs' correctness in this form,
+since closing the told gap leaves the item's pool unread and that removes its demands on its items,
+and §1.548 bounds the sends on one reading.
+
+**What a resource author writes** (ruling 4; [standard-pack-schedule.md](standard-pack-schedule.md),
+"A rule that makes an item with a recipe"; [standard-pack-goal-tables.md](standard-pack-goal-tables.md),
+the bullet `recipe`). A making rule declares the item's pool among its `produces` and the pools of
+the recipe's `from` items among its `consumes`; one that declares no such item is not seen as a
+maker. Whether one run makes one batch (its `produces` the recipe's `makes`; the told gap closes
+over the dispatches by §1.548's sum, or within one run under a `run_cap`) or as many as it is told
+(fix round 1: it reads the gap it is told for that entry, `gap_remaining.<j>`, and makes the lesser
+of it and the turns `run_cap` allows; without a `run_cap` a package that caps its repeats by it
+ends at its entry) is the package's choice (the study's F2). Fix round 1: for the made part to push
+anything the item's pool writes a step and an importance (a valuation with its `gap`, or
+`target_defaults`), and a maker judged without a fixed value needs a valuation on every pool it
+touches; after a making run the resource side reads the item again.
+
+**Not this slice** (ruling 5): the whole part not covered on the item's pool; a push on buyers or
+direct farms of the item; sharing an item's holding among the items that use it; leaving a
+gap-told run's consumed pools unread (an extension of §1.509); reading `k` against the lines'
+reading less what it does not show yet; a declaration in `goal-tables.json` of who makes an item;
+any push on the rule that spends the item.
+
+**A worked example** (the tests' numbers). An item needed 10, held 4, made 1 at a time from 4 of a
+lower item and 300 of a cost item: 6 makings, 24 and 1800 of those needed. With 8 and 1000 in hand
+`k = min(6, 2, 3) = 2`, the item's pool asks 6 (`Making { made: 2 }`) and its items still 24 and
+1800, whose gaps (16 and 800) are the four makings that cannot be made yet. The computed goal of 6
+covers the maker alone: with no stored goal, the need tier 2 (`Γ` 2000 at the step 1 and the
+importance 1000), a maker of the value 10 000 consuming 4 of the lower item (1000 a unit) is `B`
+8000 where it was 6000, told the gap 2; the buyer and the direct farm decide byte for byte as with
+`Covered` 4. With 3 of the lower item in hand `k = 0`, and the set is byte for byte §1.538's. Made 3
+at a time with 6 held: `min(4, 2·3) = 4`. Fix round 1: a stored goal of 50 on the pool asks 54, the
+gap 50, the need tier 0 and the stock tier 50, with a maker or without and with `Making` 6 or
+`Covered` 4 alike (today's pump, pinned), and keeps its own coverage; the first build asked 56, the
+gap 52 and the need tier 2 there. Without a maker on the instance the item's pool is `Covered` 4
+whatever is in hand.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The made part | `crates/runtime-host/src/goal_needs.rs` (`take_apart`, `makings_in_hand`, `TakenApart`; `instance_needs` calls `with_making_from`; the module doc's "Taking apart"; fix round 1: `NeedsSources::has_maker`) |
+| Whether the instance has a maker (fix round 1) | `crates/policy/src/record_needs.rs` (`NeedsProjection::has_maker`); `crates/runtime-host/src/host/record_needs.rs` (`HostSources` forwards it) |
+| The kind, the identity, the set's `from` pools, the view's ` made=` | `crates/policy/src/record_needs.rs` (`PoolNeedKind::Making`, `InstanceRecordNeeds::new`'s identity, `with_making_from`, `making_from`, `need_reason`) |
+| The computed goal and its coverage | `crates/policy/src/resource_targets.rs` (`landing_targets`, `StackedNeeds::making_from`, `resolve_v2`, `pool_makers`; fix round 1: `stored_part`, `StackedNeeds::stacked_need`, `stack_record_needs`) |
+| The catalogue text | the policy fragment's description of `goal_records_need` |
+
+**Decided here.** The computed goal of a `Making` pool is known by its id (`goal_records`), its
+`tasks` none and no stock stacked on its pool, the three things only the stacking's own target has
+(a stored target on the pool always stacks a stock there); the coverage is then written into the
+target's resolved named tasks, so the term, the `resource_targets` item, `goal_records_need`, the gap
+a dispatch is told and the goal term of `run_cap` all read one set. Only the recipe's `from` items
+name a maker, as ruling 1 says; its `cost` items bound `k` but make no rule a maker (a rule that
+consumes only the currency of the cost is a buyer). The pools of the `from` items are those the
+root's files write, resolved for the instance by the one function a target's pool is resolved by.
+`take_apart` gives its result in a small struct (`TakenApart`) rather than a pair. An amount of 0
+in a recipe cannot be read (the tables' reader refuses it), and is taken as 1 there as `makes` is.
+
+**Tests** (incident `#455 MAKE`: `crates/policy/src/tests/gate_455_make.rs`, policy gate map, and
+`crates/runtime-host/src/tests/gate_455_make.rs`, host gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `actingcommand-runtime-host` `gate_455_make::make_m1_the_items_in_hand_make_part_of_what_is_not_covered` (study m1) | 8 and 1000 in hand: the item's pool 6 `Making { made: 2 }`, made from the lower item's pool; 24 and 1800 `Lands`; the freshness the earliest of the roster's and the two inputs', whichever ends first |
+| `…::make_m2_items_in_hand_that_pay_for_no_making_leave_the_set_as_before` (m2) | 3 of the lower item, or 200 of the cost: the set equal to §1.538's, identity included, no input bounding the freshness |
+| `…::make_m3_an_input_not_known_or_unread_makes_nothing` (m3) | the cost not known, the cost unread, the lower item unread: §1.538's set, the roster's freshness |
+| `…::make_m4_the_made_part_is_bounded_by_the_part_not_covered_and_by_the_inputs` (m4) | made 3 at a time, 4 not covered: 4 with two makings paid, 3 with one |
+| `…::make_m5_an_input_without_a_pool_makes_nothing` (m5) | an input item of no pool: `Covered` 4 and its `goal_records_item_unweighed` as before |
+| `…::make_m6_each_level_makes_what_its_items_in_hand_pay_for` (m6) | two levels: without the middle item in hand the top `Covered` and the middle `Making { made: 3 }`; with it both `Making { made: 2 }` |
+| `…::make_m7_the_identity_hashes_the_kind_and_the_made_part` (m7) | a `Making` set hashes apart from §1.538's; `Making` 2, `Making` 3, `Covered` and `Lands` four identities; the `from` pools not hashed |
+| `…::make_m8_without_a_maker_nothing_is_made_and_no_item_s_holding_is_read` (fix round 1) | m1's holdings, no maker: asked once with the lower item's pool, no holding but the item's read, the set §1.538's, identity and freshness included |
+| `…::make_m9_a_recipe_of_two_from_items_names_both_their_pools` (fix round 1) | two `from` items: the maker asked with both pools in the recipe's order, `Making { made: 2 }` made from both |
+| `…::make_m10_an_item_in_from_and_cost_takes_the_sum_for_one_making` (fix round 1) | an item in `from` (4) and `cost` (2): 8 in hand make 1, 12 make 2 |
+| `actingcommand-policy` `gate_455_make::make_t1_the_computed_goal_covers_the_maker_alone_and_tells_it_the_made_part` (t1) | the maker carries `goal_records@pool.top:applied current=4 at_least=6 gap=2 …` and `goal_records_need … made=2`, `B` 8000 (6000 with `Covered`), told 2; the buyer and the farm byte for byte as with `Covered` |
+| `…::make_t2_an_instance_without_a_maker_decides_as_with_the_holdings_part_alone` (t2) | no maker: every decision equal to `Covered`'s but for the set's own identity in the dispatched decision's record, the same dispatch; no item, no need, no lapse; fix round 1: also with no producer of the item, so the goal is passed over and not resolved covering nobody |
+| `…::make_t3_a_stored_goal_on_the_pool_asks_its_stock_and_the_need_and_keeps_its_coverage` (t3) | fix round 1: a stored 50 with a maker and `Making` 6: every decision equal to t4's, `at_least` 54, gap 50, `need_gap` 0, `stock_gap` 50, told 50, no ` made=` (the first build: 56, 52, 2, told 2) |
+| `…::make_t4_today_s_stored_goal_on_a_covered_pool_lifts_by_its_stock_alone` (t4, today's pump pinned) | `Covered` 4 and a stored 50: `at_least` 54, gap 50, `need_gap` 0, `Γ` 40, told 50, no computed goal, no ` made=` |
+| `…::make_t5_the_made_part_is_read_by_the_unread_rule_as_any_goal_s_gap` (t5) | a maker not judged, one making a run, no `run_cap`: read after one dispatch told 2, unread after the second; the goal pending; `Unsplit` then gives no goal |
+| `…::make_t6_a_maker_worth_nothing_by_itself_is_sent_by_the_made_part_alone` (t6, §1.550 on this tree) | a maker of the value 0 and a priced item: `policy_benefit_nonpositive` −4000 with `Covered`, dispatched with `B` 2000 with `Making`, told 2 and `run_cap` 2 |
+| `…::make_t7_a_maker_whose_input_reads_below_one_run_is_held_by_the_hard_line` (t7) | the lower item read 3, below one run's 4: held `pool_line_held` `would_cross_hard_line` without needs, with `Covered`, and with a made part the host would not give |
+| `…::make_t8_a_rule_out_of_the_instance_s_scope_or_disabled_on_it_is_no_maker` (fix round 1) | `NeedsProjection::has_maker`: the maker with the lower item's pool alone or second of two, not the cost's; not the buyer or the farm; not a maker scoped to another instance or disabled on this one, where a made part given anyway decides as `Covered` |
+| `…::make_t9_a_stored_goal_without_a_maker_is_as_before_the_slice` (fix round 1, the review's F1 sequence) | the buyer and the farm and a stored 50: `at_least` 54, gap 50, `need_gap` 0, the buyer `B` 2740 dispatched and told 50, the farm `B` 2040, no ` made=`; a made part given anyway decides the same |
+| `…::make_t10_no_computed_goal_lands_on_a_line_s_pool` (fix round 1) | the item's pool writes `spend_line`, a maker present: the goal passed over, every decision as with `Covered` |
+
+Every existing gate passes as it is, none renamed or retired, no golden re-recorded (fix round 1:
+the test sources of `gate_455_rr3`, `gate_455_rr3c` and `gate_455_rr4a` gain the new trait method,
+each answering no maker, their assertions unchanged): the
+host's `rr3_p1` to `rr3_p4`, `rr3_p3_b`, `rr3a_p1`, `rr3_h1`, `rr3_h2`, `rr3c_p1`, `rr3c_h1`,
+`rr4a_p1` and §1.548's host gates give no recipe item a holding of its items that pays for one
+making (their inputs' holdings are not known, or every holding is 4 against a cost of 300), so
+their pools stay `Covered`; the policy's gates of §1.538, §1.542, §1.543, §1.548, §1.509, §1.518,
+§1.522, §1.531, §1.540, §1.547 and §1.550 give `Lands` or `Covered` needs only. What reading could
+not settle (no compiler, no test run here): that each fixture compiles and is admitted as written
+(the lower item's pool with constant lines 900 000 and 0 beside a constant capacity; the item's
+pool without a valuation writing `target_defaults` and `goal_tiers`); that in t1 and t3 the maker,
+of the highest `B`, is the one dispatched and the others wait behind it with the same reasons in
+both rounds; that in t5 the maker not judged is due again a minute later on the same reading; and
+the exact `B` of t6 and t7, read from the benefit's sum and the lines' allowance.
+
+**What is not changed** (fix round 1). Every instance without a maker of the item's pool (no task
+that can run on it, produces the pool and consumes the pool of one of the recipe's `from` items):
+nothing is made and no holding of the recipe's items is read for it, so its set, the set's
+identity and freshness, every decision and its identity, every wake and every recorded word are
+what a build without the slice gives. Every goal a person stored on the item's pool, maker or not:
+it stacks the holding's part alone, so its `at_least`, gap, tiers, told gap, coverage and
+`goal_records_need` are as before. Every instance whose needs hold no made part (an item whose
+items in hand pay for no making, or whose holdings are not known, `Covered` as before); every
+instance without stored records; `Unsplit` and `Lands`; buyers, direct farms and every rule that is
+no maker; the members a run is told and the unread rules; every record, request, ledger member
+and declared interface range. What differs is only where a maker can run and no goal is stored on
+the pool: the set holds the made part (its identity and freshness with it, the freshness lowered by
+the expiries of the items' holdings it read), and the makers alone are lifted and told it.
+
+**At deploy.** Nothing to configure and nothing to migrate: the made part lives one evaluation.
+Nothing happens until a root's catalogue has a rule that declares itself a maker (the item's pool
+among its `produces`, a `from` item's pool among its `consumes`) and can run on the instance, its
+tables a recipe whose items are in hand, and no goal is stored on the item's pool; then the maker's
+decision carries `goal_records@<pool>` and `goal_records_need` ending ` made=<n>`. Before that no
+decision, identity, wake or word of any instance changes. **Rollback.** Nothing is stored; an older
+build takes the needs apart as §1.538 does and stops asking makers. In the release notes' language:
+有配方的物品，手里的原料现在就能合成的那一部分，会作为目标交给“合成它的规则”（产出这个物品的池子、并且消耗配方里某样原料的池子的规则）：只抬它、只告诉它这么多；买成品、直接刷成品的规则照旧不被需求抬起。实例上没有合成规则时一切照旧；物品的池子上存着目标时，那个目标也照旧，不叠合成的部分。原料还缺的部分仍由原料自己的缺口去推。没有要配置的东西。
+
+**Fix round 1** (the independent review of the pull request; the coordinator's rulings on its
+findings). F1 and F2, by code: `take_apart` takes the pools of the recipe's `from` items first and
+asks `NeedsSources::has_maker`; the host's sources answer it with `NeedsProjection::has_maker`,
+which finds the instance in the projection and the pool by `target_pool` and asks `pool_makers`,
+the function `resolve_v2` asks too, on the same compiled catalogue and the same projected instance,
+under the gates the evaluation's inputs are projected under (the admission's recomputation asks it
+the same way). Without a maker `made` is 0 and `makings_in_hand` is not called. The trait method
+has no default: every source says it. `pool_makers` now takes a task an instance override disables
+for no maker (`task_on_instance`), so an instance whose only maker is disabled is as without one.
+Ruling 2 (it replaces the first build's sentence on a stored goal): a stored goal on a `Making` pool
+stacks `need − made` (`stored_part`), and its tiers and `goal_records_need` read that part, so t3
+now pins t4's numbers; the made part is asked only by the makers' goal where no goal is stored (a
+known limit: a person who wants the makers asked removes the stored goal). F5,
+by code: an item in both `from` and `cost` takes the sum of its amounts for one making. F4 (i), by
+code: `resolve_v2` passes the makers' goal over on a pool that writes `spend_line` (`line_pool`).
+F4 (ii), written down: a maker that pays a `cost` in a currency a line governs is lifted like any
+maker; what holds that spending below the line is the line's pressing, a slice of its own. F3 and
+F7, in the authors' paragraphs: the item's pool writes a step and an importance for the made part
+to push anything, a judged maker without a fixed value needs a valuation on every pool it touches,
+and a package that makes as many as it is told makes the lesser of the gap told for that entry and
+the turns. F6, written down as a known limit: after a maker's told production reaches the made
+part, the item's pool is unread until it is read again after the run's end, and until then nothing
+below the item is asked; the resource side reads the item again after a making run. F8: m8 to m10
+and t8 to t10 are new, t2 tells "passed over" from "covers nobody", t3 is re-derived. Left: the
+wake of a set with a made part in the evaluator, composed copies of a maker, and a `Making` goal
+that resolves `unresolved` stay unpinned. What reading could not settle: that t9's farm is `B` 2040
+(read from the benefit's sum), that the out-of-scope and disabled makers' catalogues compile as
+written, and that t10's line pool beside the makers' fixed values judges them as written.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -54108,6 +54754,7 @@ lift check of one package runs at most once per
 | W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 | W23 | `RuntimePerformanceStatus.memory` and `.vision` (§1.280 PR-1, PR-2; `since` 0.12.41) | runtime-client 6 | #407 PERF-READ | two optional members of W15's status (`deny_unknown_fields`), read from memory: the process's counters and the parts its owners hold, and each vision model's lock waits and inference times; declared [3, 6] in 0.12.41 with `min` unchanged; a reader whose `max` is below 6 refuses an answer that carries them (`runtime_receipt_decode_failed`), and this build fills `memory` on every answer; on PerformanceStatus, not on Status, as W20 |
 | W24 | `RuntimeOperation::GoalView { instance_alias }` → `RuntimeResult::GoalViewed { view }`; `RuntimeOperation::EditGoal { instance_alias, expected_version?, op }` → `RuntimeResult::GoalEdited { edited }` | runtime-client 9 | #463 V3 | §1.383; both on the console's list |
+| W25 | `RuntimeOperation::GoalPageView { instance_alias, part, cursor?, limit? }` → `RuntimeResult::GoalPageViewed { page }` | runtime-client 15 | #455 RR4b-1 | §1.557; on the console's list; no answer of an earlier kind changes |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).

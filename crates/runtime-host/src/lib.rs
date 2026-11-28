@@ -39,6 +39,8 @@ mod failure_pacing;
 // Workflow #455 RR3: what an instance's stored records still need, computed before each
 // evaluation, pure.
 mod goal_needs;
+// Workflow #455 RR4b-1: the goal page in pages, its rows and its cut, pure.
+mod goal_page;
 // Workflow #455 RR2: the instance fact `session.goal_records`, a records entry's stored records,
 // read and composed, pure.
 mod goal_records;

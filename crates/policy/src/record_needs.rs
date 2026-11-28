@@ -36,7 +36,8 @@ use crate::evaluator::{
     project_time_validity, survives_resets, timeline_resets, unknown_token,
 };
 use crate::resource_targets::{
-    TargetObservation, bounded_list, observe_target, pending_name, resolve_target_pool,
+    TargetObservation, bounded_list, observe_target, pending_name, pool_makers,
+    resolve_target_pool, target_pool,
 };
 use crate::{
     CompiledCatalog, DecisionReason, EvaluationFacts, EvaluationTime, GivenPoolReadings,
@@ -87,6 +88,12 @@ pub enum PoolNeedKind {
     /// The pool of an item with a recipe whose holding is not known: the item's whole need, and
     /// nothing is taken apart below it.
     Unsplit,
+    /// #455 MAKE (register §1.558): the pool of an item with a recipe whose holding is known and
+    /// below its need, and whose recipe's items in hand pay for `made` of it now (above 0): the
+    /// part its holding covers and the made part, a goal asked of the rules that make it alone
+    /// ([`InstanceRecordNeeds::making_from`]). What is not covered is made as for
+    /// [`PoolNeedKind::Covered`], its recipe's items needed instead.
+    Making { made: u64 },
 }
 
 /// One pool's computed need, in the pool's own units.
@@ -125,6 +132,12 @@ pub enum ProgressListUnknown {
 }
 
 impl ProgressListUnknown {
+    /// Workflow #455 RR4b-1 (register §1.557): the token of the vocabulary `unknown_reason` it is,
+    /// the word the note's reason says it with, which the goal page's view carries.
+    pub const fn token(self) -> &'static str {
+        unknown_token(self.reason())
+    }
+
     /// The fact reading's reason it is.
     const fn reason(self) -> UnknownReason {
         match self {
@@ -348,6 +361,10 @@ pub struct InstanceRecordNeeds {
     notes: Vec<RecordNeedsNote>,
     fresh_until_unix_ms: Option<u64>,
     identity: String,
+    /// #455 MAKE (register §1.558): for each pool of the kind [`PoolNeedKind::Making`], the pools
+    /// of its recipe's `from` items as the root's files write them; not hashed (a function of the
+    /// tables, whose sha256 the identity holds).
+    making_from: BTreeMap<String, Vec<String>>,
 }
 
 impl InstanceRecordNeeds {
@@ -372,11 +389,17 @@ impl InstanceRecordNeeds {
         for (pool_id, need) in &pools {
             writer.text(pool_id);
             writer.number(need.need);
-            writer.text(match need.kind {
-                PoolNeedKind::Lands => "lands",
-                PoolNeedKind::Covered => "covered",
-                PoolNeedKind::Unsplit => "unsplit",
-            });
+            match need.kind {
+                PoolNeedKind::Lands => writer.text("lands"),
+                PoolNeedKind::Covered => writer.text("covered"),
+                PoolNeedKind::Unsplit => writer.text("unsplit"),
+                // #455 MAKE (register §1.558): its word and the made part; a set without such a
+                // pool hashes as before.
+                PoolNeedKind::Making { made } => {
+                    writer.text("making");
+                    writer.number(made);
+                }
+            }
         }
         writer.number(notes.len() as u64);
         for note in &notes {
@@ -390,12 +413,31 @@ impl InstanceRecordNeeds {
             notes,
             fresh_until_unix_ms,
             identity,
+            making_from: BTreeMap::new(),
         }
+    }
+
+    /// #455 MAKE (register §1.558): the same set with `making_from`, for each pool of the kind
+    /// [`PoolNeedKind::Making`] (by the id the root's files write it), the pools of its recipe's
+    /// `from` items as the root's files write them, which say who makes it: a rule that produces
+    /// the pool and consumes one of them. Its identity is unchanged: they follow from the tables.
+    pub fn with_making_from(mut self, making_from: BTreeMap<String, Vec<String>>) -> Self {
+        self.making_from = making_from;
+        self
     }
 
     /// Each pool's need, by the id the root's files write it.
     pub fn pools(&self) -> &BTreeMap<String, PoolNeed> {
         &self.pools
+    }
+
+    /// #455 MAKE (register §1.558): the pools of the recipe's `from` items of the pool `pool_id`
+    /// of the kind [`PoolNeedKind::Making`], as the root's files write them; none for any other.
+    pub fn making_from(&self, pool_id: &str) -> &[String] {
+        self.making_from
+            .get(pool_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     /// Every part that adds nothing or names what is not counted, in the order computed.
@@ -593,7 +635,8 @@ const fn pending_unknown(reason: ResourceTargetPendingReason) -> UnknownReason {
 /// the characters need of it (`needed`), the stock its stored goal asks (`stock`, 0 without one),
 /// its holding (`held`), how much of the holding goes to the characters (`to_characters`, the
 /// lesser of the two), the gap (`max(0, needed + stock - held)`) and the tables' sha256; the holding
-/// and what follows from it `pending` while the evaluation does not know it.
+/// and what follows from it `pending` while the evaluation does not know it. #455 MAKE (register
+/// §1.558): on a pool of the kind [`PoolNeedKind::Making`], then `made`, the made part, there only.
 pub(crate) fn need_reason(
     pool_id: &str,
     need: PoolNeed,
@@ -613,13 +656,17 @@ pub(crate) fn need_reason(
             "pending".to_owned(),
         ),
     };
+    let mut detail = format!(
+        "needed={} stock={stock} held={held} to_characters={to_characters} gap={gap} tables={}",
+        need.need,
+        tables_sha256.unwrap_or("none")
+    );
+    if let PoolNeedKind::Making { made } = need.kind {
+        detail.push_str(&format!(" made={made}"));
+    }
     DecisionReason {
         outcome: Outcome::new(PolicyCode::GoalRecordsNeed).pool_id(pool_id),
-        detail: format!(
-            "needed={} stock={stock} held={held} to_characters={to_characters} gap={gap} tables={}",
-            need.need,
-            tables_sha256.unwrap_or("none")
-        ),
+        detail,
     }
 }
 
@@ -734,6 +781,26 @@ impl<'a> NeedsProjection<'a> {
             },
             TargetObservation::Pending { reason } => NeedHolding::Unknown(Some(reason)),
         }
+    }
+
+    /// #455 MAKE fix round 1 (register §1.558): whether the instance `instance_id` has a maker of
+    /// the pool the root's files write `resource`, the pool of an item whose recipe's `from` items
+    /// are held in the pools `from` (as the root's files write them): the pool a target of that id
+    /// names on the instance ([`target_pool`]) and the one function that says who makes it
+    /// ([`pool_makers`]), which the evaluation asks too, on the same catalog and the same projected
+    /// instance. `false` for an instance or a pool the projection does not hold: without a maker
+    /// the host computes no made part.
+    pub fn has_maker(&self, instance_id: &str, resource: &str, from: &[String]) -> bool {
+        let Some(instance) = self
+            .projected
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_id)
+        else {
+            return false;
+        };
+        target_pool(self.catalog, resource, instance)
+            .is_some_and(|pool| !pool_makers(self.catalog, instance, pool, from).is_empty())
     }
 
     /// Whether the instance `instance_id`'s list `fact_key`, observed at `observed_at_unix_ms`

@@ -52,7 +52,7 @@ use crate::evaluator::{
     project_pool_value, project_time_validity, scope_matches_instance, with_values,
 };
 use crate::record_needs::{
-    InstanceRecordNeeds, PoolNeedKind, RecordNeeds, need_reason, not_stacked_reason,
+    InstanceRecordNeeds, PoolNeed, PoolNeedKind, RecordNeeds, need_reason, not_stacked_reason,
 };
 use crate::source::{CatalogDocumentSource, SourceMap, parse_document};
 use crate::{
@@ -1849,6 +1849,54 @@ impl StackedNeeds {
     fn stock(&self, resource: &str) -> u64 {
         self.stocks.get(resource).copied().unwrap_or(0)
     }
+
+    /// #455 MAKE fix round 1 (register §1.558): the need stacked on the goal on `resource`, which
+    /// its tiers split and its `goal_records_need` says: a stored goal's [`stored_part`], the need
+    /// [`stack_record_needs`] added to it; a computed goal's the pool's whole need; `None` for a
+    /// pool without one.
+    fn stacked_need(&self, resource: &str) -> Option<PoolNeed> {
+        let need = *self.needs.pools().get(resource)?;
+        Some(if self.stocks.contains_key(resource) {
+            stored_part(need)
+        } else {
+            need
+        })
+    }
+
+    /// #455 MAKE (register §1.558; `contracts/resource-targets.md`, "Needs computed from the
+    /// records"): when `target` is the goal the needs alone gave a pool of the kind
+    /// [`PoolNeedKind::Making`] ([`landing_targets`]: no stored goal names the pool, so no stock was
+    /// stacked on one), the pools of the recipe's `from` items, as the root's files write them,
+    /// by which [`resolve_v2`] knows the pool's makers; `None` for every other target, a stored
+    /// one on such a pool included, which keeps its own coverage.
+    fn making_from(&self, target: &ResourceTargetSpecV2) -> Option<&[String]> {
+        let computed = target.id == COMPUTED_TARGET_ID
+            && target.tasks.is_none()
+            && !self.stocks.contains_key(&target.resource);
+        let making = self
+            .needs
+            .pools()
+            .get(&target.resource)
+            .is_some_and(|need| matches!(need.kind, PoolNeedKind::Making { .. }));
+        (computed && making).then(|| self.needs.making_from(&target.resource))
+    }
+}
+
+/// #455 MAKE fix round 1 (register §1.558; `contracts/resource-targets.md`, "Needs computed from
+/// the records"): the part of `need` a stored goal on its pool stacks. On a pool of the kind
+/// [`PoolNeedKind::Making`] the part its holding covers alone (`need − made`), as on a `Covered`
+/// pool before the slice: the stored goal's `at_least`, gap, tiers, told gap and coverage are as
+/// before, and the made part is asked only by the computed goal of the makers, where no stored goal
+/// names the pool. Every other need whole.
+fn stored_part(need: PoolNeed) -> PoolNeed {
+    if let PoolNeedKind::Making { made } = need.kind {
+        PoolNeed {
+            need: need.need.saturating_sub(made),
+            kind: PoolNeedKind::Covered,
+        }
+    } else {
+        need
+    }
 }
 
 /// The id of a target the computed needs give a pool no stored target names: in memory only,
@@ -1861,8 +1909,10 @@ const COMPUTED_TARGET_ID: &str = "goal_records";
 ///
 /// - an active v2 policy (a v2 record, or a v3 record's live targets): each target on a pool with
 ///   a computed need asks `stock + need` (its own `at_least` the stock, its own step and
-///   importance kept), and each pool on which a need lands (an item without a recipe) that no
-///   target names gains a target of `need` with the pool's own step and importance; the policy's
+///   importance kept; #455 MAKE fix round 1: on a pool whose need holds a made part, the part its
+///   holding covers alone, [`stored_part`]), and each pool on which a need lands (an item without a
+///   recipe) that no target names gains a target of `need` with the pool's own step and importance
+///   (#455 MAKE: and each pool whose need holds a made part, [`landing_targets`]); the policy's
 ///   lifetime ends no later than the needs' freshness;
 /// - no record, or one that holds no target: such a policy of the landing needs alone, its identity
 ///   `goal-records:<identity>` and its time the records' own;
@@ -1911,9 +1961,11 @@ pub(crate) fn stack_record_needs(
                     };
                     let TargetCondition::AtLeast { amount } = target.condition;
                     stocks.insert(target.resource.clone(), amount);
+                    // #455 MAKE fix round 1: on a pool whose need holds a made part, the part its
+                    // holding covers alone ([`stored_part`]).
                     target.condition = TargetCondition::AtLeast {
                         amount: amount
-                            .saturating_add(need.need)
+                            .saturating_add(stored_part(*need).need)
                             .min(MAX_RESOURCE_TARGET_AMOUNT),
                     };
                 }
@@ -1964,7 +2016,10 @@ pub(crate) fn stack_record_needs(
 
 /// The targets of `computed`'s landing needs (each pool of an item without a recipe whose need
 /// is above 0) that no target of `existing` names: `at_least` the need, the pool's own step and
-/// importance, adjusting every producing candidate.
+/// importance, adjusting every producing candidate. #455 MAKE (register §1.558): and of each pool
+/// of the kind [`PoolNeedKind::Making`] no target of `existing` names, `at_least` its need (the
+/// holding and the made part), which [`resolve_v2`] lets cover the pool's makers alone. A pool of
+/// the kind `Covered` or `Unsplit` gains none, as before.
 fn landing_targets(
     computed: &InstanceRecordNeeds,
     existing: &[ResourceTargetSpecV2],
@@ -1973,7 +2028,7 @@ fn landing_targets(
         .pools()
         .iter()
         .filter(|(resource, need)| {
-            need.kind == PoolNeedKind::Lands
+            matches!(need.kind, PoolNeedKind::Lands | PoolNeedKind::Making { .. })
                 && need.need > 0
                 && !existing.iter().any(|target| target.resource == **resource)
         })
@@ -2981,7 +3036,9 @@ impl TargetGap {
 struct ResolvedTargetV2<'a> {
     target: &'a ResourceTargetSpecV2,
     pool: &'a PoolSpec,
-    /// The named tasks that map (`r >= 1`); `None` covers every producing candidate.
+    /// The named tasks that map (`r >= 1`); `None` covers every producing candidate. #455 MAKE
+    /// (register §1.558): for the goal the needs alone gave a pool of the kind
+    /// [`PoolNeedKind::Making`], the pool's makers ([`pool_makers`]).
     named: Option<BTreeSet<&'a str>>,
     status: TargetStatus,
 }
@@ -3512,6 +3569,9 @@ fn weighed_tasks(
 /// Workflow #455 RR3: `stacked`, the needs computed from the instance's stored records as
 /// [`stack_record_needs`] stacked them on `targets`, gives each covered candidate the
 /// `goal_records_need` of each covering target's pool that has one, and the policy its notes.
+/// #455 MAKE (register §1.558): the goal it gave a pool of the kind [`PoolNeedKind::Making`]
+/// covers the pool's makers alone ([`pool_makers`]), and none at all, so it is passed over, on an
+/// instance without one.
 fn resolve_v2(
     context: &TargetContext<'_>,
     targets: &[ResourceTargetSpecV2],
@@ -3532,6 +3592,24 @@ fn resolve_v2(
     let mut unmapped = BTreeMap::<String, (String, String, String, &'static str)>::new();
     let mut unevaluable = Vec::new();
     for target in targets {
+        // #455 MAKE (register §1.558): the goal the needs alone gave a pool whose need holds a made
+        // part covers the pool's makers alone; with none on the instance it is passed over (no
+        // item, no need, no lapse), and the instance is judged as without it. The host gives no
+        // made part without a maker; this stays a second guard. Fix round 1: nor does it land on
+        // a line's pool ([`line_pool`]), on which no need lands.
+        let made_by = match stacked.and_then(|computed| computed.making_from(target)) {
+            None => None,
+            Some(from) => {
+                let makers = target_pool(catalog, &target.resource, instance)
+                    .filter(|pool| !line_pool(pool))
+                    .map(|pool| pool_makers(catalog, instance, pool, from))
+                    .unwrap_or_default();
+                if makers.is_empty() {
+                    continue;
+                }
+                Some(makers)
+            }
+        };
         let mut mark_unmapped = |task: &str, why| {
             unmapped.insert(
                 task.to_owned(),
@@ -3579,7 +3657,7 @@ fn resolve_v2(
             lapsed("no_producing_task");
         }
         let named = match &target.tasks {
-            None => None,
+            None => made_by,
             Some(tasks) => {
                 let mut named = BTreeSet::new();
                 for task in tasks {
@@ -3631,9 +3709,10 @@ fn resolve_v2(
                             TargetStatus::Satisfied { current }
                         } else {
                             // #455 RR3b: the need the records stacked on the target's pool, which
-                            // splits the gap on a pool that writes `goal_tiers`.
+                            // splits the gap on a pool that writes `goal_tiers` (#455 MAKE fix round
+                            // 1: the part a stored goal stacked, [`StackedNeeds::stacked_need`]).
                             let stacked_need = stacked
-                                .and_then(|computed| computed.needs.pools().get(&target.resource))
+                                .and_then(|computed| computed.stacked_need(&target.resource))
                                 .map_or(0, |pool_need| pool_need.need);
                             let (gap_weight_milli, capped, tiers) = gap_weight(
                                 pool,
@@ -3698,13 +3777,13 @@ fn resolve_v2(
             }
             term.targets.push(target.item());
             // Workflow #455 RR3 (ruling 8): the need computed for the target's pool, with the
-            // numbers its stacking gave.
+            // numbers its stacking gave (#455 MAKE fix round 1: the part it stacked).
             if let Some(stacked) = stacked
-                && let Some(need) = stacked.needs.pools().get(&target.target.resource)
+                && let Some(need) = stacked.stacked_need(&target.target.resource)
             {
                 term.needs.push(need_reason(
                     &target.target.resource,
-                    *need,
+                    need,
                     stacked.stock(&target.target.resource),
                     target.held_and_gap(),
                     stacked.needs.tables_sha256(),
@@ -3772,6 +3851,46 @@ fn resolve_v2(
             .map(|stacked| stacked.needs.note_reasons())
             .unwrap_or_default(),
     })
+}
+
+/// #455 MAKE (register §1.558; `contracts/resource-targets.md`, "Needs computed from the
+/// records"): the makers on `instance` of `pool`, the pool of an item with a recipe whose `from`
+/// items are held in the pools `from` (as the root's files write them): every catalog task that can
+/// run on the instance (its scope covers it and no instance override disables it,
+/// [`task_on_instance`], as the lapse of a target without `tasks` reads its producers), that
+/// produces `pool` (one run's production at least 1, as a target's coverage reads it) and whose
+/// `consumes` names the pool one of `from` names for the instance ([`target_pool`]). The one
+/// function both halves ask: the host whether the made part is computed at all
+/// ([`crate::NeedsProjection::has_maker`]), [`resolve_v2`] whom its goal covers. Read from the
+/// tasks' declarations, scopes and overrides alone, never from a run state; a task an override
+/// disables has no candidate, so which makers are disabled moves no pool weight and no other task's
+/// term (SS-1's one-way guard): with none left the instance is as without the slice.
+pub(crate) fn pool_makers<'a>(
+    catalog: &'a CompiledCatalog,
+    instance: &InstanceSnapshot,
+    pool: &PoolSpec,
+    from: &[String],
+) -> BTreeSet<&'a str> {
+    let inputs = from
+        .iter()
+        .filter_map(|resource| target_pool(catalog, resource, instance))
+        .map(|input| input.id.as_str())
+        .collect::<BTreeSet<_>>();
+    catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .filter(|task| {
+            task_on_instance(task, instance).is_ok()
+                && per_run_production(task, &pool.id) >= 1
+                && task
+                    .consumes
+                    .iter()
+                    .any(|effect| inputs.contains(effect.pool_id.as_str()))
+        })
+        .map(|task| task.id.as_str())
+        .collect()
 }
 
 /// Resolves one active target (T1) and records the effect of each task it names.

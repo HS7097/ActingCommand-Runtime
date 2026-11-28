@@ -437,6 +437,8 @@ runtime_operation_kinds! {
     // Workflow #463 V3 (register §1.383): one application's goals, read and set by name.
     GoalView,
     EditGoal,
+    // Workflow #455 RR4b-1 (register §1.557): the goal page in pages.
+    GoalPageView,
 }
 
 impl RuntimeOperationKind {
@@ -469,7 +471,9 @@ impl RuntimeOperationKind {
             // G14).
             | Self::PackScheduleView
             // Workflow #463 V3: the goal page, a general read that records nothing.
-            | Self::GoalView => GENERAL_QUERY,
+            | Self::GoalView
+            // Workflow #455 RR4b-1: the goal page in pages, a general read that records nothing.
+            | Self::GoalPageView => GENERAL_QUERY,
             // General reads that record: looking at frames, instance discovery.
             Self::ObserveReadonly | Self::CaptureSequence | Self::DiscoverInstances => {
                 GENERAL_RECORDED_READ
@@ -554,7 +558,8 @@ impl RuntimeOperationKind {
 /// Runtime's gate checks (§2.3 step 5); every other kind is refused there. Workflow #455 T1-R
 /// (0.12.60): `ApplyResourceTargets` joins the list, the one write of the resource target
 /// document that `ResourceTargetView` reads. Workflow #463 V3 (0.12.61): `GoalView` and
-/// `EditGoal` join it, the goal page the console's Goals tab reads and writes.
+/// `EditGoal` join it, the goal page the console's Goals tab reads and writes. Workflow #455 RR4b-1
+/// (0.12.104): `GoalPageView` joins it, the goal page's records and options in pages.
 pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
     use RuntimeOperationKind as Kind;
     matches!(
@@ -595,6 +600,9 @@ pub const fn ui_allows(kind: RuntimeOperationKind) -> bool {
             // the console sends them.
             | Kind::GoalView
             | Kind::EditGoal
+            // Workflow #455 RR4b-1: the goal page in pages, on the list before the console sends
+            // it.
+            | Kind::GoalPageView
             // Writes on the list before they are built.
             | Kind::RunInstanceTask
             | Kind::EditResourceTarget
@@ -718,6 +726,8 @@ impl RuntimeOperationKind {
             // Workflow #463 V3 (register §1.383).
             Self::GoalView => Some(ReceiptCode::GoalViewCompleted.code()),
             Self::EditGoal => Some(ReceiptCode::EditGoalCompleted.code()),
+            // Workflow #455 RR4b-1 (register §1.557).
+            Self::GoalPageView => Some(ReceiptCode::GoalPageViewCompleted.code()),
         }
     }
 }
@@ -816,6 +826,7 @@ impl RuntimeOperation {
             Self::AgentWakeTest { .. } => Kind::AgentWakeTest,
             Self::GoalView { .. } => Kind::GoalView,
             Self::EditGoal { .. } => Kind::EditGoal,
+            Self::GoalPageView { .. } => Kind::GoalPageView,
         }
     }
 
@@ -975,6 +986,9 @@ mod tests {
             // nothing; its one-value write a general instruction recorded through G14.
             K::GoalView => (General, Some(Read), false),
             K::EditGoal => (General, Some(Instruction), true),
+            // Workflow #455 RR4b-1 (register §1.557): the goal page in pages, a general read that
+            // records nothing.
+            K::GoalPageView => (General, Some(Read), false),
         }
     }
 

@@ -3974,6 +3974,14 @@
       "status": "active",
       "since": "0.12.61",
       "description": "A runtime client operation: set or clear one value of an application's goal page by its name (EditGoal, Workflow #463 V3)."
+    },
+    "runtime_goal_page_view": {
+      "owner": "runtime-client",
+      "layer": "client",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "A runtime client operation: read one page of one part of an application's goal page, its records with their positions, a table's options or one ladder's positions (GoalPageView, Workflow #455 RR4b-1)."
     }
   }
 }

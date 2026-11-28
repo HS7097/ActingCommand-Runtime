@@ -6,7 +6,8 @@
 //! evaluation's inputs are projected under, the host reads each instance's `session.goal_records`
 //! record (with its own reader, `crate::goal_records`) and its progress lists from the fact store,
 //! what the scheduler workbench keeps of its game root from memory ([`RecordRoots`], read before
-//! the gates), and the holdings through the evaluator's own projection of the same inputs
+//! the gates), and the holdings (#455 MAKE: and whether a pool has a maker) through the evaluator's
+//! own projection of the same inputs and its active catalog
 //! (`actingcommand_policy::NeedsProjection`), and computes the needs with the one pure function
 //! (`crate::goal_needs::instance_needs`). The result is given to the evaluator in memory and to
 //! the instance's view identity; nothing is stored. An instance without stored records has none.
@@ -30,12 +31,13 @@ pub(super) struct NeedsInputs<'i> {
 }
 
 /// What the computation reads of one instance: its facts as the store holds them under the gate,
-/// and the evaluator's projection of the evaluation's inputs.
-struct HostSources<'s, 'c> {
-    store: &'s InstanceFactStore,
-    scope: FactScope,
-    instance_id: &'s str,
-    projection: &'s NeedsProjection<'c>,
+/// and the evaluator's projection of the evaluation's inputs. Workflow #455 RR4b-1: the goal
+/// page's view reads through the same sources.
+pub(super) struct HostSources<'s, 'c> {
+    pub(super) store: &'s InstanceFactStore,
+    pub(super) scope: FactScope,
+    pub(super) instance_id: &'s str,
+    pub(super) projection: &'s NeedsProjection<'c>,
 }
 
 impl NeedsSources for HostSources<'_, '_> {
@@ -59,6 +61,10 @@ impl NeedsSources for HostSources<'_, '_> {
 
     fn holding(&self, pool_id: &str) -> NeedHolding {
         self.projection.holding(self.instance_id, pool_id)
+    }
+
+    fn has_maker(&self, pool_id: &str, from: &[String]) -> bool {
+        self.projection.has_maker(self.instance_id, pool_id, from)
     }
 }
 

@@ -213,12 +213,29 @@ fn verify_sources(
     trigger: &PersistedEvent,
     event: &PersistedEvent,
 ) -> RuntimeStateResult<()> {
-    require_fact_origin(published, EventType::FactPublished)?;
+    // Workflow #503 FACT-R: an expiry reclamation of a record of `published`. Such a record may
+    // have been published under a request's source and actor (a priority offset, a pack schedule),
+    // always by the fact store; its invalidation's time is the record's expiry, which lay more than
+    // the margin before the trigger.
+    let reclamation = matches!(published.payload(), EventPayload::Fact(FactPayload::Published(value))
+        if value.records().any(|record| actingcommand_contract::is_expiry_reclamation(data, record)));
+    if reclamation {
+        require_fact_module(published, EventType::FactPublished)?;
+    } else {
+        require_fact_origin(published, EventType::FactPublished)?;
+    }
     require_fact_origin(event, EventType::FactInvalidated)?;
+    let time_matches = if reclamation {
+        data.invalidated_at_unix_ms
+            .saturating_add(actingcommand_contract::FACT_RECLAIM_AFTER_EXPIRY_MS)
+            < trigger.timestamp_unix_ms()
+    } else {
+        trigger.timestamp_unix_ms() == data.invalidated_at_unix_ms
+    };
     if !matches!(event.payload(), EventPayload::Fact(FactPayload::Invalidated(value)) if value.invalidation() == data)
         || trigger.event_id() != &data.invalidated_by_event_id
         || trigger.event_type() != data.invalidated_by_event_type
-        || trigger.timestamp_unix_ms() != data.invalidated_at_unix_ms
+        || !time_matches
         || published.sequence() >= trigger.sequence()
         || trigger.sequence() >= event.sequence()
     {
@@ -248,7 +265,9 @@ fn verify_sources(
             record.scope == data.scope
                 && record.key == data.key
                 && record.source_snapshot_id == data.source_snapshot_id
-                && (adjustment || record.invalidate_on.contains(&trigger.event_type()))
+                && (adjustment
+                    || reclamation
+                    || record.invalidate_on.contains(&trigger.event_type()))
         })
     {
         return Err(fact_error(
@@ -264,6 +283,15 @@ fn require_fact_origin(event: &PersistedEvent, event_type: EventType) -> Runtime
         || event.origin().actor() != EventActor::Runtime
         || event.origin().module() != OriginModule::FactStore
     {
+        return Err(fact_error(StateCode::FactProjectionOriginInvalid.code()));
+    }
+    Ok(())
+}
+
+/// Workflow #503 FACT-R: the published event of a record an expiry reclamation drops, of any source
+/// and actor but always the fact store's.
+fn require_fact_module(event: &PersistedEvent, event_type: EventType) -> RuntimeStateResult<()> {
+    if event.event_type() != event_type || event.origin().module() != OriginModule::FactStore {
         return Err(fact_error(StateCode::FactProjectionOriginInvalid.code()));
     }
     Ok(())

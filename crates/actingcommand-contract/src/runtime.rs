@@ -107,7 +107,10 @@ pub use goals::*;
 // opened by #479 F-3b, a projection frame reduced from a display within a pixel of its base's
 // shape, joined by Workflow #479 F-3a): the value `acib_screen_capture` of
 // `RuntimeCaptureBackend`, which only a configured iOS handset's observation carries and a reader
-// of 12 or lower refuses; `min` stays 12, declared [12, 13].
+// of 12 or lower refuses; `min` stays 12, declared [12, 13]. Revision 15 (Workflow #455 RR4b-1,
+// since 0.12.104): the request kind `GoalPageView` with its result (`goals.rs`), which no client of
+// 14 sends; every earlier request is answered as before, `GoalView` byte for byte, declared
+// [12, 15].
 pub const RUNTIME_REQUEST_SCHEMA_VERSION: &str = "actingcommand.runtime.request.v4";
 pub const RUNTIME_RECEIPT_SCHEMA_VERSION: &str = "actingcommand.runtime.receipt.v2";
 pub const RUNTIME_INFO_SCHEMA_VERSION: &str = "actingcommand.runtime.info.v1";
@@ -4498,6 +4501,20 @@ pub enum RuntimeOperation {
         expected_version: Option<u64>,
         op: GoalEdit,
     },
+    // Workflow #455 RR4b-1 (register §1.557, since 0.12.104; `runtime-client` 15; `goals.rs`): the
+    // goal page in pages, a read no client of revision 14 sends.
+    /// Reads one page of one part of an application's goal page (`GoalPageView`): its records with
+    /// their positions, a table's options or one ladder's positions, after `cursor` (the page
+    /// before's `next`), at most `limit` rows (1 to 512; without it the part's default). A general
+    /// read that records nothing.
+    GoalPageView {
+        instance_alias: String,
+        part: GoalPagePart,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<GoalPageCursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
 }
 
 impl RuntimeOperation {
@@ -4694,6 +4711,24 @@ impl RuntimeOperation {
             // (`goal_value_invalid`).
             | Self::GoalView { instance_alias }
             | Self::EditGoal { instance_alias, .. } => validate_instance_alias(instance_alias),
+            // Workflow #455 RR4b-1: the alias, then the part's names, the limit and the cursor's
+            // form and part; what only the Runtime knows (a moved source, a name the root does
+            // not have) is the host's.
+            Self::GoalPageView {
+                instance_alias,
+                part,
+                cursor,
+                limit,
+            } => {
+                validate_instance_alias(instance_alias)?;
+                if goals::goal_page_view_well_formed(part, cursor.as_ref(), *limit) {
+                    Ok(())
+                } else {
+                    Err(RuntimeContractError::new(
+                        RuntimeContractCode::InvalidGoalPageView,
+                    ))
+                }
+            }
             // Workflow #428 S168-LB1a: a key prefix is a non-empty start of an instance fact key.
             Self::InstanceFactSnapshot {
                 instance,
@@ -4987,6 +5022,7 @@ impl fmt::Debug for RuntimeOperation {
             Self::ReleasePlayerHold { .. } => "RuntimeOperation::ReleasePlayerHold(<redacted>)",
             Self::GoalView { .. } => "RuntimeOperation::GoalView(<redacted>)",
             Self::EditGoal { .. } => "RuntimeOperation::EditGoal(<redacted>)",
+            Self::GoalPageView { .. } => "RuntimeOperation::GoalPageView(<redacted>)",
         })
     }
 }
@@ -5963,6 +5999,11 @@ pub enum RuntimeResult {
     /// `EditGoal`: the goal record's version after the edit and the event that holds it.
     GoalEdited {
         edited: GoalEdited,
+    },
+    /// Workflow #455 RR4b-1 (`runtime-client` 15): `GoalPageView`: one page of one part of an
+    /// application's goal page.
+    GoalPageViewed {
+        page: Box<GoalPageView>,
     },
 }
 

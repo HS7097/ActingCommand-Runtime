@@ -850,6 +850,14 @@ impl HostShared {
                 op,
                 connection_id,
             ),
+            // Workflow #455 RR4b-1 (register §1.557): one page of one part of an application's
+            // goal page, read from memory and the fact store under the evaluation's gates.
+            RuntimeOperation::GoalPageView {
+                instance_alias,
+                part,
+                cursor,
+                limit,
+            } => self.goal_page_view(instance_alias, part, cursor.as_ref(), *limit),
         }
     }
 }
