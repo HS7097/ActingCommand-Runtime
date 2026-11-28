@@ -22123,6 +22123,70 @@
       "common_causes": "A value written by hand or by an agent that the declaration does not take; a package update that removed the option, narrowed the range or changed the type; a name of another application's game.",
       "handling": "Read the page (goals get) and set a value the entry's declaration takes; for variable_not_applying fix the root as standard-pack check's warning says; for not_offered bind a package that declares the variable on the application, or set nothing; for not_checked_yet send the same request again after the Runtime's next check; for root_failing repair the game root the page's declaration names (asking again does not help); for no_schedule give the game root a schedule.json; for record_unreadable write the whole document with targets set first."
     },
+    "goal_page_view_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "json_pointer": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): a GoalPageView of the part options or positions names what the application's game root does not have, for the reason goal_problem names at json_pointer, the goal edit's words: no records entry of that name whose table is one of the root's accepted tables (name_unknown at /part/entry: a name no records entry has, a records entry whose table the root's goal-tables.json does not hold, or a root without an accepted goal-tables.json); a key or a class the table does not hold (not_an_option at /part/ladder/key or /part/ladder/class); a ladder the key or the class does not have in that column or sub (out_of_range at /part/ladder/column or /part/ladder/sub). Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "A records entry, a key or a ladder of a page read before the root's files changed, or a name written by hand.",
+      "handling": "Read the part records (the root's records entries and whether each applies) and the part options of an entry that applies, then ask a key, class and ladder its rows list."
+    },
+    "goal_page_view_records_moved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "current_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): the cursor of a GoalPageView of the part records came from a page answered over other stored records: the application's session.goal_records record was written after that page (its records_version is no longer the record's sequence). The pages would mix two states, so none is answered. current_version is the goal page's version now. Only the part records is refused for this: the cursors of options and positions carry no records version (Addendum 1). Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "An EditGoal of a records entry, from this or another client, between two pages of the part records.",
+      "handling": "Read the part records again from its first page (no cursor)."
+    },
+    "goal_page_view_declaration_moved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "current_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): the cursor of a GoalPageView came from a page answered over another declaration: the game root's accepted goal-tables.json (its sha256) or the root's records entries (their names, tables and max_records, in file order) changed after that page, as the scheduler workbench's checks read them. The pages would mix two declarations, so none is answered; any part's cursor is refused for this. current_version is the goal page's version now. Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "A new bundle placed, or a root's goals.json or goal-tables.json changed and read by the workbench's next check, between two pages.",
+      "handling": "Drop what was kept under the old tables' sha256 and read the part again from its first page (no cursor)."
+    },
     "goal_value_package_unreadable": {
       "category": "warning",
       "ladder_class": "none",
@@ -26468,6 +26532,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
+    },
+    "goal_page_view": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "A Runtime host operation or stage: goal page view (Workflow #455 RR4b-1, GoalPageView)."
     },
     "goal_view": {
       "owner": "runtime-host",

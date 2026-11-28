@@ -240,6 +240,8 @@ mod package_debug;
 mod pack_schedule;
 // Workflow #463 V3: `GoalView` and `EditGoal`.
 mod goals;
+// Workflow #455 RR4b-1: `GoalPageView`, the goal page in pages.
+mod goal_page_view;
 mod performance;
 mod planning;
 mod policy_catalog;

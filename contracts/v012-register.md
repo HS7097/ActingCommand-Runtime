@@ -52399,6 +52399,164 @@ Runtime before this build that reads a root whose file writes `names` refuses th
 until it is replaced, and nothing else is kept on disk for this slice. In the release notes'
 language: 新增：`goal-tables.json` 可以写 `names`，给物品、表里的键、列、子列、类别和条件起给人看的名字，并写明一个位置怎么念（按前缀匹配的片段，文字里可以有 `{0}` 到 `{3}` 的占位，子列也可以有自己的一套）；Runtime 不拿名字算任何东西，只随表一起保存。包的修订升到 32：写了 `names` 的表文件要本版以上；回滚到本版以前，先换回不写 `names` 的表文件，否则旧版拒收整个表文件、记录条目不生效（其余照常）。
 
+### 1.557 Slice #455 RR4b-1 (0.12.104): the goal page's records with their positions, a table's options and one ladder's positions, read in pages by a new read, `GoalPageView`, so that a person can choose in the console whom to raise and how far; `GoalView` stays byte for byte (board #455; the rulings 1 to 8 and Addendum 1 are the coordinator's of 11-29, after a read-only study of the goal page's records and of reads in pages and the console side's statement of what its page needs; coordinator work order `rd-1123/brief-455-rr4b1.md`; on main `924f4034`, v0.12.100; §1.545 to §1.556 are slices of the same days under review, and whichever merges later keeps the sections in order)
+
+It ships in 0.12.104 and takes `runtime-client` 15, written over row 14 of §1.493.
+[runtime-interface.md](runtime-interface.md) ("Goal request kinds": the kind's row and the new
+"The goal page in pages"), [standard-pack-goals.md](standard-pack-goals.md) ("The records entry",
+"What a client sees"), [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("Who reads
+it"), [component-interfaces.md](component-interfaces.md) (the `runtime-client` row 15),
+[lab-two-entries.md](lab-two-entries.md) (§3, the UI list) and `lab-operations.json` (`ui_kinds`,
+`not_exposed`) are the contract.
+
+**The problem.** A root may declare goal tables and a `records` entry, and a person's records ("this
+key, to this position") push what the scheduler farms (§1.538). But the goal page's view lists no
+records entry (RR1's ruling 7), and the Lab's `goals get` of one answers `not_recognised`: a console
+can neither show the stored records nor offer a key and a position to choose; only an agent can, by
+writing the whole array. What a person needs to see (each lane's current and target position, the
+position a prerequisite raises it to, whether the key is held, why a record does not apply) is
+computed by each evaluation's walk of the records and then dropped.
+
+**Why a new read and a frozen view.** Every type of `GoalView`'s answer refuses unknown members, and
+a connection negotiates no revision: the Runtime cannot tell which revision a client reads. So a
+member added to `GoalView` would make every installed console of revision 14 refuse the first page
+that carried it. The only way that keeps the installed console working is to leave every answer it
+asks for exactly as it is and to put everything new into the answer of a request it never sends:
+one new read kind, in parts, in pages.
+
+**The rulings, as built.**
+- *1, `GoalView` frozen* (`crates/runtime-host/src/host/goals.rs`). Its request and its answer are
+  byte for byte those of revision 14, records entries skipped as before. The one change in its file
+  is that three of its judgements are now functions `GoalPageView` calls too, unchanged in what
+  they decide: the instance's game (`page_game`), the remedy table the next evaluation keeps
+  (`kept_remedy_table`) and whether the page is in memory (`page_sources`); `page_version`,
+  `unchecked_state` and `goal_declaration` are shared as they are.
+- *2, one new read kind* (`RuntimeOperation::GoalPageView {instance_alias, part, cursor?, limit?}`,
+  `RuntimeResult::GoalPageViewed {page}`; `crates/actingcommand-contract/src/runtime/goals.rs`;
+  `crates/runtime-host/src/host/goal_page_view.rs`; `crates/runtime-host/src/goal_page.rs`). Block
+  general, class read, records nothing, no G14 copy; on the `ui` list (`ui_allows`, `ui_kinds` with
+  `console_today: false`); in `not_exposed` (`unsent`): no Lab operation sends it in this slice.
+  Success `request_goal_page_view_completed`.
+- *3, three parts.* `records`, `options` of one entry, `positions` of one ladder (shapes below).
+- *4, one walk* (`crates/runtime-host/src/goal_needs.rs`). The walk of the needs' computation is
+  split: `walk_records` judges each stored record in its order (the edit's word, or `key_repeated`
+  for a key an earlier record of the same table names), walks an applied one (`Walk::need`) and
+  answers, besides the notes and what the walked records need, each record's judgement, its key's
+  held state and each lane's own target, the index the walk takes it to and its current position or
+  the note of why not. `instance_needs` calls it and does what it did after the walk, so its pools,
+  notes, freshness and identity are what they were (the identity is a function of those, of the
+  tables' sha256 and of the records' time). A key's held state and current positions for `options`
+  are read by the walk's own `held` and `read_current` (`read_key`). The read takes the gates the
+  evaluation computes the needs under, in the host's order (policy outcome gate, policy, fact write
+  gate, the fact store), the authoritative projection, the handed runs at its position and the
+  evaluator's own `NeedsProjection`, so freshness is judged as the evaluation judges it. A list's
+  rows are looked up by an index built once per read and per key column (`ProgressLists::key_row`),
+  which keeps the first row of each key as the walk of the rows did; the needs read through it too.
+- *5, the cursor refuses instead of mixing two states, one code for each source.* A cursor of
+  `records` whose records version moved is `goal_page_view_records_moved`; a cursor of any part
+  whose tables' sha256 or records entries' digest moved is `goal_page_view_declaration_moved`;
+  each Denied with `current_version`, the page's version now.
+- *6, codes.* `request_goal_page_view_completed` and `invalid_goal_page_view` (contract);
+  `goal_page_view_refused`, `goal_page_view_records_moved`, `goal_page_view_declaration_moved`
+  (host, `GoalPageCode`); each catalogue entry says the result (Denied, nothing answered, nothing
+  recorded) and the operation (read again from the first page; or send a cursor of the same part).
+- *7, unchanged*: `GoalView`, `EditGoal` and every other request and answer a client of 14 sends or
+  reads; the needs' computation's output; every record; `ledger`, `package`, `actingd-config` and
+  `runtime-outcomes`. Nothing is stored.
+- *8, not this slice*: the Lab's `goals get` of a records entry, the pools' needs and lifted tasks,
+  the line's mark, facts in pages and a guard for oversize reads, a search or a held-only filter of
+  keys, amounts of what a record lacks.
+- *Addendum 1* (the console side's reading of the shapes): the cursor of `options` and `positions`
+  carries no records version (`GoalPageCursor::records_version` is written by `records` alone, and
+  the request's check refuses a cursor that has it on another part or lacks it on `records`): those
+  parts say nothing of the stored records, so an edit of them between two of their pages is
+  answered with the next page; only the declaration's code refuses their cursor.
+
+**The shapes.** `part`: `{part: records}` (default `limit` 512), `{part: options, entry}` (64),
+`{part: positions, entry, ladder}` (512), `ladder` `{of: class, class, column}` or `{of: key, key,
+column, sub?}`. The page: `instance_alias`, `game_id`, `version`, `declaration`, `tables {state,
+sha256?, standard_pack_problem?, json_pointer?}`, `read_at_unix_ms`, `fresh_until_unix_ms?`,
+`records_state?`, `ladder? {source, class?, positions}`, `rows`, `rows_total`, `cut?`
+(`count`|`bytes`), `next?`. Rows: `entry {name, declared, after_entry?, entry?, applies, problem?,
+records_total}`; `record {entry, key, key_name?, to, set, applied, problem?, held?, lanes,
+texts_left_out?}`, a lane `{column, sub?, column_name?, sub_name?, source, target?, raised_to?,
+current?, unknown? {code, fact_key?, reading?, unknown_reason?}, conditions?}`, a position `{index,
+position, said?}`; `column {column, name?, per, subs?, requires}`; `class {class, name?}`; `key
+{key, name?, class, held, lanes [{column, sub?, source, positions, current?, unknown?}]}`; `position
+{index, position, said?}`. The cursor: `{records_version?, tables_sha256?, entries_sha256,
+part_sha256, after}`; `part_sha256` digests the part's members length-prefixed, `entries_sha256`
+the root's records entries (name, table, `max_records`) in file order, each `sha256:` and 64
+lowercase hex digits. A text is an object of locale to string in the pack's order; a position is
+said only by `say_goal_position`.
+
+**Sizes and pages.** A page holds the rows after the cursor, at most `limit`, cut before the row that
+would make it pass 786,432 bytes, at least one; a row is at most 262,144 bytes. Worst cases at the
+contract's bounds (serialized JSON, by hand):
+
+| Row | Worst | Realistic |
+|---|---|---|
+| a text (16 locales of 35 bytes, strings of 128 bytes, every byte escaped) | about 4.8 KiB | about 0.1 KiB |
+| a said position (16 locales) | about 12 KiB | about 0.1 KiB |
+| `column` (named, 8 subs named, 4 requirements each said twice) | about 140 KiB | about 1 KiB |
+| `class` | about 5 KiB | 0.1 KiB |
+| `key` (64 lanes) | about 32 KiB | about 0.3 KiB |
+| `position` | about 12.2 KiB | about 0.1 KiB |
+| `entry` (help of 16 locales) | about 40 KiB | about 0.5 KiB |
+| `record` with its texts / without | can pass 2 MiB / about 50 KiB | about 3 KiB |
+
+A record row that would pass the row bound is built again without its texts (`texts_left_out`); no
+other row passes it within the contract's bounds. At the page bound a page holds at least 24 key rows
+or 62 position rows in the worst case, and the limit in practice.
+
+**Decided here.** A cursor past the part's rows is `invalid_goal_page_view` (the host's own check of
+the contract code; the request's form is the contract's). `next` and `cut` are counted at their
+largest when a page is measured. A record whose entry the root does not declare has no lanes and no
+held state; one whose table the root does not apply has none either. A key's current positions in
+`options` are read only for a key the `held_by` list holds, as the walk reads them. A page not in
+memory answers `GoalView`'s word and no row whatever the cursor; `tables` is then what the workbench
+holds of the root, `not_read` without it. The part's digest is not the JSON of the part, so a
+client's own spelling of the request cannot move it. A stored row the reader took that gives back no
+setter or target (none does) is `goal_records_record_invalid`, and a page that does not serialize
+`runtime_frame_encode_failed`, each Denied for that request alone.
+
+**Tests** (host gate map row "#455 RR4b-1", contract gate map row "#455 RR4b-1"; no clock read in a
+gate file). What reading could not verify is said beside each.
+
+| Test | What it shows |
+|---|---|
+| runtime-host `gate_455_rr4b1::rr4b1_p1_the_needs_and_the_page_take_their_judgement_from_one_walk` | the needs' pools, notes and freshness are the walk's; each record's judgement, held state and lanes (a target raised by a prerequisite, the condition); the records part's rows in order, lanes said in two languages, nothing lacked (not run: the fixture files' reading) |
+| `…::rr4b1_p2_a_lane_not_known_says_why_with_the_walks_own_code` | a key not held or not known has its targets alone; each unknown lane says the walk's note code with its list, reading and `unknown_reason` |
+| `…::rr4b1_p3_a_record_row_past_its_cap_is_answered_without_its_texts` | 57 lanes with 16-language texts are answered without them, under 256 KiB (not run: the sizes are estimated by hand) |
+| `…::rr4b1_p4_a_page_is_cut_by_bytes_and_by_count_and_next_is_there_exactly_when_rows_remain` | 512 said positions cut by bytes under 768 KiB, the rest on the next page, a limit cuts by count, a cursor past the rows is invalid |
+| `…::rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word` | records cursor: moved records, moved tables, moved entries each its word; options and positions cursors take a records edit (Addendum 1) and refuse a moved declaration; the request's form refusals |
+| `…::rr4b1_p6_options_and_positions_and_what_the_root_does_not_have` | the options' rows (requirements said, keys held, not held, a lane not known), positions of a class ladder and of a key's sub, each refusal at its pointer |
+| `…::rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_goal_page` | in composer mode, the page's version and declaration are `GoalView`'s, the record's lanes from a published list, options and positions in pages (not run: the list's freshness through the evaluator's projection) |
+| `…::rr4b1_h2_a_records_edit_moves_the_records_cursor_alone_and_a_new_tables_file_moves_every_cursor` | ruling 5 and Addendum 1 on the host, with `current_version` (not run: the workbench's re-read of a shorter file at the next check) |
+| `…::rr4b1_h3_a_page_not_in_memory_an_undeclared_name_and_what_the_root_does_not_have` | `not_checked_yet` and no row before the first check; `goal_page_view_refused` at `/part/entry`; a cursor past the rows; undeclared records listed `declared: false`; `instance_unknown` |
+| runtime-client `gate_455_rr4b1::rr4b1_c1_goal_page_view_sends_its_members_as_given_and_answers_the_page` | the request member by member, `cursor` and `limit` absent when `None`; the page answered |
+| `…::rr4b1_c2_an_older_runtime_is_unsupported_and_another_instances_page_unexpected` | a Runtime that drops the kind gives `runtime_operation_unsupported`; another instance's page is unexpected |
+
+The gates that pin today's page and must stay green unchanged (they prove the page of 14 byte for
+byte): `gate_455_rr1`, `gate_455_rr2`, the `gate_463_v3` host tests, `gate_455_tk1`, `gate_500_sv2`,
+`gate_503_goal1`, `gate_455_p2`, the MCP `serve_calls` goal rows, and every `gate_455_rr3*` and
+`gate_455_rr4a` test (the walk split). Adapted, the requirement adding a kind and raising the range:
+`gate_434_lab6s3`'s UI list (34 kinds); the rescue module's `gate_429_r0b_pairing` and
+`gate_480_pg2e`, their first tests renamed for [12, 15] (retirements in `ci/retired-gates.toml`);
+actinglab-architecture's `component_interfaces` ([12, 15]) and `workspace_guards`'
+`RUNTIME_OPEN_ORIGIN_OPERATIONS` (the new kind takes no origin gate). No golden is re-recorded.
+
+**What is not changed.** `GoalView` and `EditGoal`, every earlier request and answer, the needs'
+computation and its identity, every record, the ledger, the configuration and every setting.
+
+**At deploy.** Nothing to configure. The installed console keeps working: it sends only revision-14
+requests, whose answers are unchanged, and shows no records until a console that asks the new read
+is installed. The installer's edges pass both ways ([12, 14] and [12, 15] meet).
+
+**Rollback.** Nothing is stored, so nothing is undone. A console that asks the new read of an older
+Runtime has its connection dropped (that Runtime cannot decode the kind); its client reports
+`runtime_operation_unsupported`, and the console shows the page of 14. In the release notes'
+language: 新增：只读的分页读取 `GoalPageView`（`runtime-client` 升到 15）：目标页的记录条目连同每条记录每条梯的目标、被前置拉到的位置、当前位置或读不到的原因、键是否持有（`records`），一张表的列、类别和键及其梯的大小和当前位置（`options`），一条梯的全部位置（`positions`），名字和位置的念法都照包里写的；每页最多 512 行、768 KiB，游标在记录或表变了时拒绝并说明是哪个变了。`GoalView` 一字节不变，已装的界面照常可用。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -52449,6 +52607,7 @@ lift check of one package runs at most once per
 | W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 | W23 | `RuntimePerformanceStatus.memory` and `.vision` (§1.280 PR-1, PR-2; `since` 0.12.41) | runtime-client 6 | #407 PERF-READ | two optional members of W15's status (`deny_unknown_fields`), read from memory: the process's counters and the parts its owners hold, and each vision model's lock waits and inference times; declared [3, 6] in 0.12.41 with `min` unchanged; a reader whose `max` is below 6 refuses an answer that carries them (`runtime_receipt_decode_failed`), and this build fills `memory` on every answer; on PerformanceStatus, not on Status, as W20 |
 | W24 | `RuntimeOperation::GoalView { instance_alias }` → `RuntimeResult::GoalViewed { view }`; `RuntimeOperation::EditGoal { instance_alias, expected_version?, op }` → `RuntimeResult::GoalEdited { edited }` | runtime-client 9 | #463 V3 | §1.383; both on the console's list |
+| W25 | `RuntimeOperation::GoalPageView { instance_alias, part, cursor?, limit? }` → `RuntimeResult::GoalPageViewed { page }` | runtime-client 15 | #455 RR4b-1 | §1.557; on the console's list; no answer of an earlier kind changes |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).

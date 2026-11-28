@@ -255,7 +255,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   handset's observation carries; the range stays [12, 13]. Workflow #489 AVAIL-1 (0.12.76,
 ///   register §1.493) raises `max` to 14: the status member `RuntimeInstanceStatus.unavailable`,
 ///   which a reader of 13 or lower refuses, so (fix round 1) this build's Runtime answers it for no
-///   instance and `min` stays until the release that answers it, so [12, 14].
+///   instance and `min` stays until the release that answers it, so [12, 14]. Workflow #455 RR4b-1
+///   (0.12.104, register §1.557) raises `max` to 15: the request kind `GoalPageView` with its
+///   result, which no client of 14 sends; every earlier request is answered as before, `GoalView`
+///   byte for byte, so [12, 15].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
     ("actingd-config", [5, 35]),
@@ -263,7 +266,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-selection", [1, 1]),
     ("ledger", [3, 10]),
     ("package", [3, 32]),
-    ("runtime-client", [12, 14]),
+    ("runtime-client", [12, 15]),
     ("runtime-outcomes", [1, 1]),
 ];
 

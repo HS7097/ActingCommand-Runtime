@@ -2125,6 +2125,9 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #455 RR4b-1 (register §1.557): one page of one part of an application's goal
+        // page.
+        GoalPageView => "goal_page_view",
         // Workflow #463 V3 (register §1.383): one application's goal page.
         GoalView => "goal_view",
         // Workflow #369 S6b.
@@ -3698,6 +3701,34 @@ actingcommand_contract::outcome_codes! {
         /// was composed. A decision's reason at position 5a, first there, with no wake of its
         /// own; nothing is dispatched, nothing fails. Only the resource side can mend it.
         RuleMissing => "goal_value_rule_missing": warning / none,
+    }
+}
+
+actingcommand_contract::outcome_codes! {
+    /// The host's codes of the goal page read in pages (Workflow #455 RR4b-1, register §1.557;
+    /// `contracts/runtime-interface.md`, "Goal request kinds"). No existing code fits:
+    /// `goal_value_invalid` refuses an edit, and the cursor of event pages names a ledger snapshot
+    /// a page of memory does not have. One code for each cause a reader tells apart: a part that
+    /// names what the root does not have, and each source of a cursor that moved.
+    pub(crate) enum GoalPageCode {
+        /// Error (since 0.12.104). A `GoalPageView` names, for its part, what the application's
+        /// game root does not have, for the reason `goal_problem` names at `json_pointer`, the
+        /// edit's words: no records entry of that name whose table is one of the root's accepted
+        /// tables (`name_unknown` at `/part/entry`), no such key or class of the table
+        /// (`not_an_option` at `/part/ladder/key` or `/part/ladder/class`), no such ladder
+        /// (`out_of_range` at `/part/ladder/column` or `/part/ladder/sub`). Denied, nothing
+        /// answered.
+        Refused => "goal_page_view_refused": error / none,
+        /// Error (since 0.12.104). The cursor of a `GoalPageView` of the part `records` was
+        /// answered over other stored records: the instance's `session.goal_records` record was
+        /// written after that page (`current_version` the goal page's version now). Denied,
+        /// nothing answered: read the part again from its first page.
+        RecordsMoved => "goal_page_view_records_moved": error / none,
+        /// Error (since 0.12.104). The cursor of a `GoalPageView` was answered over another
+        /// declaration: the root's accepted `goal-tables.json` or its `records` entries changed
+        /// after that page (`current_version` the goal page's version now). Denied, nothing
+        /// answered: read the part again from its first page.
+        DeclarationMoved => "goal_page_view_declaration_moved": error / none,
     }
 }
 

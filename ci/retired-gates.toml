@@ -1719,3 +1719,19 @@ test = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknow
 ruling = "#486 ASLEEP-3 (0.12.79; register §1.512; the coordinator's rulings 1 and 4 of fix rounds 1 and 2: a reading alone wakes no instance at a start, and the ordinary check of a restored instance leaves its readings out)"
 reason = "Renamed: its name said the start wakes the instance for a reading alone, which the rulings withdraw; the test now asserts that the start stops the running emulator and wakes nothing."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading, in the same host.toml row."
+
+# apps.toml, the row of Workflow #429 R-0b (the build's runtime-client range; Workflow #455 RR4b-1).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_14"
+ruling = "Workflow #455 RR4b-1 (0.12.104; register §1.557; the coordinator's work order rd-1123/brief-455-rr4b1.md: the request kind GoalPageView takes runtime-client 15, declared [12, 15])"
+reason = "Renamed: the name gave the range [12, 14] the build declared at Workflow #489 AVAIL-1, while the test asserts [12, 15] since Workflow #455 RR4b-1 (runtime-client max 15), so the name said a range the build no longer declares."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_429_r0b_pairing::r0b_the_build_declares_runtime_client_12_to_15, in the apps.toml row of Workflow #429 R-0b: the build's own declaration speaks runtime-client [12, 15]."
+
+# apps.toml, the row of #480 PG-2e (the build's runtime-client range and the rows that state it; Workflow #455 RR4b-1).
+[[retired]]
+fragment = "apps"
+test = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_14_and_its_rows_say_so"
+ruling = "Workflow #455 RR4b-1 (0.12.104; register §1.557; the coordinator's work order rd-1123/brief-455-rr4b1.md: the request kind GoalPageView takes runtime-client 15, declared [12, 15])"
+reason = "Renamed: the name gave the range [12, 14] and the row of revision 14, while the test asserts the declaration [12, 15] and the rows of revision 12 (its floor 12) and 15 (the range), so the name said a range the build no longer declares."
+covered_by = "actingcommand-lab-rescue::lib::install::gate_480_pg2e::pg2e_the_build_declares_runtime_client_12_to_15_and_its_rows_say_so, in the apps.toml row of #480 PG-2e: the declaration speaks runtime-client [12, 15], the row of revision 12 says min is 12 and the row of revision 15 declares [12, 15]."

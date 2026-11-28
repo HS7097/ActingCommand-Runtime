@@ -76,15 +76,15 @@ const GOAL_RECORDS_FACT_SCHEMA: &str = "fact.v1";
 /// The instance's stored `session.resource_targets` record or (Workflow #455 RR2) its
 /// `session.goal_records` record: its rows (empty for content that is no record list), its expiry
 /// and its version (`0` without a record).
-struct StoredRecord {
-    rows: Option<Vec<BTreeMap<String, FactScalar>>>,
+pub(super) struct StoredRecord {
+    pub(super) rows: Option<Vec<BTreeMap<String, FactScalar>>>,
     expires_at_unix_ms: Option<u64>,
-    version: u64,
+    pub(super) version: u64,
 }
 
 impl StoredRecord {
     /// `scope`'s record of `key` as the fact store holds it now.
-    fn of(store: &InstanceFactStore, scope: &FactScope, key: &str) -> Self {
+    pub(super) fn of(store: &InstanceFactStore, scope: &FactScope, key: &str) -> Self {
         match store.active_revision(scope, key) {
             Some((record, sequence, _)) => Self {
                 rows: Some(match &record.content {
@@ -108,8 +108,8 @@ impl StoredRecord {
 /// Workflow #455 RR2 (ruling 5): the page's one version over its two records, the greater of
 /// their sequences (`0` without either), with the key of the record that holds it
 /// (`session.resource_targets` when neither is the later): what `GoalView` answers and every
-/// `EditGoal`'s `expected_version` is compared with.
-fn page_version(record: &StoredRecord, records: &StoredRecord) -> (&'static str, u64) {
+/// `EditGoal`'s `expected_version` is compared with. Workflow #455 RR4b-1: and `GoalPageView`.
+pub(super) fn page_version(record: &StoredRecord, records: &StoredRecord) -> (&'static str, u64) {
     if records.version > record.version {
         (GOAL_RECORDS_FACT_KEY, records.version)
     } else {
@@ -119,9 +119,49 @@ fn page_version(record: &StoredRecord, records: &StoredRecord) -> (&'static str,
 
 /// What the page is judged by, once it is in memory: the active catalog and the variable table a
 /// dispatch reads.
-struct PageSources {
-    catalog: LoadedCatalog,
+pub(super) struct PageSources {
+    pub(super) catalog: LoadedCatalog,
     variables: Arc<VariableTable>,
+}
+
+/// Workflow #455 RR4b-1: the remedy table the last evaluation built, `table`, when it is the one
+/// the next evaluation keeps: built for the active catalog `catalog` from the procedure manifest in
+/// place (`manifest_digest`). `GoalView` and `GoalPageView` judge it alike.
+pub(super) fn kept_remedy_table(
+    table: Option<BuiltTable>,
+    catalog: Option<&LoadedCatalog>,
+    manifest_digest: Option<&str>,
+) -> Option<BuiltTable> {
+    table.filter(|table| {
+        catalog.is_some_and(|catalog| {
+            table.catalog_hash() == catalog.compiled().catalog_hash()
+                && table.manifest_digest() == manifest_digest
+        })
+    })
+}
+
+/// Workflow #455 RR4b-1: what the page is judged by, when it is in memory (fix round 1 of #463
+/// V3): the active catalog `catalog` and the variable table a dispatch reads, the workbench's
+/// (`goal_roots`) with a composed standard pack once its check read the game root (`root_read`),
+/// else the remedy table's (`table`, the one [`kept_remedy_table`] keeps). `None` until all of
+/// them are in memory. `GoalView` and `GoalPageView` judge it alike.
+pub(super) fn page_sources(
+    catalog: Option<LoadedCatalog>,
+    table: Option<&BuiltTable>,
+    goal_roots: Option<&StandardPackGoalRoots>,
+    root_read: bool,
+) -> Option<PageSources> {
+    match (catalog, table, goal_roots) {
+        (Some(catalog), Some(_), Some(roots)) if root_read => Some(PageSources {
+            catalog,
+            variables: Arc::clone(&roots.table),
+        }),
+        (Some(catalog), Some(table), None) => Some(PageSources {
+            catalog,
+            variables: Arc::new(table.variables().clone()),
+        }),
+        _ => None,
+    }
 }
 
 /// What a request read of the page: the page itself, what the workbench holds of the game's
@@ -433,21 +473,7 @@ impl HostShared {
         time: EvaluationTime,
         operation: HostLocation,
     ) -> RuntimeHostResult<PageRead> {
-        let instances = lock(&self.policy_inputs, operation)?
-            .as_ref()
-            .map(|inputs| inputs.facts().instances.clone())
-            .unwrap_or_default();
-        let game_id = instances
-            .iter()
-            .find(|instance| instance.instance_id == instance_alias)
-            .map(|instance| instance.game_id.clone())
-            .ok_or_else(|| {
-                RuntimeHostError::request(
-                    HostCode::ResourceTargetViewInstanceUnconfigured,
-                    operation,
-                    RuntimeErrorCode::InstanceUnknown,
-                )
-            })?;
+        let game_id = self.page_game(instance_alias, operation)?;
         let goal_roots = self.standard_pack_goal_roots()?;
         let manifest_digest = lock(&self.procedure_manifest, operation)?
             .as_ref()
@@ -507,28 +533,14 @@ impl HostShared {
             })?;
         // The remedy table the last evaluation built, when it is the one the next evaluation keeps:
         // built for the active catalog from the procedure manifest in place.
-        let table = table.filter(|table| {
-            catalog.as_ref().is_some_and(|catalog| {
-                table.catalog_hash() == catalog.compiled().catalog_hash()
-                    && table.manifest_digest() == manifest_digest.as_deref()
-            })
-        });
+        // Workflow #455 RR4b-1: the one judgement `GoalPageView` reads too.
+        let table = kept_remedy_table(table, catalog.as_ref(), manifest_digest.as_deref());
         let root = goal_roots
             .as_ref()
             .and_then(|roots| roots.roots.get(&game_id));
         // The variable table a dispatch reads: the workbench's with a composed standard pack, else
         // the remedy table's.
-        let sources = match (catalog, &table, &goal_roots) {
-            (Some(catalog), Some(_), Some(roots)) if root.is_some() => Some(PageSources {
-                catalog,
-                variables: Arc::clone(&roots.table),
-            }),
-            (Some(catalog), Some(table), None) => Some(PageSources {
-                catalog,
-                variables: Arc::new(table.variables().clone()),
-            }),
-            _ => None,
-        };
+        let sources = page_sources(catalog, table.as_ref(), goal_roots.as_ref(), root.is_some());
         // Fix round 2: one word per cause of a page that lists nothing. A root the workbench's
         // last check keeps nothing of answers why (asking again would not change it); else what
         // the page is judged by is not in memory yet.
@@ -611,6 +623,32 @@ impl HostShared {
             records,
             tables,
         })
+    }
+
+    /// The game of `instance_alias` as the policy inputs configure it, a refusal naming
+    /// `operation`: an instance they do not configure is
+    /// `resource_target_view_instance_unconfigured`, as the resource target view refuses it.
+    /// Workflow #455 RR4b-1: `GoalPageView` reads it too.
+    pub(super) fn page_game(
+        &self,
+        instance_alias: &str,
+        operation: HostLocation,
+    ) -> RuntimeHostResult<String> {
+        let instances = lock(&self.policy_inputs, operation)?
+            .as_ref()
+            .map(|inputs| inputs.facts().instances.clone())
+            .unwrap_or_default();
+        instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_alias)
+            .map(|instance| instance.game_id.clone())
+            .ok_or_else(|| {
+                RuntimeHostError::request(
+                    HostCode::ResourceTargetViewInstanceUnconfigured,
+                    operation,
+                    RuntimeErrorCode::InstanceUnknown,
+                )
+            })
     }
 
     /// #503 GOAL-1 (ruling 4; `contracts/runtime-interface.md`, "Goal request kinds"): the answer
@@ -744,7 +782,7 @@ fn declaration_state(state: GoalDeclarationRead) -> GoalDeclarationState {
 /// the start read, with why as the check recorded it (the file, and the reader's first problem
 /// with its pointer or the operating system's failure kind); `no_schedule` for a game without a
 /// standard pack root with `schedule.json`; else `not_checked_yet`.
-fn unchecked_state(unread: Option<&RootUnread>) -> (GoalProblem, GoalDeclarationState) {
+pub(super) fn unchecked_state(unread: Option<&RootUnread>) -> (GoalProblem, GoalDeclarationState) {
     match unread {
         Some(RootUnread::Failing(failure)) => {
             let text = |outcome: &actingcommand_contract::outcome::Outcome, key: &str| {
@@ -781,7 +819,7 @@ fn unchecked_state(unread: Option<&RootUnread>) -> (GoalProblem, GoalDeclaration
 /// (`goals`; `None` without a composed standard pack, where no workbench reads a game root,
 /// `not_read`): its state and the accepted file. A refused file names its sha256 and its first
 /// problem with its pointer; it, an unreadable file and an absent one list no entry.
-fn goal_declaration(
+pub(super) fn goal_declaration(
     goals: Option<&RootGoals>,
 ) -> (GoalDeclarationState, Option<StandardPackGoals>) {
     match goals {

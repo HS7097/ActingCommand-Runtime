@@ -322,6 +322,9 @@ mod gate_455_rr3c;
 // #455 RR4a (0.12.100; register §1.546): a tables file that writes the names a person reads gives
 // the needs of the same file without them, its sha256 aside.
 mod gate_455_rr4a;
+// #455 RR4b-1 (0.12.104; register §1.557): the goal page's records with their positions, a table's
+// options and a ladder's positions, read in pages from the walk the needs take.
+mod gate_455_rr4b1;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

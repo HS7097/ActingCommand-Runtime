@@ -208,6 +208,8 @@ crate::outcome_codes! {
         // Workflow #463 V3 (register §1.383): the goal page's read and its one-value edit.
         GoalViewCompleted => "request_goal_view_completed": success / none,
         EditGoalCompleted => "request_edit_goal_completed": success / none,
+        // Workflow #455 RR4b-1 (register §1.557): the goal page in pages.
+        GoalPageViewCompleted => "request_goal_page_view_completed": success / none,
     }
 }
 
@@ -850,6 +852,9 @@ crate::outcome_codes! {
         InvalidPlayerHoldReceipt => "invalid_player_hold_receipt": error / none,
         // A status `control` that disagrees with the same status's members (R-7a §2.6 O-7).
         InvalidRuntimeInstanceControl => "invalid_runtime_instance_control": error / none,
+        // Workflow #455 RR4b-1 (register §1.557, since 0.12.104): a `GoalPageView` request whose
+        // part, limit or cursor is of the wrong form, or whose cursor is of another part.
+        InvalidGoalPageView => "invalid_goal_page_view": error / none,
     }
 }
 

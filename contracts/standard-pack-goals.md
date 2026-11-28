@@ -172,6 +172,18 @@ what that takes are the root's `goal-tables.json` ([standard-pack-goal-tables.md
   no word, so a client of today's `runtime-client` revision reads the page as it reads it without
   the entry; the page's `version` is the greater of the sequences of the application's two records.
   A stored goal shows what the person stored: nothing computed is shown in it or added to it.
+  Workflow #455 RR4b-1 (since 0.12.104, `runtime-client` 15; [v012-register.md](v012-register.md)
+  §1.557): a client that reads records reads them with the other read `GoalPageView`
+  ([runtime-interface.md](runtime-interface.md), "The goal page in pages"), which `GoalView`'s
+  clients never send, so `GoalView` stays as above, byte for byte. Its part `records` lists each
+  records entry in file order (whether it applies, the entry before it) with its stored records,
+  then the stored records of names no entry declares; each record with the needs' own judgement of
+  it (applied, or its word), its key's held state and, for each ladder the computation walks, the
+  target, the position a prerequisite raises it to and the current position or why it is not
+  known, said through the table's names. Its parts `options` and `positions` give the table's
+  columns, classes and keys and one ladder's positions, from which a person chooses whom to raise
+  and how far; the choice is written with `EditGoal` as above. No amount of what a record lacks is
+  shown in a record.
 - **What the records do** (Workflow #455 RR3, since 0.12.95; [v012-register.md](v012-register.md)
   §1.538). Before every evaluation the Runtime computes from each instance's stored records, the
   root's tables, the instance's progress lists and its holdings what the recorded characters still

@@ -18186,6 +18186,26 @@
       "common_causes": "A Runtime defect, or a peer of another build.",
       "handling": "Report the defect with the status; the Runtime goes on."
     },
+    "invalid_goal_page_view": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): a GoalPageView request of the wrong form, refused before anything is read: a part whose entry is no entry name or whose ladder names a key, class, column or sub that is empty, longer than 128 bytes or holds a control character; a limit of 0 or above 512; or a cursor that is not the next of a page of this part (its part_sha256 another part's, a records_version on a cursor of options or positions or none on one of records, a digest that is not sha256: and 64 lowercase hex digits), or (the Runtime's own check) whose after passes the rows the part holds. Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "A client defect: a cursor kept from another part, a hand-written cursor, or a limit outside 1 to 512.",
+      "handling": "Send the request again without a cursor (the part's first page) or with the next of the last page of the same part, and a limit of 1 to 512."
+    },
     "request_acquire_player_hold_completed": {
       "category": "success",
       "ladder_class": "none",
@@ -18297,6 +18317,20 @@
       "description": "A completed receipt of an EditGoal request (Workflow #463 V3, runtime-client 9): one value of an application's goal page was set or cleared by its name and the application's session.resource_targets record published as one fact.published (or, replayed, the record already held it); the result names the record's version after the edit and that event. Workflow #455 RR2 (since 0.12.94): a records entry's records are its session.goal_records record instead, and the version the result names is the page's after the edit, the greater of the two records' sequences. Workflow #378 A4: one success code per request kind.",
       "common_causes": "The request succeeded.",
       "handling": "Nothing to do; send the result's version as the next edit's expected_version."
+    },
+    "request_goal_page_view_completed": {
+      "category": "success",
+      "ladder_class": "none",
+      "owner": "contract",
+      "layer": "contract",
+      "uncertain": false,
+      "values": {},
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "A completed receipt of a GoalPageView request (Workflow #455 RR4b-1, runtime-client 15): one page of one part of an application's goal page, from the Runtime's memory and fact store: the records of its records entries with each lane's target, raised position, current position or why it is not known and the key's held state (records), a records entry's table with its columns, classes and keys (options), or one ladder's positions (positions); the goal page's version, what the workbench holds of goals.json and goal-tables.json, the rows after the cursor and, when rows remain, the next cursor. Nothing is recorded. Workflow #378 A4: one success code per request kind.",
+      "common_causes": "The request succeeded.",
+      "handling": "Nothing to do; for the rest of the part send the result's next as the cursor of the same part, and the result's version as the next EditGoal's expected_version."
     },
     "invalid_contained_task_variable_count": {
       "category": "error",
