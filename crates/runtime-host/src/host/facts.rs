@@ -646,11 +646,20 @@ impl HostShared {
                 previous_version = Some(sequence);
             }
         }
-        let preview = lock(&self.facts, ContractLocation::PublishFact)?.preview_observation(
-            &observation,
-            now,
-            &self.ledger,
-        )?;
+        // Workflow #503 FACT-R: a scope the publication's new keys would take past its bound takes
+        // them in the room of its records that expired more than seven days ago, when those cover
+        // it; the check counts that room, and the records are written below, after every other
+        // check of the publication has passed.
+        let (preview, reclamation) = {
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            let reclamation = facts.plan_expiry_reclamation(&observation, now);
+            let freed = reclamation
+                .as_ref()
+                .map_or(0, crate::fact_store::ExpiryReclamation::freed);
+            let preview =
+                facts.preview_observation_freeing(&observation, now, &self.ledger, freed)?;
+            (preview, reclamation)
+        };
         if let Some(event_id) = preview {
             let record = &observation.records[0];
             let facts = lock(&self.facts, ContractLocation::PublishFact)?;
@@ -701,6 +710,7 @@ impl HostShared {
                 ContractLocation::PublishFacts,
             ));
         }
+        let reclaiming = reclamation.map(|reclamation| (reclamation, observation.clone()));
         let payload =
             FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
                 .map_err(|_| {
@@ -709,6 +719,16 @@ impl HostShared {
                         ContractLocation::PublishFacts,
                     )
                 })?;
+        // Workflow #503 FACT-R: the room is reclaimed now, in this hold; the check then runs again
+        // on the store that followed the records, without the room, and must pass.
+        if let Some((reclamation, observation)) = &reclaiming {
+            self.reclaim_expired_under_gate(reclamation)?;
+            lock(&self.facts, ContractLocation::PublishFact)?.preview_observation(
+                observation,
+                now,
+                &self.ledger,
+            )?;
+        }
         let links = match source_request {
             Some(request) => self.events.request_links(request, None, None, None),
             None => self.events.system_links()?,
@@ -783,6 +803,80 @@ impl HostShared {
             self.fatal.report_warning(&outcome);
         }
         self.synchronize_fact_store_under_gate()
+    }
+
+    /// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): the
+    /// records of `reclamation`, written in the caller's hold of `fact_write_gate` before the
+    /// publication that needs their room. First one Warning `runtime.failed`
+    /// `fact_store_expired_facts_reclaimed` under the system links (`instance_id` the alias, or
+    /// `server` or `game`, the scope's id; `count` the records reclaimed; `limit_count` the
+    /// scope's bound), handed to the daemon's log too; the store follows it and the invalidations
+    /// it derives by the ordinary rule are written. Then, per record in the plan's order, one
+    /// `fact.invalidated` whose trigger is the warning and whose time is the record's own expiry,
+    /// with its State tombstone in one transaction, the store following each. Each record stands
+    /// on its own: a failure stops the reclamation there, the publication is not appended, and a
+    /// start loads what was written.
+    fn reclaim_expired_under_gate(
+        &self,
+        reclamation: &crate::fact_store::ExpiryReclamation,
+    ) -> RuntimeHostResult<()> {
+        let outcome = Outcome::new(FactCapacityCode::ExpiredFactsReclaimed)
+            .operation(ContractLocation::PublishFacts);
+        let outcome = match reclamation.scope() {
+            FactScope::Instance { instance_id } => outcome.instance_id(instance_id.as_str()),
+            FactScope::Server { server_id } => outcome.server(server_id.as_str()),
+            FactScope::Game { game_id } => outcome.game(game_id.as_str()),
+        }
+        .count(u32::try_from(reclamation.records().len()).unwrap_or(u32::MAX))
+        .limit_count(u32::try_from(reclamation.bound()).unwrap_or(u32::MAX));
+        let warning = self.append_event_under_fact_gate(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            self.events.system_links()?,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome.clone(),
+                DiagnosticDetailDraft::new(
+                    "instance_fact_store",
+                    HostLocation::CommitFact,
+                    "runtime_host",
+                    ContractLocation::PublishFacts.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        self.fatal.report_warning(&outcome);
+        self.synchronize_fact_store_under_gate()?;
+        for (key, published_sequence) in reclamation.records() {
+            let (data, work) = lock(&self.facts, ContractLocation::PublishFacts)?
+                .prepare_expiry_reclamation(
+                    &self.ledger,
+                    reclamation.scope(),
+                    key,
+                    *published_sequence,
+                    &warning,
+                )?;
+            let draft = self.events.draft(
+                EventSeverity::Info,
+                EventSource::Runtime,
+                OriginModule::FactStore,
+                EventActor::Runtime,
+                self.events.system_links()?,
+                FactPayloadDraft::invalidated(data, AuditInput::new()),
+            )?;
+            let draft = self.events.sanitize(draft)?;
+            let persisted = self
+                .ledger
+                .append_transaction(draft, Box::new(work))
+                .map_err(crate::fact_store::fact_transaction_error)?;
+            // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
+            self.policy_wakes.raise(persisted.event_type());
+            self.synchronize_fact_store_under_gate()?;
+        }
+        Ok(())
     }
 
     /// Workflow #411 B15 R6 (model-b15 §5.1): the write rule of one `session.remedy.choices`

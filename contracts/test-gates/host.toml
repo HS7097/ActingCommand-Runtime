@@ -5020,3 +5020,21 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr1::rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_applies_no_records",
 ]
 incident = ["#455 RR4a"]
+
+# #503 FACT-R (0.12.103; register §1.555; contracts/instance-fact-store.md, "Expiry reclamations"; contracts/component-interfaces.md, the ledger row 11), no clock read in the gate file. The store as the host drives it, on the fixture's own clock (a ledger and its State store; the plan, the check with the room it frees, the warning, the invalidations it derives, each reclamation with its State tombstone in one transaction, the check again, the publication): a full instance takes a new key in the room of its longest expired fact, the ledger showing the warning, the invalidation (trigger the warning, time the fact's expiry) and the publication in that order (a); three new keys reclaim three in the order of their expiries, and with fewer candidates nothing is written and the refusal is fact_store_capacity_exceeded as before (b); the four keys whose writers read an expired record back, the observation's own key, a fact expired less than the margin and facts without an expiry are never taken, and ties go by publication then key (c); after reclamations the start's tagged load and the full replay equal the live store, each reclaimed key's latest_observed its expiry, and the history at every position from the first warning on equals the live store there (d); a made-up reclamation (a trigger of another type, a fact expired less than the margin before the trigger, a time other than the expiry, a fact without an expiry) is refused fatally by the State projection with nothing appended, and the three the record shows by the live store's reducer, the history and the replay (e); the reclaimed snapshot is refused fact_source_snapshot_invalidated, a reading at the expiry fact_observation_not_newer, and one observed after the expiry but before the reclamation is taken as a new key (f); a full game reclaims an expired priority offset published under the operator's origin, the State projection taking that origin for this form (g); a store a build before 0.12.76 filled past its bound reclaims back to it or is refused (h); a fact that lists runtime.failed is dropped by the warning by the ordinary rule and counts as freed (j). On the S168-4 gate's host, a run whose new list meets its instance full of facts expired eight days before completes, with one warning fact_store_expired_facts_reclaimed under the system links (instance_id, count 1, limit_count 224) and one invalidation naming it (i). The declaration and the ledger row 11 say [3, 11] (k).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_a_a_full_instance_takes_a_new_key_in_the_room_of_its_longest_expired_fact",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_b_three_new_keys_take_three_and_too_few_candidates_write_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_c_the_margin_and_the_exclusions_keep_their_facts_and_ties_go_by_sequence_then_key",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_d_a_start_a_replay_and_the_history_rebuild_the_live_store_after_reclamations",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_e_a_made_up_reclamation_is_refused_by_the_state_the_store_the_history_and_the_replay",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_f_a_reading_captured_before_the_reclamation_is_a_new_key_after_it",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_g_a_full_game_reclaims_an_expired_offset_a_request_published",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_h_a_store_past_its_bound_reclaims_back_to_it_or_is_refused",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_i_a_runs_new_list_on_a_full_instance_takes_the_room_of_expired_facts",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_j_a_fact_that_lists_runtime_failed_is_dropped_by_the_warning_and_counted_as_freed",
+    "actingcommand-runtime-host::lib::tests::gate_503_factr::factr_k_the_declaration_and_the_ledger_row_say_3_to_11",
+]
+incident = ["#503 FACT-R"]
