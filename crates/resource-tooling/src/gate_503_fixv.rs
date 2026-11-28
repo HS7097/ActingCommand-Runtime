@@ -203,6 +203,11 @@ fn warned(warnings: &[Outcome], code: SharedCode) -> Vec<Value> {
 #[test]
 fn fixv_the_writer_writes_a_value_of_any_sign_back_and_finds_no_false_difference() {
     let (temp, root) = game_root(0);
+    // A file of version 1 first, as `gate_477_cv1` (3) does: `converted` names the entries of a
+    // version 1 file the line converts, and a root with no file has none to convert.
+    let plain = write(&root, &[], None, false);
+    assert_eq!(plain.status, "written");
+    assert!(plain.converted.is_none());
     let converted = write(&root, &[], None, true);
     assert_eq!(converted.status, "written");
     assert_eq!(
