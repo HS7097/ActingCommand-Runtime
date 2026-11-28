@@ -2642,9 +2642,12 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     // (register §1.538, ruling 5): the needs the host computed from each instance's stored
     // records are stacked on them, in memory, for this evaluation alone. #455 SL2 (register
     // §1.547): each record is read without its lines, which weigh nothing, before the needs are
-    // stacked.
+    // stacked. #455 SL3 (register §1.559): the lines in effect, read from the same records, go to
+    // the benefit gate through the placement context.
+    let (weighed, stored_lines) =
+        crate::resource_targets::weighed_policies_and_lines(catalog, facts, time)?;
     let target_policies = crate::resource_targets::stack_record_needs(
-        crate::resource_targets::weighed_target_policies(catalog, facts, time)?,
+        weighed,
         left_out.record_needs(),
         &facts.instances,
     );
@@ -2785,6 +2788,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         timeline_events: &timeline_events,
         turns: &turns,
         instance_lines,
+        stored_lines: &stored_lines,
         amounts: &amounts,
         left_out,
         asleep: &asleep,
@@ -4773,6 +4777,11 @@ struct PlacementContext<'a> {
     /// gives its pools, read before the catalog's ([`capped`]); none outside the Runtime's
     /// cycle.
     instance_lines: &'a InstancePoolLines,
+    /// #455 SL3 (register §1.559): the lines in effect on each instance's pools whose spending a
+    /// line governs, read from the stored records by the walk that leaves them out of what is
+    /// weighed ([`crate::resource_targets::weighed_policies_and_lines`]); the benefit gate presses
+    /// their spenders below them ([`benefit`]).
+    stored_lines: &'a crate::resource_targets::StoredSpendLines,
     /// #428 SCHED-C1f1 (register §1.303 SC1F-2): the amounts in effect of the consumptions read
     /// from a fact, resolved once for the evaluation ([`consumption::resolve`]).
     amounts: &'a ConsumptionAmounts,

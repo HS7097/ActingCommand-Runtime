@@ -2350,7 +2350,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.32",
-      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or a regenerating pool it consumes has a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading).",
+      "description": "Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md \"Net benefit within a tier\"): a judged candidate's net benefit is unknown, so it is not dispatched; unknown is never 0 and the known part is never added up. benefit_gap says why: the task declares no produces or consumes entry, an entry's amount or a pool valuation it touches is the pending marker or missing (pool_id), or a regenerating pool it consumes has a reading that is unknown or expired (pool_id, and fact_key with unknown_reason when the pool reads a fact; the fact refresh is asked for that reading); #455 SL3 (since 0.12.104): so does a pool it consumes whose spending a line in effect on the instance governs, when its amount is not known (reading_unknown).",
       "common_causes": "The resource side has not written the task's produces and consumes, or the pools' valuation, yet (Alice's ruling 116: business dispatch waits until values exist); or a pool reading has expired.",
       "handling": "Write the task's produces and consumes and each touched pool's valuation in the game's schedule.json; actinglab standard-pack check reports how many judged rules are complete, pending and undeclared. A reading is refreshed by the fact refresh."
     },
@@ -2899,6 +2899,32 @@
       "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the instance holds stored records and its stored session.resource_targets record is a v1 policy, which weighs its named tasks alone: the needs the records compute are not stacked on it. On every candidate of the instance.",
       "common_causes": "The instance's targets were written as an actingcommand.resource-targets.v1 document.",
       "handling": "Write the instance's targets as a v2 document, or set its goals by name (goals set); the needs then stack on them."
+    },
+    "spend_line_pressed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "line_at_least": "required",
+        "pool_reading": "required",
+        "consumption": "required",
+        "line_shortfall": "required",
+        "pressing_milli": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Scheduling decision reason (#455 SL3, register section 1.559; contracts/scheduling/README.md \"A pool whose spending a line governs\"): a judged candidate consumes a pool whose spending a line governs (the pool writes spend_line), a line is in effect on its instance (line_at_least, the stored goal's at_least on the pool), and its run would leave the pool below it: the pool's reading pool_reading less the run's consumption in whole units consumption leaves line_shortfall below the line. Its net benefit was charged pressing_milli for the units it takes from below the line, min(consumption, line_shortfall), each at the pool's spend_line price of scale units times min(1, line_shortfall / scale): the farther below, the dearer each unit. It runs if what is left is positive: the codes that decide are the ones of before (policy_benefit_nonpositive, benefit_within_tolerance, pool_line_held, capped_spend, or a dispatch). One reason for each such pool, in the order its consumption is declared, after benefit_fixed_value and before the decision's other reasons.",
+      "common_causes": "The pool is below, or near, the line a person set on it, and the task spends it.",
+      "handling": "None. To stop the pressing, raise the pool's amount, lower the line or clear it on the goal page; the price and its slope are the pool's spend_line in the resource root's schedule.json (price_milli, scale)."
     }
   }
 }

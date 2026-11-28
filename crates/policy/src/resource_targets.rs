@@ -835,8 +835,8 @@ fn pool_target_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
 /// without a valuation and without `target_defaults`, so [`pool_target_terms`] gives it nothing. The
 /// one place the difference is read, from the catalog in force: a line carries `at_least` alone and
 /// needs no producer ([`check_target_v2`], the v1 check), the targetable list names its pool with
-/// neither term required ([`listed_terms`]), and the evaluation reads no line
-/// ([`weighed_target_policies`]).
+/// neither term required ([`listed_terms`]), and the evaluation weighs no line and (#455 SL3) hands
+/// each line in effect to the benefit gate ([`weighed_policies_and_lines`]).
 fn line_pool(pool: &PoolSpec) -> bool {
     pool.spend_line.is_some()
 }
@@ -2004,12 +2004,32 @@ fn landing_targets(
 /// error: every instance it covers notes it as ignored (a server record over a game one). The
 /// map holds only the instances with something to report. #455 SL2: every stored target as it is
 /// stored, lines included, as the view (`ResourceTargetView`) shows them; the evaluation reads
-/// [`weighed_target_policies`].
+/// [`weighed_policies_and_lines`].
 pub(crate) fn instance_target_policies(
     facts: &EvaluationFacts,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
-    target_policies(facts, time, |_, _| false)
+    Ok(target_policies(facts, time, |_, _| None)?.0)
+}
+
+/// #455 SL3 (register §1.559; `contracts/resource-targets.md`, "A pool's line";
+/// `contracts/scheduling/README.md`, "A pool whose spending a line governs"): the lines in effect on
+/// each instance, by the catalogue pool each is on: the `at_least` of every stored target the
+/// evaluation's walk leaves out of what it weighs ([`weighed_policies_and_lines`]) that is live,
+/// its record read whole as an active policy with the target among the targets it weighs (a v1 or
+/// v2 document within its lifetime; a v3 target within its own lifetime, or without one). The
+/// benefit gate presses the spenders of such a pool below its line; nothing else reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StoredSpendLines {
+    /// The lines `L` by instance alias, then by catalogue pool id.
+    by_instance: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+impl StoredSpendLines {
+    /// The line `L` in effect on `instance_id` on the catalogue pool `pool_id`, if one is.
+    pub(crate) fn line(&self, instance_id: &str, pool_id: &str) -> Option<u64> {
+        self.by_instance.get(instance_id)?.get(pool_id).copied()
+    }
 }
 
 /// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): the stored
@@ -2019,32 +2039,48 @@ pub(crate) fn instance_target_policies(
 /// its own lifetime with it, before anything reads them, so a line adds no term, order, reason,
 /// gap, run count or stacked need to any task, and a record that holds lines alone is read as one
 /// that holds no target (no policy). Nothing stored is rewritten; the view and the goal page show
-/// the lines as stored. The next slice that presses spending reads the lines here, from the same
-/// records.
-pub(crate) fn weighed_target_policies(
+/// the lines as stored. #455 SL3 (register §1.559): the walk is a partition, and its other half,
+/// the lines in effect read from the same records ([`StoredSpendLines`]), is handed to the benefit
+/// gate beside the policies.
+pub(crate) fn weighed_policies_and_lines(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     time: EvaluationTime,
-) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+) -> PolicyEvaluationResult<(BTreeMap<String, InstanceTargetPolicy>, StoredSpendLines)> {
     target_policies(facts, time, |instance_id, resource| {
         facts
             .instances
             .iter()
             .find(|instance| instance.instance_id == instance_id)
             .and_then(|instance| target_pool(catalog, resource, instance))
-            .is_some_and(line_pool)
+            .filter(|pool| line_pool(pool))
+            .map(|pool| pool.id.as_str())
     })
 }
 
-/// The walk of [`instance_target_policies`] and [`weighed_target_policies`]: each record read by
-/// [`stored_policy_state`] without the targets `line` names, by the record's instance and the
-/// target's `resource`.
-fn target_policies(
+/// #455 SL2's reading of the stored policies as the evaluation weighs them: the first half of
+/// [`weighed_policies_and_lines`], which SL2's gate compares with the view's reading.
+#[cfg(test)]
+pub(crate) fn weighed_target_policies(
+    catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     time: EvaluationTime,
-    line: impl Fn(&str, &str) -> bool,
 ) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    Ok(weighed_policies_and_lines(catalog, facts, time)?.0)
+}
+
+/// The walk of [`instance_target_policies`] and [`weighed_policies_and_lines`]: each record read by
+/// [`stored_policy_state`] without the targets `line` names a pool of, by the record's instance and
+/// the target's `resource`. #455 SL3 (register §1.559): and the partition's other half, each
+/// instance-scoped record read whole by the same reader, whose live targets `line` names a pool of
+/// are the instance's lines in effect on those pools ([`StoredSpendLines`]).
+fn target_policies<'a>(
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    line: impl Fn(&str, &str) -> Option<&'a str>,
+) -> PolicyEvaluationResult<(BTreeMap<String, InstanceTargetPolicy>, StoredSpendLines)> {
     let mut policies = BTreeMap::<String, InstanceTargetPolicy>::new();
+    let mut lines = StoredSpendLines::default();
     for fact in facts
         .facts
         .iter()
@@ -2052,9 +2088,33 @@ fn target_policies(
     {
         let scope_kind = match &fact.scope {
             ScopeSelector::Instance { instance_id } => {
-                let of_instance = |resource: &str| line(instance_id.as_str(), resource);
+                let of_instance = |resource: &str| line(instance_id.as_str(), resource).is_some();
                 if let Some(state) = stored_policy_state(fact, instance_id, time, &of_instance) {
                     policies.entry(instance_id.clone()).or_default().state = Some(state);
+                }
+                // #455 SL3: the targets the read above left out that the record, read whole,
+                // weighs now (it is active and they are live) are the lines in effect.
+                let whole = stored_policy_state(fact, instance_id, time, &|_: &str| false);
+                let live = match &whole {
+                    Some(TargetPolicyState::Active { targets, .. }) => targets
+                        .iter()
+                        .map(|target| (target.resource.as_str(), target.condition))
+                        .collect::<Vec<_>>(),
+                    Some(TargetPolicyState::ActiveV2 { targets, .. }) => targets
+                        .iter()
+                        .map(|target| (target.resource.as_str(), target.condition))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for (resource, condition) in live {
+                    if let Some(pool_id) = line(instance_id.as_str(), resource) {
+                        let TargetCondition::AtLeast { amount } = condition;
+                        lines
+                            .by_instance
+                            .entry(instance_id.clone())
+                            .or_default()
+                            .insert(pool_id.to_owned(), amount);
+                    }
                 }
                 continue;
             }
@@ -2072,7 +2132,7 @@ fn target_policies(
             }
         }
     }
-    Ok(policies)
+    Ok((policies, lines))
 }
 
 /// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): whether `ResourceTargetView`

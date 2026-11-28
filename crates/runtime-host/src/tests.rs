@@ -339,6 +339,11 @@ mod gate_455_sl2;
 // pool's trigger line before the line; the idle plan keeps that release, and three answers only a
 // change lets through are held.
 mod gate_503_wake;
+
+// #455 SL3 (0.12.104; register §1.559): a line stored through the stored document presses its
+// pool's spender until a higher reading, and an instance that can sleep is not woken for a pressed
+// spender.
+mod gate_455_sl3;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

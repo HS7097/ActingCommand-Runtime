@@ -53456,6 +53456,171 @@ there was one each time a run's cost regenerated.
 consumer due again and wakes the instance at once, as before. Nothing it reads was written in a new
 form.
 
+### 1.559 Slice #455 SL3 (0.12.104): below its line a pool's spenders are charged for the units they take from below it, the more for each unit the farther below, and say so (`spend_line_pressed`) (board #455; the owner's words of 11-28, in neutral words below; the rulings 1 to 9 the coordinator's of 11-29; coordinator work order `rd-1123/brief-455-sl3.md` after the read-only study `rd-1123/study-spend-line.md`; on main `b5e9102e`, v0.12.101)
+
+This section takes 1.559 (§1.552 to §1.558 are slices built beside it; whichever merges later keeps
+the sections in order). It ships in 0.12.104. [scheduling/README.md](scheduling/README.md) ("A pool
+whose spending a line governs": its member table and the new "Below a line"; "Net benefit within a
+tier": "Unknown is never 0", "A declared 0", "Within tolerance"; "Pool lines", "At each
+evaluation"), [resource-targets.md](resource-targets.md) ("A pool's line"),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("A currency a line governs") and the
+catalogue are the contract: one code is new, `spend_line_pressed` (info, policy; its domain
+`spend_line_`), with three new keys, `line_at_least`, `line_shortfall` and `pressing_milli`; the
+texts of `benefit_unknown`, of the word `reading_unknown` and of the keys `consumption` and
+`pool_reading` say what they now also cover. No interface revision, `requires` name, setting,
+record shape or stored member moves, and nothing is stored.
+
+**The problem.** Since §1.540 a pool without a valuation may declare `spend_line`: a currency an
+account saves for something, whose spenders write their true consumption, which costs nothing
+while no line is set; since §1.547 a stored goal on such a pool is its line, accepted, kept and
+shown, and left out of everything that weighs. The line did nothing yet. The owner's words of 11-28
+(board #455), in neutral words: such a currency has a line; that does not mean nothing may be spent
+below it, but that the weight of the tasks that spend it is lowered and the spending reduced; and
+the farther below the line, the harder the pressing. This slice makes the line press.
+
+**The rulings, as built.**
+- *1, who is judged, and where the lines come from* (`crates/policy/src/resource_targets.rs`:
+  `weighed_policies_and_lines`, `target_policies`, `StoredSpendLines`). The walk of §1.547 that
+  reads each instance-scoped record without its lines is now a partition: it reads the record
+  without them, as before (the weighed policies, byte for byte), and the same record whole by the
+  same reader; the live targets of that whole read (an active v1 or v2 policy's, or a v3 record's
+  targets whose own lifetime has not passed) that name a pool writing `spend_line` are the
+  instance's **lines in effect**, each its `at_least` `L` by the catalogue pool `target_pool`
+  gives. The evaluation hands them to the benefit gate through the one place its context is built
+  (`PlacementContext::stored_lines`, `crates/policy/src/evaluator.rs`). A record of lines alone
+  stays no policy for everything that weighs. `weighed_target_policies` remains, for tests only, the
+  first half. A candidate the gate judges is judged, for each pool it consumes that writes
+  `spend_line` and has a line in effect on its instance.
+- *2, the amount* (`crates/policy/src/evaluator/capped.rs`: `pool_amount`, `PoolAmount`). The block
+  of the lines' reading that projected the pool's value and took off the consumption the reading
+  does not show yet (every task dispatched on the instance at or after the reading's observation,
+  each by its own amount in effect) is one function; `lines` calls it where the block stood, in the
+  same order (the projection first, its failure the same `unknown`), so what `lines` answers is
+  unchanged, and the gate calls it for `r`. `c` is the candidate's consumption of the pool in
+  effect on the instance in whole units, `units` of its consumption in thousandths, as the hard
+  line's check counts it (`units` is now shared).
+- *3, the pressing* (`crates/policy/src/evaluator/benefit.rs`: `judge`'s consumption loop,
+  `pressing`). With `a = r − c ≥ L` nothing is added (no term, no reason, the item `<pool>:-0`), and
+  nothing either where the spending takes no unit from below the line (`c = 0`). Otherwise
+  `d = L − a`, `below = min(c, d)` and `P = price_milli · min(d, scale) · below ÷ scale²` in milli,
+  an exact reduced ratio subtracted from `S` with the sum's own checked arithmetic (an overflow is
+  the evaluation's overflow error); it adds no share to `ε` (it rounds nothing) and no consumed term
+  of the capped order (the pool has no valuation); the item is `<pool>:-⌊P⌋`. With a fixed value
+  `B = V + … − P`. Several such pools: each its own `P`, in the consumption's declaration order.
+- *4, what a decision says* (`pressed_reason`, `note_pressed`). Whenever `P > 0` the decision
+  carries `spend_line_pressed` (info; `pool_id`; `line_at_least` `L`, new; `pool_reading` `r`, the
+  existing key of the reading the lines are checked against, the same meaning; `consumption` `c`,
+  the existing key of one run's consumption in whole units at the evaluation, the same meaning;
+  `line_shortfall` `d`, new; `pressing_milli` ⌊P⌋, new; its text gives `P` as an exact fraction),
+  inserted where `benefit_fixed_value` is (after the leading `consumption_fact_unusable` warnings,
+  `benefit_fixed_value` first), in every branch that places that reason: a capped hold, a capped
+  member, and the normal judgement. The codes that decide are the existing ones: a sum not positive
+  is `policy_benefit_nonpositive`, one within its rounding error `benefit_within_tolerance`, and
+  the lines and later gates act as before. No reader of a decision's last reason meets anything
+  new; the idle plan's set of gate-held answers (`crates/runtime-host/src/schedule_explanation.rs`)
+  holds `policy_benefit_nonpositive` already, so a pressed spender held there is neither due nor a
+  wake of its own and wakes no closed instance. No reader was found that must learn the new reason.
+- *5, an amount that is not known.* A line in effect and the pool's value absent from the
+  evaluation's pool values, or not projectable: the pool joins the readings the loop waits for, as a
+  regenerating pool's missing reading does, so `B` is unknown, `benefit_unknown` `reading_unknown`
+  with the pool, its key and its reason, and the fact refresh is asked for the reading by the same
+  suggestion. With no line in effect the pool's value is not read, as before.
+- *6, never pressed.* A task whose `produces` names the pool (a line never weighs its producers; a
+  task that both produces and consumes it is not pressed either, read literally, the choice of this
+  build); whatever the gate does not judge; the capped order, the stop, hard and trigger lines.
+- *7, turns.* The gate judges one run's consumption `c`. A dispatch handed a `run_cap` of `n > 1`
+  turns (from a reserve the task holds on the pool, or from another pool that bounds the run) may
+  take up to `n·c` from the pool, and the pressing charges only the first run's units below the
+  line: it under-counts such a run. As the work order asks, that part is not built: nothing here
+  touches the spend values or `run_cap`; it is written down as a limit for a later slice.
+- *8, no date, no income, no list.* The line is judged by the amount alone;
+  `income_floor_milli_per_day` stays unread; nothing dated is stored or read; no hold, no list of
+  exempt tasks.
+- *9, the known limits*, below.
+
+**Why the price rises with the shortfall, and is charged on the units below the line only.** The
+owner's order is that the spending be reduced, not forbidden, and the more the farther below the
+line. A price per unit that grows with the shortfall `d`, reaching the pool's full price at
+`d = scale`, makes the candidate with the least return for each unit spent the first whose `B`
+falls to 0, while one worth its price still runs: the ranking by `B ÷ E` and the not-positive test
+of before do the rest, with no second walk of the candidates. A spend that stays at or above the
+line is the spend of before, so only the units it takes from below the line are charged.
+
+**Known limits** (ruling 9). `P` charges every unit below the line at the price of the deepest one
+(a spend that starts at the line pays up to twice the integral of the slope: simple, and on the
+careful side). The price and its slope are the resource side's (`spend_line`), and a wrong one makes
+the line too weak or too strong. A line on a pool nothing reads holds its spenders (unknown) until a
+reader is bound or the line is cleared. A run told several turns is under-counted (ruling 7). A pool
+that writes `spend_line` and regenerates is read at the next evaluation; its rise schedules no wake
+of its own for a pressed spender. The goal page does not yet say which tasks a line presses.
+
+**A worked example** (neutral names). `pool.currency` writes `spend_line` `{100 000, 100, 0}`: a unit
+at most 1000 milli. A line of 400; read at 500. A rule of `V` 50 000 spending 100 a run leaves 400:
+`B = 50 000`, as before. Spending 120 it leaves 380: `d = 20`, 20 units at a fifth of the full
+price, `P = 100 000 · 20 · 20 ÷ 100² = 4000`, `B = 46 000`, dispatched, `spend_line_pressed`
+`line_at_least` 400 `pool_reading` 500 `consumption` 120 `line_shortfall` 20 `pressing_milli` 4000.
+Read at 300, a rule spending 1 leaves 299: `d = 101`, its one unit at the full price, `P = 1000`.
+Two rules spending 10 each, of `V` 5000 and 50 000, read at 250: each is charged 10 000; the first is
+`policy_benefit_nonpositive` (−5000), the second dispatched (40 000).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The lines in effect | `crates/policy/src/resource_targets.rs` (`StoredSpendLines`, `weighed_policies_and_lines`, `target_policies`; `weighed_target_policies` for tests) |
+| The context | `crates/policy/src/evaluator.rs` (`PlacementContext::stored_lines`, the one construction) |
+| The amount | `crates/policy/src/evaluator/capped.rs` (`pool_amount`, `PoolAmount`, `lines`; `units` shared) |
+| The pressing and its reason | `crates/policy/src/evaluator/benefit.rs` (`spend_line_pool`, `produces_pool`, `pressing`, `Pressing`, `judge`'s consumption loop, `note_pressed`, `leading_warnings`, `pressed_reason`, the gate's three placements) |
+| The code and its keys | `crates/policy/src/codes.rs` (`SpendLinePressed`); `crates/actingcommand-contract/src/outcome/keys.rs` (the three keys); `contracts/outcome-codes/policy.json`, `catalog.json` (keys, texts, the domain) and the regenerated index |
+
+**Tests** (incident `#455 SL3`: `crates/policy/src/tests/gate_455_sl3.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_455_sl3.rs`, host gate map; no clock read). The fixture of the
+policy tests: the currency (`spend_line` 100 000 milli of 100 units), a second such pool (50 000 of
+50), a valued pool read at 5000; the line a stored v3 goal of 400 unless a row says otherwise.
+
+| Test | What it shows |
+|---|---|
+| `sl3_t1_at_or_above_the_line_and_without_a_line_in_effect_nothing_changes` (rulings 3, 6) | spenders of 100 at 500, a producer and a valued producer: a line of 400 (each run leaves exactly 400), of 100, of 450 past its own lifetime, and on a pool no task consumes: each evaluation equals, whole, the one without the record |
+| `sl3_t2_a_spend_that_crosses_the_line_by_a_little_is_charged_and_still_passes` (2, 3, 4) | 110 from 500: `d` 10, `P` 1000, dispatched, `benefit_fixed_value` 49 000 then `spend_line_pressed`, values and text pinned; a twin of `V` 1000 `policy_benefit_nonpositive` `B` 0 with `pool.currency:-1000` |
+| `sl3_t3_far_below_the_line_each_unit_is_charged_at_the_full_price` (3) | read at 411, 410, 250, 5: `d` 99, 100, 260, 505; `P` 98 010, 100 000, 110 000, 110 000; `policy_benefit_nonpositive` `B = 50 000 − P` the last reason, the item `-P` |
+| `sl3_t4_the_spender_with_the_least_return_for_each_unit_stops_first` (3) | `V` 5000 and 50 000, 10 a run, at 250: both 10 000, the lower `policy_benefit_nonpositive` −5000 last, the higher dispatched 40 000; at 405 both 250, neither not positive |
+| `sl3_t5_the_owners_two_cases_in_neutral_numbers` (3) | at 500 a spend of 100 equals, whole, the evaluation without the line; 120 is charged 4000 on 20 units; at 300 a spend of 1 is charged 1000 at `d` 101 |
+| `sl3_t6_with_a_line_and_no_reading_the_benefit_is_unknown_and_the_reading_asked_for` (5) | no reading, a line: `benefit_unknown` `reading_unknown` with the pool, its key and `fact_missing`, `fact_refresh_unbound` with the key, nothing dispatched, no pressing; no line: dispatched, `B` 50 000 |
+| `sl3_t7_a_fixed_value_spender_is_v_less_p_and_a_producer_its_production_less_p` (3) | at 450 a spend of 110 is charged 36 000: `V` 40 000 is 4000, dispatched; a producer of 2 valued units without a fixed value −34 000 with `pool.neutral:+2000,pool.currency:-36000`, the pressing its first reason |
+| `sl3_t8_a_producer_of_the_pool_is_never_pressed` (6) | a producer of the currency and one that also consumes it, at 100: no pressing; the evaluation equals, whole, the one without the line |
+| `sl3_t9_two_pools_a_line_governs_on_one_task_are_each_pressed` (3) | 110 of the currency at 500 and 20 of the second pool at 110 below its line of 100: `B` −500, two `spend_line_pressed` in order (1000, 2000), both items |
+| `sl3_t10_a_dispatch_after_the_reading_lowers_the_amount_the_line_reads` (2) | a dispatch of 50 after the reading: `r` 450, `d` 60, `P` 36 000; without it 500, 10, 1000 |
+| `sl3_h1_a_stored_line_presses_the_spender_until_a_higher_reading` (host 1) | catalog-a's task judged `V` 500 spending 120 of a `spend_line` pool (6000 of 100): the line of 400 stored by `ApplyResourceTargets` (v2), a package reading of 450 published: not dispatched, last reason `policy_benefit_nonpositive` −2440, the pressing 2940 with `d` 70; a reading of 600: dispatched, no pressing |
+| `sl3_h2_an_instance_that_can_sleep_is_not_woken_for_a_pressed_spender` (host 2) | the pressed spender deferred `policy_benefit_nonpositive` beside a quiet task: not due, no wake, the instance closed and not woken; pressed and selected, due |
+
+Test touched: `gate_455_sl2::sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before`
+(policy) pinned that a line of 800 over a reading of 500 left its consumers (120 a run) as without
+the line, which ruling 3 changes on purpose; its lines in effect are now 380, where each run leaves
+the pool exactly at the line, so its equalities still show that a line weighs nothing (its line
+past its own lifetime keeps 800); its name stays. Relied on as they stand: SL1's and SL2's other
+gates, `gate_ss2h`, `gate_sched_c1c`, `gate_sched_c1e`, `gate_477_lf1` (the lines' reading),
+`gate_ss2b`, `gate_ss2d`, `gate_sched_c1a`, `gate_503_fixv` (the gate), and the host's `gate_ss2d`
+and `gate_503_wake` (the idle plan). Not verified by reading alone: the whole equalities of t1, t5
+and t8 (nothing else of the evaluation reads the stored record or the pool's value), and in h1 that
+the host's projection feeds the published reading to the pool's value as `gate_503_wake` relies on;
+CI is the first build.
+
+**What is not changed.** Every evaluation with no line in effect, and every candidate whose run
+stays at or above its line, byte for byte; the weighed policies and every reader of them; the
+lines of valued pools, the capped order, the reserve gate, the spend values and `run_cap`; every
+record shape, request, stored member and interface revision. No game, package, pool or alias is
+named in code.
+
+**At deploy.** Nothing to configure. Nothing happens until an instance stores a line on a pool
+whose root declares `spend_line` and whose spenders declare their `consumes`; then the spenders of
+that instance are pressed below the line, and their decisions say so. In the release notes'
+language:
+写了 `spend_line` 的池子设了线以后，花这个池子的规则在一次花费会让池子落到线下时会被“压低”：落到线下的那几个单位按价格计入它的净收益，离线越远单价越高（满价是 `spend_line` 的 `price_milli` 除以 `scale`，缺口到 `scale` 时达到满价）；剩下的收益仍为正就照常派发，否则像其他收益不为正的规则一样等。决定里会多一条 `spend_line_pressed`，写明线、读数、这次花费、缺口和压低的值。花完仍在线上（或线上方）的规则和以前完全一样；产出这个池子的规则不受影响。设了线却还没有读数时，这些规则等读数。一趟被告知可以做多轮的派发，这一版只按一轮的花费计压低。
+
+**Rollback.** Nothing is stored: an older build (0.12.101 to 0.12.103) keeps and shows the line,
+weighs nothing with it and presses nothing; its spenders are judged with the consumption costing
+nothing, as in 0.12.101.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

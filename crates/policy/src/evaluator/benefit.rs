@@ -37,6 +37,19 @@
 //!   read as any pool's without a valuation; its reading is not read here. A task without a fixed
 //!   value whose only effect is such a consumption has `S = ε = 0`: a sum without a rounding bound
 //!   is exact, so it is not within the band and its known `B = 0` is `policy_benefit_nonpositive`.
+//! - **Below a line** (#455 SL3, register §1.559; `contracts/scheduling/README.md`, "A pool whose
+//!   spending a line governs"). With a line `L` in effect on the instance on such a pool (a stored
+//!   goal `{at_least}` on it, read from the stored records by the walk that leaves it out of what
+//!   is weighed) and a task that does not produce the pool, the pool's amount `r` is read as the
+//!   pools' lines read it ([`super::capped::pool_amount`]); unknown, `B` is unknown
+//!   (`reading_unknown`) and the fact refresh is asked for the reading, as for a regenerating
+//!   pool's. With `a = r − c` (`c` the consumption in whole units) `a ≥ L` adds nothing, as
+//!   before; otherwise, `d = L − a`, the pressing `P = price_milli · min(d, scale) · min(c, d) ÷
+//!   scale²` in milli (the pool's `spend_line`) is subtracted from `S` exactly, adds no share of `ε`
+//!   and no consumed term, its item is `<pool>:-⌊P⌋`, and the decision carries
+//!   `spend_line_pressed` where `benefit_fixed_value` is placed. The codes that decide stay the
+//!   others. The price rises with the shortfall, so the task with the least return for each unit
+//!   stops first.
 //! - **The one-way rule.** Nothing here writes a pool weight: the weights are read from the
 //!   resource layer's own term, which reads no task state.
 //! - **The zero band** (SS-2d, register §1.235; Alice's ruling 127, the review's version; design
@@ -112,8 +125,8 @@ use super::{
 use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
 use crate::resource_targets::PoolWeight;
 use crate::{
-    ObservationRef, PoolProjection, PoolSpec, PredicateSpec, TaskSpec, TaskTerminalState,
-    ValuationDeclaration,
+    ObservationRef, PoolProjection, PoolSpec, PoolSpendLine, PredicateSpec, TaskSpec,
+    TaskTerminalState, ValuationDeclaration,
 };
 
 /// The instance fact family of instructions: a person's or an agent's request is a fact of it.
@@ -205,6 +218,9 @@ enum Judgement {
         /// §1.542): without those of pools that do not write `goal_tiers`; `None` too when every
         /// goal term is of a pool that writes it.
         without_goals: Option<WithoutGoals>,
+        /// #455 SL3 (register §1.559): `spend_line_pressed` for each pool whose line in effect
+        /// presses its consumption, in the consumption's declaration order; empty otherwise.
+        pressed: Vec<DecisionReason>,
     },
     Unknown {
         gap: Gap,
@@ -448,17 +464,69 @@ fn valued_pool<'a>(
 }
 
 /// #455 SL1 (register §1.540; `contracts/scheduling/README.md`, "A pool whose spending a line
-/// governs"): whether `pool_id` is a pool of the instance that writes `spend_line`. A judged task's
-/// consumption of it is no gap and, while no line is set, costs nothing (module doc, "A declared
-/// 0"); its production is read as any pool's without a valuation.
-fn spend_line_pool(
+/// governs"): `pool_id`'s pool when it is a pool of the instance that writes `spend_line`. A judged
+/// task's consumption of it is no gap and, while no line is in effect, costs nothing (module doc,
+/// "A declared 0"); its production is read as any pool's without a valuation. #455 SL3 (register
+/// §1.559): below a line in effect its consumption is pressed (module doc, "Below a line").
+fn spend_line_pool<'a>(
     pool_id: &str,
     instance: &InstanceSnapshot,
-    context: &PlacementContext<'_>,
-) -> bool {
-    context.pool_specs.get(pool_id).is_some_and(|pool| {
-        pool.spend_line.is_some() && scope_matches_instance(&pool.scope, instance)
-    })
+    context: &PlacementContext<'a>,
+) -> Option<&'a PoolSpec> {
+    context
+        .pool_specs
+        .get(pool_id)
+        .copied()
+        .filter(|pool| pool.spend_line.is_some() && scope_matches_instance(&pool.scope, instance))
+}
+
+/// #455 SL3 (register §1.559, ruling 6): whether `task` produces `pool_id`. A task that produces a
+/// pool whose spending a line governs is never pressed on it: a line never weighs its producers.
+fn produces_pool(task: &TaskSpec, pool_id: &str) -> bool {
+    task.produces.iter().any(|effect| effect.pool_id == pool_id)
+}
+
+/// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs", "Below a line"): what a consumption is charged below a pool's line.
+struct Pressing {
+    /// `d = L − (r − c)`, the shortfall the spending leaves, at least 1.
+    shortfall: u128,
+    /// `P` in milli as a reduced fraction.
+    cost: (u128, u128),
+}
+
+/// #455 SL3 (register §1.559): the pressing of a consumption of `consumed` whole units (`c`) of a
+/// pool read at `reading` (`r`) whose line in effect is `line` (`L`) and whose `spend_line` is
+/// `declared`. With `a = r − c ≥ L` nothing (`None`), and nothing where the spending takes no unit
+/// from below the line (`c = 0`). Otherwise `d = L − a`, the units below the line `min(c, d)` and
+/// `P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli, exact: the price of `scale`
+/// units at `f = min(1, d ÷ scale)` of it, on every unit taken from below the line. An overflow is
+/// the evaluation's overflow error, as for the other terms.
+fn pressing(
+    line: u64,
+    reading: i128,
+    consumed: u64,
+    declared: &PoolSpendLine,
+) -> PolicyEvaluationResult<Option<Pressing>> {
+    let overflow = || PolicyEvaluationError::overflow("a pressing below a line overflowed");
+    let after = reading
+        .checked_sub(i128::from(consumed))
+        .ok_or_else(overflow)?;
+    if after >= i128::from(line) {
+        return Ok(None);
+    }
+    let shortfall = i128::from(line)
+        .checked_sub(after)
+        .and_then(|shortfall| u128::try_from(shortfall).ok())
+        .ok_or_else(overflow)?;
+    let below = shortfall.min(u128::from(consumed));
+    if below == 0 {
+        return Ok(None);
+    }
+    let (price, scale) = (u128::from(declared.price_milli), u128::from(declared.scale));
+    let cost =
+        ratio(&[price, shortfall.min(scale), below], &[scale, scale]).ok_or_else(overflow)?;
+    Ok(Some(Pressing { shortfall, cost }))
 }
 
 /// #455 RR3b ruling A1 (register §1.542; `contracts/scheduling/README.md`, "Fixed values written in
@@ -489,7 +557,8 @@ fn goal_tiers_pool(
 /// priced pool's `valuation.scale`), so its base valuation is never added to `V`; for a pool
 /// without a valuation `Γ` is the whole weight, as before. #455 SL1 (register §1.540): a consumed
 /// pool that writes `spend_line` needs no valuation and adds no term, no share of `ε` and no
-/// consumed term, only its item `<pool>:-0`.
+/// consumed term, only its item `<pool>:-0`. #455 SL3 (register §1.559): below a line in effect on
+/// it, the term `−P` and its item `<pool>:-⌊P⌋` (module doc, "Below a line").
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
@@ -516,7 +585,7 @@ fn judge(
         if effect.is_pending() {
             return Ok(unknown(Gap::EntryPending(effect.pool_id.clone())));
         }
-        if index >= checked.len() && spend_line_pool(&effect.pool_id, instance, context) {
+        if index >= checked.len() && spend_line_pool(&effect.pool_id, instance, context).is_some() {
             continue;
         }
         if let Err(gap) = valued_pool(&effect.pool_id, instance, context) {
@@ -630,16 +699,62 @@ fn judge(
     let mut readings = Vec::new();
     let mut wake_unix_ms = None;
     let mut consumed = Vec::new();
+    let mut pressed = Vec::new();
     for effect in &task.consumes {
         if seen.contains(&effect.pool_id.as_str()) {
             continue;
         }
         seen.push(effect.pool_id.as_str());
-        // #455 SL1 (register §1.540): a pool whose spending a line governs, with no line set,
-        // costs nothing whatever the amount: no term of `S`, no share of `ε`, no consumed term
-        // (it has no valuation, so no lines and no capped order); its item says it was read.
-        if spend_line_pool(&effect.pool_id, instance, context) {
-            items.push(format!("{}:-0", effect.pool_id));
+        // #455 SL1 (register §1.540): a pool whose spending a line governs, with no line in
+        // effect, costs nothing whatever the amount: no term of `S`, no share of `ε`, no consumed
+        // term (it has no valuation, so no lines and no capped order); its item says it was read.
+        // #455 SL3 (register §1.559): with a line `L` in effect on the instance (and the task no
+        // producer of the pool) its amount `r` is read as the pools' lines read it; unknown, `B`
+        // is unknown as for a regenerating pool's reading; below the line the consumption is
+        // pressed by an exact term `P`, no share of `ε`, its item `<pool>:-⌊P⌋`, its reason
+        // `spend_line_pressed`; at or above the line nothing is added, as before.
+        if let Some(pool) = spend_line_pool(&effect.pool_id, instance, context) {
+            let in_effect = context
+                .stored_lines
+                .line(&instance.instance_id, &effect.pool_id)
+                .filter(|_| !produces_pool(task, &effect.pool_id));
+            let (Some(line), Some(declared)) = (in_effect, pool.spend_line.as_ref()) else {
+                items.push(format!("{}:-0", effect.pool_id));
+                continue;
+            };
+            let Some(value) = context.pool_values.get(effect.pool_id.as_str()) else {
+                readings.push(pool);
+                continue;
+            };
+            let Some(holding) = capped::pool_amount(context, facts, instance, pool, value)? else {
+                readings.push(pool);
+                continue;
+            };
+            // `c`, in whole units as the hard line's check counts a consumption.
+            let spent = capped::units(crate::resource_targets::consumption_milli(
+                task,
+                &effect.pool_id,
+                context.amounts.on(&instance.instance_id),
+            )?)?;
+            match pressing(line, holding.reading(), spent, declared)? {
+                None => items.push(format!("{}:-0", effect.pool_id)),
+                Some(charged) => {
+                    let (numerator, denominator) = charged.cost;
+                    sum.add(numerator, denominator, true).ok_or_else(overflow)?;
+                    items.push(format!(
+                        "{}:-{}",
+                        effect.pool_id,
+                        numerator / denominator.max(1)
+                    ));
+                    pressed.push(pressed_reason(
+                        &effect.pool_id,
+                        line,
+                        holding.reading(),
+                        spent,
+                        &charged,
+                    ));
+                }
+            }
             continue;
         }
         let (pool, valuation) = valued_pool(&effect.pool_id, instance, context)
@@ -749,6 +864,7 @@ fn judge(
             downstream,
             consumed,
             without_goals: None,
+            pressed,
         });
     }
     let full_sum = sum.joined(&goal_sum).ok_or_else(overflow)?;
@@ -784,6 +900,7 @@ fn judge(
         downstream,
         consumed,
         without_goals,
+        pressed,
     })
 }
 
@@ -906,6 +1023,7 @@ pub(super) fn gate(
                 downstream,
                 consumed: _,
                 without_goals,
+                pressed,
             } => {
                 let defer = |task_work: &mut TaskWork, reason: DecisionReason| {
                     task_work.state = SchedulingDecisionState::Deferred;
@@ -916,14 +1034,17 @@ pub(super) fn gate(
                     }
                 };
                 // SS-2h: a capped pool's order decides before the sign of `B`. SCHED-C1a: a `B`
-                // computed from a fixed value says so first, whatever the gate then decides.
+                // computed from a fixed value says so first, whatever the gate then decides. #455
+                // SL3 (register §1.559): so does each pressing below a pool's line, after it.
                 let (hold, below_trigger, trigger_at) = match disposition {
                     Disposition::Held(reason) => {
+                        note_pressed(task_work, &pressed);
                         note_fixed_value(task_work, task, saturating_milli(sum.floor()), expected);
                         defer(task_work, reason);
                         continue;
                     }
                     Disposition::Member { benefit, mut slot } => {
+                        note_pressed(task_work, &pressed);
                         note_fixed_value(task_work, task, benefit.benefit_milli, expected);
                         // SS-2h fix 1: a fallback of its block that waits takes the wake a held
                         // candidate takes.
@@ -973,6 +1094,7 @@ pub(super) fn gate(
                 // SCHED-C1a: the `B` the decision reads, with the goal terms once it passes, else the
                 // one judged (ruling 11).
                 let passes = !within && gated_milli > 0;
+                note_pressed(task_work, &pressed);
                 note_fixed_value(
                     task_work,
                     task,
@@ -1168,15 +1290,63 @@ fn tolerance_reason(
 /// (register §1.303 SC1F-4): after the warnings `consumption_fact_unusable`, which come first.
 fn note_fixed_value(task_work: &mut TaskWork, task: &TaskSpec, benefit_milli: i64, expected: u64) {
     if let Some(value) = task.benefit_fixed_value_milli {
-        let first = task_work
-            .reasons
-            .iter()
-            .take_while(|reason| reason.outcome.is(PolicyCode::ConsumptionFactUnusable))
-            .count();
+        let first = leading_warnings(task_work);
         task_work
             .reasons
             .insert(first, fixed_value_reason(benefit_milli, value, expected));
     }
+}
+
+/// SCHED-C1f1 (register §1.303 SC1F-4): how many warnings `consumption_fact_unusable` open a
+/// decision, which come before `benefit_fixed_value` and (#455 SL3) `spend_line_pressed`.
+fn leading_warnings(task_work: &TaskWork) -> usize {
+    task_work
+        .reasons
+        .iter()
+        .take_while(|reason| reason.outcome.is(PolicyCode::ConsumptionFactUnusable))
+        .count()
+}
+
+/// #455 SL3 (register §1.559): a judged candidate pressed below the lines of pools it consumes
+/// carries `spend_line_pressed` for each, in its consumption's order, placed as
+/// `benefit_fixed_value` is: before its other reasons, after the warnings
+/// `consumption_fact_unusable`. [`note_fixed_value`] runs after it, so `benefit_fixed_value`
+/// comes first.
+fn note_pressed(task_work: &mut TaskWork, pressed: &[DecisionReason]) {
+    let first = leading_warnings(task_work);
+    for (offset, reason) in pressed.iter().enumerate() {
+        task_work.reasons.insert(first + offset, reason.clone());
+    }
+}
+
+/// #455 SL3 (register §1.559): `spend_line_pressed` (info; `pool_id`, `line_at_least` `L`,
+/// `pool_reading` `r`, `consumption` `c`, `line_shortfall` `d`, `pressing_milli` ⌊P⌋); the
+/// developer text also gives `P` as an exact reduced fraction in milli. Each integer is saturated
+/// at the `i64` range of a record value.
+fn pressed_reason(
+    pool_id: &str,
+    line: u64,
+    reading: i128,
+    spent: u64,
+    charged: &Pressing,
+) -> DecisionReason {
+    let (numerator, denominator) = charged.cost;
+    let floor = i64::try_from(numerator / denominator.max(1)).unwrap_or(i64::MAX);
+    let outcome = Outcome::new(PolicyCode::SpendLinePressed)
+        .pool_id(pool_id)
+        .line_at_least(i64::try_from(line).unwrap_or(i64::MAX))
+        .pool_reading(saturating_milli(reading))
+        .consumption(i64::try_from(spent).unwrap_or(i64::MAX))
+        .line_shortfall(i64::try_from(charged.shortfall).unwrap_or(i64::MAX))
+        .pressing_milli(floor);
+    reason_with(
+        outcome,
+        format!(
+            "pool_id={pool_id} line_at_least={line} pool_reading={reading} consumption={spent} \
+             line_shortfall={} pressing_milli={floor} pressing={numerator}/{denominator}",
+            charged.shortfall
+        ),
+    )
 }
 
 /// SCHED-C1a (register §1.299): `benefit_fixed_value` (info; `benefit_milli` `B`,
