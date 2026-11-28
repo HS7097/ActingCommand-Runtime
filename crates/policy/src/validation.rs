@@ -2581,6 +2581,69 @@ fn validate_pools(
         );
         // #455 B3-P (register §1.522): so is the step and importance a goal on the pool takes.
         validate_target_defaults(pool, &path, map, descriptor, diagnostics);
+        // #455 SL1 (register §1.540): so is the declaration that a line governs its spending.
+        validate_spend_line(pool, &path, map, descriptor, diagnostics);
+    }
+}
+
+/// #455 SL1 (register §1.540; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs"): a pool's `spend_line` at `<path>/spend_line`. It is a V2 member: a V1 document is
+/// refused as `unknown_field` at it, and nothing else is checked. Then, each at its pointer:
+/// - beside a `valuation` (a block or the pending marker) or `target_defaults`, `type_mismatch` at
+///   the member, the diagnostic `target_defaults` gets beside a valuation: one reading per pool of
+///   a goal on it (on such a pool a goal will be the line, never a weight on its producers);
+/// - its `price_milli` and `scale` outside `1..=2^53 − 1` and its `income_floor_milli_per_day`
+///   outside `0..=2^53 − 1` (the bounds of a task's fixed value and of a valuation's `scale`,
+///   [`MAX_CANONICAL_INTEGER`]), `limit_exceeded` at each.
+///
+/// A missing member is the reader's `missing_required_field`, an unknown one its `unknown_field`.
+fn validate_spend_line(
+    pool: &PoolSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(line) = &pool.spend_line else {
+        return;
+    };
+    let member = format!("{path}/spend_line");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "a pool's spend_line requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if pool.valuation.is_some() || pool.target_defaults.is_some() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            member.clone(),
+            "a pool writes spend_line only without a valuation and without target_defaults: one \
+             reading per pool of a goal on it",
+            descriptor,
+        ));
+    }
+    let bound = MAX_CANONICAL_INTEGER as u64;
+    for (field, value, least) in [
+        ("price_milli", line.price_milli, 1),
+        ("scale", line.scale, 1),
+        (
+            "income_floor_milli_per_day",
+            line.income_floor_milli_per_day,
+            0,
+        ),
+    ] {
+        if !(least..=bound).contains(&value) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{member}/{field}"),
+                format!("a pool's spend_line {field} must be within {least}..={bound}"),
+                descriptor,
+            ));
+        }
     }
 }
 

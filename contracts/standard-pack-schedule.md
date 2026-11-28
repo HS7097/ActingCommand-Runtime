@@ -37,7 +37,9 @@ optional `"fixed_value_origin"` ("The fixed value" below), and to a pool an opti
 `"valuation_origin"` ("Provenance" below). SCHED-C1c (register §1.299, since 0.12.53): a pool's V2
 member `"trigger_line"` passes through as the other two lines do. Workflow #500 SV-2 (register
 §1.511, since 0.12.81): a rule may carry `"variables"`, values for its package's variables, which
-pass through to its task as a V2 member ("A rule's variable values" below).
+pass through to its task as a V2 member ("A rule's variable values" below). #455 SL1 (register
+§1.540, since 0.12.97): a pool's V2 member `"spend_line"` passes through as the lines do ("A
+currency a line governs" below).
 
 Every member but `schema_version` may be absent, which means empty. The reader
 (`actingcommand_contract::parse_standard_pack_schedule`) refuses, each as
@@ -159,6 +161,18 @@ a file that lists it with `schedule_requires_missing` at that entry, and the ins
 refuses a rollback to such a build while an installed or kept schedule lists it (#429 RB-1 above).
 The resource tools check no `requires`: `standard-pack check`, `compose` and `adopt` accept and
 carry the member.
+
+#455 SL1 (register §1.540, since 0.12.97). A pool that writes `spend_line`, which declares that a
+line governs its spending ([scheduling/README.md](scheduling/README.md), "A pool whose spending a
+line governs"), requires `pool_spend_line`, alike: the composer refuses a file that writes one
+while `requires` does not name it, `schedule_invalid` at the first such pool's member in file order
+(for example `/pools/0/spend_line`). The member passes through as written, and the catalog compiler
+checks it, mapped back to the pool. A Runtime names `pool_spend_line` in `config.subsystems`,
+always on, from 0.12.97. **No Runtime of 0.12.96 names it**: such a Runtime, and its check-config,
+refuse a file that lists it with `schedule_requires_missing` at that entry, and the installer's
+plan refuses a rollback to such a build while an installed or kept schedule lists it (#429 RB-1
+above). The resource tools check no `requires`: `standard-pack check`, `compose` and `adopt` accept
+and carry the member.
 
 Workflow #477 CV-2 (register §1.508, since 0.12.80; the coordinator's rulings, the owner's words
 being only "one cut-over, no coexistence"). **`catalog_business` switches a root's business part to
@@ -564,7 +578,8 @@ its pools' valuations weigh in):
 - A consumer writes its `consumes` beside its value, and the pool it consumes needs a valuation
   for its cost: the model's, or a constant block the pack writes on the pool
   ([scheduling/README.md](scheduling/README.md), "Pool Valuation", "A valuation written in the
-  pack").
+  pack"); #455 SL1 (since 0.12.97): or the pool writes `spend_line` and no valuation, and costs
+  nothing while no line is set ("A currency a line governs" below).
 - `"fixed_value_origin": "model"` says that the model's export wrote the number (`acmodel bindings
   apply`, by a value binding of the repository's `ours/model/bindings.json`); without it the pack's
   own hand wrote it (registered in that file as a hand entry with its `status` and `ref`). Only
@@ -613,6 +628,21 @@ cooldown. While its gap is open such a rule is handed the gap as `gap_remaining`
 is at most the runs the gap still needs: ⌈gap ÷ the integer `amount`⌉, or for a production by
 `expected_amount_milli` ⌈gap·1000 ÷ that expectation⌉, at least 1 (ruling 10: a goal never takes
 `run_cap` away; [remedies.md](remedies.md), section 4, "Spend values").
+
+**A currency a line governs** (#455 SL1, since 0.12.97; register §1.540). A currency a player saves
+for a dated event, which no valuation can price (its producers keep their fixed values), is
+declared so that the Runtime knows which rules spend it: **declare the currency's pool with
+`spend_line` and no valuation** (`{"price_milli": P, "scale": S, "income_floor_milli_per_day": F}`
+from the research table: the price of `S` units in the unit of the game's values, and the least
+the pool gains a day with nothing spent, 0 when nothing is sure; the file then names
+`pool_spend_line` in `requires`, "`requires`" above), and **write the true `consumes` on the rules
+that spend it**, beside their fixed values. Until a line is set they run as they do today: such a
+consumption costs nothing and never makes a rule wait for a valuation, so a rule of value `V` that
+spends only the currency is still `B = V` ([scheduling/README.md](scheduling/README.md), "Net
+benefit within a tier", "A declared 0"). Write no `target_defaults` and no valuation on that pool
+(either beside `spend_line` is refused), and put no `resource` entry on it in `goals.json`: a goal on
+such a pool will be its line, set in a later build, never a weight on its producers. A rule that
+also reserves the pool is held by the reserve gate as for any pool.
 
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
 can replace them one by one, the composer reports, per game, which judged rules run on a fixed
@@ -735,7 +765,8 @@ pure: its caller reads the packages.
    `trigger_line` and `benefit_fixed_value` when a rule writes `fixed_value_milli` or a pool
    `valuation_origin`, #455 P1 (0.12.78): `pool_list_rows` when a pool's `observation` is of the
    kind `list_rows`, #455 B3-P (0.12.82): `pool_target_defaults` when a pool writes
-   `target_defaults`, SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
+   `target_defaults`, #455 SL1 (0.12.97): `pool_spend_line` when a pool writes `spend_line`,
+   SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
    writes `max_queue_wait_ms`, Workflow #500 SV-2 (0.12.81): `rule_variables` when a rule carries
    `variables`, #477 CK-1 (0.12.83): `clock_monthly` when a rule's clock or a timeline event's

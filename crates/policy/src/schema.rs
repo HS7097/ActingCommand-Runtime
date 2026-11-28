@@ -1159,6 +1159,30 @@ pub struct PoolSpec {
     /// keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_defaults: Option<PoolTargetDefaults>,
+    /// #455 SL1 (register §1.540; V2 only): the pool's spending is governed by a line a person may
+    /// set ([`PoolSpendLine`]), written only on a pool that writes neither a `valuation` nor
+    /// `target_defaults`. A judged task that consumes such a pool is judged with that consumption
+    /// costing nothing while no line is set. Absent, the catalog keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend_line: Option<PoolSpendLine>,
+}
+
+/// #455 SL1 (register §1.540; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs"): a pool's `spend_line`, the three numbers a line on the pool will be read with. All
+/// three are required, each within `MAX_CANONICAL_INTEGER`; this build validates, serializes and
+/// hashes them, and nothing computes with them yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolSpendLine {
+    /// The milli of value of `scale` units of the pool, in the unit the instance's valuations
+    /// weigh in: the full price of the pressing below a line. In `1..=2^53 − 1`.
+    pub price_milli: u64,
+    /// The amount `price_milli` is the price of, and the shortfall below a line at which the
+    /// pressing reaches the full price. In `1..=2^53 − 1`.
+    pub scale: u64,
+    /// The thousandths of a unit the pool gains each day at the least with nothing spent; 0 says
+    /// nothing is sure. In `0..=2^53 − 1`; read for a dated line.
+    pub income_floor_milli_per_day: u64,
 }
 
 /// #455 B3-P (register §1.522; `contracts/scheduling/README.md`, "A goal's step and importance on
@@ -1409,6 +1433,13 @@ pub const POOL_LIST_ROWS_SUBSYSTEM: &str = "pool_list_rows";
 /// every Runtime of that version refuses such a file (`schedule_requires_missing`) and keeps the
 /// game's last good rules.
 pub const POOL_TARGET_DEFAULTS_SUBSYSTEM: &str = "pool_target_defaults";
+
+/// #455 SL1 (register §1.540; `contracts/standard-pack-schedule.md`, "`requires`"): the
+/// configuration-manifest subsystem of a Runtime that reads a pool's `spend_line`; a
+/// `schedule.json` whose pool writes it names it in `requires`. No Runtime of 0.12.96 names it, so
+/// every Runtime of that version refuses such a file (`schedule_requires_missing`) and keeps the
+/// game's last good rules.
+pub const POOL_SPEND_LINE_SUBSYSTEM: &str = "pool_spend_line";
 
 /// Workflow #477 CV-2 (register §1.508; `contracts/standard-pack-schedule.md`, "`requires`"): the
 /// configuration-manifest subsystem of a Runtime whose composer takes a game root's business part

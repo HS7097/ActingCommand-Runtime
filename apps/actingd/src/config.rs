@@ -124,6 +124,11 @@ mod gate_455_b3p;
 #[cfg(test)]
 mod gate_477_ck1;
 
+// Test-only: #455 SL1, this build names `pool_spend_line`, so it composes a `schedule.json` whose
+// pool writes `spend_line`.
+#[cfg(test)]
+mod gate_455_sl1;
+
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 120_000;
