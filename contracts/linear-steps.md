@@ -680,7 +680,12 @@ rule of 11-15 that packages are made by recording, which gives step plans, and t
 rulings on board #428). An operation's effect may be a list reading, `read_list`: the step reads a
 list its page shows, scrolling it to its end, and writes it as one instance fact of value
 `record_list`, as on the page graph ([resource-readings.md](resource-readings.md), "List
-readings"). It is the one step whose page does not change: its `to` is its `from`.
+readings"). It is the one step whose page does not change: its `to` is its `from`. Workflow #503
+LIST-C (since 0.12.97, `package` revision 30): for a list whose end check can pass in its middle
+too, the scan's `end` writes `"require_stationary": true`, `"end": {"check": "step_03/end",
+"require_stationary": true}`, and the reading then ends only where the list has also stopped
+moving ([selection-graph.md](selection-graph.md), "Select over a scan", "An end that must also be
+stationary"); the recorder writes no such member, so a package gains it by hand.
 
 ```json
 {"id": "step_03_read", "from": "step_03", "to": "step_03",
@@ -727,7 +732,8 @@ moves are its only inputs, each a `task.effect_intent` of the step followed by i
 decision. It ends as "List readings" says for the page graph, with the same records and the same
 codes:
 
-- **The list read whole**: `ListReadingFrame` on the frame its end check passed on, then the list
+- **The list read whole**: `ListReadingFrame` on the frame its end check passed on (Workflow #503
+  LIST-C: with `require_stationary`, the frame on which the list had also stopped), then the list
   (`ListReading`); the step's `StepFinished` names its page as recognized on its last viewport, and
   the next step decides on that viewport: its guard is judged on it, with no frame of its own (with
   a step gap, ACT-2, a fresh frame of the page first, as for any step). The last viewport is not

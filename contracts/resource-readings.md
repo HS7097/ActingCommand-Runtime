@@ -644,7 +644,7 @@ only; the numbers and names are neutral examples, not values:
 | `columns` | 0 to 63 entries `{column, feature}`: `column` a token as `key_column`, distinct, never the `key_column`; `feature` a feature of the layout other than `key_feature`, each at most once, of value `passed` (a `boolean` column), `ocr_integer` (an `integer` column) or `identity` (a string column, the business ID it reads) | `…/read_list/columns/<j>/column`, `…/columns/<j>/feature` |
 | `fact_key` | starts with `inventory.list.`, satisfies the instance fact key rule, and is unique among every key the task writes (each mark's `fact_key` and `capacity_fact_key`, each other list, a field list's included) | `…/read_list/fact_key` |
 | `valid_for_ms` | `1..=31_536_000_000` | `…/read_list/valid_for_ms` |
-| `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read; so its `end` is required, which a select step's scan may leave out beside `early_stop` since Workflow #463 K-c (0.12.70); a `null` `end` is a missing one, as in a select step's scan (its fix round 1) | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; no `end`, or a `null` one: `MissingField` @ `…/scan/end`; the static checks as a select step's |
+| `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read; so its `end` is required, which a select step's scan may leave out beside `early_stop` since Workflow #463 K-c (0.12.70); a `null` `end` is a missing one, as in a select step's scan (its fix round 1). Workflow #503 LIST-C (since 0.12.97, `package` revision 30): its `end` may write `require_stationary: true`, as a select step's (below, "An end that must also be stationary") | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; no `end`, or a `null` one: `MissingField` @ `…/scan/end`; `require_stationary` written `false`: `InvalidValue`, as anything else but `true`: `InvalidType`, @ `…/scan/end/require_stationary`; another member of `end`: `read_list`, as every malformed scan; the static checks as a select step's |
 | `guard` | required, any guard a select step takes; judged on every viewport | `MissingField` @ `/operations/<i>/guard` |
 | `others` | optional (Workflow #503 LIST-A, since 0.12.90, `package` revision 27): the one word `pass_over` of a closed vocabulary, `null` being an absent member; a card the identity mapping marks none of the wanted keys then makes no row and does not make the list unread (section "A list of the wanted keys only" below). Without it every rule of this section is as before, byte for byte | another word: `InvalidValue` @ `…/read_list/others`; another type: `InvalidType` @ `…/read_list/others`; a Runtime before 0.12.90: `UnknownField` @ `…/read_list/others`; Workflow #503 LIST-B: `pass_over` over a picture identity whose pool holds no `other` entry, which could never pass a card over: admission's `read_list/others` |
 | the operation's other members | as the table "Members of a `read_list` step" below says | as that table says |
@@ -735,8 +735,9 @@ One `read_list` step runs:
    ([selection-graph.md](selection-graph.md), "Select over a scan"): the dispatched frame settled
    as the first viewport; the start check, with a rewind when declared; then the coverage
    viewports, each with its move, settle, page, guard, alignment, gap and spacing checks and the
-   reading of every position, until the end check passes. No policy is evaluated, so nothing
-   stops it early.
+   reading of every position, until the end check passes (Workflow #503 LIST-C: with
+   `end.require_stationary`, until it passes on the viewport on which the list has stopped
+   moving; below). No policy is evaluated, so nothing stops it early.
 2. **Rows.** Each position's fixed Known reading is one row: `{<key_column>: <business ID>,
    <column>: <value>, …}`, each declared column the fixed reading of its feature. The rows are
    ordered by key, in ascending byte order.
@@ -776,6 +777,22 @@ At this step a layout whose anchor template matches nothing on the page cannot b
 list that is really empty: both read zero positions and, when both checks pass, publish an empty
 list. A package must therefore make its start and end checks specific to the list page, so that
 they do not both pass where the list does not show.
+
+**An end that must also be stationary** (Workflow #503 LIST-C, since 0.12.97, `package` revision
+30; [v012-register.md](v012-register.md) §1.541). Where no check on one frame tells the list's foot
+from some positions in its middle (a popup list without a scroll bar or a footer, whose rows stand
+at a fixed pitch), an end check that passes in the middle would write the list without its tail,
+and nothing would say so. The scan's `end` then writes `"require_stationary": true`: the coverage
+is complete only on the viewport on which the list has stopped moving (the second consecutive
+forward viewport that repeats the one before it) and the end check passes there; a pass after which
+the list moves on counts for nothing, and a list that stops where the check does not pass fails
+`selection_scan_end_unconfirmed` at the stage `read_list`. The two repeats are coverage viewports:
+they count against `max_viewports` and `max_ms`. The list is built from every position read, as
+always; its observation (`ListReadingFrame`, `observed_at_unix_ms`) is the frame of the viewport
+that completed the coverage. Nothing else of the step changes, and a reading whose scan does not
+write the member reads as before. The rule, its limit (a list that stops responding at a
+look-alike position passes both tests) and its offline answer are
+[selection-graph.md](selection-graph.md)'s, "An end that must also be stationary" and "Offline".
 
 ### A list of the wanted keys only (Workflow #503 LIST-A, since 0.12.90)
 
@@ -1096,7 +1113,13 @@ failure of the scan is the error, with the stage `read_list`, as it ends a run; 
 rewind or a corrective) or a capture past the last frame is `selection_scan_replay_frame_missing`,
 never a list. An operation that declares no list reading is
 `contained_task_resource_reading_invalid`, `<operation id>:read_list`; an operation the task does
-not declare is `contained_task_operation_missing`. It is in memory only.
+not declare is `contained_task_operation_missing`. It is in memory only. Workflow #503 LIST-C
+(since 0.12.97): the session being the run's, a scan whose end requires the list to be stationary
+answers here what a run would: on frames that end with the two repeats at the list's foot, the
+run's list; on frames that end at the first viewport whose end check passes, as a recording that
+stopped there saved them, `selection_scan_replay_frame_missing`: the scan asks for its next move's
+frame, as a run moves on, because the list was not yet seen to stop. `package list-check` answers
+the same, through this entry.
 
 Workflow #503 LIST-A3 (since 0.12.91; register §1.534; the coordinator's rulings on board #503).
 The dry run answers, beside the list, every position the scan read, on a list with `others` and on
