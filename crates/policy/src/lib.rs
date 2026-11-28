@@ -259,6 +259,10 @@ mod tests {
     // pool's trigger line waits for the line, or for the end of its chance less its run.
     mod gate_503_wake;
 
+    // #455 SL3 (0.12.104; register §1.559): below its line a pool's spenders are charged for the
+    // units they take from below it, the more for each unit the farther below.
+    mod gate_455_sl3;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

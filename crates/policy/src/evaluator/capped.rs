@@ -102,8 +102,9 @@ use super::tie_break::TieKey;
 use super::{
     Amounts, ConsumptionAmounts, DecisionReason, EvaluationFacts, InstanceSnapshot,
     PlacementCandidate, PlacementContext, PolicyEvaluationError, PolicyEvaluationResult,
-    SchedulingDecisionState, TaskWork, UnknownReasonToken, pool_bound, project_pool_value,
-    reason_with, scope_matches_identity, scope_matches_instance, unknown_token, with_values,
+    PoolReading, SchedulingDecisionState, TaskWork, UnknownReasonToken, pool_bound,
+    project_pool_value, reason_with, scope_matches_identity, scope_matches_instance, unknown_token,
+    with_values,
 };
 use crate::codes::{LinesSource, PolicyCode, PoolLineHold};
 use crate::resource_targets::{LineView, PoolLines};
@@ -1005,10 +1006,68 @@ fn member_amounts(
         .collect()
 }
 
-/// `⌈C/1000⌉`, the whole units a consumption in thousandths reads.
-fn units(consumed_milli: u128) -> PolicyEvaluationResult<u64> {
+/// `⌈C/1000⌉`, the whole units a consumption in thousandths reads. #455 SL3 (register §1.559):
+/// the benefit gate counts a consumption a pool's line presses by it too, as the hard line's check
+/// counts one.
+pub(super) fn units(consumed_milli: u128) -> PolicyEvaluationResult<u64> {
     u64::try_from(consumed_milli.div_ceil(1_000))
         .map_err(|_| PolicyEvaluationError::overflow("a consumption exceeds the integer range"))
+}
+
+/// #455 SL3 (register §1.559): a pool's amount at the evaluation as [`pool_amount`] reads it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PoolAmount {
+    /// The pool's value in the evaluation's pool values, projected to the evaluation's time.
+    projected: u64,
+    /// The consumption that value does not show yet.
+    unshown: i128,
+}
+
+impl PoolAmount {
+    /// `r`: the projected value less the consumption it does not show yet; negative when that
+    /// consumption exceeds it.
+    pub(super) fn reading(self) -> i128 {
+        i128::from(self.projected) - self.unshown
+    }
+}
+
+/// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "Pool lines", "At each
+/// evaluation"; "A pool whose spending a line governs"): the amount of `pool` on `instance` at the
+/// evaluation as the pools' lines read it, from its value `value` in the evaluation's pool values:
+/// that value projected to the evaluation's time, less the consumption the reading does not show
+/// yet (every task dispatched on the instance at or after the reading's observation, the reserve
+/// gate's step 3; SCHED-C1f1: each by its own amount in effect on the instance). `None` when the
+/// value cannot be projected. The one place it is computed: [`lines`] reads it, and so does the
+/// benefit gate where a pool's line presses its spenders (`super::benefit`).
+pub(super) fn pool_amount(
+    context: &PlacementContext<'_>,
+    facts: &EvaluationFacts,
+    instance: &InstanceSnapshot,
+    pool: &PoolSpec,
+    value: &PoolReading<'_>,
+) -> PolicyEvaluationResult<Option<PoolAmount>> {
+    let Ok(projected) = project_pool_value(pool, value.bound, value.snapshot, context.time.unix_ms)
+    else {
+        return Ok(None);
+    };
+    let mut unshown = 0_i128;
+    for state in &facts.tasks {
+        if state.instance_id != instance.instance_id
+            || state
+                .last_dispatched_unix_ms
+                .is_none_or(|dispatched| dispatched < value.snapshot.observed_at_unix_ms)
+        {
+            continue;
+        }
+        if let Some((_, task)) = context.tasks.get(state.task_id.as_str()) {
+            unshown += i128::from(crate::resource_targets::consumption(
+                task,
+                &pool.id,
+                context.amounts.on(&instance.instance_id),
+            )?);
+        }
+    }
+    Ok(Some(PoolAmount { projected, unshown }))
 }
 
 /// The lines of `pool` on `instance` at the evaluation (module doc), or why they cannot be kept.
@@ -1069,32 +1128,12 @@ fn lines(
             ObservationRef::Outcome { .. } => unknown(None, None),
         }));
     };
-    let Ok(projected) =
-        project_pool_value(pool, reading.bound, reading.snapshot, context.time.unix_ms)
-    else {
+    // #455 SL3 (register §1.559): the projected amount less the consumption the reading does not
+    // show yet, computed in the one place the benefit gate's pressing below a line reads it too.
+    let Some(holding) = pool_amount(context, facts, instance, pool, reading)? else {
         return Ok(Err(unknown(None, None)));
     };
     let capacity = reading.bound.capacity();
-    // The consumption the reading does not show yet: every task dispatched on the instance at or
-    // after the reading's observation (the reserve gate's step 3); SCHED-C1f1: each by its own
-    // amount in effect on the instance.
-    let mut unshown = 0_i128;
-    for state in &facts.tasks {
-        if state.instance_id != instance.instance_id
-            || state
-                .last_dispatched_unix_ms
-                .is_none_or(|dispatched| dispatched < reading.snapshot.observed_at_unix_ms)
-        {
-            continue;
-        }
-        if let Some((_, task)) = context.tasks.get(state.task_id.as_str()) {
-            unshown += i128::from(crate::resource_targets::consumption(
-                task,
-                &pool.id,
-                context.amounts.on(&instance.instance_id),
-            )?);
-        }
-    }
     // #503 WAKE (register §1.549): what the reading is projected from, at this same read, for the
     // time it reaches the trigger line ([`Lines::trigger_at`]).
     let rise = match &pool.projection {
@@ -1104,12 +1143,12 @@ fn lines(
                 observed_at_unix_ms: reading.snapshot.observed_at_unix_ms,
                 amount: projection.amount,
                 per_ms: projection.per_ms,
-                unshown,
+                unshown: holding.unshown,
             })
         }
         _ => None,
     };
-    let reading = i128::from(projected) - unshown;
+    let reading = holding.reading();
     let (stop, hard) = match (stop_line, hard_line) {
         (None, None) => (i128::from(capacity), 0),
         (Some(stop), Some(hard)) => {

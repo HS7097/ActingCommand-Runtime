@@ -430,6 +430,15 @@ actingcommand_contract::outcome_codes! {
         /// tasks alone: the needs its stored records compute are not stacked on it (no keys).
         GoalRecordsNotStacked => "goal_records_not_stacked": warning / none,
         // ---- Workflow #455 RR3: end ----
+        // ---- #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending
+        // a line governs"): begin ----
+        /// Info. A judged candidate's run would leave a pool whose spending a line governs below
+        /// the line in effect on its instance: its net benefit was charged the pressing for the
+        /// units it takes from below the line, at a price that rises with the shortfall; carried
+        /// before the decision's other reasons, whatever the gate then decides (keys `pool_id`,
+        /// `line_at_least`, `pool_reading`, `consumption`, `line_shortfall`, `pressing_milli`).
+        SpendLinePressed => "spend_line_pressed": info / none,
+        // ---- #455 SL3: end ----
     }
 }
 
@@ -528,7 +537,8 @@ actingcommand_contract::outcome_vocabulary! {
         ValuationPending => "valuation_pending",
         /// A pool the task touches has no valuation for the instance.
         ValuationMissing => "valuation_missing",
-        /// A regenerating pool the task consumes has a reading that is unknown or expired.
+        /// A regenerating pool the task consumes has a reading that is unknown or expired; #455
+        /// SL3 (register §1.559): or a pool whose spending a line in effect governs.
         ReadingUnknown => "reading_unknown",
     }
 }

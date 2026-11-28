@@ -2213,7 +2213,7 @@
     },
     "run_cap": {
       "type": "integer",
-      "description": "The runs a dispatch's spend allowances pay for: the least, over the consumed pools its task reserves, of the allowance divided by the task's declared consumption of the pool per run, rounded down; when no produced pool of the task carries a base weight, at most the runs its largest open goal gap still needs; and at most 1000, the ceiling of a max_repeats fact cap (SS-6)."
+      "description": "The runs a dispatch's spend allowances pay for: the least, over the consumed pools its task reserves, of the allowance divided by the task's declared consumption of the pool per run, rounded down; when no produced pool of the task carries a base weight, at most the runs its largest open goal gap still needs; and at most 1000, the ceiling of a max_repeats fact cap (SS-6). #455 SL3 (since 0.12.104): where there is such a term, each consumed pool whose spending a line in effect governs adds the line's turns, floor((reading - line) / net consumption) when at least 1, else 1; a line adds no run_cap where there is none."
     },
     "effect_index": {
       "type": "integer",
@@ -2221,7 +2221,7 @@
     },
     "spend_allowance": {
       "type": "integer",
-      "description": "How much of a pool a dispatch may spend, in the pool's real units: the reserve gate's available amount at the evaluation (the pool's projected amount less the other tasks' consumption its latest reading does not show yet) less the task's reserve on it, at least 0 (SS-6)."
+      "description": "How much of a pool a dispatch may spend, in the pool's real units: the reserve gate's available amount at the evaluation (the pool's projected amount less the other tasks' consumption its latest reading does not show yet) less the task's reserve on it, at least 0 (SS-6). #455 SL3 (since 0.12.104): for a pool whose spending a line in effect governs, when the dispatch's run_cap has a term without the line, the larger of what the pool holds above the line and one run's net consumption, the less of that and the reserve's where the task also reserves the pool."
     },
     "gap_remaining": {
       "type": "integer",
@@ -2233,7 +2233,7 @@
         "effect_index": "required",
         "spend_allowance": "required"
       },
-      "description": "The spend allowances a dispatch hands its run, one record per entry of its task's consumes whose pool the task also reserves, in list order: the entry's position and the allowance (SS-6)."
+      "description": "The spend allowances a dispatch hands its run, one record per entry of its task's consumes whose pool the task also reserves, in list order: the entry's position and the allowance (SS-6); #455 SL3 (since 0.12.104): or whose spending a line in effect governs, when the run_cap has a term without the line."
     },
     "gaps_remaining": {
       "type": "records",
@@ -2655,7 +2655,7 @@
     },
     "pool_reading": {
       "type": "integer",
-      "description": "A pool's reading the lines were checked against, in the pool's real units: its projected amount less the consumption its reading does not show yet; negative when that consumption exceeds the amount (SS-2h)."
+      "description": "A pool's reading the lines were checked against, in the pool's real units: its projected amount less the consumption its reading does not show yet; negative when that consumption exceeds the amount (SS-2h). On spend_line_pressed the same reading of a pool whose spending a line governs, checked against that line (#455 SL3, since 0.12.104)."
     },
     "capped_episode": {
       "type": "integer",
@@ -2735,7 +2735,7 @@
     },
     "consumption": {
       "type": "integer",
-      "description": "One run's consumption of a pool by a task in an evaluation, in whole units of the pool (the ⌈C/1000⌉ the decision reads), when the task's consumption of the pool is read from a fact: the fact's usable value, or the entry's fallback (#428 SCHED-C1f1, contracts/scheduling/README.md \"A run's consumption read from a fact\")."
+      "description": "One run's consumption of a pool by a task in an evaluation, in whole units of the pool (the ⌈C/1000⌉ the decision reads), when the task's consumption of the pool is read from a fact: the fact's usable value, or the entry's fallback (#428 SCHED-C1f1, contracts/scheduling/README.md \"A run's consumption read from a fact\"); on spend_line_pressed, the net consumption a pool's line presses, the run's consumption less its production of the pool, however it is declared (#455 SL3, since 0.12.104)."
     },
     "consumption_source": {
       "type": "vocab:consumption_source",
@@ -2987,6 +2987,18 @@
     "shutdown_obstacle": {
       "type": "vocab:shutdown_obstacle",
       "description": "What refused a shutdown request of the Runtime's own target as busy, on runtime_shutdown_denied with runtime_code runtime_busy: a start that prepares, a lease held, a waiting entry no pause holds, a client's reset still owed, a policy run a worker holds, or lifecycle work of the requesting thread itself, the first that holds; or (fix round 1) lifecycle work in flight on other threads that outlived a settling window while none may open (Workflow #503 SD-1, contracts/runtime-interface.md \"A shutdown request that finds work in flight\", since 0.12.83)."
+    },
+    "line_at_least": {
+      "type": "integer",
+      "description": "A pool's line in effect on an instance, in the pool's real units: the at_least of the stored goal on a pool that writes spend_line, below which the benefit gate presses the pool's spenders (#455 SL3, contracts/scheduling/README.md \"A pool whose spending a line governs\", since 0.12.104)."
+    },
+    "line_shortfall": {
+      "type": "integer",
+      "description": "How far a judged candidate's run would leave a pool below its line in effect, in the pool's real units: the line less the pool's reading less the run's consumption, at least 1 (#455 SL3, contracts/scheduling/README.md \"A pool whose spending a line governs\", since 0.12.104)."
+    },
+    "pressing_milli": {
+      "type": "integer",
+      "description": "What a judged candidate's net benefit is charged, in milli and floored, for the units of a pool its run takes from below the pool's line in effect: the pool's spend_line price_milli times the shortfall up to its scale times those units, over the scale squared (#455 SL3, contracts/scheduling/README.md \"A pool whose spending a line governs\", since 0.12.104)."
     }
   },
   "vocabularies": {
@@ -4179,7 +4191,7 @@
           "description": "A pool the task touches has no valuation for the instance; pool_id names it."
         },
         "reading_unknown": {
-          "description": "A regenerating pool the task consumes has a reading that is unknown or expired; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
+          "description": "A regenerating pool the task consumes has a reading that is unknown or expired, or (#455 SL3, since 0.12.104) a pool whose spending a line in effect governs has none; pool_id names the pool, fact_key and unknown_reason its reading when it reads a fact, and the fact refresh is asked for it."
         }
       }
     },
@@ -13617,6 +13629,9 @@
     "specific_": [
       "execution-kernel",
       "pack-containment"
+    ],
+    "spend_line_": [
+      "policy"
     ],
     "spill_": [
       "artifact-store"

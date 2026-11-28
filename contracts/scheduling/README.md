@@ -246,14 +246,15 @@ such a pool's valuation would not be read beside the value: "Fixed values writte
 "spend_line": { "price_milli": 33333, "scale": 6000, "income_floor_milli_per_day": 71429 }
 ```
 
-| Field | Bound | What it will be read for | Diagnostic |
+| Field | Bound | What it is read for | Diagnostic |
 | --- | --- | --- | --- |
-| `price_milli` | required, 1..=9,007,199,254,740,991, the upper bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line | `limit_exceeded` at it; missing: `missing_required_field` |
-| `scale` | required, 1..=9,007,199,254,740,991, the bound of a valuation's `scale` | the amount the price is of, and the shortfall below the line at which the pressing reaches the full price | as `price_milli` |
-| `income_floor_milli_per_day` | required, 0..=9,007,199,254,740,991 | the thousandths of a unit the pool gains each day at the least, with nothing spent; 0 says nothing is sure; read for a line with a date | as `price_milli` |
+| `price_milli` | required, 1..=9,007,199,254,740,991, the upper bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line ("Below a line") | `limit_exceeded` at it; missing: `missing_required_field` |
+| `scale` | required, 1..=9,007,199,254,740,991, the bound of a valuation's `scale` | the amount the price is of, and the shortfall below the line at which the pressing reaches the full price ("Below a line") | as `price_milli` |
+| `income_floor_milli_per_day` | required, 0..=9,007,199,254,740,991 | the thousandths of a unit the pool gains each day at the least, with nothing spent; 0 says nothing is sure; not read by any build (a line is judged by the amount alone, #455 SL3) | as `price_milli` |
 
-In this build the three numbers are validated, serialized, hashed and shown in the compiled
-catalog; **nothing computes with them**, so the resource side can write them now. Refused, each at
+The three numbers are validated, serialized, hashed and shown in the compiled catalog. Since #455
+SL3 (0.12.104) `price_milli` and `scale` price the pressing below a line in effect ("Below a line");
+`income_floor_milli_per_day` is still read by nothing. Refused, each at
 its pointer: beside a `valuation` block, the pending marker or `target_defaults`, `type_mismatch` at
 `/pools/<i>/spend_line` (the diagnostic `target_defaults` gets beside a valuation: one reading per
 pool of a goal on it; on such a pool a goal will be the line, never a weight on its producers); in a
@@ -261,7 +262,8 @@ V1 document, `unknown_field` there; another member, `unknown_field`.
 
 What it changes is the net benefit of a judged task that **consumes** the pool ("Net benefit within
 a tier", "A declared 0"): it is no longer unknown for lack of a valuation, and the consumption costs
-nothing while no line is set. Nothing else reads the member. A task that **produces** the pool is
+nothing while no line is in effect (below a line in effect, "Below a line"). Nothing else reads the
+member. A task that **produces** the pool is
 judged as with any pool without a valuation. Every other reader of a consumption reads the pool as
 it reads any pool without a valuation: the reserve gate holds a consumer whose reading is short
 ("Task Reserves"), the forward projection applies the consumption, a run handed a `run_cap` leaves
@@ -278,12 +280,97 @@ pool's line, set by `{at_least}` alone on the goal page or in a document, with n
 listed with the member's `scale` and `price_milli` as its numbers and neither required, and taken by
 a `resource` entry of `goals.json`; no need of the records lands on it. A line has no date of its
 own, and it never weighs: the evaluation reads each stored record without its lines, so the tasks
-that produce the pool are judged as with no target on it and the tasks that consume it as above, the
-consumption still costing nothing. The pressing of the spenders below the line, its date, the hold
-and the statement of a shortfall are later slices. A `schedule.json` whose pool writes the member
-names `pool_spend_line` in `requires`
+that produce the pool are judged as with no target on it. Until #455 SL3 the tasks that consume it
+were judged as above, the consumption still costing nothing; since, the line presses them ("Below a
+line"). The statement of a shortfall on the goal page is a later slice. A `schedule.json` whose
+pool writes the member names `pool_spend_line` in `requires`
 ([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
 serializes, hashes and decides exactly as before.
+
+**Below a line** (#455 SL3, since 0.12.104; register §1.559; the owner's words of 11-28 that a
+currency saved for something has a line, that nothing is forbidden below it but the weight of the
+tasks that spend it is lowered and the spending reduced, the harder the farther below the line; the
+rulings the coordinator's). The walk that reads each instance's stored records without their lines
+hands those lines to the benefit gate (by instance and pool, through the evaluation's one context):
+a line is **in effect** while its record, read whole, is an active policy with the line among the
+targets it weighs (a v1 or v2 document within its lifetime, a v3 target within its own lifetime or
+without one; [../resource-targets.md](../resource-targets.md), "A pool's line"), and `L` is its
+`at_least`. For a judged candidate, on its instance, for each pool it consumes on net that writes
+`spend_line` and has a line in effect there:
+
+- **The amount and the net.** `r` is the pool's amount at the evaluation as the pools' lines read
+  it ("Pool lines", "At each evaluation"): its value in the evaluation's pool values, projected,
+  less the consumption its reading does not show yet (every task dispatched on the instance at or
+  after the reading's observation, each by its own amount in effect), computed in the one function
+  the lines read it by. `c` is the candidate's **net** consumption of the pool for one run,
+  `max(0, consumption − production)` of the pool in thousandths (its consumption in effect on the
+  instance, its production as a run's goal term reads it), in whole units as the hard line's check
+  counts a consumption, `⌈·/1000⌉`: a production is never weighed by the line, and a token
+  production does not take a spending out of it. A net of 0 is not pressed, adds no turns and is
+  not read (its item `<pool>:-0`). `a = r − c`.
+- **At or above the line**, `a ≥ L` (and where `c` takes no unit from below it): nothing is added
+  to the judgement, no term, no reason, the item `<pool>:-0`, as a build without this rule judges
+  it; a dispatch told turns by another term is told at most the line's ("The turns" below), and
+  one told none is byte for byte that build's.
+- **Below the line**, `d = L − a`, the units taken from below the line are `min(c, d)`, and the
+  candidate's exact sum `S` is charged the **pressing**
+  `P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli: every unit below the line at the
+  full price of a unit, `price_milli ÷ scale`, times `f = min(1, d ÷ scale)`, which rises with the
+  shortfall and reaches 1 at `d = scale`. `P` is an exact ratio subtracted as a consumed term is
+  (an overflow is the evaluation's overflow error), adds no share to `ε` (it rounds nothing) and no
+  consumed term of the capped spending order (the pool has no valuation), and its item is
+  `<pool>:-⌊P⌋`. With a fixed value, `B = V + … − P`. Several such pools: each its own `P`.
+- **What the decision says.** Whenever `P > 0` the decision carries `spend_line_pressed` (info;
+  `pool_id`, `line_at_least` `L`, `pool_reading` `r`, `consumption` `c`, `line_shortfall` `d`,
+  `pressing_milli` ⌊P⌋; its text gives `P` as an exact fraction), one for each such pool in the
+  order its consumption is declared, placed as `benefit_fixed_value` is (after it, before the
+  reasons that decide). The codes that decide are the ones of before: a candidate whose sum is not
+  positive is deferred `policy_benefit_nonpositive`, one within its rounding error
+  `benefit_within_tolerance`, and the pools' lines and every later gate act as before. So no reader
+  of a decision's last reason learns anything new: the idle plan counts a pressed spender held as it
+  counts any not-positive one, neither due nor a wake of its own.
+- **An amount that is not known.** With a line in effect and the pool's value not known at the
+  evaluation (no reading, expired, unread after a run told turns, no reader bound) the candidate's
+  `B` is unknown, `benefit_unknown` `reading_unknown` with the pool (and its key and reason when it
+  reads a fact), and the fact refresh is asked for the reading, as for a regenerating pool's missing
+  reading. A currency under a line is not spent blind. With no line in effect the pool's value is
+  not read.
+- **The turns** (ruling 7, as decided and corrected on 11-29: a run told turns never crosses the
+  line unjudged, and the line's turns are a term **only among other terms**). Where a candidate's
+  `run_cap` has at least one term without the line, as before this rule (a reserve on a pool it
+  consumes, the lines of a valued pool it consumes; [../remedies.md](../remedies.md), section 4,
+  "Spend values"), each such pool adds one more term, the line's turns: `⌊(r − L) ÷ c⌋` when that
+  is at least 1, so the last turn told still leaves the pool at or above the line and none of them
+  is pressed, else 1, the one turn the gate judged with its pressing; the least of the terms is
+  taken (then the goal term and the ceiling of 1000, as before). What a person sees then: on the
+  same `policy_dispatch_parameters`, for each entry of the task's `consumes` on such a pool, a
+  `spend_allowance` of `max(r − L, c)` (what the line lets the run spend: what the pool holds above
+  it, or the one judged run; the less of it and the reserve's where the task also reserves the
+  pool), beside `run_cap`; where the line's term is the least, `run_cap = ⌊spend_allowance ÷ c⌋`.
+  Where `run_cap` has no other term it has none now either: no `run_cap`, no `spend_allowance`, no
+  dispatch parameters and nothing left unread because of the line. Such a dispatch runs once, and
+  its one consumption is counted by the amount's reading (the consumption dispatched since the
+  reading, "The amount and the net" above), which the next judgement of any spender of the pool
+  reads. The pressing of the one turn judged is the same in both cases. With no line in effect, or
+  a net of 0, no term and no allowance: the values of before, byte for byte. A package that ignores
+  the turns it is told is the package's matter.
+- **Never pressed:** a production (a line never weighs what produces its pool; a task that also
+  consumes the pool is pressed on its net); whatever the gate does not judge (a manual request, a
+  chain's successor that rides with its chain, the Runtime's own tasks); and the capped order, the
+  stop and hard lines and the trigger line, which are a valued pool's.
+- **The price rises with the shortfall** so that the candidate with the least return for each unit
+  is the first whose `B` falls to 0 and stops, and one that is worth its price still runs: the
+  pressing reduces the spending, it forbids nothing. It is charged on the units below the line only:
+  a spend that stays at or above the line is the one of before.
+- **Limits.** `P` charges every unit below the line at the price of the deepest one, so a spend that
+  starts at the line pays up to twice the integral of the slope: simple, and on the careful side.
+  The price and its slope are the resource side's, and a wrong one makes the line too weak or too
+  strong. A line on a pool nothing reads holds its spenders until a reader is bound or the line is
+  cleared. A pool that regenerates is read again at the next evaluation; its rise wakes none of its
+  own. The goal page does not yet say which tasks a line presses.
+
+The line is judged by the amount alone: no date, no income and no list of exempt tasks; the
+member's `income_floor_milli_per_day` is not read and nothing dated is stored.
 
 ### A goal's gap in two parts
 
@@ -1266,7 +1353,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   unknown), an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
   pending marker or absent (for the instance; #455 SL1: but for a pool that writes `spend_line` and
   that it consumes, "A declared 0" below), or a regenerating pool it consumes whose reading is
-  unknown or expired (still read, as before, though its cost no longer depends on it) has an
+  unknown or expired (still read, as before, though its cost no longer depends on it), or (#455
+  SL3, since 0.12.104) a pool it consumes whose spending a line in effect governs and whose amount
+  is not known ("A pool whose spending a line governs", "Below a line") has an
   unknown `B`: the known part is never added up. It is not dispatched:
   deferred with `benefit_unknown` (info; `benefit_gap` `no_effects`, `entry_pending`,
   `valuation_pending`, `valuation_missing` or `reading_unknown`; `pool_id`, and `fact_key` with
@@ -1281,8 +1370,13 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   `<pool>:-0` at its place in the consumption's declaration order, so a reader of the decision sees
   the consumption was read and cost nothing. This 0 is a declared one, not an unknown read as 0:
   the pool says its spending is governed by a line, and no line is set. #455 SL2 (since 0.12.101):
-  with a line set it is the same 0, as the evaluation reads no line yet (the pressing below it is a
-  later slice's). Its reading is not read for
+  with a line set it was the same 0, as the evaluation read no line. #455 SL3 (since 0.12.104;
+  register §1.559): with a line in effect on the instance and a net consumption of the pool above 0
+  (its consumption less its production, a run's) the pool's amount is read, and a consumption
+  whose run stays at or above the line is the same 0, the
+  item `<pool>:-0`; one that would leave the pool below it is charged the exact term `−P`, no share
+  of `ε`, the item `<pool>:-⌊P⌋`, the reason `spend_line_pressed` ("A pool whose spending a line
+  governs", "Below a line"). Without a line in effect its reading is not read for
   the cost, and the pool takes no part in the pools' lines (below). An entry on it whose `amount`
   is the pending marker stays `entry_pending`; a task that produces it is judged as with any pool
   without a valuation (without a fixed value `valuation_missing`). A task without a fixed value
@@ -1369,8 +1463,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
     `B = ⌊S⌋ > 0` is positive and ranks by `B ÷ E`, any other known `B` is not positive (so a `B` of
     0 above `ε` is still not dispatched, as before). #455 SL1 (since 0.12.97): a sum whose `ε` is 0
     has no rounding and is not in the band; only a task without a fixed value whose only effect is
-    a consumption of a pool that writes `spend_line` has one ("A declared 0" above), `S = 0`, not
-    positive.
+    a consumption of a pool that writes `spend_line` has one ("A declared 0" above), `S = 0` (#455
+    SL3: or `−P` below a line in effect, which is exact too), not positive.
   - *The zero tier.* A candidate within tolerance whose task carries `benefit_realization: true`
     ([v2/README.md](v2/README.md); the model's verdict that the task is a realization or
     conversion with a real downstream use, one more run wasting nothing), whose `B` is known, that
@@ -2915,6 +3009,9 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   amount less the consumption its reading does not show yet: every task dispatched on the
   instance at or after the reading's observation, by its declared consumption (the reserve gate's
   step 3, "Task Reserves"), the candidate's own task included; each dispatch counts one run.
+  #455 SL3 (since 0.12.104): one function computes this amount, and the benefit gate reads the
+  amount of a pool whose spending a line governs by it too ("A pool whose spending a line
+  governs", "Below a line"); what the lines answer is unchanged.
   #477 LF-1 (since 0.12.80; register §1.509; the coordinator's ruling after the two reviews of
   #1872, not the owner's words): **a run told its turns leaves its pools unread.** A pool read
   from a fact or from rows of a list (not a static value) is unknown to the whole evaluation (`unknown_reason`

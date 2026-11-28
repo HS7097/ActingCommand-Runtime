@@ -1261,18 +1261,31 @@ in one place of the policy crate (`line_pool`), and nowhere copied.
   the records lands on it ([standard-pack-goal-tables.md](standard-pack-goal-tables.md), the row of
   `table_pool_unvalued`).
 - **It never weighs.** The evaluation reads each stored record without its lines
-  (`weighed_target_policies`, before the needs computed from the records are stacked): a line adds
-  nothing to any task's benefit, order, run count or reasons. It covers no producer in the resource
-  weights (no `Γ`, no `resource_targets` item, no override), gives no `gap_remaining` and no goal
-  term of `run_cap`, leaves no pool unread after a run, takes no part in the two tiers (`goal_tiers`
-  is never written beside `spend_line`) and takes no stacked need; a line past a v3 target's own
-  lifetime says no expiry either. So a task that produces the pool is judged exactly as with no
-  target on it, a task that consumes it exactly as in 0.12.99 (the consumption costs nothing, its
-  item `<pool>:-0`), and a record of lines alone is read as a record that holds no target. The
-  pressing of the spenders below the line is a later slice's, which reads the lines from the same
-  records where this one leaves them out.
+  (`weighed_policies_and_lines`, before the needs computed from the records are stacked): a line
+  adds nothing to the weighing of any task. It covers no producer in the resource weights (no `Γ`,
+  no `resource_targets` item, no override), gives no `gap_remaining` and no goal term of `run_cap`,
+  leaves no pool unread after a run, takes no part in the two tiers (`goal_tiers` is never written
+  beside `spend_line`) and takes no stacked need; a line past a v3 target's own lifetime says no
+  expiry either. So a task that produces the pool is judged exactly as with no target on it, and a
+  record of lines alone is read as a record that holds no target (no policy).
+- **It presses the spenders below it** (#455 SL3, since 0.12.104; register §1.559). The same walk
+  over the same records is a partition: its other half, the lines **in effect**, goes to the benefit
+  gate through the evaluation's one context. A line is in effect on its record's instance while the
+  record, read whole by its own reader, is an active policy with the line among the targets it
+  weighs: a v1 or v2 document within its lifetime, a v3 target within its own lifetime or without
+  one. Its `at_least` is the line `L` on the catalogue pool its `resource` names for the instance
+  ("A target's pool"). A judged candidate that consumes the pool on net (its consumption less its
+  production of it, a run's) is judged against it by the pool's amount and that net
+  ([scheduling/README.md](scheduling/README.md), "A pool whose spending a line governs", "Below a
+  line"): at or above the line its judgement is unchanged (its item `<pool>:-0`, as in 0.12.99),
+  below it its net benefit is charged for the units it takes from below the line and its decision
+  carries `spend_line_pressed`; with a line in effect and the pool's amount not known its benefit is
+  unknown (`reading_unknown`). A dispatch told turns by another term (a reserve, a valued pool's
+  lines) is told at most the turns that keep the pool at or above the line, or the one turn judged;
+  one told none runs once, and the reading counts its consumption ("The turns" there). A line on an
+  instance's pool presses nothing on another instance.
 - **No end of its own.** Nothing gives a line a date. A document's own validity and a v3 target's
-  own lifetime apply to it as to every row.
+  own lifetime apply to it as to every row: past them it is not in effect and presses nothing.
 - **Shown as a goal is shown.** `ResourceTargetView`'s `active` lists it as stored, with its
   condition, and the goal page lists the entry with its `{at_least}`, who set it, the pool's
   reading and the gap, how far the holding is below the line, by the code that shows any resource

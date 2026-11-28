@@ -835,8 +835,8 @@ fn pool_target_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
 /// without a valuation and without `target_defaults`, so [`pool_target_terms`] gives it nothing. The
 /// one place the difference is read, from the catalog in force: a line carries `at_least` alone and
 /// needs no producer ([`check_target_v2`], the v1 check), the targetable list names its pool with
-/// neither term required ([`listed_terms`]), and the evaluation reads no line
-/// ([`weighed_target_policies`]).
+/// neither term required ([`listed_terms`]), and the evaluation weighs no line and (#455 SL3) hands
+/// each line in effect to the benefit gate ([`weighed_policies_and_lines`]).
 fn line_pool(pool: &PoolSpec) -> bool {
     pool.spend_line.is_some()
 }
@@ -2004,12 +2004,32 @@ fn landing_targets(
 /// error: every instance it covers notes it as ignored (a server record over a game one). The
 /// map holds only the instances with something to report. #455 SL2: every stored target as it is
 /// stored, lines included, as the view (`ResourceTargetView`) shows them; the evaluation reads
-/// [`weighed_target_policies`].
+/// [`weighed_policies_and_lines`].
 pub(crate) fn instance_target_policies(
     facts: &EvaluationFacts,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
-    target_policies(facts, time, |_, _| false)
+    Ok(target_policies(facts, time, |_, _| None)?.0)
+}
+
+/// #455 SL3 (register §1.559; `contracts/resource-targets.md`, "A pool's line";
+/// `contracts/scheduling/README.md`, "A pool whose spending a line governs"): the lines in effect on
+/// each instance, by the catalogue pool each is on: the `at_least` of every stored target the
+/// evaluation's walk leaves out of what it weighs ([`weighed_policies_and_lines`]) that is live,
+/// its record read whole as an active policy with the target among the targets it weighs (a v1 or
+/// v2 document within its lifetime; a v3 target within its own lifetime, or without one). The
+/// benefit gate presses the spenders of such a pool below its line; nothing else reads it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StoredSpendLines {
+    /// The lines `L` by instance alias, then by catalogue pool id.
+    by_instance: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+impl StoredSpendLines {
+    /// The line `L` in effect on `instance_id` on the catalogue pool `pool_id`, if one is.
+    pub(crate) fn line(&self, instance_id: &str, pool_id: &str) -> Option<u64> {
+        self.by_instance.get(instance_id)?.get(pool_id).copied()
+    }
 }
 
 /// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): the stored
@@ -2019,32 +2039,48 @@ pub(crate) fn instance_target_policies(
 /// its own lifetime with it, before anything reads them, so a line adds no term, order, reason,
 /// gap, run count or stacked need to any task, and a record that holds lines alone is read as one
 /// that holds no target (no policy). Nothing stored is rewritten; the view and the goal page show
-/// the lines as stored. The next slice that presses spending reads the lines here, from the same
-/// records.
-pub(crate) fn weighed_target_policies(
+/// the lines as stored. #455 SL3 (register §1.559): the walk is a partition, and its other half,
+/// the lines in effect read from the same records ([`StoredSpendLines`]), is handed to the benefit
+/// gate beside the policies.
+pub(crate) fn weighed_policies_and_lines(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     time: EvaluationTime,
-) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+) -> PolicyEvaluationResult<(BTreeMap<String, InstanceTargetPolicy>, StoredSpendLines)> {
     target_policies(facts, time, |instance_id, resource| {
         facts
             .instances
             .iter()
             .find(|instance| instance.instance_id == instance_id)
             .and_then(|instance| target_pool(catalog, resource, instance))
-            .is_some_and(line_pool)
+            .filter(|pool| line_pool(pool))
+            .map(|pool| pool.id.as_str())
     })
 }
 
-/// The walk of [`instance_target_policies`] and [`weighed_target_policies`]: each record read by
-/// [`stored_policy_state`] without the targets `line` names, by the record's instance and the
-/// target's `resource`.
-fn target_policies(
+/// #455 SL2's reading of the stored policies as the evaluation weighs them: the first half of
+/// [`weighed_policies_and_lines`], which SL2's gate compares with the view's reading.
+#[cfg(test)]
+pub(crate) fn weighed_target_policies(
+    catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     time: EvaluationTime,
-    line: impl Fn(&str, &str) -> bool,
 ) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    Ok(weighed_policies_and_lines(catalog, facts, time)?.0)
+}
+
+/// The walk of [`instance_target_policies`] and [`weighed_policies_and_lines`]: each record read by
+/// [`stored_policy_state`] without the targets `line` names a pool of, by the record's instance and
+/// the target's `resource`. #455 SL3 (register §1.559): and the partition's other half, each
+/// instance-scoped record read whole by the same reader, whose live targets `line` names a pool of
+/// are the instance's lines in effect on those pools ([`StoredSpendLines`]).
+fn target_policies<'a>(
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    line: impl Fn(&str, &str) -> Option<&'a str>,
+) -> PolicyEvaluationResult<(BTreeMap<String, InstanceTargetPolicy>, StoredSpendLines)> {
     let mut policies = BTreeMap::<String, InstanceTargetPolicy>::new();
+    let mut lines = StoredSpendLines::default();
     for fact in facts
         .facts
         .iter()
@@ -2052,9 +2088,33 @@ fn target_policies(
     {
         let scope_kind = match &fact.scope {
             ScopeSelector::Instance { instance_id } => {
-                let of_instance = |resource: &str| line(instance_id.as_str(), resource);
+                let of_instance = |resource: &str| line(instance_id.as_str(), resource).is_some();
                 if let Some(state) = stored_policy_state(fact, instance_id, time, &of_instance) {
                     policies.entry(instance_id.clone()).or_default().state = Some(state);
+                }
+                // #455 SL3: the targets the read above left out that the record, read whole,
+                // weighs now (it is active and they are live) are the lines in effect.
+                let whole = stored_policy_state(fact, instance_id, time, &|_: &str| false);
+                let live = match &whole {
+                    Some(TargetPolicyState::Active { targets, .. }) => targets
+                        .iter()
+                        .map(|target| (target.resource.as_str(), target.condition))
+                        .collect::<Vec<_>>(),
+                    Some(TargetPolicyState::ActiveV2 { targets, .. }) => targets
+                        .iter()
+                        .map(|target| (target.resource.as_str(), target.condition))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for (resource, condition) in live {
+                    if let Some(pool_id) = line(instance_id.as_str(), resource) {
+                        let TargetCondition::AtLeast { amount } = condition;
+                        lines
+                            .by_instance
+                            .entry(instance_id.clone())
+                            .or_default()
+                            .insert(pool_id.to_owned(), amount);
+                    }
                 }
                 continue;
             }
@@ -2072,7 +2132,7 @@ fn target_policies(
             }
         }
     }
-    Ok(policies)
+    Ok((policies, lines))
 }
 
 /// Workflow #455 G-R2a (the coordinator's ruling of 11-14 on #1702): whether `ResourceTargetView`
@@ -4803,11 +4863,48 @@ pub(crate) fn spend_values(
 /// ([`crate::HandedRuns`]), so no value is computed from a reading the run's turns made stale.
 /// `pools` are the catalog's pools, for their base weight;
 /// `gap` answers the active goal's gap on a pool for the task ([`InstanceTargets::goal_gap`]).
-/// Integer arithmetic only, saturating: nothing panics or wraps.
+/// Integer arithmetic only, saturating: nothing panics or wraps. No pool's line in effect takes
+/// part ([`spend_values_with_lines`]).
 pub(crate) fn spend_values_with(
     task: &TaskSpec,
     views: Option<&[ReserveView]>,
     lines: impl Fn(&str) -> Option<LineView>,
+    pending: impl Fn(&str) -> u64,
+    pools: &[PoolSpec],
+    gap: impl Fn(&str) -> Option<u64>,
+) -> SpendValues {
+    spend_values_with_lines(task, views, lines, |_| None, pending, pools, gap)
+}
+
+/// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs", "The turns"; `contracts/remedies.md`, section 4, "Spend values"): what a pool whose
+/// spending a line in effect governs lets one judged candidate's run spend of it, read as the
+/// pressing reads the pool: its amount `r`, the line `L` and the task's net consumption `c`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LineAllowance {
+    /// `max(r − L, c)`: what the pool holds above the line, or, when that is less than one run,
+    /// the one run the benefit gate judged and pressed.
+    pub(crate) allowance: u64,
+    /// `c`, the task's net consumption of the pool per run in whole units, at least 1.
+    pub(crate) consumes: u64,
+}
+
+/// [`spend_values_with`] with, by pool, the [`LineAllowance`] of each pool the task consumes on net
+/// whose spending a line in effect on the candidate's instance governs (`lines_in_effect`; #455
+/// SL3, register §1.559, the coordinator's rulings of 11-29 as corrected at 04:34). The line's
+/// turns are a term **only among other terms**: where `run_cap` has at least one term without the
+/// line, as before (a reserved pool, a valued pool whose lines take part: [`pool_runs`]), such a
+/// pool gives it one more, the line's turns `⌊allowance ÷ c⌋` (`⌊(r − L) ÷ c⌋` when that is at least
+/// 1, so the last turn told still leaves the pool at or above the line, else 1), and the least is
+/// taken; its entries of `consumes` then take its allowance, the less of it and the reserve's where
+/// the task also reserves the pool. Where `run_cap` has no other term the line adds nothing: no
+/// `run_cap`, no `spend_allowance`; such a run is one turn, and the amount's reading counts its one
+/// consumption. With no such pool every value is [`spend_values_with`]'s of before, byte for byte.
+pub(crate) fn spend_values_with_lines(
+    task: &TaskSpec,
+    views: Option<&[ReserveView]>,
+    lines: impl Fn(&str) -> Option<LineView>,
+    lines_in_effect: impl Fn(&str) -> Option<LineAllowance>,
     pending: impl Fn(&str) -> u64,
     pools: &[PoolSpec],
     gap: impl Fn(&str) -> Option<u64>,
@@ -4820,13 +4917,22 @@ pub(crate) fn spend_values_with(
         }
         pool_spend(view, line, pending(pool_id))
     };
+    // #455 SL3: the terms without the line, as before; the line joins them only.
+    let pooled = pool_runs(task, &spend);
+    let line_allowance = |pool_id: &str| pooled.and_then(|_| lines_in_effect(pool_id));
     let spend_allowances = task
         .consumes
         .iter()
         .enumerate()
-        .filter_map(|(index, effect)| match spend(effect.pool_id.as_str()) {
-            PoolSpend::Known { allowance, .. } => Some((index, allowance)),
-            PoolSpend::Apart | PoolSpend::Unknown => None,
+        .filter_map(|(index, effect)| {
+            let above = line_allowance(effect.pool_id.as_str()).map(|line| line.allowance);
+            match spend(effect.pool_id.as_str()) {
+                PoolSpend::Known { allowance, .. } => {
+                    Some((index, above.map_or(allowance, |line| allowance.min(line))))
+                }
+                PoolSpend::Apart => above.map(|above| (index, above)),
+                PoolSpend::Unknown => None,
+            }
         })
         .collect();
     let gaps_remaining = task
@@ -4838,7 +4944,7 @@ pub(crate) fn spend_values_with(
     SpendValues {
         spend_allowances,
         gaps_remaining,
-        run_cap: run_cap(task, &spend, pools, &gap),
+        run_cap: run_cap(task, pooled, &line_allowance, pools, &gap),
     }
 }
 
@@ -4905,13 +5011,29 @@ fn run_amount(task: &TaskSpec, pool_id: &str, consumes: u64) -> Option<u64> {
 /// away: a goal-driven production declared by expectation bounds it ([`goal_runs`]) instead of
 /// removing it, as it did before. SCHED-C1f1: one run's amount is the one in effect on the
 /// candidate's instance, which its reserve view and its lines hold ([`run_amount`]), an integer,
-/// so an amount read from a fact gives a `run_cap`.
+/// so an amount read from a fact gives a `run_cap`. `pooled` is that spend term ([`pool_runs`]).
+/// #455 SL3 (register §1.559, as corrected on 11-29): where it is a term, each pool whose spending a
+/// line in effect governs and that the task consumes on net adds the line's turns ([`line_runs`])
+/// beside it, the least taken; where it is none, nothing, as before.
 fn run_cap(
     task: &TaskSpec,
-    spend: &impl Fn(&str) -> PoolSpend,
+    pooled: Option<u64>,
+    line_allowance: &impl Fn(&str) -> Option<LineAllowance>,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
 ) -> Option<u64> {
+    let pooled = pooled?;
+    let runs = line_runs(task, line_allowance).map_or(pooled, |lined| pooled.min(lined));
+    let cap = match goal_runs(task, pools, gap) {
+        Some(needed) => runs.min(needed),
+        None => runs,
+    };
+    Some(cap.min(u64::from(MAX_DESIGNATED_EFFECT_REPEATS)))
+}
+
+/// The spend term of [`run_cap`] over the pools that take part (`spend`), as before #455 SL3:
+/// `None` when none takes part, when one is unknown, or when one has no integer per-run amount.
+fn pool_runs(task: &TaskSpec, spend: &impl Fn(&str) -> PoolSpend) -> Option<u64> {
     let mut seen = BTreeSet::new();
     let mut least: Option<u64> = None;
     for effect in &task.consumes {
@@ -4934,12 +5056,25 @@ fn run_cap(
         });
         least = Some(least.map_or(runs, |least| least.min(runs)));
     }
-    let runs = least?;
-    let cap = match goal_runs(task, pools, gap) {
-        Some(needed) => runs.min(needed),
-        None => runs,
-    };
-    Some(cap.min(u64::from(MAX_DESIGNATED_EFFECT_REPEATS)))
+    least
+}
+
+/// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs", "The turns"): the least, over the pools of the task's `consumes` whose spending a line
+/// in effect governs and that it consumes on net (`line_allowance`), of the line's turns
+/// `⌊allowance ÷ c⌋`, each pool once; `None` without such a pool.
+fn line_runs(
+    task: &TaskSpec,
+    line_allowance: &impl Fn(&str) -> Option<LineAllowance>,
+) -> Option<u64> {
+    let mut seen = BTreeSet::new();
+    task.consumes
+        .iter()
+        .filter(|effect| seen.insert(effect.pool_id.as_str()))
+        .filter_map(|effect| line_allowance(effect.pool_id.as_str()))
+        .filter(|line| line.consumes > 0)
+        .map(|line| line.allowance / line.consumes)
+        .min()
 }
 
 /// SS-6: the goal term of `run_cap`, the runs the task's goals still need. Only when no pool of

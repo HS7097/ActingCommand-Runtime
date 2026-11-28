@@ -1203,9 +1203,10 @@ pub struct PoolGoalTiers {
 }
 
 /// #455 SL1 (register §1.540; `contracts/scheduling/README.md`, "A pool whose spending a line
-/// governs"): a pool's `spend_line`, the three numbers a line on the pool will be read with. All
-/// three are required, each within `MAX_CANONICAL_INTEGER`; this build validates, serializes and
-/// hashes them, and nothing computes with them yet.
+/// governs"): a pool's `spend_line`, the three numbers a line on the pool is read with. All three
+/// are required, each within `MAX_CANONICAL_INTEGER`, validated, serialized and hashed. #455 SL3
+/// (register §1.559): `price_milli` and `scale` price the pressing of the pool's spenders below a
+/// line in effect; `income_floor_milli_per_day` is read by nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PoolSpendLine {

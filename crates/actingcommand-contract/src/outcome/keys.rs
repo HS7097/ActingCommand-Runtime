@@ -949,4 +949,10 @@ outcome_keys! {
     // ---- Workflow #503 SD-1 (register §1.525): what refused a shutdown request as busy
     // (`runtime_shutdown_denied` with `runtime_code` `runtime_busy`); kept in codes mode. ----
     shutdown_obstacle: vocab(shutdown_obstacle),
+    // ---- #455 SL3 (register §1.559; contracts/scheduling/README.md "A pool whose spending a line
+    // governs"): a pool's line in effect, the shortfall a run leaves below it, and what the run is
+    // charged for it (`spend_line_pressed`). ----
+    line_at_least: integer,
+    line_shortfall: integer,
+    pressing_milli: integer,
 }

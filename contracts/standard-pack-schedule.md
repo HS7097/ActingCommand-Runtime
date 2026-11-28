@@ -618,7 +618,8 @@ its pools' valuations weigh in):
   for its cost: the model's, or a constant block the pack writes on the pool
   ([scheduling/README.md](scheduling/README.md), "Pool Valuation", "A valuation written in the
   pack"); #455 SL1 (since 0.12.97): or the pool writes `spend_line` and no valuation, and costs
-  nothing while no line is set ("A currency a line governs" below).
+  nothing while no line is set ("A currency a line governs" below; #455 SL3, since 0.12.104: below
+  a line in effect its spending is pressed).
 - `"fixed_value_origin": "model"` says that the model's export wrote the number (`acmodel bindings
   apply`, by a value binding of the repository's `ours/model/bindings.json`); without it the pack's
   own hand wrote it (registered in that file as a hand entry with its `status` and `ref`). Only
@@ -684,9 +685,29 @@ benefit within a tier", "A declared 0"). Write no `target_defaults` and no valua
 (either beside `spend_line` is refused). Until 0.12.101 no `resource` entry was to be put on it in
 `goals.json`; since #455 SL2 (register §1.547) a `resource` entry on it offers the pool's line: a
 goal on such a pool is its line, `{at_least}` alone, never a weight on its producers
-([resource-targets.md](resource-targets.md), "A pool's line"), and the pressing of the rules that
-spend it below the line is a later build's. A rule that also reserves the pool is held by the
-reserve gate as for any pool.
+([resource-targets.md](resource-targets.md), "A pool's line"). A rule that also reserves the pool is
+held by the reserve gate as for any pool.
+
+*What `price_milli` and `scale` decide* (#455 SL3, since 0.12.104; register §1.559). With a line `L`
+in effect, a rule that spends the currency on net (`c`, its run's consumption less its production of
+the currency) is charged, when its run would leave the pool's amount `r` below the line, the
+pressing
+`P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli, `d = L − (r − c)`: each unit below
+the line at the full price of a unit, `price_milli ÷ scale`, times `min(1, d ÷ scale)`
+([scheduling/README.md](scheduling/README.md), "A pool whose spending a line governs", "Below a
+line"). So choose `price_milli ÷ scale` as what one unit of the currency is worth to the account
+when it is short, in the unit the game's values are written in, and `scale` as the shortfall below
+the line at which a unit is to cost that whole price: a small `scale` presses hard just below the
+line, a large one lets the pressing grow slowly. A rule is still dispatched while its value exceeds
+its pressing, so of two rules the one with the least value for each unit spent stops first. For
+example, `{"price_milli": 100000, "scale": 100, "income_floor_milli_per_day": 0}` (a unit at most
+1000 milli) and a line of 400: read at 500, a rule of `V` 50 000 spending 100 a run leaves 400 and
+is judged `B = 50 000` as before (with no reserve it is told no turns and runs once; reserving the
+currency it is told at most one, read at 1000 at most six); spending 120 it leaves 380, 20 below
+the line at a fifth of the full price, `P = 100 000 · 20 · 20 ÷ 100² = 4000`, `B = 46 000`; read
+at 250, every unit of its 120 is below the line at the full price, `P = 120 000`, and it waits
+`policy_benefit_nonpositive` until the amount rises, the line is lowered or it is cleared. `income_floor_milli_per_day` is still
+read by nothing: a line is judged by the amount alone.
 
 **A goal's gap in two parts** (#455 RR3b, since 0.12.98; register §1.542). On a pool a goal may be
 set on, a pack may write `goal_tiers` (`{"need_importance_milli": I_n, "stock_cap_milli": C}` from

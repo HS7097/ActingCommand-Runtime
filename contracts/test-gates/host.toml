@@ -5127,3 +5127,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_9_a_failing_read_starts_and_says_so_once",
 ]
 incident = ["#503 MEM"]
+
+# #455 SL3 (0.12.104; register §1.559; brief rd-1123/brief-455-sl3.md; contracts/scheduling/README.md, "A pool whose spending a line governs"), the host's half, on a manual Runtime clock: catalog-a declared V2, its task judged with the fixed value 500 consuming 120 a run of a pool that writes spend_line (6000 milli of 100 units) and no valuation, read from its key through the ledger. A line of 400 stored through ApplyResourceTargets (v2) is taken; a package reading of 450 published: the spender is not dispatched, its last reason policy_benefit_nonpositive -2440, spend_line_pressed with the pool, the line 400, the reading 450, the consumption 120, the shortfall 70 and 2940; a reading of 600 published, it is dispatched and pressed no more, and with no other term of run_cap told no turns (no policy_dispatch_parameters) (h1). On an instance whose idle action can close it, a pressed spender deferred policy_benefit_nonpositive beside a task whose trigger is false: not due, no wake, the action taken and the closed instance not woken ten minutes later; the same spender pressed and selected is due (h2).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_sl3::sl3_h1_a_stored_line_presses_the_spender_until_a_higher_reading",
+    "actingcommand-runtime-host::lib::tests::gate_455_sl3::sl3_h2_an_instance_that_can_sleep_is_not_woken_for_a_pressed_spender",
+]
+incident = ["#455 SL3"]
