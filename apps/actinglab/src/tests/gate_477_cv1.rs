@@ -41,12 +41,13 @@ fn own_package_range() -> [u64; 2] {
     }
 }
 
-/// A version 2 catalog needs 24 and a version 1 catalog 16; this build declares [3, 31] (Workflow
+/// A version 2 catalog needs 24 and a version 1 catalog 16; this build declares [3, 32] (Workflow
 /// #477 LR-1, register §1.513, raised it to 25, Workflow #455 TK-1, register §1.532, to 26,
 /// Workflow #503 LIST-A, register §1.533, to 27, Workflow #455 RR1, register §1.535, to 28,
-/// Workflow #503 LIST-B, register §1.536, to 29, Workflow #503 LIST-C, register §1.541, to 30, and
-/// Workflow #503 LIST-D, register §1.544, to 31) and places both; an installer of [3, 23] refuses
-/// the zip of 24 at its edge and places the zip of 16.
+/// Workflow #503 LIST-B, register §1.536, to 29, Workflow #503 LIST-C, register §1.541, to 30,
+/// Workflow #503 LIST-D, register §1.544, to 31, and Workflow #455 RR4a, register §1.546, to 32)
+/// and places both; an installer of [3, 23] refuses the zip of 24 at its edge and places the zip
+/// of 16.
 #[test]
 fn cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16() {
     let version_1 =
@@ -59,7 +60,7 @@ fn cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_ke
     assert_eq!(revision_of(&version_2), CATALOG_V2_PACKAGE_REVISION);
 
     let own = own_package_range();
-    assert_eq!(own, [3, 31]);
+    assert_eq!(own, [3, 32]);
     let earlier = [3, CATALOG_V2_PACKAGE_REVISION - 1];
     let carries_version_2 = [CATALOG_V2_PACKAGE_REVISION, CATALOG_V2_PACKAGE_REVISION];
     let carries_version_1 = [CATALOG_PACKAGE_REVISION, CATALOG_PACKAGE_REVISION];
