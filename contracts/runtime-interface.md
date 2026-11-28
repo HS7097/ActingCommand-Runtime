@@ -814,8 +814,12 @@ workbench keeps of the game root, then, under the policy outcome gate, the polic
 write gate (the locks under which the evaluation computes the needs from the records), the
 authoritative projection, the remedy table, the instance's two goal records and its progress lists.
 A page not in memory yet answers `GoalView`'s word (`not_checked_yet`, `root_failing` or
-`no_schedule`) and no row. The page: `instance_alias`, `game_id`, `version` (`GoalView`'s, the
-next `expected_version`), `declaration` (as `GoalView` says it), `tables` (what the workbench
+`no_schedule`) and no row. Fix round 1: a page whose `declaration.state` is one of those three,
+not the state of a page in memory, holds nothing of its part, whatever its `tables` says; a client
+neither ends a part on it nor keeps anything of it, and reads the part again from its first page
+later; a request with a cursor that meets such a state is refused (below). The page:
+`instance_alias`, `game_id`, `version` (`GoalView`'s, the next `expected_version`),
+`declaration` (as `GoalView` says it), `tables` (what the workbench
 holds of `goal-tables.json`: `absent`, `accepted` with its sha256, `refused` with its sha256 and
 first problem and pointer, `unreadable`, `not_read`), `read_at_unix_ms`, `fresh_until_unix_ms`
 (`records` and `options`: the earliest expiry of the lists read), `records_state` (`records`:
@@ -832,7 +836,10 @@ positions}`), `rows`, `rows_total`, `cut` (`count` or `bytes`) and `next`.
   object; `applied` and `problem` the needs' own judgement of it (the edit's word, or `key_repeated`
   for a key an earlier stored record of the same table names); `held` `{state: held|not_held|
   unknown, fact_key?, unknown_reason?}` from the table's `held_by` list as the walk judges it; one
-  lane for each ladder the walk takes, `{column, sub?, column_name?, sub_name?, source: class|own,
+  lane for each ladder the walk takes, in the table's order (fix round 1: its columns as the file
+  writes them and, in a column of `per: "sub"`, its subs as the column writes them; a lane only a
+  prerequisite raised in its column's place), `{column, sub?, column_name?, sub_name?, source:
+  class|own,
   target?, raised_to?, current?, unknown?, conditions?}`, each position `{index, position, said?}`:
   `target` the record's own (absent for a lane only a prerequisite raised), `raised_to` where a
   prerequisite of another column takes it beyond its target, `current` the key's position, else
@@ -865,8 +872,14 @@ one) is no longer the record's is `goal_page_view_records_moved`; any part's who
 in file order) moved is `goal_page_view_declaration_moved`; each Denied with `current_version`,
 and the reader reads the part again from its first page. A cursor of `options` or `positions`
 carries no records version: an edit of the records between two of their pages is answered with the
-next page. A part, limit or cursor of the wrong form, a cursor of another part (its `part_sha256`)
-or one past the part's rows is `invalid_goal_page_view`; a part that names what the root does not
+next page. Fix round 1: a cursor that meets a page not in memory (above) is
+`goal_page_view_declaration_absent`, Denied with `goal_problem` (the state's word,
+`not_checked_yet`, `root_failing` or `no_schedule`) and `current_version`: the declaration did not
+move, so a client keeps what it kept under the tables' sha256 and reads the part again from its
+first page once a first page (or `GoalView`) says the declaration is in memory; a request without a
+cursor is answered with the state and no row. A part, limit or cursor of the wrong form, a cursor
+of another part (its `part_sha256`) or one past the part's rows is `invalid_goal_page_view`; a
+part that names what the root does not
 have is `goal_page_view_refused` with the edit's words at the part's pointer (`name_unknown` at
 `/part/entry`, `not_an_option` at `/part/ladder/key` or `/part/ladder/class`, `out_of_range` at
 `/part/ladder/column` or `/part/ladder/sub`). A completed receipt carries
@@ -875,7 +888,15 @@ cursor, limit)`; a Runtime of 14 or lower cannot decode the kind and drops the c
 client reports as `runtime_operation_unsupported`. A console then shows the page of 14 (records
 hidden), asking once per owner epoch; it keeps a table's options by instance, entry and tables'
 sha256 and a ladder's positions by ladder and sha256, and drops what it kept under the old sha256
-on `goal_page_view_declaration_moved`.
+on `goal_page_view_declaration_moved`. In codes mode (the console's default detail) a refusal of
+this read keeps `goal_problem`, a registered word, and `current_version`, which a denied receipt
+keeps at its top in every detail mode (as for `fact_observation_version_conflict`), but not
+`json_pointer`: a console that shows the pointer of `goal_page_view_refused` asks this read with
+`detail: full`. A known limit (fix round 1, register §1.557): every page holds the policy outcome
+gate, the policy, the fact write gate and the fact store's lock while it builds and measures its
+rows, and `positions` takes them and the projection too though it reads only the tables; so a
+console reads a part when it shows it and again after an edit or a refusal, and never polls pages
+in a loop.
 
 ### The variable values of a contained run
 

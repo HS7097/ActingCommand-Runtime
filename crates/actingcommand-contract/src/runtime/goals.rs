@@ -625,7 +625,9 @@ pub enum GoalLadderRef {
 /// in file order); `part_sha256` the part's ([`GoalPagePart::digest`]); `after` the rows the pages
 /// before answered. A cursor whose records moved is `goal_page_view_records_moved`, one whose
 /// tables or records entries moved `goal_page_view_declaration_moved`: the reader starts again
-/// from the first page.
+/// from the first page. Fix round 1: one sent while the page is not in memory is
+/// `goal_page_view_declaration_absent`: the declaration did not move, so the reader keeps what it
+/// kept and starts again from the first page once a first page says the declaration is in memory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoalPageCursor {
@@ -858,7 +860,9 @@ pub enum GoalPageRow {
     /// A stored record: its entry, its key (and the key's name), its target as stored (`to`, the
     /// canonical object), who set it, whether the computation applies it (else `problem`), the
     /// key's held state as the computation judged it, and one lane for each ladder the
-    /// computation walks for it, in the order of their column and sub.
+    /// computation walks for it, in the table's order: its columns as the file writes them and,
+    /// in a column of `per: "sub"`, its subs as the column writes them; a lane only a
+    /// prerequisite raised stands in its column's place.
     Record {
         entry: String,
         key: String,

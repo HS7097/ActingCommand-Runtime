@@ -853,7 +853,8 @@ crate::outcome_codes! {
         // A status `control` that disagrees with the same status's members (R-7a §2.6 O-7).
         InvalidRuntimeInstanceControl => "invalid_runtime_instance_control": error / none,
         // Workflow #455 RR4b-1 (register §1.557, since 0.12.104): a `GoalPageView` request whose
-        // part, limit or cursor is of the wrong form, or whose cursor is of another part.
+        // part, limit or cursor is of the wrong form, or whose cursor is of another part; and, the
+        // Runtime's own check, a cursor whose `after` passes the rows the part holds.
         InvalidGoalPageView => "invalid_goal_page_view": error / none,
     }
 }

@@ -52707,8 +52707,8 @@ the contract code; the request's form is the contract's). `next` and `cut` are c
 largest when a page is measured. A record whose entry the root does not declare has no lanes and no
 held state; one whose table the root does not apply has none either. A key's current positions in
 `options` are read only for a key the `held_by` list holds, as the walk reads them. A page not in
-memory answers `GoalView`'s word and no row whatever the cursor; `tables` is then what the workbench
-holds of the root, `not_read` without it. The part's digest is not the JSON of the part, so a
+memory answers `GoalView`'s word and no row to a request without a cursor (one with a cursor: fix
+round 1, below); `tables` is then what the workbench holds of the root, `not_read` without it. The part's digest is not the JSON of the part, so a
 client's own spelling of the request cannot move it. A stored row the reader took that gives back no
 setter or target (none does) is `goal_records_record_invalid`, and a page that does not serialize
 `runtime_frame_encode_failed`, each Denied for that request alone.
@@ -52722,11 +52722,13 @@ gate file). What reading could not verify is said beside each.
 | `…::rr4b1_p2_a_lane_not_known_says_why_with_the_walks_own_code` | a key not held or not known has its targets alone; each unknown lane says the walk's note code with its list, reading and `unknown_reason` |
 | `…::rr4b1_p3_a_record_row_past_its_cap_is_answered_without_its_texts` | 57 lanes with 16-language texts are answered without them, under 256 KiB (not run: the sizes are estimated by hand) |
 | `…::rr4b1_p4_a_page_is_cut_by_bytes_and_by_count_and_next_is_there_exactly_when_rows_remain` | 512 said positions cut by bytes under 768 KiB, the rest on the next page, a limit cuts by count, a cursor past the rows is invalid |
-| `…::rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word` | records cursor: moved records, moved tables, moved entries each its word; options and positions cursors take a records edit (Addendum 1) and refuse a moved declaration; the request's form refusals |
+| `…::rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word` | records cursor: moved records, moved tables, moved entries each its word; options and positions cursors take a records edit (Addendum 1) and refuse a moved declaration; the request's form refusals; fix round 1 (F6): an options cursor sent to positions, and to the options of another entry on the same table, refused by the part's digest alone |
 | `…::rr4b1_p6_options_and_positions_and_what_the_root_does_not_have` | the options' rows (requirements said, keys held, not held, a lane not known), positions of a class ladder and of a key's sub, each refusal at its pointer |
-| `…::rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_goal_page` | in composer mode, the page's version and declaration are `GoalView`'s, the record's lanes from a published list, options and positions in pages (not run: the list's freshness through the evaluator's projection) |
+| `…::rr4b1_p7_an_options_page_cut_by_bytes_stays_under_the_bound_with_its_freshness` | fix round 1 (F3): 600 keys named in 16 languages, `options` with a limit of 512 cut by bytes under 768 KiB with the lists' freshness, the next row would not have fit, the next page holds the rest, together in the table's order (not run: the row sizes are estimated by hand) |
+| `…::rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_goal_page` | in composer mode, the page's version and declaration are `GoalView`'s, the record's lanes from a published list (fix round 1, F4: in the table's order, `grade`, `skill`, `mastery` sub `1`), options and positions in pages (not run: the list's freshness through the evaluator's projection) |
 | `…::rr4b1_h2_a_records_edit_moves_the_records_cursor_alone_and_a_new_tables_file_moves_every_cursor` | ruling 5 and Addendum 1 on the host, with `current_version` (not run: the workbench's re-read of a shorter file at the next check) |
 | `…::rr4b1_h3_a_page_not_in_memory_an_undeclared_name_and_what_the_root_does_not_have` | `not_checked_yet` and no row before the first check; `goal_page_view_refused` at `/part/entry`; a cursor past the rows; undeclared records listed `declared: false`; `instance_unknown` |
+| `…::rr4b1_h4_a_cursor_sent_to_a_page_not_in_memory_is_refused_with_its_own_code` | fix round 1 (F1): in composer mode, after a first page of `options`, another procedure manifest in place takes the page out of memory; its cursor is `goal_page_view_declaration_absent` with `not_checked_yet` and `current_version`, and a first page answers `not_checked_yet`, no row and the same tables (not run: that nothing between the two requests builds the remedy table again) |
 | runtime-client `gate_455_rr4b1::rr4b1_c1_goal_page_view_sends_its_members_as_given_and_answers_the_page` | the request member by member, `cursor` and `limit` absent when `None`; the page answered |
 | `…::rr4b1_c2_an_older_runtime_is_unsupported_and_another_instances_page_unexpected` | a Runtime that drops the kind gives `runtime_operation_unsupported`; another instance's page is unexpected |
 
@@ -52749,7 +52751,36 @@ is installed. The installer's edges pass both ways ([12, 14] and [12, 15] meet).
 **Rollback.** Nothing is stored, so nothing is undone. A console that asks the new read of an older
 Runtime has its connection dropped (that Runtime cannot decode the kind); its client reports
 `runtime_operation_unsupported`, and the console shows the page of 14. In the release notes'
-language: 新增：只读的分页读取 `GoalPageView`（`runtime-client` 升到 15）：目标页的记录条目连同每条记录每条梯的目标、被前置拉到的位置、当前位置或读不到的原因、键是否持有（`records`），一张表的列、类别和键及其梯的大小和当前位置（`options`），一条梯的全部位置（`positions`），名字和位置的念法都照包里写的；每页最多 512 行、768 KiB，游标在记录或表变了时拒绝并说明是哪个变了。`GoalView` 一字节不变，已装的界面照常可用。
+language: 新增：只读的分页读取 `GoalPageView`（`runtime-client` 升到 15）：目标页的记录条目连同每条记录每条梯的目标、被前置拉到的位置、当前位置或读不到的原因、键是否持有（`records`），一张表的列、类别和键及其梯的大小和当前位置（`options`），一条梯的全部位置（`positions`），名字和位置的念法都照包里写的；每页最多 512 行、768 KiB，游标在记录或表变了时拒绝并说明是哪个变了；页不在内存时带游标的请求也拒绝（`goal_page_view_declaration_absent`），不会被当成最后一页。`GoalView` 一字节不变，已装的界面照常可用。
+
+**Fix round 1** (the independent review of pull request #1944, findings F1 to F10; the
+coordinator's rulings of 11-29). Acted on: *F1*, a page not in memory looked like a part's last
+page while its `tables` kept an unmoved sha256, so a console that keeps options by that digest could
+keep an empty or cut list: the contract now says such a page (`not_checked_yet`, `root_failing`,
+`no_schedule`) holds nothing of its part, and a request with a cursor that meets one is refused with
+a code of its own, `goal_page_view_declaration_absent` (`goal_problem` the state's word,
+`current_version` as the two moved codes carry it, under the locks the read takes already), not the
+declaration's code, because the digest did not move and the operation differs (keep what was kept,
+read again from the first page once it is in memory); a request without a cursor is answered as
+before, and `GoalView` is not touched. *F3*, an `options` page is measured with
+`fresh_until_unix_ms` at its largest, since its lists are read as the page's keys are, and given its
+value after. *F4*, a record row's lanes come in the table's order (`key_lanes`), a raised lane in its
+column's place, in the row's construction alone: the walk, its map and the needs are byte for byte
+as before; h1, which pinned the name order, is adapted. *F6*, the two refusals only the part's
+digest makes are asserted (an `options` cursor sent to `positions`, and to `options` of another
+entry on the same table). *F9*, the contract code's comment names the cursor past the part's rows.
+Read (the review could not tell): under the console's `codes` detail, `goal_problem` (a vocabulary
+word) and `current_version` (kept at a denied receipt's top since 0.12.36) reach the console and
+`json_pointer` (a pointer) does not; keeping it would change what `EditGoal`'s refusals carry to a
+console of 14, so nothing is registered and the contract says the console asks `detail: full` for
+the pointer. Left for later slices, changed by nothing here: *F2* (each page holds the four locks
+while it builds and measures its rows, and `positions` pays a projection it does not need; a known
+limit in the contract, with "never poll pages in a loop"), *F5* (a stored row's setter and target
+parsed a second time), *F7* (a golden of the revision-14 form of `GoalView`; a needs fixture with
+one key's row twice in a list), *F8* (titles, help and other entries are outside the cursor),
+*F10* (a sub given on an unknown column refused at `/part/ladder/sub`; with a small `limit`,
+`records` costs grow with the square of its rows; `max_records` moves the entries' digest for
+`options` and `positions` too). Tests p7 and h4 are new, p5 gains the two asserts.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

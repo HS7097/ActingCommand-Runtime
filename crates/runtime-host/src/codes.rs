@@ -3743,7 +3743,8 @@ actingcommand_contract::outcome_codes! {
     /// `contracts/runtime-interface.md`, "Goal request kinds"). No existing code fits:
     /// `goal_value_invalid` refuses an edit, and the cursor of event pages names a ledger snapshot
     /// a page of memory does not have. One code for each cause a reader tells apart: a part that
-    /// names what the root does not have, and each source of a cursor that moved.
+    /// names what the root does not have, each source of a cursor that moved, and (fix round 1) a
+    /// cursor sent to a page that is not in memory.
     pub(crate) enum GoalPageCode {
         /// Error (since 0.12.104). A `GoalPageView` names, for its part, what the application's
         /// game root does not have, for the reason `goal_problem` names at `json_pointer`, the
@@ -3763,6 +3764,13 @@ actingcommand_contract::outcome_codes! {
         /// after that page (`current_version` the goal page's version now). Denied, nothing
         /// answered: read the part again from its first page.
         DeclarationMoved => "goal_page_view_declaration_moved": error / none,
+        /// Error (since 0.12.104, fix round 1). The cursor of a `GoalPageView` reached a page that
+        /// is not in the Runtime's memory, which holds nothing of its part (`goal_problem` its
+        /// declaration's state: `not_checked_yet`, `root_failing` or `no_schedule`); the
+        /// declaration did not move (`current_version` the goal page's version now). Denied,
+        /// nothing answered: keep what was kept under the tables' sha256 and read the part again
+        /// from its first page once a first page says the declaration is in memory.
+        DeclarationAbsent => "goal_page_view_declaration_absent": error / none,
     }
 }
 

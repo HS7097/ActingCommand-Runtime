@@ -1051,9 +1051,11 @@ fn rr4b1_p4_a_page_is_cut_by_bytes_and_by_count_and_next_is_there_exactly_when_r
 // other stored records (`RecordsMoved`) and one over another declaration: the tables' sha256 or the
 // root's records entries (`DeclarationMoved`). A cursor of `options` or of `positions` carries no
 // records version: a records edit between two of their pages is answered with the next page; a
-// declaration that moved refuses it. A cursor of one part given to another, a records version on a
-// cursor of `options` or none on one of `records`, a limit of 0 or past 512 and a name of no form
-// are the request's own refusal, `invalid_goal_page_view`, before the Runtime reads anything.
+// declaration that moved refuses it. A cursor of one part given to another (fix round 1: of
+// `options` given to `positions`, or to the `options` of another entry on the same table, which the
+// part's digest alone tells apart), a records version on a cursor of `options` or none on one of
+// `records`, a limit of 0 or past 512 and a name of no form are the request's own refusal,
+// `invalid_goal_page_view`, before the Runtime reads anything.
 #[test]
 fn rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word() {
     let fixture = Fixture::units();
@@ -1192,6 +1194,22 @@ fn rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word() {
     refused(
         request(GoalPagePart::Records, Some(options_cursor.clone()), None),
         "a cursor of options given to records",
+    );
+    // Fix round 1 (the review's F6): two refusals the part's digest alone makes, each cursor being
+    // of the form of the part it is given to.
+    refused(
+        request(positions.clone(), Some(options_cursor.clone()), None),
+        "a cursor of options given to positions",
+    );
+    refused(
+        request(
+            GoalPagePart::Options {
+                entry: SECOND.to_owned(),
+            },
+            Some(options_cursor.clone()),
+            None,
+        ),
+        "a cursor of one entry's options given to the options of another entry on the same table",
     );
     let mut without_version = at_records.clone();
     without_version.records_version = None;
@@ -1432,6 +1450,134 @@ fn rr4b1_p6_options_and_positions_and_what_the_root_does_not_have() {
     for (name, part, expected) in cases {
         assert_eq!(read(&part), Err(expected), "{name}");
     }
+}
+
+/// A root of one records entry `many` on the table `many`: one class column `g` read from
+/// [`WIDE_LIST`] (the class `c`'s ladder of two positions) and `keys` keys `k000`, `k001`, ... of
+/// the class, each named in 16 languages (about 2 KiB a key row). Built as the reader's result.
+fn many_keys_fixture(keys: usize) -> Fixture {
+    let names = (0..keys)
+        .map(|key| format!("k{key:03}"))
+        .collect::<Vec<_>>();
+    let many = GoalTable {
+        name: "many".to_owned(),
+        progress: vec![GoalProgressList {
+            fact_key: WIDE_LIST.to_owned(),
+            key_column: "id".to_owned(),
+            held_by: false,
+            columns: vec!["r_g".to_owned()],
+        }],
+        columns: vec![GoalColumn {
+            name: "g".to_owned(),
+            read: GoalColumnRead::Class(vec!["r_g".to_owned()]),
+            requires: Vec::new(),
+        }],
+        classes: vec![GoalClass {
+            name: "c".to_owned(),
+            ladders: vec![("g".to_owned(), counted_ladder(2))],
+        }],
+        keys: names
+            .iter()
+            .map(|name| GoalKey {
+                name: name.clone(),
+                class: "c".to_owned(),
+                own: Vec::new(),
+                columns: Vec::new(),
+            })
+            .collect(),
+    };
+    let tables = StandardPackGoalTables {
+        game: GAME.to_owned(),
+        items: vec![GoalTableItem {
+            name: "gold".to_owned(),
+            pool: Some("pool.gold".to_owned()),
+            recipe: None,
+        }],
+        tables: vec![many],
+        names: GoalTableNames {
+            items: Vec::new(),
+            tables: vec![(
+                "many".to_owned(),
+                GoalTableNaming {
+                    keys: names
+                        .iter()
+                        .map(|name| (name.clone(), long_text(name)))
+                        .collect(),
+                    ..GoalTableNaming::default()
+                },
+            )],
+        },
+    };
+    let document = json!({"schema_version": "actingcommand.goals.v3", "game": GAME,
+    "entries": [
+        {"name": "many", "type": "records", "table": "many", "max_records": 1,
+         "title": {"en": "Many"}}
+    ]});
+    Fixture::of(goals_of(&document), tables)
+}
+
+// Fix round 1 (the review's F3 and its check 9): an `options` page cut by bytes. The 602 rows of
+// `many` (its column, its class, 600 keys named in 16 languages) asked 512 a page: the first page
+// holds as many as fit, is cut `bytes` and stays under 768 KiB with its `next` and the lists'
+// freshness, which is known only once the page's keys are read; the row after it would not have
+// fitted; the next page holds the rest without `next` or `cut`; together they are the table's rows
+// in its order.
+#[test]
+fn rr4b1_p7_an_options_page_cut_by_bytes_stays_under_the_bound_with_its_freshness() {
+    let fixture = many_keys_fixture(600);
+    let records = stored(&[]);
+    let row = BTreeMap::from([
+        ("id".to_owned(), text("k000")),
+        ("r_g".to_owned(), FactScalar::Integer(0)),
+    ]);
+    let lists = sources(vec![list(WIDE_LIST, vec![row])]);
+    let part = GoalPagePart::Options {
+        entry: "many".to_owned(),
+    };
+    let first = fixture
+        .read(&part, &records, &lists, None, Some(512), fixture.seq(0))
+        .expect("the first page of options");
+    let first_rows = first.rows.len();
+    assert!(
+        first_rows > 2 && first_rows < 512,
+        "{first_rows} rows on the first page"
+    );
+    assert_eq!(first.rows_total, 602);
+    assert_eq!(first.cut, Some(GoalPageCut::Bytes));
+    assert_eq!(first.fresh_until_unix_ms, Some(READ_AT + FRESH_MS));
+    let next = first.next.clone().expect("rows remain");
+    assert_eq!(next.after, u32::try_from(first_rows).expect("a count"));
+    assert_eq!(next.records_version, None);
+    let bytes = serde_json::to_vec(&first).expect("the page's bytes").len();
+    assert!(bytes <= MAX_GOAL_PAGE_VIEW_BYTES, "{bytes} bytes");
+
+    let second = fixture
+        .read(
+            &part,
+            &records,
+            &lists,
+            Some(&next),
+            Some(512),
+            fixture.seq(0),
+        )
+        .expect("the next page of options");
+    assert_eq!((second.next.as_ref(), second.cut), (None, None));
+    let following = serde_json::to_vec(&second.rows[0])
+        .expect("the row's bytes")
+        .len();
+    assert!(
+        bytes + following + 64 > MAX_GOAL_PAGE_VIEW_BYTES,
+        "{bytes} bytes and a row of {following}: the first page was cut before it was full"
+    );
+    let shapes = shape(&first)
+        .into_iter()
+        .chain(shape(&second))
+        .collect::<Vec<_>>();
+    let expected = ["column:g".to_owned(), "class:c".to_owned()]
+        .into_iter()
+        .chain((0..600).map(|key| format!("key:k{key:03}")))
+        .collect::<Vec<_>>();
+    assert_eq!(shapes, expected);
 }
 
 // ---- The host part ----
@@ -1821,10 +1967,11 @@ fn hero_options() -> GoalPagePart {
 // no records entry; `records`, read a row a page, answers the page's version (`GoalView`'s), its
 // declaration, the tables accepted with their sha256, the entry (after `stock`, applied, one record)
 // and then `hero_a`'s record, every lane with its target and its current position from the list,
-// held; `options`, four rows a page, its three columns and its class, then its two keys, `hero_a`
-// held with each ladder's size and current position and `hero_b`, whom the list does not hold,
-// without; `positions` of the class's grade ladder and of `hero_a`'s mastery sub, by class and by
-// key.
+// held, the lanes in the table's order (fix round 1, the review's F4: `grade`, `skill`, then
+// `mastery`'s sub, not their names' order); `options`, four rows a page, its three columns and its
+// class, then its two keys, `hero_a` held with each ladder's size and current position and
+// `hero_b`, whom the list does not hold, without; `positions` of the class's grade ladder and of
+// `hero_a`'s mastery sub, by class and by key.
 #[test]
 fn rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_goal_page() {
     let scene = Scene::new();
@@ -1879,12 +2026,12 @@ fn rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_
                     {"column": "grade", "source": "class",
                      "target": {"index": 2, "position": [2]},
                      "current": {"index": 0, "position": [0]}},
-                    {"column": "mastery", "sub": "1", "source": "own",
-                     "target": {"index": 1, "position": [1]},
-                     "current": {"index": 0, "position": [0]}},
                     {"column": "skill", "source": "own",
                      "target": {"index": 2, "position": [3]},
-                     "current": {"index": 0, "position": [1]}}]})]
+                     "current": {"index": 0, "position": [1]}},
+                    {"column": "mastery", "sub": "1", "source": "own",
+                     "target": {"index": 1, "position": [1]},
+                     "current": {"index": 0, "position": [0]}}]})]
     );
 
     let options = paged(&scene.page(INSTANCE_A, &hero_options(), None, Some(4)));
@@ -2097,5 +2244,72 @@ fn rr4b1_h3_a_page_not_in_memory_an_undeclared_name_and_what_the_root_does_not_h
         "instance_unknown",
         "operation",
     );
+    scene.close();
+}
+
+/// A procedure manifest other than the one the composition put in place: with it in place, the
+/// remedy table the last evaluation built is not the one the next keeps (`kept_remedy_table`), so
+/// the goal page is not in memory until an evaluation builds that table again.
+fn other_procedure_manifest() -> ProcedureManifest {
+    ProcedureManifest::new([ProcedureBinding::new(
+        "procedure.other",
+        "operation.observe",
+        Vec::new(),
+    )
+    .expect("a procedure binding")])
+    .expect("a procedure manifest")
+}
+
+// Fix round 1 (the review's F1). In composer mode, after the first cycle, a first page of `options`
+// (four rows of six) is answered in memory, with its next cursor. Then another procedure manifest is
+// put in place, as a placed bundle or a changed catalog does until the next evaluation: the page is
+// no longer in memory. The next page's request, with that cursor, is refused
+// `goal_page_view_declaration_absent` with the declaration's state (`goal_problem`
+// `not_checked_yet`) and the page's version; it is not answered as an empty last page. A first page
+// in the same state is answered as before: `not_checked_yet`, no row, no next, and the tables'
+// sha256 the cursor came over, which has not moved.
+#[test]
+fn rr4b1_h4_a_cursor_sent_to_a_page_not_in_memory_is_refused_with_its_own_code() {
+    let scene = Scene::new();
+    scene.cycle(T0);
+    let first = paged(&scene.page(INSTANCE_A, &hero_options(), None, Some(4)));
+    assert_eq!(first.declaration.state, GoalDeclarationRead::Accepted);
+    assert_eq!((first.rows.len(), first.rows_total), (4, 6));
+    let next = first.next.clone().expect("rows remain");
+
+    scene
+        .host
+        .replace_procedure_manifest_for_test(other_procedure_manifest())
+        .expect("another procedure manifest in place");
+    let receipt = scene.page(INSTANCE_A, &hero_options(), Some(&next), Some(4));
+    assert_eq!(
+        denied(
+            &receipt,
+            "goal_page_view_declaration_absent",
+            "goal_problem"
+        ),
+        Some(json!("not_checked_yet"))
+    );
+    assert_eq!(
+        receipt.outcome().value("current_version"),
+        Some(&json!(first.version))
+    );
+
+    let again = paged(&scene.page(INSTANCE_A, &hero_options(), None, Some(4)));
+    assert_eq!(again.declaration.state, GoalDeclarationRead::NotCheckedYet);
+    assert_eq!(
+        (
+            again.rows.len(),
+            again.rows_total,
+            again.next.as_ref(),
+            again.cut
+        ),
+        (0, 0, None, None)
+    );
+    assert_eq!(
+        again.tables, first.tables,
+        "the tables' sha256 did not move"
+    );
+    assert_eq!(again.version, first.version);
     scene.close();
 }

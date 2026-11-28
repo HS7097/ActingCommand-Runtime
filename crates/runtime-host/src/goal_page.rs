@@ -7,10 +7,11 @@
 //! - **`records`**: for each `records` entry of the accepted `goals.json`, in file order, its
 //!   `entry` row and then its stored records in their stored order; then, for each name the stored
 //!   records hold that no records entry declares, in their stored order, its `entry` row and its
-//!   records. A record's applied word, its key's held state and its lanes (target, the position a
-//!   prerequisite raises it to, the current position or why it is not known, the conditions) are
-//!   what the walk of the needs' computation read (`crate::goal_needs::walk_records`, the one
-//!   function both call); a position is said through the pack's names (`say_goal_position`).
+//!   records. A record's applied word, its key's held state and its lanes, in the table's order
+//!   (target, the position a prerequisite raises it to, the current position or why it is not
+//!   known, the conditions), are what the walk of the needs' computation read
+//!   (`crate::goal_needs::walk_records`, the one function both call); a position is said through
+//!   the pack's names (`say_goal_position`).
 //! - **`options`** of a records entry the root applies: its table's columns, then its classes,
 //!   then its keys, each in file order; a key's held state and current positions are read as the
 //!   walk reads them (`crate::goal_needs::read_key`), only for the keys of the page.
@@ -45,7 +46,7 @@ use serde::Serialize;
 
 use crate::goal_needs::{
     KeyHeld, LaneCurrent, LaneKey, NeedsSources, ProgressLists, RecordJudgement, RecordsRoot,
-    WalkedLane, ladder_of, read_key, walk_records,
+    WalkedLane, key_lanes, ladder_of, read_key, walk_records,
 };
 use crate::goal_records::{StoredGoalRecords, StoredRecordRow};
 use crate::goals::declared_entry;
@@ -72,6 +73,10 @@ pub(crate) enum PageFailure {
     RecordsMoved,
     /// The cursor came over another declaration: `goal_page_view_declaration_moved`.
     DeclarationMoved,
+    /// Fix round 1: a request with a cursor reached a page that is not in memory, its
+    /// declaration's state being `problem` (`not_checked_yet`, `root_failing` or `no_schedule`):
+    /// `goal_page_view_declaration_absent`. The host answers it before any part is read.
+    DeclarationAbsent { problem: GoalProblem },
     /// A row the reader took gives back no setter or no target (no row the reader takes does).
     RecordUnread,
     /// A row or the page does not serialize.
@@ -237,6 +242,9 @@ pub(crate) fn read_part(
             let total = items.len();
             let start = start_of(after, total)?;
             let mut lists = ProgressLists::new(sources);
+            // Fix round 1: the lists are read as the page's keys are, so the head is measured
+            // with the freshness at its largest and given its value once the page is built.
+            head.fresh_until_unix_ms = Some(u64::MAX);
             let rows = items[start..].iter().map(|item| {
                 Ok(match item {
                     OptionItem::Column(column) => column_row(column, naming),
@@ -433,11 +441,16 @@ fn record_row(
 ) -> Result<GoalPageRow, PageFailure> {
     let naming = naming.filter(|_| texts);
     let key = table.and_then(|table| table.key(&record.key));
+    // Fix round 1: the lanes in the table's order (`key_lanes`: the columns in the file's order
+    // and, of a column of `per: "sub"`, its subs in the column's), a lane only a prerequisite
+    // raised in its column's place; the walk's map is read as it is.
     let lanes = match (judgement, table, key) {
-        (Ok(walked), Some(table), Some(key)) => walked
-            .lanes
-            .iter()
-            .filter_map(|(lane_key, lane)| page_lane(table, key, naming, lane_key, lane))
+        (Ok(walked), Some(table), Some(key)) => key_lanes(table, key)
+            .into_iter()
+            .filter_map(|lane_key| {
+                let lane = walked.lanes.get(&lane_key)?;
+                page_lane(table, key, naming, &lane_key, lane)
+            })
             .collect(),
         _ => Vec::new(),
     };

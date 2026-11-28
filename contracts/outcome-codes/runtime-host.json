@@ -22270,6 +22270,28 @@
       "common_causes": "A new bundle placed, or a root's goals.json or goal-tables.json changed and read by the workbench's next check, between two pages.",
       "handling": "Drop what was kept under the old tables' sha256 and read the part again from its first page (no cursor)."
     },
+    "goal_page_view_declaration_absent": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "current_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 fix round 1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): a GoalPageView with a cursor reached a page that is not in the Runtime's memory: its declaration's state is not_checked_yet, root_failing or no_schedule (goal_problem, the word GoalView's declaration says), and such a page holds nothing of its part, whatever its tables say. The declaration did not move (the tables' sha256 and the records entries are still the cursor's), so it is not goal_page_view_declaration_moved, but the pages before the cursor cannot go on over it. current_version is the goal page's version now. A request without a cursor is answered with that state and no row. Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "Between two pages a new bundle was placed, another catalog activated or the procedure manifest changed, until the next evaluation reads the bound packages again; or the Runtime started again, until its first check of the game root.",
+      "handling": "Keep what was kept under the tables' sha256, and read the part again from its first page (no cursor) once a first page or GoalView says the declaration is in memory: for not_checked_yet after the Runtime's next check; for root_failing once the game root is repaired; for no_schedule once the game root holds schedule.json."
+    },
     "goal_value_package_unreadable": {
       "category": "warning",
       "ladder_class": "none",

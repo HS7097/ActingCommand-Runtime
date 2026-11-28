@@ -17,8 +17,9 @@
 //!   evaluator's projection (`NeedsProjection`);
 //!
 //! then answers `crate::goal_page::read_part`. Until what the page is judged by is in memory the
-//! page answers `GoalView`'s word (`not_checked_yet`, `root_failing` or `no_schedule`) and no row.
-//! It records nothing and stores nothing.
+//! page answers `GoalView`'s word (`not_checked_yet`, `root_failing` or `no_schedule`) and no row;
+//! fix round 1: a request with a cursor is then refused `goal_page_view_declaration_absent`, with
+//! the word and the page's version. It records nothing and stores nothing.
 
 use super::goals::{
     StoredRecord, goal_declaration, kept_remedy_table, page_sources, page_version, unchecked_state,
@@ -118,7 +119,13 @@ impl HostShared {
             let unread = goal_roots
                 .as_ref()
                 .and_then(|roots| roots.unread.get(&game_id));
-            let (_, declaration) = unchecked_state(unread);
+            let (problem, declaration) = unchecked_state(unread);
+            // Fix round 1: such a page holds nothing of its part, so the pages before a cursor
+            // cannot go on over it; its declaration did not move (the tables' sha256 is still the
+            // cursor's), which is a cause of its own.
+            if cursor.is_some() {
+                return Err(self.page_refused(PageFailure::DeclarationAbsent { problem }, version));
+            }
             return Ok(page_head(
                 instance_alias,
                 &game_id,
@@ -174,10 +181,12 @@ impl HostShared {
     /// a cursor of more rows than the part holds `invalid_goal_page_view`; a part that names what
     /// the root does not have `goal_page_view_refused` with its word and pointer; a cursor over
     /// other stored records `goal_page_view_records_moved`, over another declaration
-    /// `goal_page_view_declaration_moved`, each with `current_version`; a stored row the reader
-    /// took that gives back no setter or target `goal_records_record_invalid` (its daemon line
-    /// written, as a composed record not read back is); a page that does not serialize
-    /// `runtime_frame_encode_failed`. Each is Denied and records nothing.
+    /// `goal_page_view_declaration_moved`, each with `current_version`; a cursor sent to a page not
+    /// in memory `goal_page_view_declaration_absent` with its state's word (`goal_problem`) and
+    /// `current_version` (fix round 1); a stored row the reader took that gives back no setter or
+    /// target `goal_records_record_invalid` (its daemon line written, as a composed record not read
+    /// back is); a page that does not serialize `runtime_frame_encode_failed`. Each is Denied and
+    /// records nothing.
     fn page_refused(&self, failure: PageFailure, version: u64) -> RuntimeHostError {
         let refused = |code: GoalPageCode| {
             RuntimeHostError::request(code, OPERATION, RuntimeErrorCode::InvalidRequest)
@@ -196,6 +205,10 @@ impl HostShared {
                 .with_outcome_values(move |outcome| outcome.current_version(version)),
             PageFailure::DeclarationMoved => refused(GoalPageCode::DeclarationMoved)
                 .with_outcome_values(move |outcome| outcome.current_version(version)),
+            PageFailure::DeclarationAbsent { problem } => refused(GoalPageCode::DeclarationAbsent)
+                .with_outcome_values(move |outcome| {
+                    outcome.goal_problem(problem).current_version(version)
+                }),
             PageFailure::RecordUnread => {
                 let refusal = RuntimeHostError::request(
                     HostCode::GoalRecordsRecordInvalid,
