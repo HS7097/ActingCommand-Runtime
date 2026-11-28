@@ -289,6 +289,8 @@ mod saved_artifact_ocr;
 mod unavailable_probe;
 // Workflow #490 ENTRY-A: the instances a scheduled run's failure at its entry blocked.
 mod entry_blocks;
+// #503 PACE: the pairs whose scheduled runs keep failing.
+mod failure_pairs;
 use material_read::MaterialReadContext;
 #[cfg(test)]
 pub(crate) use unavailable_probe::UnavailableForTest;
@@ -2437,6 +2439,7 @@ impl RuntimeHost {
             resource_fences: Mutex::new(BTreeMap::new()),
             unavailable_instances: Mutex::new(BTreeMap::new()),
             entry_blocks: Mutex::new(entry_blocks::EntryBlocks::default()),
+            failure_pairs: Mutex::new(crate::failure_pacing::FailurePairs::default()),
             session_deaths: Mutex::new(BTreeSet::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
@@ -5504,6 +5507,44 @@ impl RuntimeHost {
         shared.seed_entry_pair_for_test(instance_id, task_id, seeded)
     }
 
+    /// #503 PACE: the pair of `task_id` on `instance_alias`, if its latest scheduled runs failed:
+    /// its failures in a row, those against it, the time before which it is not dispatched there
+    /// and whether it is set aside.
+    #[cfg(test)]
+    pub(crate) fn failure_pair_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+    ) -> RuntimeHostResult<Option<failure_pairs::FailurePairForTest>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::FailurePairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.failure_pair_for_test(instance_id, task_id)
+    }
+
+    /// #503 PACE: the pair of `task_id` on `instance_alias` seeded as `in_a_row` failures in a row
+    /// in the window ending at `window_end`, the latest settled at `latest_unix_ms`, waiting until
+    /// `until_unix_ms`, and with `set_aside` set aside
+    /// (`(in_a_row, latest_unix_ms, until_unix_ms, window_end, set_aside)`).
+    #[cfg(test)]
+    pub(crate) fn seed_failure_pair_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+        seeded: (u32, u64, u64, u64, bool),
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::FailurePairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.seed_failure_pair_for_test(instance_id, task_id, seeded)
+    }
+
     /// Workflow #490 ENTRY-A fix round 8 (ruling 1): `instance_alias`'s entry block counts
     /// `task_id` among the tasks whose failures set or renewed it, as a failure at the entry of
     /// that task settled while the block stands does; `false` when the instance is not blocked.
@@ -7619,6 +7660,10 @@ struct HostShared {
     // a recovery the ladder's cool-down held back for them and the marks a run's settlement
     // compares (memory only; a restart starts with no block). A leaf lock.
     entry_blocks: Mutex<entry_blocks::EntryBlocks>,
+    // #503 PACE: the pairs (instance, catalog task) whose scheduled runs keep failing, with the
+    // scheduled runs that succeeded on each instance (memory only; a restart starts with none). A
+    // leaf lock.
+    failure_pairs: Mutex<crate::failure_pacing::FailurePairs>,
     // ISO-2b (#419 R1): the instances whose device session died at a capture and has not
     // finished a capture since (memory only; `HostShared::session_died_again`). A leaf lock.
     session_deaths: Mutex<BTreeSet<InstanceId>>,

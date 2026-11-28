@@ -20,7 +20,9 @@
 //!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `pool_list_rows` when a
 //!    pool's `observation` is of the kind `list_rows` (#455 P1), `pool_target_defaults` when a pool
 //!    writes `target_defaults` (#455 B3-P), `pool_spend_line` when a pool writes `spend_line` (#455
-//!    SL1), `pool_goal_tiers` when a pool writes `goal_tiers` (#455 RR3b), `queue_wait` when a rule
+//!    SL1), `pool_goal_tiers` when a pool writes `goal_tiers` (#455 RR3b), `fixed_value_any` when
+//!    a rule's fixed value is 0 or below or stands beside a production of a pool that writes a
+//!    valuation (#503 FIXV), `queue_wait` when a rule
 //!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -1628,6 +1630,25 @@ fn read_game(
             ),
         ));
     }
+    // #503 FIXV (register §1.550): likewise a rule whose fixed value is 0 or below, or a rule with a
+    // fixed value that writes a production of a pool whose `valuation` is written, at the first
+    // such rule's `fixed_value_milli`. No Runtime before 0.12.101 names the subsystem, so every
+    // such Runtime refuses the file at `requires` instead of refusing it at the rule's value.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::FIXED_VALUE_ANY_SUBSYSTEM)
+        && let Some(pointer) = first_fixed_value_freedom(&schedule)
+    {
+        return Err(refused(
+            schedule_issue(StandardPackProblem::ScheduleInvalid, pointer),
+            format!(
+                "a rule's {SCHEDULE_RULE_FIXED_VALUE_MEMBER} of 0 or below, or beside a production \
+                 of a pool that writes a valuation, needs requires to name {}",
+                crate::FIXED_VALUE_ANY_SUBSYSTEM
+            ),
+        ));
+    }
     // SCHED-C1c (register §1.299): likewise a pool that writes `trigger_line`, in either form; its
     // two lines need `pool_lines` besides.
     if !schedule
@@ -2122,6 +2143,40 @@ fn first_fixed_value_member(schedule: &StandardPackSchedule) -> Option<String> {
             .position(|pool| pool.valuation_origin == ScheduleValueOrigin::Model)
             .map(|index| format!("/pools/{index}/{SCHEDULE_POOL_VALUATION_ORIGIN_MEMBER}"))
     })
+}
+
+/// #503 FIXV (register §1.550): the pointer of the first rule's `fixed_value_milli`, in file order,
+/// that requires [`crate::FIXED_VALUE_ANY_SUBSYSTEM`]: an integer of 0 or below, or any value of a
+/// rule that writes a `produces` entry of a pool whose `valuation` is written (a block or the
+/// pending marker). `None` when there is none. A value that is no integer is left to the compiler.
+fn first_fixed_value_freedom(schedule: &StandardPackSchedule) -> Option<String> {
+    let valued = schedule
+        .pools
+        .iter()
+        .filter(|pool| {
+            pool.body
+                .get("valuation")
+                .is_some_and(|value| !value.is_null())
+        })
+        .map(|pool| pool.id.as_str())
+        .collect::<BTreeSet<_>>();
+    schedule
+        .rules
+        .iter()
+        .position(|rule| {
+            rule.fixed_value_milli.as_ref().is_some_and(|value| {
+                value.as_i64().is_some_and(|milli| milli <= 0)
+                    || rule
+                        .body
+                        .get("produces")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|entry| entry.get("pool_id").and_then(Value::as_str))
+                        .any(|pool_id| valued.contains(pool_id))
+            })
+        })
+        .map(|index| format!("/rules/{index}/{SCHEDULE_RULE_FIXED_VALUE_MEMBER}"))
 }
 
 /// SCHED-C1f1 (register §1.303 SC1F-6): each `consumes` entry of a rule, in file order, whose

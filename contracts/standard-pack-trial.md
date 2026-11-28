@@ -12,6 +12,11 @@ records it ("The run", "The end", "Reading the end later"). The tool records the
 reference it is given and judges nothing: it never decides whether an authorization is good, and
 it never starts a trial by itself.
 
+Workflow #503, slice TRIAL (Runtime 0.12.101; register §1.551): the run asks for no
+acknowledgement of a package the irreversible mark flags. The line has no `--irreversible`, the
+plan no `irreversible_acknowledged`, and `trial_irreversible_unacknowledged` is retired; the mark
+is still judged over `--root`, shown in the plan and kept in the record ("The irreversible mark").
+
 Three sentences every text of the tool keeps true:
 
 - **A passed trial is not an authorization.** The record says which content was tried, under which
@@ -27,7 +32,7 @@ Three sentences every text of the tool keeps true:
 
 ```text
 actinglab standard-pack trial <instance> --package <dir> [--authorization <reference>]
-    [--variable <name>=<json>]... [--expect <outcome_key>] [--irreversible]
+    [--variable <name>=<json>]... [--expect <outcome_key>]
     [--root <game root>] [--state-dir <dir>]
     (--plan | [--wait <duration>] | --collect <request_id>)
 ```
@@ -46,8 +51,8 @@ the end later"). `--collect` or `--wait` beside `--plan`, and `--wait` beside `-
 **A plan prepares and shows** (the authorization line's first kind, "prepare and show"; the
 coordinator's ruling of fix round 2): it needs no authorization and refuses nothing that only the
 run needs. What the run will require that the plan was not given, the plan says
-(`run_requires`); the refusals that belong to the run (an authorization missing, an irreversible
-package not acknowledged) are the run's ("The run").
+(`run_requires`); the refusal that belongs to the run (an authorization missing) is the run's
+("The run"). Since #503 TRIAL nothing of the irreversible mark is the run's to refuse either.
 
 | Input | What it is |
 |---|---|
@@ -56,8 +61,7 @@ package not acknowledged) are the run's ("The run").
 | `--authorization` | The reference of the owner's authorization ("The authorization"); optional for a plan, required by the run. |
 | `--variable` | A value of a variable the package declares, `<name>=<json>`, once per name ("The variables"); the plan shows it, and the run sends it in its request (S3-8, S3-9, 0.12.68: a Runtime of `runtime-client` revision 11 is needed, "The run"). |
 | `--expect` | The outcome key the trial is expected to end with: one the package declares. The run answers whether its end matched it ("The end"). |
-| `--irreversible` | Acknowledges a package the irreversible mark flags ("The irreversible mark"); shown in the plan, required by the run of a marked package. |
-| `--root` | A game root, installed or a bundle laid out as one, its directory named as its game: the root the irreversible mark is judged over. A package it does not register counts as marked. |
+| `--root` | A game root, installed or a bundle laid out as one, its directory named as its game: the root the irreversible mark is judged over. A package it does not register counts as marked. The mark is shown; nothing is refused for it. |
 | `--state-dir` | The Lab's state directory, as the recording commands take it (default actinglab's session directory), where trial records are kept ("The record"). |
 | `--plan` | Answer the plan only: nothing is sent or written and no Runtime is reached. |
 | `--wait` | (S3-11) The longest the run is waited for, a duration as `run start`'s `--wait` takes it; absent, the run is waited for to its receipt ("The run"). |
@@ -74,6 +78,9 @@ Under the global `--dry-run` it answers the same ([actinglab-dry-run.md](actingl
 
 **Malformed arguments** are `validation_failed` naming the flag (`argument`, `argument_problem`
 and `arguments`), as the command line answers every other: one code for one kind of mistake.
+Since #503 TRIAL (0.12.101) `--irreversible` is no flag of the row: a line that still gives it is
+refused naming it with `unknown`, as every flag the row does not take, before anything is read,
+sent or written.
 
 ## The package
 
@@ -149,13 +156,18 @@ directory tried in its place. The plan answers `irreversible`
 the `capabilities` a package of the root marks irreversible that the package provides or its
 remedies list, and the root's `unreadable_packages`. The type's safe side holds: a package the
 root does not register, and every package while one of the root cannot be read, counts as marked.
-`irreversible_acknowledged` says whether `--irreversible` was given. **The plan shows the mark and
-refuses nothing for it** (fix round 2); a marked package that is not acknowledged is the run's to
-refuse.
+**The plan shows the mark and refuses nothing for it** (fix round 2), **and nor does the run**
+(Workflow #503 TRIAL, 0.12.101): a package the mark flags is sent under its authorization alone, as
+one `unmarked` or `not_judged` is, and its record keeps the mark and its basis. The mark is
+information for the person who tries the package; it asks nothing of them. Until 0.12.101 the run
+of a `marked` package needed `--irreversible`, an acknowledgement the plan showed as
+`irreversible_acknowledged`, and was refused without it (`trial_irreversible_unacknowledged`, now
+retired); the line has neither the flag nor the plan the member any more, and the record keeps the
+member, written `false` ("The record").
 
 **Without `--root` the mark cannot be judged**: the plan answers `irreversible` `not_judged`. S3-11
 decided that the run does not require `--root`: a mark not judged refuses nothing, as the plan
-says; only a package the mark flags (`marked`) needs `--irreversible`.
+says.
 
 ## The plan
 
@@ -171,7 +183,7 @@ The answer of `--plan`:
 | `plan.authorization` | The reference, as given; `null` when none was given. |
 | `plan.ends` | Each `scheduling_outcome` mapping of the entry task, in mapping order: `outcome_key`, `end` and `pages`, its terminal pages as the task writes them. `end` names each kind by the declaration that makes it one, as the package's own contracts name them, told apart in this order: `target` (its terminal pages hold a target page of the task, the kernel's own target set), `on_empty` (a select step's `on_empty` key, [selection-graph.md](selection-graph.md)), `on_max_runs` and `on_guard_refused` (the key of an operation's keyed `on_max_runs` or keyed `on_guard_refused`, [resource-declarations.md](resource-declarations.md), "Per-run operation caps and keyed guard refusals"), `on_timeout` (a wait step's `on_timeout`, "Wait steps and wait pages"), `end_page` (a page a stage lists in its `end_pages`, [README.md](README.md), "Stage end pages and entry pages"), and for every other mapping `ending` in a `linear_steps` task (an ending page, [linear-steps.md](linear-steps.md), "Endings") or `other` in a page graph. |
 | `plan.variables` | "The variables": each `{name, value, source}`. |
-| `plan.irreversible`, `plan.irreversible_basis`, `plan.irreversible_acknowledged` | "The irreversible mark"; the basis is absent when the mark was not judged. |
+| `plan.irreversible`, `plan.irreversible_basis` | "The irreversible mark"; the basis is absent when the mark was not judged. Since #503 TRIAL the plan has no `irreversible_acknowledged`. |
 | `plan.expect` | `--expect`, when given; a key the package does not declare is `validation_failed` naming `--expect` with `not_recognised`, the word an undeclared `--variable` name gets, the details carrying the key given as `expected` and the declared keys as `declared_outcome_keys`. |
 | `run_requires` | What the run will require that this plan was not given: `authorization` when `--authorization` was not given; empty otherwise. |
 | `record_directory` | Where the trial's record is to be kept: `<state>/trials/<package_id>`. |
@@ -203,7 +215,7 @@ installed root.
 |---|---|
 | `schema_version` | `actingcommand.pack-trial.v1`. |
 | `at_unix_ms` | When the trial ended (the ledger's time of the run's terminal); it names the file. |
-| `plan` | The plan the trial ran by, as `--plan` answers it, but its `authorization` is the reference the run was sent under, never `null` (fix round 3): the record's plan is a type of its own whose `authorization` is a text, made from a plan only by a conversion that refuses a plan without one (`validation_failed`, as the writer refuses another malformed record) and, S3-11, one outside the bounds of "The authorization", by calling that same check (`validation_failed` naming `--authorization`: `value_missing`, `out_of_range`, `not_recognised`), and the reader decodes into it, so a stored record whose `authorization` is absent or `null` is `trial_record_unreadable` `undecodable`. |
+| `plan` | The plan the trial ran by, as `--plan` answers it, but its `authorization` is the reference the run was sent under, never `null` (fix round 3): the record's plan is a type of its own whose `authorization` is a text, made from a plan only by a conversion that refuses a plan without one (`validation_failed`, as the writer refuses another malformed record) and, S3-11, one outside the bounds of "The authorization", by calling that same check (`validation_failed` naming `--authorization`: `value_missing`, `out_of_range`, `not_recognised`), and the reader decodes into it, so a stored record whose `authorization` is absent or `null` is `trial_record_unreadable` `undecodable`. #503 TRIAL: the record's plan keeps the member `irreversible_acknowledged`, required, beside `irreversible` and `irreversible_basis`, and this build writes it `false` (no acknowledgement exists since 0.12.101), so that the record keeps the shape of `v1`: a record of an earlier build, which holds `true` where its `--irreversible` was given, is read as written, and a record of this build is read by an earlier build's reader. |
 | `request_id`, `run_id` | The run's request id, and its run id when it has one. |
 | `end` | How the run ended, as its terminal says it: `outcome` (`success`, `failure`, `cancelled`), `outcome_key` (the business end), `final_page`, `failure_code`, `failure_values`, each when it has one. |
 | `matched` | Whether `end.outcome_key` is `plan.expect`; absent without `--expect`. |
@@ -330,16 +342,16 @@ and before anything is written:
 
 1. **Everything `--plan` does**, by the same function (one reading of the package), with its
    refusals in their order ("The plan").
-2. **The refusals only the run needs**, in this order (the resource tooling's `check_trial_run`),
-   each with its one code and one cause:
-   - no `--authorization`: `trial_authorization_missing` (`package_id`);
-   - a package the irreversible mark flags (`marked`) and no `--irreversible`:
-     `trial_irreversible_unacknowledged` (`package_id`); a mark not judged (no `--root`) refuses
-     nothing.
+2. **The refusal only the run needs** (the resource tooling's `check_trial_run`), with its one
+   code and one cause: no `--authorization`, `trial_authorization_missing` (`package_id`).
 
-   S3-8, S3-9 (0.12.68): a `--variable` refuses nothing here any more; the run carries the values
-   the plan shows as given, and `trial_variables_not_carried`, which refused it while a direct run
-   could carry none, is retired (raised nowhere; its catalog entry stays, `retired`).
+   #503 TRIAL (0.12.101): the irreversible mark refuses nothing here any more, whether it is
+   `marked`, `unmarked` or `not_judged`; `trial_irreversible_unacknowledged`, which refused a
+   `marked` package's run without `--irreversible`, is retired (raised nowhere; its catalog entry
+   stays, `retired`). S3-8, S3-9 (0.12.68): a `--variable` refuses nothing here any more; the run
+   carries the values the plan shows as given, and `trial_variables_not_carried`, which refused it
+   while a direct run could carry none, is retired (raised nowhere; its catalog entry stays,
+   `retired`).
 
    The state directory refused is S3-10's `trial_state_dir_refused`, already the plan's. A record
    of this content at the run's millisecond already there is S3-10's `trial_record_exists`, which
@@ -441,10 +453,10 @@ recorded, which names the record. The answer:
 
 `next` is `{collect: [...]}`: the words of actinglab's command line after the program's name, the
 trial's own arguments (`--instance`, `--package`, `--authorization`, since S3-8, S3-9 each
-`--variable` as the run was sent with it, `--expect`, `--irreversible`, `--root`, `--state-dir` as
-the trial had them) with `--collect <request_id>`. Fix round 1 of S3-8, S3-9: after a run nothing of
-whose receipt came back, `next` is `{unconfirmed: <word>}` instead (vocabulary
-`trial_run_unconfirmed`: `no_receipt`; "The run").
+`--variable` as the run was sent with it, `--expect`, `--root`, `--state-dir` as the trial had
+them; since #503 TRIAL never `--irreversible`) with `--collect <request_id>`. Fix round 1 of
+S3-8, S3-9: after a run nothing of whose receipt came back, `next` is `{unconfirmed: <word>}`
+instead (vocabulary `trial_run_unconfirmed`: `no_receipt`; "The run").
 
 ## Reading the end later
 
@@ -514,7 +526,7 @@ the operating system refuses is `foreign_os_error`.
 | `trial_record_unreadable` | A file of a record's name is not that record (`trial_record_problem`). | refuses |
 | `trial_record_part_left` | The record is written and in place, but the `.part` its write created could not be removed. | warns |
 | `trial_authorization_missing` | (S3-11) The run was asked for without `--authorization`. | refuses |
-| `trial_irreversible_unacknowledged` | (S3-11) The mark flags the package and the run was asked for without `--irreversible`. | refuses |
+| `trial_irreversible_unacknowledged` | (S3-11; retired in 0.12.101 by #503 TRIAL, raised nowhere) The mark flagged the package and the run was asked for without `--irreversible`, which the line no longer has. | refused (retired) |
 | `trial_variables_not_carried` | (S3-11; retired in 0.12.68 by S3-8, S3-9, raised nowhere) The run was asked for with a `--variable`, which a direct run could not carry before 0.12.68. | refused (retired) |
 | `trial_end_unexpected` | (S3-11) The run ended normally on another end than `--expect` named; the command succeeds. | warns |
 | `trial_end_unread` | (S3-11) The run has not ended yet (`run_state` `not_found`, `admitted`, `running`); no record was written; `next` reads it again later. | refuses |

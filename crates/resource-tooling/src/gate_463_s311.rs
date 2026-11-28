@@ -4,12 +4,13 @@
 // "The record"; coordinator work order rd-1115/brief-463-s311-trial-run.md, with what the review of
 // S3-10's third round left for this slice): the offline parts of the trial's run.
 // - `s311_the_runs_own_refusals_come_after_the_plan_in_their_order`: `check_trial_run` refuses a
-//   run without an authorization (`trial_authorization_missing`) and a package the irreversible
-//   mark flags without `--irreversible` (`trial_irreversible_unacknowledged`), in that order, each
-//   naming the package; a mark not judged (no root) refuses nothing; an acknowledged mark passes;
-//   what passes is the plan as the record keeps it, the authorization as given. Adapted by
-//   Workflow #463 S3-8, S3-9 (register §1.444): a `--variable` refuses nothing any more
-//   (`trial_variables_not_carried` is retired); the plan the record keeps names the value given.
+//   run without an authorization (`trial_authorization_missing`), naming the package; what passes
+//   is the plan as the record keeps it, the authorization as given. Adapted by Workflow #463 S3-8,
+//   S3-9 (register §1.444): a `--variable` refuses nothing any more (`trial_variables_not_carried`
+//   is retired); the plan the record keeps names the value given. Adapted by Workflow #503 TRIAL
+//   (register §1.551): a package the irreversible mark flags passes under its authorization alone
+//   (`trial_irreversible_unacknowledged` is retired), its record's plan holding the mark, its
+//   basis and `irreversible_acknowledged` false; a mark not judged passes as before.
 // - `s311_a_record_plan_holds_the_authorization_to_the_plans_bounds` (the review's item 3): the
 //   conversion of a plan into the record's plan refuses a blank authorization (`value_missing`),
 //   one of 1025 bytes (`out_of_range`) and one with a control character (`not_recognised`), each
@@ -37,19 +38,26 @@
 // - `s311_a_part_whose_removal_is_refused_is_named_by_a_cleanup_link`: a refused write whose
 //   `.part` cannot be removed after it: `trial_record_write_failed`, its cause `io_op` `write`, and a
 //   `cleanup` link (`foreign_os_error`, `io_op` `remove`, `path` the `.part`) naming the file left.
+// Workflow #503 TRIAL (register §1.551):
+// - `trial_a_record_keeps_its_shape_and_an_earlier_acknowledged_record_still_reads`: this build's
+//   record of a marked package's run holds every member of the plan's `v1` shape, the
+//   acknowledgement `false`; a record an earlier build wrote with it `true` is read as written
+//   beside one of this build's writer, and the content's summary reads both.
 // No device, no Runtime, no clock read, no sleep: temporary directories and made-up packages.
 
 use crate::codes::ResourceToolingCode;
 use crate::standard_pack_trial::{WriteSteps, write_trial_record_with};
 use crate::{
     MAX_AUTHORIZATION_BYTES, PackTrialRecord, StandardPackTrialRequest, TrialIrreversible,
-    TrialRecordPlan, TrialRunEnd, WrittenTrialRecord, check_trial_run, plan_standard_pack_trial,
-    trial_record_path, trial_records, write_trial_record,
+    TrialIrreversibleBasis, TrialRecordPlan, TrialRunEnd, TrialState, WrittenTrialRecord,
+    check_trial_run, plan_standard_pack_trial, trial_record_path, trial_records, trial_summary,
+    write_trial_record,
 };
 use actingcommand_contract::outcome::{CodeStr, IoOp};
 use actingcommand_contract::{LabError, RuntimeErrorCode, TaskOutcome};
 use serde_json::{Map, Value, json};
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -223,7 +231,6 @@ fn request(package: &Path, state: &Path) -> StandardPackTrialRequest {
         authorization: Some(AUTHORIZATION.to_owned()),
         variables: Vec::new(),
         expect: None,
-        irreversible: false,
         root: None,
         state_dir: state.to_path_buf(),
     }
@@ -361,7 +368,8 @@ fn s311_the_runs_own_refusals_come_after_the_plan_in_their_order() {
     let root = game_root(&temp);
     let floor = vec![("floor".to_owned(), json!(20))];
 
-    // All three at once: the authorization is refused first.
+    // A marked package, a variable and no authorization at once: the authorization is refused,
+    // the run's one refusal (adapted by Workflow #503 TRIAL: the mark refuses nothing).
     let error = checked(&StandardPackTrialRequest {
         authorization: None,
         root: Some(root.clone()),
@@ -373,39 +381,36 @@ fn s311_the_runs_own_refusals_come_after_the_plan_in_their_order() {
         refused_with(&error, ResourceToolingCode::TrialAuthorizationMissing),
         json!({"package_id": TRIED})
     );
-    // With it, the mark is next.
-    let error = checked(&StandardPackTrialRequest {
-        root: Some(root.clone()),
-        variables: floor.clone(),
-        ..request(&package, &state)
-    })
-    .expect_err("a marked package not acknowledged");
-    assert_eq!(
-        refused_with(&error, ResourceToolingCode::TrialIrreversibleUnacknowledged),
-        json!({"package_id": TRIED})
-    );
-    // Acknowledged, a variable given refuses nothing (Workflow #463 S3-8, S3-9): the plan the
-    // record keeps names the value the run is sent with.
+    // With it, the marked package passes, and a variable given refuses nothing (Workflow #463
+    // S3-8, S3-9): the plan the record keeps names the value the run is sent with.
     let given = checked(&StandardPackTrialRequest {
         root: Some(root.clone()),
-        irreversible: true,
         variables: floor,
         ..request(&package, &state)
     })
-    .expect("a variable given passes");
+    .expect("a marked package with a variable given passes");
     assert_eq!(
         serde_json::to_value(&given.variables).expect("the variables as JSON"),
         json!([{"name": "floor", "value": 20, "source": "given"}])
     );
-    // A marked package acknowledged, and a mark not judged, pass; the record keeps the plan.
-    let acknowledged = checked(&StandardPackTrialRequest {
-        root: Some(root),
-        irreversible: true,
+    // A marked package under its authorization alone, and a mark not judged, pass; the record
+    // keeps the plan: the mark, its basis and no acknowledgement.
+    let marked = checked(&StandardPackTrialRequest {
+        root: Some(root.clone()),
         ..request(&package, &state)
     })
-    .expect("an acknowledged mark passes");
-    assert_eq!(acknowledged.irreversible, TrialIrreversible::Marked);
-    assert!(acknowledged.irreversible_acknowledged);
+    .expect("a marked package passes under its authorization alone");
+    assert_eq!(marked.irreversible, TrialIrreversible::Marked);
+    assert_eq!(
+        marked.irreversible_basis,
+        Some(TrialIrreversibleBasis {
+            root: absolute(&root).display().to_string(),
+            registered: false,
+            capabilities: Vec::new(),
+            unreadable_packages: Vec::new(),
+        })
+    );
+    assert!(!marked.irreversible_acknowledged);
     let not_judged = checked(&request(&package, &state)).expect("a mark not judged passes");
     assert_eq!(not_judged.irreversible, TrialIrreversible::NotJudged);
     assert!(!not_judged.irreversible_acknowledged);
@@ -715,4 +720,101 @@ fn s311_a_part_whose_removal_is_refused_is_named_by_a_cleanup_link() {
     assert!(error.message.contains("is left"), "{}", error.message);
     assert!(part.is_dir(), "the file left is named, not removed");
     assert!(!path.exists(), "a record was written");
+}
+
+// Workflow #503 TRIAL (register §1.551; contracts/standard-pack-trial.md, "The record"): the
+// record keeps the shape of `actingcommand.pack-trial.v1`. This build's record of a marked
+// package's run writes every member of the plan an earlier build's reader requires, the mark and
+// its basis among them, and `irreversible_acknowledged` `false`; a record an earlier build wrote
+// with `irreversible_acknowledged` `true` (its `--irreversible` given) is read here as written,
+// beside one of this build's writer, and the summary of the content reads both.
+#[test]
+fn trial_a_record_keeps_its_shape_and_an_earlier_acknowledged_record_still_reads() {
+    let temp = TempDir::new().expect("a temporary directory");
+    let package = temp.path().join("packs").join(TRIED);
+    write_trial_package(&package);
+    let state = temp.path().join("state");
+    let kept = checked(&StandardPackTrialRequest {
+        root: Some(game_root(&temp)),
+        expect: Some(DONE_KEY.to_owned()),
+        ..request(&package, &state)
+    })
+    .expect("a marked package passes under its authorization alone");
+    let content = kept.content_hash_prefix.clone();
+    let earlier_run = PackTrialRecord::of_run(
+        kept.clone(),
+        AT_UNIX_MS,
+        REQUEST_ID.to_owned(),
+        Some("run-s311".to_owned()),
+        ended_on(DONE_KEY, "neutral/done"),
+    );
+
+    // This build writes the plan of the record whole: no member left out, none added.
+    let mut stored = serde_json::to_value(&earlier_run).expect("the record as JSON");
+    let members = stored["plan"]
+        .as_object()
+        .expect("the record's plan is an object")
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        members,
+        BTreeSet::from([
+            "package_id",
+            "content_hash_prefix",
+            "package",
+            "instance",
+            "authorization",
+            "ends",
+            "variables",
+            "irreversible",
+            "irreversible_basis",
+            "irreversible_acknowledged",
+            "expect",
+        ])
+    );
+    assert_eq!(stored["plan"]["irreversible"], "marked", "{stored}");
+    assert_eq!(
+        stored["plan"]["irreversible_basis"]["registered"], false,
+        "{stored}"
+    );
+    assert_eq!(
+        stored["plan"]["irreversible_acknowledged"], false,
+        "{stored}"
+    );
+
+    // The same run as an earlier build recorded it, its acknowledgement given: its bytes at the
+    // place its name says.
+    stored["plan"]["irreversible_acknowledged"] = json!(true);
+    write_json(
+        &trial_record_path(&absolute(&state), TRIED, &content, AT_UNIX_MS),
+        &stored,
+    );
+    // And a later run of the same content, recorded by this build's writer.
+    let later_run = PackTrialRecord::of_run(
+        kept,
+        AT_UNIX_MS + 1_000,
+        "req-503-trial".to_owned(),
+        None,
+        ended_on(DONE_KEY, "neutral/done"),
+    );
+    write_trial_record(&state, &later_run).expect("this build's record is written");
+
+    let read = trial_records(&state, TRIED).expect("both records read");
+    assert_eq!(read.len(), 2, "{read:?}");
+    assert!(
+        read[0].plan.irreversible_acknowledged,
+        "the earlier record is read as written"
+    );
+    assert_eq!(read[0].plan.irreversible, TrialIrreversible::Marked);
+    assert_eq!(read[0].request_id, REQUEST_ID);
+    assert_eq!(read[1], later_run);
+    assert!(!read[1].plan.irreversible_acknowledged);
+    let summary = trial_summary(&state, TRIED, &content).expect("the summary of the content");
+    assert_eq!(summary.state, TrialState::Passed, "{summary:?}");
+    assert!(summary.passed_on_record, "{summary:?}");
+    assert!(!summary.other_content, "{summary:?}");
+    let latest = summary.record.as_ref().expect("the latest record");
+    assert_eq!(latest.request_id, "req-503-trial");
+    assert_eq!(latest.authorization, AUTHORIZATION);
 }

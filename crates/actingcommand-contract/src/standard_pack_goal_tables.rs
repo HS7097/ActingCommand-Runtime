@@ -38,7 +38,8 @@
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
 use crate::standard_pack_catalog::{MAX_PACK_CATALOG_TITLE_BYTES, at, read_document};
 use crate::standard_pack_goals::{
-    Check, GoalReferences, GoalText, MAX_GOAL_NAME_BYTES, MAX_GOAL_REFERENCE_BYTES, goal_name,
+    Check, GoalPool, GoalReferences, GoalText, MAX_GOAL_NAME_BYTES, MAX_GOAL_REFERENCE_BYTES,
+    goal_name,
 };
 use crate::taskflow::{
     MAX_LIST_READING_COLUMNS, list_reading_column_valid, list_reading_fact_key_valid,
@@ -658,8 +659,10 @@ pub fn parse_standard_pack_goal_tables(
 /// against the root), item by item in file order: `table_pool_unknown` (an item's pool is no pool
 /// of the composed `schedule.json`, [`GoalReferences::pools`]) and `table_pool_unvalued` (the pool
 /// of an item without a recipe, the one a need lands on, is one a goal cannot be put on: the
-/// judgement `goal_pool_unvalued` reads, the same map). The pool of an item with a recipe need only
-/// be a pool of the root (every pool declares its reading); an item without a pool names nothing.
+/// judgement `goal_pool_unvalued` reads, the same map; #455 SL2, so is a pool whose goal is its line,
+/// [`GoalPool::Line`], which a `resource` entry may govern and no need may land on). The pool of an
+/// item with a recipe need only be a pool of the root (every pool declares its reading); an item
+/// without a pool names nothing.
 pub fn check_standard_pack_goal_table_references(
     tables: &StandardPackGoalTables,
     references: &GoalReferences,
@@ -675,7 +678,7 @@ pub fn check_standard_pack_goal_table_references(
         let at_pool = at(&at("/items", &item.name), "pool");
         match references.pools.get(pool) {
             None => check.issue(StandardPackProblem::TablePoolUnknown, at_pool),
-            Some(false) if item.recipe.is_none() => {
+            Some(GoalPool::Unvalued | GoalPool::Line) if item.recipe.is_none() => {
                 check.issue(StandardPackProblem::TablePoolUnvalued, at_pool);
             }
             Some(_) => {}

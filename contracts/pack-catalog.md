@@ -141,7 +141,7 @@ effect:  a V2 resource effect as a schedule.json rule writes it (scheduling/v2/c
          resourceEffect): {pool_id, direction, amount | expected_amount_milli,
                            observation_source, confidence_milli}
          amount:  N (1 to 2^53 - 1) | "pending" | {type: "fact", fact_key, fallback} (consumes only)
-value:   {milli: V (1 to 2^53 - 1), origin?: "model"}
+value:   {milli: V (-(2^53 - 1) to 2^53 - 1, 0 included; before 0.12.101, 1 to 2^53 - 1), origin?: "model"}
 marks:   limited: true, realization: true (absent: no mark)
 ```
 
@@ -167,12 +167,20 @@ marks:   limited: true, realization: true (absent: no mark)
   its `fixed_value_origin` and of its `limited` and `realization` ([standard-pack-schedule.md](standard-pack-schedule.md),
   "The fixed value", "The limited mark", "The realization mark"). What the compiler refuses beside
   a rule's fixed value (`fixed_value_conflict`) the reader refuses beside a part's:
-  `catalog_value_conflict` at `value`, beside the realization mark and beside a production of a
-  pool whose `valuation` `schedule.json` declares or leaves pending. Beside a production of a pool
+  `catalog_value_conflict` at `value`, beside the realization mark. Beside a production of a pool
   without a valuation a value is accepted: such a pool counts in the rule's benefit only through a
   goal that covers it (#455 B1, since 0.12.82; [scheduling/README.md](scheduling/README.md), "Fixed
-  values written in the pack", "A goal on what it produces"), so the rule never has two values;
-  what is accepted or refused, and the catalog's hash, are unchanged.
+  values written in the pack", "A goal on what it produces"), so the rule never has two values.
+  #503 FIXV (since 0.12.101; register §1.550): `milli` takes the compiler's signed range, 0 and
+  negative values included, and a value beside a production of a pool whose `valuation`
+  `schedule.json` declares or leaves pending is accepted too, as the compiler accepts it: with a
+  fixed value the rule's base value is the value alone, and its productions feed only its goal
+  terms ("Beside priced productions" there). Before 0.12.101 both were refused (`catalog_out_of_limits`,
+  `catalog_value_conflict`). `--refresh`, `--cut`'s differences and `--values` read and write the
+  value signed; a file of values of 1 or more beside no priced product reads and writes as before.
+  A root whose rules take such a value or such a production from here names `fixed_value_any` in
+  its `schedule.json`'s `requires` ([standard-pack-schedule.md](standard-pack-schedule.md),
+  "`requires`").
 - **The entry's own part** is present when the entry writes one of its members, and then writes
   `consumes` and `produces`; an entry may write none (a package whose rules differ, below).
 - **Per-rule parts** (`rules`, the coordinator's ruling 7 of 11-22): each keyed by the `rule_id` of
@@ -211,13 +219,14 @@ Version 2 (Workflow #477 CV-1) beside those, each at its pointer:
 | Problem | When |
 |---|---|
 | `malformed` | an effect not of a rule effect's type (a member it does not know, a type: at the effect), its `direction` not the side's, two quantities or none (at the effect), a consumption read from a fact on `produces` or with a `fact_key` that is no scheduling identifier, an object `amount` not of that form; a `value` not `{milli, origin?}` or whose `milli` is no whole number, an `origin` other than `"model"`; a mark other than `true`; a `consumes` without `produces` or the reverse; a `rule_id` that is no string or off the identifier grammar |
-| `catalog_out_of_limits` | a constant `amount` or a `fallback` outside 1 to 2^53 - 1, an `expected_amount_milli` above 2^53 - 1, a `confidence_milli` above 1000, more than 128 effects on a side, a `value`'s `milli` outside 1 to 2^53 - 1, more than 4096 per-rule parts, a `rule_id` empty or over 128 bytes |
-| `catalog_value_conflict` | a fixed value beside the realization mark, or beside a production of a pool whose valuation `schedule.json` declares or leaves pending |
+| `catalog_out_of_limits` | a constant `amount` or a `fallback` outside 1 to 2^53 - 1, an `expected_amount_milli` above 2^53 - 1, a `confidence_milli` above 1000, more than 128 effects on a side, a `value`'s `milli` outside -(2^53 - 1) to 2^53 - 1 (#503 FIXV, since 0.12.101; before, 1 to 2^53 - 1), more than 4096 per-rule parts, a `rule_id` empty or over 128 bytes |
+| `catalog_value_conflict` | a fixed value beside the realization mark (#503 FIXV, since 0.12.101: no longer beside a production of a pool whose valuation `schedule.json` declares or leaves pending) |
 | `catalog_rule_unknown` | a per-rule part's `rule_id` is no rule of `schedule.json` that runs the entry's package |
 | `catalog_duplicate` | a pool twice on one side of a part, a `rule_id` twice in an entry |
 | `catalog_pool_undeclared` | an effect's `pool_id` `schedule.json` does not declare |
 
-The references to `schedule.json` (pools, valuations, rules) are judged where the reader holds the
+The references to `schedule.json` (pools, rules; before 0.12.101, #503 FIXV, also valuations) are
+judged where the reader holds the
 root's `schedule.json` (`parse_standard_pack_catalog_with`, which every tool of 0.12.79 calls), and
 not when that file could not be read (its own refusal).
 

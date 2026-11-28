@@ -360,7 +360,6 @@ fn trial_request(fixture: &Fixture, package: &Path) -> StandardPackTrialRequest 
         authorization: Some(AUTHORIZATION.to_owned()),
         variables: Vec::new(),
         expect: None,
-        irreversible: false,
         root: None,
         state_dir: fixture.state(),
     }

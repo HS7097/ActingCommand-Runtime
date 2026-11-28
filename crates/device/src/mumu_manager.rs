@@ -89,6 +89,7 @@ const MUMU_MANAGER_PROGRAM: CommandProgram = CommandProgram {
     stderr_reader: "mumu_manager_stderr",
     windows_creation_flags: CREATE_NO_WINDOW,
     timeout_stage: Some(MUMU_MANAGER_TIMEOUT_STAGE),
+    null_stdin: false,
 };
 
 /// Where the `MuMuManager.exe` install root came from, in resolution priority order.
@@ -232,8 +233,9 @@ pub trait MumuManagerReads {
 
 /// The vendor tool itself: each read runs `MuMuManager.exe` once, bounded by
 /// `MUMU_MANAGER_COMMAND_TIMEOUT`, and requires exit 0, strict UTF-8 JSON and the output bound.
-/// The process listing has no bound of its own, as the start's discovery and check-config have
-/// always listed.
+/// Workflow #503 NOISE-B: the process listing, the start's discovery's and check-config's, is
+/// bounded by the listing's own bound of 60 s (`discovery.rs`, `SYSTEM_PROCESS_LISTING_TIMEOUT`):
+/// at the bound only the PowerShell process it started is ended, and the listing fails.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemMumuManagerReads;
 
@@ -463,7 +465,9 @@ pub fn resolve_mumu_manager(
 
 /// [`resolve_mumu_manager`] with the running-process rung's listing through `reads`' `processes`
 /// (Workflow #453 S10 fix 1); [`SystemMumuManagerReads`] lists as the resolver always has.
-fn resolve_mumu_manager_with(
+/// Workflow #503 NOISE-B: public, so that check-config's report of the installation takes its
+/// reads as discovery does (a test injects its own).
+pub fn resolve_mumu_manager_with(
     explicit_root: Option<&Path>,
     env_folder: Option<&Path>,
     reads: &mut dyn MumuManagerReads,

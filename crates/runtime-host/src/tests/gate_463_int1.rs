@@ -603,7 +603,8 @@ fn int1_a_package_that_declares_the_page_itself_handles_it_as_before() {
 /// the same frame and end with `contained_task_environment_reset`, nothing pressed. Each failure
 /// is rerun only (class recoverable, count 1, a retry scheduled), the second's identity is not the
 /// first's, no ladder starts, and the next evaluation reruns the pair at once
-/// (`failure_retry_immediate`) with no `policy_task_paused`. The code is of class
+/// (`failure_retry_immediate`) with no `policy_task_paused` (#503 PACE, register §1.545: the
+/// evaluation once the second failure's wait has passed). The code is of class
 /// `budget_or_permission` and accumulates in no scope.
 #[test]
 fn int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_once() {
@@ -666,7 +667,10 @@ fn int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_onc
         "nothing pressed"
     );
 
-    let at = b43_rerun_time(&second, &second_context).max(clock_now(&clock));
+    // #503 PACE (register §1.545): a second failure in a row first waits
+    // `scheduling.unavailable_probe`'s first interval (shipped, one minute) from its settlement; at
+    // that wait's end the rerun is the immediate rerun still.
+    let at = b43_rerun_time(&second, &second_context).max(clock_now(&clock) + 60_000);
     advance_manual_clock_to(&clock, at);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(

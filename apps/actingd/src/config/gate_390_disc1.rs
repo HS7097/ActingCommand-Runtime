@@ -21,7 +21,8 @@ use actingcommand_contract::{
     EventPayload, EventSeverity, EventType, ProviderStartupObservation, ProviderStartupStage,
 };
 use actingcommand_device::{
-    DeviceError, DiscoveredMumuInstance, MumuDiscoveryReport, MumuManagerSource, MumuManagerVersion,
+    DeviceDiscoveryProcess, DeviceError, DeviceResult, DiscoveredMumuInstance, MumuDiscoveryReport,
+    MumuManagerReads, MumuManagerSource, MumuManagerVersion,
 };
 use actingcommand_execution_kernel::InstanceDiscoveryFailure;
 use actingcommand_ledger::{GlobalLedger, GlobalLedgerEvidenceConfig, PersistedEvent};
@@ -410,4 +411,141 @@ fn disc1_attempts_and_interval_outside_their_bounds_are_refused() {
         assert_eq!(outcome.value("range_min"), Some(&json!(min)), "{section}");
         assert_eq!(outcome.value("range_max"), Some(&json!(max)), "{section}");
     }
+}
+
+// Workflow #503 NOISE-B (register §1.553): the device error the process listing answers once its
+// bound of 60 s expires, untyped, as the bounded runner words it (`crates/device`'s own test pins
+// the runner's words and the bound).
+const LISTING_PAST_ITS_BOUND: &str =
+    "powershell -NoProfile -ExecutionPolicy Bypass -Command <the listing> timed out after 60s";
+
+// Workflow #503 NOISE-B: discovery's reads with no folder named: the process listing, the first
+// read such a discovery makes, fails as the listing fails at its bound; `listed` counts the
+// listings asked and `vendor` the reads of the vendor tool, which no test here reaches.
+#[derive(Default)]
+struct ListingPastItsBound {
+    listed: usize,
+    vendor: usize,
+}
+
+impl MumuManagerReads for ListingPastItsBound {
+    fn version(&mut self, _mumu_manager_path: &Path) -> DeviceResult<Value> {
+        self.vendor += 1;
+        Err(DeviceError::fatal("the vendor tool is not read here"))
+    }
+
+    fn instances(&mut self, _mumu_manager_path: &Path) -> DeviceResult<Value> {
+        self.vendor += 1;
+        Err(DeviceError::fatal("the vendor tool is not read here"))
+    }
+
+    fn processes(&mut self) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+        self.listed += 1;
+        Err(DeviceError::fatal(LISTING_PAST_ITS_BOUND))
+    }
+}
+
+// The outcome a failed listing is recorded as: `provider_native_failed` with `device_category`
+// `category` (absent when `None`) and no `mumu_root`, whose `foreign_other_error` link holds the
+// listing's own text, which says that it ran out of time and its bound.
+fn assert_listing_past_its_bound(failure: &Outcome, category: Option<&str>) {
+    assert_eq!(
+        failure.code().as_str(),
+        "provider_native_failed",
+        "{failure}"
+    );
+    assert_eq!(
+        failure.value("device_category"),
+        category.map(Value::from).as_ref(),
+        "{failure}"
+    );
+    assert_eq!(failure.value("mumu_root"), None, "{failure}");
+    let text = failure
+        .causes()
+        .iter()
+        .map(|link| link.outcome())
+        .find(|link| link.code().as_str() == "foreign_other_error")
+        .and_then(|link| link.value("raw_text"))
+        .and_then(Value::as_str)
+        .expect("the listing's own text");
+    assert!(text.contains("timed out after 60s"), "{text}");
+}
+
+// Workflow #503 NOISE-B, the start (study test of change 3): with no folder named, a start whose
+// process listing runs past its bound at every attempt finds the discovery unavailable each time
+// (the provider's own classification, `DiscoverySpec::discover_with` over these reads), tries it
+// again as for an emulator not started yet, one warning per attempt but the last, and ends in the
+// existing fatal; each warning and the provider startup failure carry the failed listing, its
+// text saying it ran out of time and its bound. The listing is asked once per attempt and the
+// vendor tool never.
+#[test]
+fn noise_b_a_start_whose_listing_runs_past_its_bound_is_retried_then_ends_in_the_existing_fatal() {
+    let mut reads = ListingPastItsBound::default();
+    let discovery = DiscoverySpec::new(None);
+    let answers = (0..3)
+        .map(|_| discovery.discover_with(&mut reads))
+        .collect::<Vec<_>>();
+    assert_eq!(reads.listed, 3, "one listing per attempt");
+    assert_eq!(reads.vendor, 0, "the vendor tool is never read");
+    for answer in &answers {
+        let Err(failure) = answer else {
+            panic!("a listing past its bound is no discovery");
+        };
+        assert_eq!(
+            failure.code,
+            SharedCode::InstanceDiscoveryUnavailable.as_str()
+        );
+    }
+
+    let started = start(
+        json!({ "attempts": 3, "retry_interval_ms": 10_000 }),
+        answers,
+    );
+    let error = started.result.expect_err("the start fails");
+    assert_eq!(error.code(), "instance_discovery_unavailable");
+    assert!(error.is_fatal());
+    assert_eq!(started.attempts, 3, "no attempt beyond the configured ones");
+    assert_eq!(started.waits, [Duration::from_millis(10_000); 2]);
+    assert_retry_warnings(&started.events, 2, 3, 10_000);
+    assert_retry_lines(&started.daemon_log, 2, 3, 10_000);
+    let records = observations(&started.events);
+    for (_, observation) in &records {
+        if let ProviderStartupObservation::DiscoveryRetried { outcome } = observation {
+            let unavailable = outcome
+                .causes()
+                .first()
+                .expect("the attempt's refusal")
+                .outcome();
+            let failure = unavailable
+                .causes()
+                .first()
+                .expect("the device failure")
+                .outcome();
+            assert_listing_past_its_bound(failure, Some("protocol"));
+        }
+    }
+    let (_, last) = records.last().expect("provider startup records");
+    let ProviderStartupObservation::Failed { stage, failure } = last else {
+        panic!("the provider startup ends with its failure: {last:?}");
+    };
+    assert_eq!(*stage, ProviderStartupStage::InstanceDiscovery);
+    assert_listing_past_its_bound(&failure.outcome, Some("protocol"));
+}
+
+// Workflow #503 NOISE-B, check-config (study test of change 3): with no `mumu_root` and no
+// environment folder, a process listing past its bound leaves the installation unresolved:
+// `mumu_root` `null` and the note, the failed listing (no `device_category`: check-config's
+// resolver adds none), its text saying it ran out of time and its bound. The listing is asked
+// once and the vendor tool never (check-config never runs it).
+#[test]
+fn noise_b_check_config_reports_a_listing_past_its_bound_as_an_unresolved_root() {
+    let mut reads = ListingPastItsBound::default();
+
+    let (mumu_root, note) = crate::check_config::mumu_root_report(None, None, &mut reads);
+
+    assert_eq!(mumu_root, Value::Null);
+    let note = note.expect("the unresolved installation's note");
+    assert_listing_past_its_bound(&note, None);
+    assert_eq!(reads.listed, 1, "the processes are listed once");
+    assert_eq!(reads.vendor, 0, "the vendor tool is never read");
 }
