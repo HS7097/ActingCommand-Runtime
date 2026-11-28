@@ -16,8 +16,8 @@
 use super::*;
 use crate::package_tool::gate_390_tool1::neutral_package;
 use actingcommand_contract::{
-    BundleRevisionNeed, GOAL_TABLES_PACKAGE_REVISION, GOALS_PACKAGE_REVISION, StandardPackProblem,
-    package_edge_holds,
+    BundleRevisionNeed, GOAL_TABLE_NAMES_PACKAGE_REVISION, GOAL_TABLES_PACKAGE_REVISION,
+    GOALS_PACKAGE_REVISION, StandardPackProblem, package_edge_holds,
 };
 use actingcommand_resource_tooling::{
     PackageBundleRequest, StandardPackCheckRequest, StandardPackCheckResponse,
@@ -521,9 +521,10 @@ fn rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused() {
     assert_eq!(GOALS_PACKAGE_REVISION, 28);
 
     // Workflow #503 LIST-B (register §1.536) raises the build's range to [3, 29], Workflow #503
-    // LIST-C (register §1.541) to [3, 30], and Workflow #503 LIST-D (register §1.544) to [3, 31].
+    // LIST-C (register §1.541) to [3, 30], Workflow #503 LIST-D (register §1.544) to [3, 31], and
+    // Workflow #455 RR4a (register §1.546) to [3, 32].
     let own = own_package();
-    assert_eq!(own, [3, 31]);
+    assert_eq!(own, [3, 32]);
     let needed = [GOAL_TABLES_PACKAGE_REVISION, GOAL_TABLES_PACKAGE_REVISION];
     assert!(package_edge_holds(own, needed));
     assert!(
@@ -550,4 +551,95 @@ fn rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused() {
         StandardPackProblem::GoalUndeclared.as_str(),
     ]);
     assert_eq!(names.len(), 2, "one word for each file");
+}
+
+/// Workflow #455 RR4a (0.12.100; register §1.546): [`tables`] whose one key names `class`, with the
+/// names a person reads of its item and its column and how the column's positions are said.
+fn named_tables(class: &str) -> Value {
+    let mut named = tables(class);
+    named["names"] = json!({
+        "items": {"coin": {"en": "Coin"}},
+        "tables": {"heroes": {
+            "columns": {"grade": {"en": "Grade"}},
+            "positions": {"grade": [{"prefix": [], "text": {"en": "Grade {0}"}}]}
+        }}
+    });
+    named
+}
+
+// Workflow #455 RR4a (0.12.100; register §1.546; contracts/standard-pack-goal-tables.md,
+// "Interface"; contracts/component-interfaces.md, the `package` row 32), ruling 7 and test 5, the
+// revision table (`standard-pack build`'s): a zip whose `goal-tables.json` writes `names` needs
+// 32, whatever the member holds, and the same file without the member keeps 28; the name
+// written inside a table counts nothing (the reader refuses it there). This build declares
+// [3, 32] and places such a zip; an installer of [3, 31] refuses it at its `package` edge and
+// places the zip of 28.
+#[test]
+fn rr4a_lab_a_tables_file_that_writes_names_needs_package_32_and_one_without_keeps_28() {
+    let revision_of = |value: &Value| {
+        let zip = BTreeMap::from([(TABLES.to_owned(), serde_json::to_vec(value).unwrap())]);
+        crate::resource_verify::revision::content_revision(&zip)
+    };
+    assert_eq!(revision_of(&named_tables("common")), 32);
+    assert_eq!(
+        revision_of(&named_tables("common")),
+        GOAL_TABLE_NAMES_PACKAGE_REVISION
+    );
+    assert_eq!(
+        revision_of(&json!({"names": {}})),
+        32,
+        "whatever the member holds"
+    );
+    assert_eq!(revision_of(&tables("common")), GOAL_TABLES_PACKAGE_REVISION);
+    let mut inside = tables("common");
+    inside["tables"][0]["names"] = json!({});
+    assert_eq!(revision_of(&inside), 28, "the member of the document only");
+
+    let own = own_package();
+    assert_eq!(own, [3, 32]);
+    let named = [
+        GOAL_TABLE_NAMES_PACKAGE_REVISION,
+        GOAL_TABLE_NAMES_PACKAGE_REVISION,
+    ];
+    let plain = [GOAL_TABLES_PACKAGE_REVISION, GOAL_TABLES_PACKAGE_REVISION];
+    let earlier = [3, GOAL_TABLE_NAMES_PACKAGE_REVISION - 1];
+    assert!(package_edge_holds(own, named));
+    assert!(package_edge_holds(own, plain));
+    assert!(
+        !package_edge_holds(earlier, named),
+        "an installer of the earlier range refuses the zip at its package edge"
+    );
+    assert!(package_edge_holds(earlier, plain));
+}
+
+// Workflow #455 RR4a, ruling 7 and test 5, `resource verify`: a repository whose `goal-tables.json`
+// writes `names` is verified as any (the one check reads the names), the file is carried byte for
+// byte, the bundle step counts 32 and the zip's `interfaces.json` declares [32, 32], which this
+// build's range holds; the installed root's check names no problem.
+#[test]
+fn rr4a_lab_resource_verify_declares_32_for_a_tables_file_that_writes_names() {
+    let fixture = Fixture::new();
+    fixture.write_json(GOALS, &records_goals());
+    fixture.write_json(TABLES, &named_tables("common"));
+    let goal_tables = fs::read(fixture.repo().join(TABLES)).unwrap();
+    let head = fixture.commit("goals and their tables with names");
+    let (result, report) = fixture.verify("named");
+    assert_eq!(result.exit_code(), 0, "{}", result.envelope_json());
+    assert_eq!(report["failed_steps"], json!([]), "{report}");
+    let counts = &step(&report, "bundle")["counts"];
+    assert_eq!(
+        counts["package_revision"], GOAL_TABLE_NAMES_PACKAGE_REVISION,
+        "{counts}"
+    );
+
+    let entries = zip_entries(&fixture.zip("named", &head));
+    assert_eq!(entries.get(TABLES), Some(&goal_tables));
+    let declared = declared_package(&entries);
+    assert_eq!(declared, [32, 32]);
+    assert!(package_edge_holds(own_package(), declared));
+
+    let installed = fixture.installed("named");
+    assert_eq!(fs::read(installed.join(TABLES)).unwrap(), goal_tables);
+    let warnings = warnings_of(&checked(&installed));
+    assert!(root_problems(&warnings).is_empty(), "{warnings:?}");
 }
