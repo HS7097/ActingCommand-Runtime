@@ -23,10 +23,11 @@ use actingcommand_device::{
     AcibCaptureSource, Adb, AdbConfig, CaptureBackend, CaptureBackendChoice, CaptureBackendConfig,
     DeviceError, DeviceErrorCategory, DeviceErrorDiagnosticMessage, DeviceErrorSensitivity,
     DeviceLocation, DeviceResult, DeviceTarget, InputBackend, MumuApplicationState,
-    MumuDiscoveryReport, NemuAppIndex, NemuAppIndexProblem, NemuApplicationTarget, NemuInputConfig,
-    NemuIpcSession, NemuResolutionReason, NemuSessionBackends, PreparedSegmentedSwipePlan,
-    TouchBackendChoice, TouchBackendConfig, create_touch_backend_for_fenced_input,
-    discover_mumu_instances, mumu_state_wait,
+    MumuDiscoveryReport, MumuManagerReads, NemuAppIndex, NemuAppIndexProblem,
+    NemuApplicationTarget, NemuInputConfig, NemuIpcSession, NemuResolutionReason,
+    NemuSessionBackends, PreparedSegmentedSwipePlan, SystemMumuManagerReads, TouchBackendChoice,
+    TouchBackendConfig, create_touch_backend_for_fenced_input, discover_mumu_installation,
+    mumu_state_wait,
 };
 use actingcommand_device::{AdbDeviceStateShell, DeviceStateShell};
 use actingcommand_device::{AdbTrackDevices, DeviceSerial, TrackDevicesEvent, TrackDevicesStopper};
@@ -188,23 +189,36 @@ impl DiscoverySpec {
     /// timeout, decode or JSON failure) `instance_discovery_unavailable`. Binds, rebinds and
     /// registers nothing.
     pub fn discover(&self) -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>> {
+        self.discover_with(&mut SystemMumuManagerReads)
+    }
+
+    /// Workflow #503 NOISE-B: [`Self::discover`] with discovery's reads (the vendor tool's two and
+    /// the process listing) through `reads`; the program's are [`SystemMumuManagerReads`], whose
+    /// listing is bounded at 60 s, and a test injects its own. A listing past its bound is
+    /// `instance_discovery_unavailable`, as any other failure of the listing.
+    pub fn discover_with(
+        &self,
+        reads: &mut dyn MumuManagerReads,
+    ) -> Result<MumuDiscoveryReport, Box<InstanceDiscoveryFailure>> {
         let env_nemu_folder = self.env_nemu_folder.as_deref();
-        discover_mumu_instances(self.mumu_root.as_deref(), env_nemu_folder).map_err(|error| {
-            let code = if matches!(
-                error
-                    .nemu_resolution_context()
-                    .map(|context| context.reason()),
-                Some(
-                    NemuResolutionReason::ProviderVersionBelowMinimum
-                        | NemuResolutionReason::ProviderVersionUnparseable
-                )
-            ) {
-                HostCode::MumuManagerVersionUnsupported.as_str()
-            } else {
-                SharedCode::InstanceDiscoveryUnavailable.as_str()
-            };
-            Box::new(InstanceDiscoveryFailure { code, error })
-        })
+        discover_mumu_installation(self.mumu_root.as_deref(), env_nemu_folder, reads)
+            .map(|discovered| discovered.report)
+            .map_err(|error| {
+                let code = if matches!(
+                    error
+                        .nemu_resolution_context()
+                        .map(|context| context.reason()),
+                    Some(
+                        NemuResolutionReason::ProviderVersionBelowMinimum
+                            | NemuResolutionReason::ProviderVersionUnparseable
+                    )
+                ) {
+                    HostCode::MumuManagerVersionUnsupported.as_str()
+                } else {
+                    SharedCode::InstanceDiscoveryUnavailable.as_str()
+                };
+                Box::new(InstanceDiscoveryFailure { code, error })
+            })
     }
 }
 

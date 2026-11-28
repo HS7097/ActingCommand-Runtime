@@ -1020,6 +1020,8 @@ a file that does not name it keeps its revision.
 | `emulator_control.watch_interval_ms` | milliseconds `5000..=3600000`, the time between two polls, on the Runtime clock | `60000` | yes |
 | `emulator_control.restart_attempts` | integer `1..=100`, the most starts of one configured instance's stopped emulator by the watch within `restart_window_ms` (emu-watch R3) | `3` | yes |
 | `emulator_control.restart_window_ms` | milliseconds `60000..=86400000`, the window `restart_attempts` counts in | `1800000` | yes |
+| `emulator_control.start_commit_reserve_bytes` (#503 MEM, since 0.12.102) | integer `0..=1099511627776`, the host's available commit, in bytes, an automatic emulator start requires; `0` checks nothing | `17179869184` | yes |
+| `emulator_control.start_spacing_ms` (#503 MEM, since 0.12.102) | milliseconds `0..=600000`, how long after the latest emulator Start of any kind returned an automatic start may go on, on the Runtime clock; `0` spaces nothing | `30000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
@@ -1037,6 +1039,20 @@ or bound to another port, or bound to the reported port but unprepared (EMU-BIND
 restarts (no new key).
 `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
 keys; a file that names none of them keeps its revision.
+
+**The start gate of the automatic emulator starts (#503 MEM, since 0.12.102; `actingd-config`
+revision 36; [emulator-control.md](emulator-control.md), "Commit headroom and spacing";
+[v012-register.md](v012-register.md) §1.556).** `start_commit_reserve_bytes` and
+`start_spacing_ms` hold an automatic emulator start (the daemon start's configured start, the
+emulator watch's restart, an idle wake after `stop_emulator`) whose turn has come until the host's
+available commit is at or above the reserve and the spacing has passed since the latest emulator
+Start of any kind returned. A person's, an agent's or the Lab's emulator control, any stop and the
+recovery ladder's restart rung are never held. Both keys are settable and read by the waiting claim
+at every tick of its wait (every 500 ms), so an instruction applies at the next tick without a
+restart; no per-instance form; no cross-key rule refuses a value. The keys are `hidden` in the
+console's tiers (the `advanced` tier holds its eight keys): a person sets them with `actingctl
+config set`, MCP `ac_config_set` or the configuration file. A file that names neither keeps its
+revision, and the defaults file's values apply.
 
 ## The `watchdog` section (#411 A66)
 

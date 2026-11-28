@@ -1,0 +1,8 @@
+{
+  "schema_version": "actingcommand.outcome-codes.release.v2",
+  "release": "0.12.101",
+  "codes": {
+    "trial_irreversible_unacknowledged": {"category": "error", "ladder_class": "none", "review": "pending", "status": "retired", "values": {"package_id": {"type": "name", "required": true}}}
+  },
+  "locations": {}
+}

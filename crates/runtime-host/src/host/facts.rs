@@ -223,6 +223,32 @@ pub(super) enum FactPublicationPurpose {
     /// entry. A record equal to the active one is a replay, as a resource target policy's is; the
     /// edit compares its version itself, before it composes the record.
     GoalRecords,
+    /// #503 ISO-A (the coordinator's ruling 3; `contracts/instance-fact-store.md`, "Backend
+    /// self-check availability"): the Runtime's own record of one instance's
+    /// `session.instance.available` (`publish_policy_instance_availability`). Under
+    /// `fact_write_gate` its observation is raised to one millisecond after what the store holds
+    /// for the key when it is not later (two writes in one millisecond, a wall clock stepped
+    /// back), and it is judged at that observation (`observed_after_stored`).
+    RuntimeAvailability,
+}
+
+/// #503 ISO-A (the coordinator's ruling 3): `record`, the Runtime's own availability record, is
+/// raised to one millisecond after the latest observation `facts` holds for its scope and key
+/// (its active record's, else the key's latest, which an invalidation keeps) when its own is not
+/// later, so the store's rule that a record of another source snapshot must be newer takes it.
+/// A record of the active record's own source snapshot is left as it is: the store replays or
+/// refuses it by its rule as before. Returns the record's observation, which it is judged at.
+fn observed_after_stored(facts: &InstanceFactStore, record: &mut FactRecord) -> u64 {
+    let active = facts.active_record(&record.scope, &record.key);
+    let same_snapshot =
+        active.is_some_and(|active| active.source_snapshot_id == record.source_snapshot_id);
+    let stored = active
+        .map(|active| active.observed_at_unix_ms)
+        .max(facts.latest_observed_unix_ms(&record.scope, &record.key));
+    if let Some(stored) = stored.filter(|_| !same_snapshot) {
+        record.observed_at_unix_ms = record.observed_at_unix_ms.max(stored.saturating_add(1));
+    }
+    record.observed_at_unix_ms
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -463,6 +489,7 @@ impl HostShared {
                 | FactPublicationPurpose::ApplicationUpdate
                 | FactPublicationPurpose::ListReading
                 | FactPublicationPurpose::GoalRecords
+                | FactPublicationPurpose::RuntimeAvailability
                 | FactPublicationPurpose::ResourceAdjustment { .. } => {
                     if observation
                         .records
@@ -561,7 +588,7 @@ impl HostShared {
     /// edited one in one hold of the gate through it. A fatal failure is the caller's to mark.
     pub(super) fn publish_facts_under_gate(
         &self,
-        observation: actingcommand_contract::FactObservation,
+        mut observation: actingcommand_contract::FactObservation,
         source_request: Option<&ValidatedRuntimeRequest<'_>>,
         purpose: FactPublicationPurpose,
         origin: (EventSource, EventActor),
@@ -590,6 +617,21 @@ impl HostShared {
             }
         }
         let now = self.clock.sample()?.unix_ms;
+        // #503 ISO-A (the coordinator's ruling 3): the Runtime's own availability record follows
+        // what the store holds for its key, read in this hold of the gate, which every writer of
+        // a fact takes, and is judged at its own observation: one a clock that has not moved past
+        // the stored one (or has stepped back) leaves ahead of `now`. Every other publication is
+        // judged at `now`, as before.
+        let now = if purpose == FactPublicationPurpose::RuntimeAvailability {
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            observation
+                .records
+                .iter_mut()
+                .map(|record| observed_after_stored(&facts, record))
+                .fold(now, u64::max)
+        } else {
+            now
+        };
         // A resource target policy equal to the active, unexpired one is a replay: the
         // active revision answers and nothing is appended. Workflow #455 RR2: so is a goal
         // records record equal to the active one (it has no expiry); its edit compared the
@@ -602,7 +644,8 @@ impl HostShared {
             | FactPublicationPurpose::ResourceAdjustment { .. }
             | FactPublicationPurpose::RunDuration
             | FactPublicationPurpose::ApplicationUpdate
-            | FactPublicationPurpose::ListReading => None,
+            | FactPublicationPurpose::ListReading
+            | FactPublicationPurpose::RuntimeAvailability => None,
         };
         if let Some(expected_version) = replayable {
             let record = &observation.records[0];
@@ -1146,6 +1189,15 @@ impl HostShared {
         )
     }
 
+    /// The one publisher of the Runtime's own `session.instance.available` records (the self-check
+    /// gate's withdrawals and restores, and the device link's, device state's and device system's
+    /// withdrawals), through [`Self::publish_facts`] as `publish_fact` publishes. #503 ISO-A (the
+    /// coordinator's ruling 3): its observation is the host clock, or one millisecond after what
+    /// the store holds for the key when the clock is not later, read and written in one hold of
+    /// `fact_write_gate` (`FactPublicationPurpose::RuntimeAvailability`), so two writes in one
+    /// millisecond, or a write after a wall-clock step back, are not refused
+    /// `fact_observation_not_newer`. The store's rule and every fact a client publishes are as
+    /// before.
     fn publish_policy_instance_availability(
         &self,
         instance_alias: &str,
@@ -1156,22 +1208,28 @@ impl HostShared {
         let value = ContractFactValue::Boolean(available);
         let digest =
             policy_instance_seed_digest(instance_alias, POLICY_INSTANCE_AVAILABLE_KEY, &value)?;
-        self.publish_fact(FactRecord {
-            scope: FactScope::Instance {
-                instance_id: instance_alias.to_owned(),
+        self.publish_facts(
+            actingcommand_contract::FactObservation {
+                records: vec![FactRecord {
+                    scope: FactScope::Instance {
+                        instance_id: instance_alias.to_owned(),
+                    },
+                    key: POLICY_INSTANCE_AVAILABLE_KEY.to_owned(),
+                    content: FactContent::Inline { value },
+                    observed_at_unix_ms: self.clock.sample()?.unix_ms,
+                    expires_at_unix_ms: None,
+                    ttl_policy: None,
+                    confidence_milli: 1_000,
+                    source_detector: source_detector.to_owned(),
+                    source_snapshot_id: source_snapshot_id(&digest),
+                    schema_version: POLICY_INSTANCE_SEED_SCHEMA.to_owned(),
+                    resource_bundle_hash: digest,
+                    invalidate_on: Vec::new(),
+                }],
             },
-            key: POLICY_INSTANCE_AVAILABLE_KEY.to_owned(),
-            content: FactContent::Inline { value },
-            observed_at_unix_ms: self.clock.sample()?.unix_ms,
-            expires_at_unix_ms: None,
-            ttl_policy: None,
-            confidence_milli: 1_000,
-            source_detector: source_detector.to_owned(),
-            source_snapshot_id: source_snapshot_id(&digest),
-            schema_version: POLICY_INSTANCE_SEED_SCHEMA.to_owned(),
-            resource_bundle_hash: digest,
-            invalidate_on: Vec::new(),
-        })
+            None,
+            FactPublicationPurpose::RuntimeAvailability,
+        )
         .map(|_| ())
     }
 

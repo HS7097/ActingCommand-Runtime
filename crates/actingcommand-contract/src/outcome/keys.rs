@@ -83,6 +83,10 @@ outcome_keys! {
     memory_available_bytes: integer,
     memory_reserve_bytes: integer,
     memory_floor_bytes: integer,
+    // #503 MEM (register §1.556): the host's commit as an automatic emulator start's gate reads it.
+    commit_limit_bytes: integer,
+    commit_available_bytes: integer,
+    commit_reserve_bytes: integer,
     carried_bytes: integer,
     count_known: boolean,
     event_count: integer,

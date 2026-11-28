@@ -2343,6 +2343,25 @@ pub fn merge_standard_pack_catalog(
     })
 }
 
+/// Workflow #503 NOISE-B (register §1.553): `pack-catalog.json`'s bytes, of either version, read
+/// for the game directory `game` on their own, as `actinglab resource validate` reads a resource
+/// repository's file: every error of [`parse_standard_pack_catalog_with`] that the file alone
+/// settles, and none that needs another file of the root: `package_not_listed` (the registry),
+/// `catalog_pool_undeclared`, `catalog_rule_unknown` and the `catalog_value_conflict` of a value
+/// beside a production of a valued pool (its `schedule.json`). The readers that hold the root keep
+/// those. Display defects are warnings, as there ([`StandardPackCatalog::display_issues`]).
+pub fn parse_standard_pack_catalog_alone(
+    bytes: &[u8],
+    game: &str,
+) -> Result<StandardPackCatalog, Vec<StandardPackRootIssue>> {
+    let read = read_catalog(bytes, game, None, None, None);
+    if read.errors.is_empty() {
+        Ok(read.catalog)
+    } else {
+        Err(read.errors)
+    }
+}
+
 /// The pools of the business part `object` at `pointer` (an entry's own, or (Workflow #477 CV-1)
 /// a version 2 per-rule part) of `owner` (the package, and the part's rule) that `schedule.json`
 /// still declares (`pools`): each other pool is left out of its side, answered in `dropped` and

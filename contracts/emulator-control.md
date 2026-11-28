@@ -1454,6 +1454,43 @@ configuration does not carry it (a host started without actingd's manifest).
   configuration order first, so their Starts follow one another in that order; a claim that
   waits queued takes part once it is granted. The turn holds no key and no queue position, and
   a claim waiting for it keeps renewing its key.
+- **Commit headroom and spacing (#503 MEM, since 0.12.102; [v012-register.md](v012-register.md)
+  §1.556).** Each emulator the Runtime starts commits several gibibytes, and a host whose commit
+  reaches its limit fails allocations in every program on it, the Runtime included. So, with the
+  turn in hand and before the last checks and the Start, the claim asks the start gate at every
+  tick. Two configuration keys decide it ([runtime-config.md](runtime-config.md), "The
+  `emulator_control` section"): the host's available commit (on Windows `GlobalMemoryStatusEx`,
+  `ullAvailPageFile`, beside the commit limit `ullTotalPageFile`; a page file that could still
+  grow is not counted) must be at or above `emulator_control.start_commit_reserve_bytes` (default
+  16 GiB; `0` turns the check off and reads nothing), and `emulator_control.start_spacing_ms`
+  (default 30 s; `0` none) must have passed since the latest emulator Start of any kind returned
+  from the provider. The claim reads the commit at once and then every 5 s, and reads both keys
+  in effect at every tick, so an instruction applies at the next tick. While the gate holds, the
+  claim keeps the turn and its key and ticks on, so the claims behind it wait for the turn as
+  before, and whatever ends a hold above ends this wait (a drain or a shutdown, an emulator
+  control waiting on the instance, the pauses, `start_emulator` turned off); the wait has no
+  deadline, so the instance is not handed to nobody and the watch counts no second restart (it
+  requests none while a claim waits). An idle wake held here stays under way and is admitted late,
+  never dropped or moved earlier. What a person and a reader of the state are told (each a
+  `runtime.failed` record under the instance's links, its severity the code's category, and the
+  same report line; the gate's records are not the start's, so a start a pause holds afterwards
+  still records no `command.*` and no `runtime.failed` of its own, as "Pauses (PG-1)" says): `emulator_autostart_commit_short` (warning; `alias` the instance first in line,
+  `commit_available_bytes`, `commit_limit_bytes`, `commit_reserve_bytes`, and `idle_action`
+  `stop_emulator` for an idle wake) once per short episode for the whole host, from the first
+  short read until an automatic start passes the gate again; `emulator_autostart_commit_ready`
+  (info; `alias`, `elapsed_ms` since the episode began, the read that passed and the reserve) when
+  that start passes; `emulator_autostart_commit_unknown` (warning; `alias`, `failure_code` the
+  read's code, `commit_reserve_bytes`) once per failing streak, from the first failed read until a
+  read succeeds: a read that fails lets the start go on (the spacing still applies), since a guard
+  that cannot see must not stop the starts. The spacing wait alone records nothing: it ends by
+  itself within `start_spacing_ms`. Never held, and never asking the gate: a person's, an agent's
+  or the Lab's emulator control (start, stop, restart), any Stop, the ladder's emulator-restart
+  rung (a broken instance's recovery, whose own Stop frees what its Start takes), a recognition
+  (EMU-BIND, it launches nothing), a startup package and an application start. Their Starts only
+  stamp the time the spacing counts from, so a person's start or a rung's start delays the next
+  automatic one. The gate's memory (the latest Start's time, the open episode, the failing streak)
+  is the Runtime's memory only; a restart begins with none. The network wait, the pauses, the
+  claims and their order are unchanged.
 - **The Start.** With the turn, after a last check of the above, the claim drives the operator
   start path ("The operator's claim and the fence") on its own key: its `command.received`
   (Runtime origin, written only now, so a claim that ended before leaves no open command), the
@@ -1480,7 +1517,10 @@ configuration does not carry it (a host started without actingd's manifest).
   held by the instance's own pause; PG-1, since 0.12.72: or by the global pause) and
   `emulator_autostart_interrupted` (a drain
   or a shutdown), each with the `alias` (emu-watch retires `emulator_autostart_yielded`: no
-  pause makes the claim yield). EMU-BIND (since 0.12.28): `emulator_autostart_skipped` and
+  pause makes the claim yield). #503 MEM (since 0.12.102): the start gate's
+  `emulator_autostart_commit_short`, `emulator_autostart_commit_ready` and
+  `emulator_autostart_commit_unknown` ("Commit headroom and spacing" above) are report lines too,
+  beside their records. EMU-BIND (since 0.12.28): `emulator_autostart_skipped` and
   `emulator_autostart_preparation_failed` with `watch_kind` `recognize` end the emulator watch's
   recognition of a running emulator, which starts nothing ("Emulator watch"). A report line that
   cannot be written never stops the daemon.
@@ -1859,8 +1899,13 @@ actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu
   Win32_Process listing>` (`crates/device/src/discovery.rs`), within
   `MUMU_MANAGER_PROCESS_LIST_TIMEOUT` (10 s), as a Stop's process check lists: the listing is the
   third read of `MumuManagerReads`, `BoundedMumuManagerReads` here, and at its bound only the
-  PowerShell process it started is ended and the discovery is refused (below). check-config and a
-  start still list without a bound of their own. Before it starts anything, actingd makes its own
+  PowerShell process it started is ended and the discovery is refused (below). Since 0.12.102
+  (Workflow #503 NOISE-B, register §1.553) check-config, a start, an on-demand discovery and the
+  debug bridge's and the capture's resolvers, which listed without a bound of their own, list the
+  same way within 60 s (`SYSTEM_PROCESS_LISTING_TIMEOUT`, the watchdog's and the installer's
+  bound of the same query): at the bound only the PowerShell process the listing started is
+  ended, the listing fails as a device failure each caller already handles, and no console
+  window opens. Before it starts anything, actingd makes its own
   stdout and stderr not inheritable, as the daemon does at its start (WD-MT; a failure is the
   warning `host_stdio_inheritance_failed` as a developer line on stderr, and the discovery goes
   on), so no descendant of the vendor tool or of PowerShell holds open the pipe a caller reads the

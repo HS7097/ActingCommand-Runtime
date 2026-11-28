@@ -48,9 +48,10 @@
 //!   ends at the worker's root (`end_panicked_unavailable_probe`; fix round 2, item 2, the
 //!   coordinator's ruling of 11-21): the panic is the worker's `panic_caught` record under the
 //!   probe's links, nothing probes the instance again in this unavailability, and a person is
-//!   told at once. A panic inside the preparation poisons the device's admission lock, whose next
-//!   lock stops the Runtime (`runtime_state_poisoned`); this slice does not change that (board
-//!   issue #496).
+//!   told at once. A panic inside the preparation poisons the device's admission lock; since #503
+//!   ISO-A the worker's root clears that poison and fences the instance (`instance_lock_poisoned`),
+//!   and a probe whose payload ends with an error its worker contained ends as a panicked one,
+//!   the person told with the error's code.
 //! - **When.** `scheduling.unavailable_probe.first_interval_ms` after the instance became
 //!   unavailable, then after each failed probe the interval times `factor`, at most
 //!   `max_interval_ms`. An interval counts quiet time: while a claim holds or waits for the
@@ -98,7 +99,6 @@ use crate::failure_identity::identifier_text;
 use crate::policy_host::InstanceOccupancy;
 use crate::time::RuntimeClockSample;
 use actingcommand_contract::LeasePriority;
-use actingcommand_contract::codes::ContractCode;
 use actingcommand_contract::outcome::{CodeStr, Outcome};
 use actingcommand_runtime_config::UnavailableProbeConfig;
 use std::collections::btree_map::Entry;
@@ -395,20 +395,23 @@ impl HostShared {
 
     /// Probe `probe` of `instance_id` ended by a panic of its worker, queued or running. Called at
     /// the worker's root, where the panic was caught (the join's error arm,
-    /// `instance_worker_loop`); the caller records the panic and its fatal mark whatever this
+    /// `instance_worker_loop`); the caller records the panic and its fence whatever this
     /// returns. Fix round 2 (item 2, the coordinator's ruling of 11-21, which takes back fix round
     /// 1's "the schedule goes on"): the instance's climbing mark comes off whatever state its
     /// entry is in; the entry, while it is still this probe's, stays `Panicked`, so nothing
-    /// probes the instance again in this unavailability (whether or not the panic poisoned a lock
-    /// the next probe would take: a panic inside the preparation poisons the device's admission
-    /// lock, whose next lock stops the Runtime: board issue #496); and a person is told at once,
-    /// `instance_unavailable_awaiting_person` with `failure_code` `panic_caught` (the code the
-    /// worker's own record carries) and no next probe, unless this unavailability told one
-    /// already. The panicked payload's key lapses at its TTL, as every panicked payload's does.
+    /// probes the instance again in this unavailability; and a person is told at once,
+    /// `instance_unavailable_awaiting_person` with `failure_code` `cause` and no next probe,
+    /// unless this unavailability told one already. The panicked payload's key lapses at its TTL,
+    /// as every panicked payload's does. #503 ISO-A (R-A1-2): `cause` is the code the worker's own
+    /// record of the end carries: `panic_caught` after a panic, and the error's own code when the
+    /// probe's payload ended with an error its worker contained, which ends the probe the same
+    /// way (it would otherwise stay queued or running, and nothing would probe the instance again,
+    /// silently).
     pub(super) fn end_panicked_unavailable_probe(
         &self,
         instance_id: InstanceId,
         probe: u32,
+        cause: &CodeStr,
     ) -> RuntimeHostResult<()> {
         lock(&self.stability_counter, HostLocation::RunUnavailableProbe)?
             .set_climbing(instance_id, false);
@@ -440,7 +443,7 @@ impl HostShared {
             elapsed_ms,
             self.unavailable_probe_config()?.attention_after_ms,
             probes,
-            Some(&CodeStr::from(ContractCode::PanicCaught.code())),
+            Some(cause),
             None,
         )
     }
