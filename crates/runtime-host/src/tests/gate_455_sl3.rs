@@ -224,8 +224,8 @@ fn reading(value: i64, observed_at: u64, snapshot: &str) -> FactRecord {
 // `P = 6000 · 70 · 70 ÷ 100² = 2940`: `B = 500 − 2940`, not dispatched, its last reason
 // `policy_benefit_nonpositive` with `benefit_milli` −2440, and `spend_line_pressed` with the pool,
 // the line, the reading, the consumption, the shortfall and `P`. The currency read at 600: the run
-// leaves 480, above the line, so it is dispatched and carries no pressing, and (ruling 7 as decided
-// on 11-29) it is told the line's turns: `spend_allowance` 200, `run_cap` 1.
+// leaves 480, above the line, so it is dispatched and carries no pressing, and (ruling 7 as
+// corrected on 11-29) with no other term of `run_cap` it is told no turns.
 #[test]
 fn sl3_h1_a_stored_line_presses_the_spender_until_a_higher_reading() {
     let root = TempDir::new().expect("tempdir");
@@ -306,20 +306,15 @@ fn sl3_h1_a_stored_line_presses_the_spender_until_a_higher_reading() {
             .all(|given| !given.outcome.is(PolicyCode::SpendLinePressed)),
         "{released:#?}"
     );
-    // Ruling 7 as decided on 11-29: a task that reserves nothing is told the line's turns, 200
-    // above the line, one run of 120.
-    let told = &decision(&released)
-        .reasons
-        .iter()
-        .find(|given| given.outcome.is(PolicyCode::PolicyDispatchParameters))
-        .unwrap_or_else(|| panic!("the turns told: {released:#?}"))
-        .outcome;
-    assert_eq!(
-        told.value("spend_allowances"),
-        Some(&json!([{"effect_index": 0, "spend_allowance": 200}])),
-        "{told:?}"
+    // Ruling 7 as corrected on 11-29: a task with no other term of `run_cap` (it reserves
+    // nothing, the pool has no valuation) is told no turns by the line.
+    assert!(
+        decision(&released)
+            .reasons
+            .iter()
+            .all(|given| !given.outcome.is(PolicyCode::PolicyDispatchParameters)),
+        "{released:#?}"
     );
-    assert_eq!(told.value("run_cap"), Some(&json!(1)), "{told:?}");
     assert!(host.fatal_error().expect("runtime health").is_none());
     host.close().expect("close the host");
 }

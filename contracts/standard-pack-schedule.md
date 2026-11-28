@@ -701,12 +701,12 @@ the line at which a unit is to cost that whole price: a small `scale` presses ha
 line, a large one lets the pressing grow slowly. A rule is still dispatched while its value exceeds
 its pressing, so of two rules the one with the least value for each unit spent stops first. For
 example, `{"price_milli": 100000, "scale": 100, "income_floor_milli_per_day": 0}` (a unit at most
-1000 milli) and a line of 400: read at 500, a rule of `V` 50 000 spending 100 a run leaves 400, is
-judged `B = 50 000` as before and is told one turn (read at 1000, six); spending 120 it leaves 380,
-20 below the line at a fifth of the
-full price, `P = 100 000 · 20 · 20 ÷ 100² = 4000`, `B = 46 000`; read at 250, every unit of its
-120 is below the line at the full price, `P = 120 000`, and it waits `policy_benefit_nonpositive`
-until the amount rises, the line is lowered or it is cleared. `income_floor_milli_per_day` is still
+1000 milli) and a line of 400: read at 500, a rule of `V` 50 000 spending 100 a run leaves 400 and
+is judged `B = 50 000` as before (with no reserve it is told no turns and runs once; reserving the
+currency it is told at most one, read at 1000 at most six); spending 120 it leaves 380, 20 below
+the line at a fifth of the full price, `P = 100 000 · 20 · 20 ÷ 100² = 4000`, `B = 46 000`; read
+at 250, every unit of its 120 is below the line at the full price, `P = 120 000`, and it waits
+`policy_benefit_nonpositive` until the amount rises, the line is lowered or it is cleared. `income_floor_milli_per_day` is still
 read by nothing: a line is judged by the amount alone.
 
 **A goal's gap in two parts** (#455 RR3b, since 0.12.98; register §1.542). On a pool a goal may be

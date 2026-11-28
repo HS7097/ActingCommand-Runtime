@@ -310,7 +310,8 @@ without one; [../resource-targets.md](../resource-targets.md), "A pool's line"),
   not read (its item `<pool>:-0`). `a = r − c`.
 - **At or above the line**, `a ≥ L` (and where `c` takes no unit from below it): nothing is added
   to the judgement, no term, no reason, the item `<pool>:-0`, as a build without this rule judges
-  it; the dispatch is told its turns ("The turns" below).
+  it; a dispatch told turns by another term is told at most the line's ("The turns" below), and
+  one told none is byte for byte that build's.
 - **Below the line**, `d = L − a`, the units taken from below the line are `min(c, d)`, and the
   candidate's exact sum `S` is charged the **pressing**
   `P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli: every unit below the line at the
@@ -334,20 +335,23 @@ without one; [../resource-targets.md](../resource-targets.md), "A pool's line"),
   reads a fact), and the fact refresh is asked for the reading, as for a regenerating pool's missing
   reading. A currency under a line is not spent blind. With no line in effect the pool's value is
   not read.
-- **The turns** (ruling 7, as decided on 11-29: a run told turns never crosses the line
-  unjudged). Where a dispatch's spend values give `run_cap` its terms ([../remedies.md](../remedies.md),
-  section 4, "Spend values"), each such pool adds one more term, the line's turns: `⌊(r − L) ÷ c⌋`
-  when that is at least 1, so the last turn told still leaves the pool at or above the line and none
-  of them is pressed, else 1, the one turn the gate judged with its pressing. `run_cap` is the least
-  of its terms, as before (a reserve, the lines of a valued pool, a goal, the ceiling of 1000). A
-  candidate that carried no `run_cap` before carries this term alone, so its dispatch is told its
-  turns and the rule of "Pool lines" ("a run told its turns leaves its pools unread") leaves every
-  pool its task consumes unread until it is read after that run's end: a currency under a line is
-  not spent on a count nobody judged. What a person sees: the same `policy_dispatch_parameters`
-  carries, for each entry of the task's `consumes` on such a pool, a `spend_allowance` of
-  `max(r − L, c)` (what the line lets the run spend: what the pool holds above it, or the one judged
-  run; the less of it and the reserve's where the task also reserves the pool), beside `run_cap`;
-  where the line's term is the least, `run_cap = ⌊spend_allowance ÷ c⌋`. With no line in effect, or
+- **The turns** (ruling 7, as decided and corrected on 11-29: a run told turns never crosses the
+  line unjudged, and the line's turns are a term **only among other terms**). Where a candidate's
+  `run_cap` has at least one term without the line, as before this rule (a reserve on a pool it
+  consumes, the lines of a valued pool it consumes; [../remedies.md](../remedies.md), section 4,
+  "Spend values"), each such pool adds one more term, the line's turns: `⌊(r − L) ÷ c⌋` when that
+  is at least 1, so the last turn told still leaves the pool at or above the line and none of them
+  is pressed, else 1, the one turn the gate judged with its pressing; the least of the terms is
+  taken (then the goal term and the ceiling of 1000, as before). What a person sees then: on the
+  same `policy_dispatch_parameters`, for each entry of the task's `consumes` on such a pool, a
+  `spend_allowance` of `max(r − L, c)` (what the line lets the run spend: what the pool holds above
+  it, or the one judged run; the less of it and the reserve's where the task also reserves the
+  pool), beside `run_cap`; where the line's term is the least, `run_cap = ⌊spend_allowance ÷ c⌋`.
+  Where `run_cap` has no other term it has none now either: no `run_cap`, no `spend_allowance`, no
+  dispatch parameters and nothing left unread because of the line. Such a dispatch runs once, and
+  its one consumption is counted by the amount's reading (the consumption dispatched since the
+  reading, "The amount and the net" above), which the next judgement of any spender of the pool
+  reads. The pressing of the one turn judged is the same in both cases. With no line in effect, or
   a net of 0, no term and no allowance: the values of before, byte for byte. A package that ignores
   the turns it is told is the package's matter.
 - **Never pressed:** a production (a line never weighs what produces its pool; a task that also

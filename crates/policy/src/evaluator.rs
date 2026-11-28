@@ -5391,29 +5391,10 @@ fn apply_priority_selection(
             &mut affected,
             memory,
         )?;
-        // #455 SL3 (register §1.559): a line in effect still tells its spenders their turns: their
-        // spend values hold its terms alone (no reserve, no valued pool, no goal here). Without a
-        // line in effect none, as before.
-        let line_views = line_allowances(catalog, facts, context, &ranked)?;
-        let mut spends = BTreeMap::new();
-        for candidate in &ranked {
-            let Some(views) = line_views.get(&candidate.work_index) else {
-                continue;
-            };
-            let spend = crate::resource_targets::spend_values_with_lines(
-                catalog_task(catalog, &candidate.task_id)?,
-                None,
-                |_| None,
-                |pool_id| line_allowance_of(Some(views.as_slice()), pool_id),
-                |_| 0,
-                &catalog.catalog().pools.pools,
-                |_| None,
-            );
-            if !spend.is_empty() {
-                spends.insert(candidate.work_index, spend);
-            }
-        }
-        return Ok((ranked, affected, spends));
+        // #455 SL3 (register §1.559, as corrected on 11-29): no spend values here, a line in
+        // effect or not: the line's turns are a term only among other terms, and with no reserve
+        // and no valued pool there is none; a run is one turn, counted by the amount's reading.
+        return Ok((ranked, affected, BTreeMap::new()));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
     // against the catalog, its inventory in the time-validity projected facts; with a valued

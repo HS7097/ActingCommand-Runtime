@@ -153,10 +153,12 @@ fn sl2_t2_a_stored_line_carries_at_least_alone_and_needs_no_producer() {
 // (read as the line now). With the needs computed from the records (30 covered on the currency, 3
 // landing on the valued pool) the line record and no record evaluate alike too. #455 SL3 (register
 // §1.559) changes on purpose what this test pinned for a line in effect: below it the consumers are
-// pressed, and a dispatch is told at most the turns that keep the pool at or above it, so the
-// lines in effect here are 10, the reserve's own floor: each run of 120 from 500 stays above the
-// line and nothing is pressed, and the line's turns ⌊(500 − 10) ÷ 120⌋ = 4 and its allowance 490
-// are the reserve's, so `task_spend`'s spend values are the ones without the line (they were 800).
+// pressed, and a dispatch told turns by another term (`task_spend` reserves the pool) is told at
+// most the turns that keep the pool at or above it, so the lines in effect here are 10, the
+// reserve's own floor: each run of 120 from 500 stays above the line and nothing is pressed, and
+// the line's turns ⌊(500 − 10) ÷ 120⌋ = 4 and its allowance 490 are the reserve's, so
+// `task_spend`'s spend values are the ones without the line (they were 800; at 380 the line's one
+// turn would be the least).
 #[test]
 fn sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before() {
     let lined = || catalog(tasks(true), pools(true));

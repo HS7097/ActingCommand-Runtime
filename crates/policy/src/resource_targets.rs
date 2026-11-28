@@ -4890,18 +4890,21 @@ pub(crate) struct LineAllowance {
 }
 
 /// [`spend_values_with`] with, by pool, the [`LineAllowance`] of each pool the task consumes on net
-/// whose spending a line in effect on the candidate's instance governs (`line_allowance`; #455
-/// SL3, register §1.559). Such a pool's entries of `consumes` take its allowance, the less of it
-/// and the reserve's where the task also reserves the pool, and the pool gives `run_cap` one more
-/// term, the line's turns `⌊allowance ÷ c⌋`: `⌊(r − L) ÷ c⌋` when that is at least 1, so the last
-/// turn told still leaves the pool at or above the line, else 1. `run_cap` is the least of its
-/// terms, as before; a task with no other term carries the line's. With no such pool every value
-/// is [`spend_values_with`]'s of before, byte for byte.
+/// whose spending a line in effect on the candidate's instance governs (`lines_in_effect`; #455
+/// SL3, register §1.559, the coordinator's rulings of 11-29 as corrected at 04:34). The line's
+/// turns are a term **only among other terms**: where `run_cap` has at least one term without the
+/// line, as before (a reserved pool, a valued pool whose lines take part: [`pool_runs`]), such a
+/// pool gives it one more, the line's turns `⌊allowance ÷ c⌋` (`⌊(r − L) ÷ c⌋` when that is at least
+/// 1, so the last turn told still leaves the pool at or above the line, else 1), and the least is
+/// taken; its entries of `consumes` then take its allowance, the less of it and the reserve's where
+/// the task also reserves the pool. Where `run_cap` has no other term the line adds nothing: no
+/// `run_cap`, no `spend_allowance`; such a run is one turn, and the amount's reading counts its one
+/// consumption. With no such pool every value is [`spend_values_with`]'s of before, byte for byte.
 pub(crate) fn spend_values_with_lines(
     task: &TaskSpec,
     views: Option<&[ReserveView]>,
     lines: impl Fn(&str) -> Option<LineView>,
-    line_allowance: impl Fn(&str) -> Option<LineAllowance>,
+    lines_in_effect: impl Fn(&str) -> Option<LineAllowance>,
     pending: impl Fn(&str) -> u64,
     pools: &[PoolSpec],
     gap: impl Fn(&str) -> Option<u64>,
@@ -4914,6 +4917,9 @@ pub(crate) fn spend_values_with_lines(
         }
         pool_spend(view, line, pending(pool_id))
     };
+    // #455 SL3: the terms without the line, as before; the line joins them only.
+    let pooled = pool_runs(task, &spend);
+    let line_allowance = |pool_id: &str| pooled.and_then(|_| lines_in_effect(pool_id));
     let spend_allowances = task
         .consumes
         .iter()
@@ -4938,7 +4944,7 @@ pub(crate) fn spend_values_with_lines(
     SpendValues {
         spend_allowances,
         gaps_remaining,
-        run_cap: run_cap(task, &spend, &line_allowance, pools, &gap),
+        run_cap: run_cap(task, pooled, &line_allowance, pools, &gap),
     }
 }
 
@@ -5005,22 +5011,19 @@ fn run_amount(task: &TaskSpec, pool_id: &str, consumes: u64) -> Option<u64> {
 /// away: a goal-driven production declared by expectation bounds it ([`goal_runs`]) instead of
 /// removing it, as it did before. SCHED-C1f1: one run's amount is the one in effect on the
 /// candidate's instance, which its reserve view and its lines hold ([`run_amount`]), an integer,
-/// so an amount read from a fact gives a `run_cap`. #455 SL3 (register §1.559): each pool whose
-/// spending a line in effect governs and that the task consumes on net adds the line's turns
-/// ([`line_runs`]) as one more term of the spend term; a task whose pools give no other term (none
-/// takes part, or one gives none) has the line's terms alone. Without such a pool, as before.
+/// so an amount read from a fact gives a `run_cap`. `pooled` is that spend term ([`pool_runs`]).
+/// #455 SL3 (register §1.559, as corrected on 11-29): where it is a term, each pool whose spending a
+/// line in effect governs and that the task consumes on net adds the line's turns ([`line_runs`])
+/// beside it, the least taken; where it is none, nothing, as before.
 fn run_cap(
     task: &TaskSpec,
-    spend: &impl Fn(&str) -> PoolSpend,
+    pooled: Option<u64>,
     line_allowance: &impl Fn(&str) -> Option<LineAllowance>,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
 ) -> Option<u64> {
-    let runs = match (pool_runs(task, spend), line_runs(task, line_allowance)) {
-        (Some(pooled), Some(lined)) => pooled.min(lined),
-        (Some(pooled), None) => pooled,
-        (None, lined) => lined?,
-    };
+    let pooled = pooled?;
+    let runs = line_runs(task, line_allowance).map_or(pooled, |lined| pooled.min(lined));
     let cap = match goal_runs(task, pools, gap) {
         Some(needed) => runs.min(needed),
         None => runs,
