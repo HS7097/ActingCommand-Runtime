@@ -520,9 +520,10 @@ fn rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused() {
     assert_eq!(revision_of(GOALS, &records_goals()), GOALS_PACKAGE_REVISION);
     assert_eq!(GOALS_PACKAGE_REVISION, 28);
 
-    // Workflow #503 LIST-B (register §1.536) raises the build's range to [3, 29].
+    // Workflow #503 LIST-B (register §1.536) raises the build's range to [3, 29], and Workflow #503
+    // LIST-C (register §1.541) to [3, 30].
     let own = own_package();
-    assert_eq!(own, [3, 29]);
+    assert_eq!(own, [3, 30]);
     let needed = [GOAL_TABLES_PACKAGE_REVISION, GOAL_TABLES_PACKAGE_REVISION];
     assert!(package_edge_holds(own, needed));
     assert!(

@@ -202,7 +202,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   keeps its revision, so [3, 28]. Workflow #503 LIST-B (0.12.93, register §1.536) raises it
 ///   to 29: a `repeated_anchor` layout's picture pool (`identity_templates`) and its feature's
 ///   `region`, which every Runtime before it refuses at its declaration gate (`UnknownField` at
-///   the member); a pack without them keeps its revision, so [3, 29].
+///   the member); a pack without them keeps its revision, so [3, 29]. Workflow #503 LIST-C (0.12.97,
+///   register §1.541) raises it to 30: a scan's `end` that writes `require_stationary`, which
+///   every Runtime before it refuses at its admission as an unknown member of `end`; a pack without
+///   it keeps its revision, so [3, 30].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -253,7 +256,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 10]),
-    ("package", [3, 29]),
+    ("package", [3, 30]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
 ];

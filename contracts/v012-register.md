@@ -51544,6 +51544,149 @@ tests stand unchanged.
 
 **At deploy.** Nothing to configure. In the release notes' language: 新增：规则表的读数列读到“有／没有”（列表的 `passed` 列）时按 1／0 读，所以一条梯的位置可以用卡上有没有某个标记来定（比如两种徽标各一列）。
 
+### 1.541 Slice #503 LIST-C (0.12.97): a scan's end may require that the list has stopped moving (`end.require_stationary`), so an end check that passes in the middle of a list no longer ends the reading early (board #503; the rulings 1 to 10 are the coordinator's of 11-28, to whose meaning the resource side agreed, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-list-c.md`; on main `b11a2461`, v0.12.96; §1.540, a slice of the same days, is not in its tree, and whichever of the two merges later joins main and keeps both, §1.540 first)
+
+It ships in 0.12.97 and takes `package` 30, written over row 29 of §1.536.
+[selection-graph.md](selection-graph.md) ("Declaration": the `start` and `end` bullet and a new
+row of the gate's table; "Select over a scan": step 2 and the new "An end that must also be
+stationary"; "Offline"), [resource-readings.md](resource-readings.md) ("Declaration": the `scan`
+row; "Reading": step 1 and a new paragraph; "Offline"), [linear-steps.md](linear-steps.md) ("List
+reading steps"), [component-interfaces.md](component-interfaces.md) (the `package` row 30) and
+[resource-verify.md](resource-verify.md) (row 30) are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). A scan's coverage ends when
+its declared end check passes, a check on one frame. The resource side met a list that no check on
+one frame can end: a popup with no scroll bar and no footer, at whose true end a few pixels (3 px)
+of background show under the last row. Its rows stand at a fixed pitch (106 px, with 8 px between
+two rows), so at some positions in the middle (6 px of every 106) the frame is, apart from what the
+cards show, pixel for pixel the frame of the true end. With the package's advance the scan lands in
+that band on its eighth move, with no drift; the end check passes there, the coverage is
+`complete`, the list fact is written without its tail, and nothing says so. A reading that is short
+in silence breaks the rule that every error is visible, so the package was not accepted; no other
+page shows this list's content with both the name and the level (the resource side's look at the
+saved frames). The kernel already knows when a list stopped: two consecutive forward viewports that
+repeat the one before them. Until this slice that judgement only failed a scan
+(`selection_scan_end_unconfirmed` with `end`, `selection_scan_early_stop_unreached` without).
+
+**What it rests on** (read at `b11a2461`; none of the stop conditions holds).
+- *The judgement.* `ScanSession::run` counts `forward_repeats`: a forward viewport whose aligned
+  offset lies within `position_tolerance_px` of the viewport before it adds one, any other sets it
+  to 0; at 2 the loop's `EndTest` fails the scan (`stopped_moving`). It is reached on a viewport
+  whose end check passes without changing how any other scan aligns or counts: each forward
+  viewport is aligned in the window its own end check gives (`forward_window`), which holds no
+  move.
+- *The repeats are recorded.* `observe` pushes every forward viewport into the coverage viewports
+  before the end test reads them; the record's projection writes them all (`projection`, with
+  their frames), the dry runs' summaries too. No record changes shape.
+- *Page-order evidence* (SEL-L3b). A page flip without overlap places a forward viewport at the
+  page it shows, the same page or the next; the same page gives the same offset, so the judgement
+  exists there as well.
+- *Return.* A select's `Return` starts from the last coverage viewport's offset and aligns against
+  the content map; two repeats add no position (they fall within the tolerance of the positions
+  already held) and leave the covered interval and the extent as they were, so the member is
+  found as after any coverage.
+- *One interface.* `package` only: the coverage's end evidence stays `end_check`, and no member of
+  a record, an event or the wire is new.
+
+**The rulings, as built.**
+- *1, the member* (`crates/execution-kernel/src/contained_task/scan.rs`, `DeclaredEnd::
+  require_stationary`; `crates/pack-containment/src/source/declarations.rs`, `SCAN_END_STATIONARY`,
+  `Declaration::scan_end_stationary`). `end` may write `"require_stationary": true` beside `check`,
+  in a select step's scan and in a list reading's. The precedent followed is §1.536's `other` of a
+  layout pool's entry, written only `true`: `false` is refused (`InvalidValue`), any other value,
+  `null` included, `InvalidType`, at `…/scan/end/require_stationary`, by the declaration gate (which
+  admission runs on the sealed task). Absent, the kernel reads `false`. Any other member of `end` is
+  refused as before; that refusal is admission's reader's, not the gate's (the gate does not read
+  `end`'s members): `contained_task_program_invalid` for a select step,
+  `contained_task_resource_reading_invalid` `<operation id>:read_list` for a list reading.
+- *2, what it changes* (`ScanSession::end_reached`, read where the end check was read, on the
+  start viewport and on each forward one). With the member, a viewport whose end check passes ends
+  the list only when `forward_repeats` is 2 on it; the start viewport never does. Until then the
+  scan advances and reads every viewport as before. A pass after which the list moves counts for
+  nothing; a list that stops where the check does not pass reaches `stopped_moving` as before,
+  `selection_scan_end_unconfirmed` at `select_scan_end` with the viewport's index; a list of one
+  screen completes after two advances that do not move it. The window: today a viewport whose own
+  end check passes is aligned in [*p* − *t*, *p* + *M* + *t*] (any step up to the largest, the last
+  move onto the foot shorter than *m* included), any other in the window of no move or a full step;
+  so it stays, each viewport by its own check, so a short last move onto the foot and the two
+  repeats that follow (each in the wide window, since its check passes) complete the coverage, and
+  a move after a passing viewport in the middle is held to the full step again.
+- *3, the bounds.* The two repeats are coverage viewports: `advance` refuses the next one at
+  `max_viewports` and every state checks `max_ms`, as for any viewport.
+- *4, both readers.* Neither changed: a select step (`ScanSession::select`) and a `read_list` step
+  (`ScanSession::read_list`, of a page graph or a step plan) call the one `run`, and after a
+  complete coverage go on as before. `end_passed` (a list reading's `ListReadingFrame`) is called
+  once, for the viewport that ended the list.
+- *5, page-order evidence.* The judgement exists for such a scan, so the member means the same
+  there and the gate refuses nothing for it.
+- *6, no record, event or wire member.* As above.
+- *7, a package without the member.* Its admission, its session and every record are as before,
+  byte for byte: `end_reached` is the end check alone when the member is absent. An older Runtime
+  refuses a package that writes it (admission's reader of `end`), and such a package declares
+  `package` 30.
+- *8, the recorder.* Untouched: `record stop` writes `end` as `{check}`, its end-mark rules stand,
+  and neither the gate nor `record ready` refuses a hand-written package with the member.
+- *9, offline.* `dry_run_scan_decide` and `dry_run_list_reading` (the list check's entry, which
+  `package list-check` calls) run the same session: on saved frames that end with the two repeats
+  they answer as a run; on frames that end at the first viewport whose end check passes the
+  session asks for its next move's frame, and they answer `selection_scan_replay_frame_missing`,
+  the code of every dry run whose frames run out.
+- *10, neutral; no code.* No game, package or list is named; no outcome code, word or setting is
+  added, and the outcome index does not change.
+
+**Decided here.** `null` is refused as the precedent refuses it, not read as absent; the gate
+looks only at `require_stationary` of an `end` object and leaves the rest of `end` to admission's
+reader, so a package without the member is refused by the same code as before; the frame a list
+reading names is the frame of the viewport that completed the coverage, the second repeat's.
+
+**The known limit, not solved.** A list that stops responding (a frozen application, an overlay that
+lets the list show through and takes the moves) at a look-alike position passes both tests: its end
+check passes and it does not move. The page check and the guard of every viewport are what stand
+against it, as before. The contract says so.
+
+**The `package` revision.** A Runtime before this one (0.12.96, read at `b11a2461`) refuses the
+member at admission, whose reader of `end` (`DeclaredEnd`) denies every member but `check`; its
+installer, whose range ends at 29, refuses a bundle that declares 30. This build declares [3, 30];
+`standard-pack build` counts the member as 30 (the row `require_stationary` under `end`).
+
+**Tests** (exec gate map row "#503 LIST-C"; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `contained_task::gate_503_list_c::list_c_the_declaration_takes_require_stationary_only_as_true` (1) | the member admitted in a select's scan, a list reading's and a select's scan paged by page-order evidence; `false` `InvalidValue`, `"yes"` and `null` `InvalidType` at `/operations/0/select/scan/end/require_stationary` and `/operations/1/read_list/scan/end/require_stationary`; another member of `end` `contained_task_program_invalid` (select) and `contained_task_resource_reading_invalid` `read_members:read_list` (list reading), the codes an older reader gives the member itself |
+| `…::list_c_a_list_reading_step_reads_past_an_end_mark_in_the_middle` (2, 7) | a step plan's reading with the end mark at 24 px and at 48 px: without the member the run records six cards of seven as the whole list; with it all seven, one `ListReadingFrame`, six inputs, the run completed |
+| `…::list_c_a_short_last_move_onto_the_foot_then_two_repeats_completes` (3) | 0, 300, 600, 760 (a move of 160 under the smallest 180), 760, 760: complete, the end named once on the last; the list reader every row |
+| `…::list_c_a_list_of_one_screen_completes_after_two_advances_that_do_not_move_it` (4) | 0, 0, 0, every end check passing, two advances, the twelve cards; without the member viewport 0 alone |
+| `…::list_c_a_list_that_stops_where_the_end_check_fails_is_end_unconfirmed` (5) | `selection_scan_end_unconfirmed`, `select_scan_end`, viewport 5, with no end check and with one only at 300 (where without the member eight rows of thirteen were whole) |
+| `…::list_c_the_two_repeats_count_against_max_viewports` (6) | `max_viewports` 6: `selection_scan_bounds_exceeded`, `coverage_viewports`, 6; 7: complete |
+| `…::list_c_both_readers_go_on_as_before_after_the_coverage` (7, 2) | the look-alike grid: without the member eleven rows of sixteen and the select `empty`; with it sixteen rows, and the select `selected`, one return move, confirmed at 860 on the last frame, the record's coverage `complete` with `end_check` and seven viewports |
+| `…::list_c_a_scan_without_the_member_ends_as_before` (8) | `gate_308_l3`'s list ends at 0, 300, 600, 760, as that gate pins it |
+| `…::list_c_a_scan_paged_by_page_order_evidence_ends_on_its_second_repeat_too` (ruling 5) | 0, 500, 1000, 1000, 1000 with the member; 0, 500, 1000 without |
+| `…::list_c_the_list_check_answers_as_the_run_on_the_same_frames` (9) | the seven rows on frames that end with the repeats; `selection_scan_replay_frame_missing` on frames that end at the first end check |
+| `…::list_c_the_select_dry_run_decides_as_the_run_on_the_same_frames` (9) | `selected` `member-g`, position 6, viewport 2, row 82, over 0, 24, 48, 48, 48; `selection_scan_replay_frame_missing` on frames that end at the look-alike, where without the member the decision is `empty` |
+| `apps/actinglab` `gate_503_list_c::list_c_a_scan_ends_require_stationary_needs_revision_30_and_nothing_else_does` (1) | 30 for the member, `true` or `false`, in a select's and a list reading's scan, either mode; without it 3, 13, 8 and 22; the name under `start` 3 |
+
+Adapted, the requirement moving the shipped `package` range to [3, 30]: `gate_463_kp1`
+(`KEY_REVISION + 13`), `gate_463_sel2l` (`SHARED_READ_REVISION + 10`), the Lab's
+`gate_463_sel2l_rows`, actinglab-architecture's `component_interfaces`, the rescue module's
+`gate_463_v1`, `gate_477_cv1`, `gate_455_tk1` and `gate_455_rr1`. No golden re-recorded; no test
+leaves the gate maps.
+
+**What is not changed.** A scan without the member: its declaration, admission, session, windows,
+bounds, records, dry runs and the frame a list reading names; the existing scan gates
+(`gate_308_l3`, `gate_308_l3b`, `gate_308_l4b`, `gate_428_s168_4`, `gate_428_s168_lk`,
+`gate_463_kbc`, `gate_463_r3a`, `gate_503_list_a`, `gate_503_list_a3`, `gate_503_list_b`) and the
+recorder's goldens of a scan's `end` (`gate_463_s29a`, `gate_463_self_scan`) pin it and are
+unchanged; the recorder; the ledger, `runtime-client`, `actingd-config`, `runtime-outcomes`; every
+code and setting.
+
+**At deploy.** Nothing to configure, and nothing changes until a package writes the member: no
+installed package does. A package that writes it needs this build (its bundle declares `package`
+30); a rollback below 0.12.97 meets it as an older Runtime does (its installer refuses the bundle at
+the `package` edge, a placed one is refused at every admission), so the rollback stays open while
+no root is placed from such a bundle. In the release notes' language: 新增：扫描的终点可以写
+`"require_stationary": true`：终点检查通过还不够，要列表也停住了（连续两次前进画面都和前一张一样）才算读到底；列表中间某个位置的画面和底部一模一样时，不会再提前收尾、悄悄少读一截。没有这个成员的包一切照旧。多出的两张画面算在 `max_viewports` 和 `max_ms` 里。包的修订升到 30：写了这个成员的包要本版以上的 Runtime。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

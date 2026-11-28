@@ -709,7 +709,12 @@ Runtime supplies no default. The numbers below are neutral examples, not values:
   list's two ends; `rewind: true` lets the scan move toward the start until its check passes. A
   scan without `end` has no evidence of its list's end, so it never covers its list: a step that
   declares `on_empty` beside it is refused, and so is a scan that declares neither `end` nor
-  `early_stop`, which could only fail.
+  `early_stop`, which could only fail. Workflow #503 LIST-C (since 0.12.97, `package` revision
+  30): `end` may also write `"require_stationary": true`, `{"check": "check/list_end",
+  "require_stationary": true}`, for a list whose end check can pass in its middle too: the end
+  check then ends the coverage only once the list has also stopped moving (section Select over a
+  scan, "An end that must also be stationary"). The member is written only `true`; without it the
+  end check alone ends the coverage, as before.
 - `bounds` caps the coverage viewports (`max_viewports`), the rewind and return viewports
   together (`max_reposition_viewports`) and the scan's time (`max_ms`, section Select over a
   scan). `early_stop: "upper_bound"` lets the scan stop before the list's end once no position
@@ -724,6 +729,7 @@ task. Each refusal names its file and the JSON pointer of the offending field:
 | `select` holds `layout_id` and `policy`, and optionally `scan` and `on_empty`, of the right JSON types. | the field | `task.json` |
 | `scan` holds `identity_feature`, `axis`, `advance`, `reposition`, `settle`, `track`, `start`, `end` and `bounds` (`MissingField`), and optionally `early_stop`; any other member is `UnknownField`. Admission reads their values. Workflow #463 K-c (since 0.12.70, `package` revision 18): `end` may be left out when the scan declares `early_stop`; a scan with neither is refused as a missing `end` always was (`MissingField`), because it could only fail; a `null` member is an absent one. | `…/select/scan/<member>` | `task.json` |
 | Workflow #463 K-c: a step whose `scan` declares no `end` declares no `on_empty` (`InvalidValue`): such a scan never covers its list, so rule 1 of section Select over a scan, which needs complete coverage, could never end the step empty. | `…/select/on_empty` | `task.json` |
+| Workflow #503 LIST-C (since 0.12.97, `package` revision 30): a scan's `end`, of a select step or of a list reading ([resource-readings.md](resource-readings.md), "List readings"), that writes `require_stationary` writes it `true`, as a layout pool's entry writes `other` (section Rules): `false` is `InvalidValue`, any other value (`null` included) `InvalidType`. The rest of `end` is admission's, as before: its reader takes `check` and this member and refuses any other (`contained_task_program_invalid` for a select step, `contained_task_resource_reading_invalid` `<operation id>:read_list` for a list reading), which is also how a Runtime before revision 30 refuses `require_stationary` itself. A scan whose pages are placed by page-order evidence takes the member as any other scan. | `…/scan/end/require_stationary` | `task.json` |
 | `on_empty` is `{outcome_key}`, a string. | `…/select/on_empty/outcome_key` | `task.json` |
 | `expect_after.expect_identity` holds `choice_of` and optionally `target_id`, both strings, and optionally `templates`, an array of `{id, target_id}`, both strings (SEL-L4b-T); any other member is `UnknownField`. Admission requires exactly one of `target_id` and `templates`. | `/operations/<i>/expect_after/expect_identity/<member>`, `…/expect_identity/templates/<j>/<member>` | `task.json` |
 | `layout_id` matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/operations/<i>/select/layout_id` | `task.json` |
@@ -1065,7 +1071,9 @@ decides, returns to the chosen member and confirms it. One attempt runs:
    stop holds (`early_stopped`). Two consecutive forward viewports that repeat the one before them
    (the list stopped moving) fail the scan at the stage `select_scan_end`: with `end` declared
    `selection_scan_end_unconfirmed`, without it `selection_scan_early_stop_unreached` (below, "A
-   scan without an end").
+   scan without an end"). Workflow #503 LIST-C: an `end` that writes `require_stationary` is
+   passed only on the second of those two viewports, when its end check passes there; a pass
+   anywhere else ends nothing (below, "An end that must also be stationary").
 3. **Decide.** A position that was tracked but never readable fails
    `selection_scan_position_unread`, and the spacing of the whole list is checked. The members,
    the positions whose fixed reading the evaluator ranked, are numbered `<layout>#NN` in
@@ -1184,6 +1192,50 @@ default recovery ladder by its trigger `pack_logic` ([emulator-control.md](emula
 an ending instead (`end` and `on_empty`, rule 1 above). The offline entry `dry_run_scan_decide`
 (section Offline) runs the same session and the same `Decide`, so it answers the same on the same
 frames.
+
+**An end that must also be stationary** (Workflow #503 LIST-C, since 0.12.97, `package` revision
+30; [v012-register.md](v012-register.md) §1.541). The end check is a check on one frame, and some
+lists have no frame that only their foot shows: a popup list with no scroll bar and no footer, for
+example, whose foot is a few pixels of background under its last row. Where the rows stand at a
+fixed pitch, the frames of some positions in the middle of the list (those where a gap between two
+rows lies where the background lies at the foot) are, apart from what the cards show, the frame
+of the foot, so the end check passes there, the coverage is `complete` without the list's tail, and
+nothing says so. An `end` that writes `"require_stationary": true` asks for more:
+
+- The coverage is `complete` on the forward viewport on which the stopped-moving judgement above
+  holds (the second consecutive forward viewport that repeats the one before it) **and** the end
+  check passes on that viewport. Until then the scan goes on advancing and reads every viewport as
+  any scan does, the viewports whose end check passes included.
+- A pass after which the list still moves counts for nothing: the scan goes on.
+- When the list stops and the end check does not pass on that viewport, the step fails
+  `selection_scan_end_unconfirmed` at the stage `select_scan_end` with that `viewport_index`, as a
+  scan with `end` always did: a list that stopped without positive evidence of its end.
+- A list of one screen, whose start and end checks both pass on its first viewport, follows the
+  same rule: two advances that do not move it complete it.
+- Each forward viewport is aligned in the window its own end check gives it, as for any scan with
+  `end`: one whose check passes in [*p* − *t*, *p* + *M* + *t*] (so the last move onto the foot may
+  be shorter than *m*, and the repeats at the foot lie in it), any other in the window of no move or
+  a full step. A short last move onto the foot followed by two repeats completes the coverage.
+- A scan whose pages are placed by page-order evidence (SEL-L3b) has the same judgement (a forward
+  viewport that shows the same page as the one before it repeats it), so the member means the same
+  there.
+- The two repeats are coverage viewports: they count against `bounds.max_viewports` and `max_ms`
+  as any viewport, so an author who writes the member allows for them, or
+  `selection_scan_bounds_exceeded` (`scan_bound` `coverage_viewports` or `duration`) comes first,
+  as "A scan without an end" says for its own two.
+- Nothing new is recorded: the coverage's end evidence stays `end_check` (the check did pass), the
+  repeats are in the record's coverage viewports as every coverage viewport is, and a list
+  reading's end frame (`ListReadingFrame`, [resource-readings.md](resource-readings.md), "List
+  readings") is the frame of the viewport that completed the coverage. `Decide`, `Return`,
+  `Confirm` and the tap, and a list reading's rows, follow as for any complete coverage.
+
+A known limit, not solved here: a list that stops responding while it shows a look-alike position
+(a frozen application, or an overlay that lets the list show through and takes the moves) passes
+both tests. The page check and the guard of every viewport are what stand against it, as for any
+scan. The recorder does not write the member ([lab-recording.md](lab-recording.md), "A scrolling
+choice: reading the list to its end" is unchanged): a package gains it by hand, and a package that
+writes it declares `package` 30 ([component-interfaces.md](component-interfaces.md)). The offline
+entries follow the session (section Offline).
 
 The same scan session reads a list for a `read_list` step (Workflow #428 S168-4,
 [resource-readings.md](resource-readings.md), "List readings"), of a page graph or (Workflow #428
@@ -1407,7 +1459,14 @@ mode `none_allowed` where the step declares `on_empty`, and the upper bound's in
 `contained_task_select_invalid` with the admission's detail. Workflow #463 K-c: the session and
 `Decide` are the run's own, so a scan without an end answers here what it answers in a run (section
 Select over a scan, "A scan without an end"): a decision once its early stop held, else the error
-`selection_scan_early_stop_unreached` with the run's stage and viewport.
+`selection_scan_early_stop_unreached` with the run's stage and viewport. Workflow #503 LIST-C
+(since 0.12.97): so does a scan whose end requires the list to be stationary (section Select over a
+scan, "An end that must also be stationary"): on saved frames that end with the two repeats at the
+foot it decides as the run does; on frames that end at the first viewport whose end check passes
+(as a recording that stopped there, or a run without the member, saved them) the session asks for
+its next move's frame, and the dry run answers what a run's next move would have found out, that
+the list had not yet been seen to stop: `selection_scan_replay_frame_missing`, the error of every
+dry run whose frames run out.
 
 Workflow #428 S168-LK (since 0.12.78): `dry_run_list_reading` dry-runs a `read_list` step's scan
 over the same frames, with the run's own session and rows, and answers the list whole or its miss

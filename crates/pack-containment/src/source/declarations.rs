@@ -30,6 +30,10 @@ const SCAN_MEMBERS: &[&str] = &[
     "early_stop",
 ];
 
+/// Workflow #503 LIST-C (`package` revision 30): the optional member of a scan's `end` that makes
+/// the coverage also wait for the list to have stopped moving; it is written only `true`.
+const SCAN_END_STATIONARY: &str = "require_stationary";
+
 /// Workflow #406 T3 (plan Q17): the click kind of the path drag the kernel generates in a box.
 const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
 
@@ -1340,6 +1344,7 @@ impl Declaration<'_> {
                     self.required(scan, &scan_pointer, member)?;
                 }
             }
+            self.scan_end_stationary(scan, &scan_pointer)?;
         }
         // Workflow #308 SEL-L4b (S0 §1.4): `{outcome_key}`, a string; Runtime admission checks
         // the mode, the scheduling outcome and the route's terminal.
@@ -1553,7 +1558,30 @@ impl Declaration<'_> {
             }
             self.required(scan, &scan_pointer, member)?;
         }
-        Ok(())
+        self.scan_end_stationary(scan, &scan_pointer)
+    }
+
+    /// Workflow #503 LIST-C (`contracts/selection-graph.md`, "Declaration"; `package` revision 30):
+    /// a scan's `end` object, of a select step or of a list reading, that writes
+    /// [`SCAN_END_STATIONARY`] writes it `true`, as a layout pool's entry writes `other`: `false` is
+    /// `InvalidValue` and any other value `InvalidType`, at `…/scan/end/require_stationary`. The
+    /// rest of `end` is admission's, as before: its reader refuses any other member.
+    fn scan_end_stationary(&self, scan: &Map<String, Value>, scan_pointer: &str) -> CliOutcome<()> {
+        let Some(member) = scan
+            .get("end")
+            .and_then(Value::as_object)
+            .and_then(|end| end.get(SCAN_END_STATIONARY))
+        else {
+            return Ok(());
+        };
+        let pointer = child(&child(scan_pointer, "end"), SCAN_END_STATIONARY);
+        match member {
+            Value::Bool(true) => Ok(()),
+            Value::Bool(false) => {
+                Err(self.error(&pointer, ResourceDeclarationReason::InvalidValue))
+            }
+            _ => Err(self.error(&pointer, ResourceDeclarationReason::InvalidType)),
+        }
     }
 
     /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings", "Declaration"):

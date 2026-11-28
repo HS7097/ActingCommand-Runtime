@@ -341,6 +341,10 @@ mod gate_455_rr1;
 // `package list-check` answers the mapping's evidence of each kind of position read from pictures.
 #[path = "gate_503_list_b.rs"]
 mod gate_503_list_b;
+// Workflow #503 LIST-C: the revision table counts a scan's `end.require_stationary` as `package`
+// 30, in a select step's scan and a list reading's, in a pack of either mode, and nothing else so.
+#[path = "gate_503_list_c.rs"]
+mod gate_503_list_c;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
