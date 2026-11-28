@@ -1030,3 +1030,21 @@ tests = [
     "actingcommand-contract::lib::standard_pack_goal_tables::tests::rr1_fix1_a_prerequisite_on_a_sub_column_or_on_its_own_column_is_refused",
 ]
 incident = ["#455 RR1"]
+
+# Workflow #455 RR4a (0.12.100; register §1.546; brief rd-1123/brief-455-rr4a.md with its addendum 1; contracts/standard-pack-goal-tables.md, "Names for people"; contracts/standard-pack-goals.md, "Texts and limits"), the contract crate: goal-tables.json may write names. The contract's first example with its example of names (items; a table's keys, columns, subs, classes and a condition; the positions of a column of width 1, of one of width 2 with two prefixes and the empty prefix's fallback, of a column of per sub with one sub's own list) reads, every name and list as written, and its game, items and tables are those of the same file without names, whose names are none (tests 1 and 4); each refusal at its pointer, the only problem: a name of an item, a table, a key, a column, a sub, a class or a condition the file does not declare, a sub named under a column not of per sub, an unknown member of a table's names and of names, a prefix longer than the width (a per sub column's too), two segments of one prefix, a placeholder at the width, a lone opening or closing brace and a brace of no placeholder, each malformed; 65 segments and none, and a 129-byte string, table_out_of_limits; of sub_positions a column not of per sub and a sub the column does not have malformed at the key, a prefix over the sub's own width at it; 64 segments and a 128-byte string read (test 2); a position said by the longest prefix that is its first elements, the empty prefix the fallback, its placeholders filled with decimal numbers (a negative one too) in every language the segment writes and no other, nothing for a column without a list or a placeholder past the position, a sub's own list alone for that sub and the column's list for a sub without one (test 3)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_goal_tables::tests::rr4a_the_first_example_with_names_reads_and_its_tables_are_those_of_the_file_without",
+    "actingcommand-contract::lib::standard_pack_goal_tables::tests::rr4a_each_name_of_nothing_declared_and_each_bad_segment_is_refused_at_its_pointer",
+    "actingcommand-contract::lib::standard_pack_goal_tables::tests::rr4a_a_position_is_said_by_its_longest_prefix_in_every_language_of_its_segment",
+]
+incident = ["#455 RR4a"]
+
+# #455 SL2 (0.12.101; register §1.547; brief rd-1123/brief-455-sl2.md, ruling 2 and tests 4 and 5; contracts/standard-pack-goal-tables.md, the row of table_pool_unvalued; contracts/standard-pack-goals.md, the row of goal_pool_unvalued): the references' one map says what each pool of the root offers a goal (Valued, Line for a pool that writes spend_line, Unvalued), and each check reads it by its own rule: on the first example's root whose gel_3 and core_5 pools are Line, gel_3, an item without a recipe, is table_pool_unvalued at its pool, the only problem, and core_5, an item with a recipe, is taken; a goals.json resource entry governing a Line pool is accepted and one governing an Unvalued pool is goal_pool_unvalued at /entries/0/governs/pool (tests 4 and 5). Adapted, the map's value becoming GoalPool: standard_pack_goals' goals_neutral_example_reads_to_typed_entries and goals_each_type_reads_its_members (their valued pool GoalPool::Valued) and standard_pack_goal_tables' references helper (true is Valued, false Unvalued)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_goal_tables::tests::sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it",
+]
+incident = ["#455 SL2"]

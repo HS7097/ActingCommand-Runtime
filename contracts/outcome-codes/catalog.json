@@ -7886,7 +7886,7 @@
           "description": "A resource entry of goals.json governs a pool that is not a pool of the composed schedule (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_pool_unvalued": {
-          "description": "A resource entry of goals.json governs a pool that gives a goal no step and importance: neither a valuation with scale and gap nor, on a pool that writes no valuation, target_defaults with scale and importance_milli (Workflow #455 G-R1, since 0.12.60; target_defaults #455 B3-P, since 0.12.82). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
+          "description": "A resource entry of goals.json governs a pool that gives a goal no step and importance: neither a valuation with scale and gap nor, on a pool that writes no valuation, target_defaults with scale and importance_milli (Workflow #455 G-R1, since 0.12.60; target_defaults #455 B3-P, since 0.12.82), nor spend_line, on which the entry's goal is the pool's line (#455 SL2, since 0.12.101). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
         },
         "goal_package_unknown": {
           "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60): since Workflow #463 V1 the package a tier entry's rule runs, or one that declares a placed variable."
@@ -7988,7 +7988,7 @@
           "description": "An item of goal-tables.json names a pool that is no pool of the game root's composed schedule.json (none without the file), at its pool (Workflow #455 RR1, since 0.12.92)."
         },
         "table_pool_unvalued": {
-          "description": "An item of goal-tables.json without a recipe, the item a need lands on, names a pool a goal cannot be put on: the judgement goal_pool_unvalued gives a resource entry's pool (neither a valuation with scale and gap nor, without a valuation, target_defaults with scale and importance_milli), at its pool; the pool of an item with a recipe need only be a pool of the root (Workflow #455 RR1, since 0.12.92)."
+          "description": "An item of goal-tables.json without a recipe, the item a need lands on, names a pool a goal cannot be put on: the judgement goal_pool_unvalued gives a resource entry's pool (neither a valuation with scale and gap nor, without a valuation, target_defaults with scale and importance_milli), at its pool, and (#455 SL2, since 0.12.101) a pool that writes spend_line, whose goal is its line and gives no step and importance; the pool of an item with a recipe need only be a pool of the root (Workflow #455 RR1, since 0.12.92)."
         },
         "table_pool_duplicate": {
           "description": "An item of goal-tables.json names a pool an earlier item of the file names: a holding has one name in the file, so what a later slice subtracts of a pool's holding it subtracts once. At the later item's pool (Workflow #455 RR1 fix round 1, since 0.12.92)."
@@ -10557,7 +10557,7 @@
           "description": "The pool of a resource value is no pool the application can target (pool_id)."
         },
         "pool_unvalued": {
-          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: it has neither a valuation with scale and gap nor, as a pool without a valuation, target_defaults (#455 B3-P, since 0.12.82) (pool_id). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
+          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: it has neither a valuation with scale and gap nor, as a pool without a valuation, target_defaults (#455 B3-P, since 0.12.82) nor spend_line (#455 SL2, since 0.12.101: the value is then the pool's line) (pool_id). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
         },
         "deadline_unsupported": {
           "description": "A resource value carries by_unix_ms: no reader of this build reads a deadline (Workflow #455 G-R4 builds it), so none is stored."

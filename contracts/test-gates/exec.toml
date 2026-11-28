@@ -4638,6 +4638,23 @@ tests = [
 ]
 incident = ["#503 LIST-D"]
 
+# Workflow #455 RR4a (0.12.100; register §1.546; brief rd-1123/brief-455-rr4a.md, ruling 7 and test 5; contracts/standard-pack-goal-tables.md, "Interface"; contracts/resource-verify.md, row 32; contracts/component-interfaces.md, the package row 32), the Lab: the revision table counts a goal-tables.json whose document writes names as 32, whatever the member holds, the same file without it 28 and the name inside a table nothing; this build declares [3, 32] and places both zips, an installer of [3, 31] refuses the zip of 32 at its package edge and places the zip of 28 (1); resource verify of a neutral repository whose goal-tables.json writes names passes, carries the file byte for byte, counts 32 and declares [32, 32], which this build's range holds, and the installed root's check names no problem (2). Adapted, the requirement moving the shipped package range to [3, 32]: gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision (KEY_REVISION + 15), gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range (SHARED_READ_REVISION + 12), the Lab's gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below, actinglab-architecture's component_interfaces::the_runtime_declares_each_v0120_interface_revision_once, the rescue module's gate_463_v1::v1_the_build_declares_package_through_revision_14, gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16, gate_455_tk1::tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses_it and gate_455_rr1::rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused ([3, 32] each)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_455_rr1::rr4a_lab_a_tables_file_that_writes_names_needs_package_32_and_one_without_keeps_28",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_455_rr1::rr4a_lab_resource_verify_declares_32_for_a_tables_file_that_writes_names",
+]
+incident = ["#455 RR4a"]
+
+# #455 SL2 (0.12.101; register §1.547; brief rd-1123/brief-455-sl2.md, ruling 2 and test 5; contracts/standard-pack-goals.md, the row of goal_pool_unvalued): standard-pack check's goal check on G-R1's root with two more pools without a valuation, one writing spend_line (schedule.json naming pool_spend_line in requires) and one writing neither it nor target_defaults: the valid goals.json whose resource entry governs the first gives no warning, its goal being that pool's line; governing the second, or the pool whose valuation has no gap weight, is goal_pool_unvalued at /entries/2/governs/pool as before (test 5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_455_gr1::sl2_a_resource_entry_on_a_pool_that_writes_spend_line_is_accepted",
+]
+incident = ["#455 SL2"]
+
 # Workflow #503 TRIAL (0.12.101; register §1.551; brief rd-1123/brief-503-trial.md; contracts/standard-pack-trial.md, "The irreversible mark", "The run", "The record"): the trial's run asks for no acknowledgement of a package the irreversible mark flags. Offline (the resource tooling): the record's plan of a marked package's run holds every member of the actingcommand.pack-trial.v1 plan (package_id, content_hash_prefix, package, instance, authorization, ends, variables, irreversible, irreversible_basis, irreversible_acknowledged, expect), irreversible marked, its basis and irreversible_acknowledged false; a record an earlier build wrote with irreversible_acknowledged true, its bytes at its place, is read as written beside one this build's writer wrote, and the content's summary is passed, passed on record, its latest record this build's. On the command line, with the runtime client's scripted Runtime, every frame of every connection in order: over a root that does not register the package (marked, registered false, no capability, no unreadable package), a line with --authorization and no other flag sends status, the run once and the five event reads of any trial's run, exit 0, matched true, the plan marked with its basis and no irreversible_acknowledged, the record marked with its basis and irreversible_acknowledged false; the outcome catalog holds trial_irreversible_unacknowledged retired in 0.12.101. Adapted in their own rows: S3-10's s310_the_irreversible_mark_is_judged_only_over_a_root and s310_the_plan_of_a_package_with_two_endings_lists_three_keys, S3-11's two s311 refusal tests.
 [[gate]]
 coverage = "Y"

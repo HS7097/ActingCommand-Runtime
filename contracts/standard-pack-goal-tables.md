@@ -15,11 +15,16 @@ from it, before every evaluation, what the recorded characters still need ("What
 The core stays game-neutral: every name of the file is an opaque string, compared for equality
 and measured in bytes.
 
+Since Workflow #455 RR4a (0.12.100; [v012-register.md](v012-register.md) §1.546) the file may also
+hold the names a person reads of what it declares, and how a position is said ("Names for
+people"). The Runtime computes nothing from a name.
+
 ## The file
 
 `<standard_packs.root>/<game>/goal-tables.json`, `schema_version`
-`actingcommand.goal-tables.v1`, `game` equal to the directory's name. The document has exactly the
-members `schema_version`, `game`, `items` and `tables`.
+`actingcommand.goal-tables.v1`, `game` equal to the directory's name. The document has the
+members `schema_version`, `game`, `items` and `tables`, and (RR4a) may have a fifth, `names`; it
+has no other.
 
 ```text
 {schema_version: "actingcommand.goal-tables.v1", game,
@@ -29,12 +34,22 @@ members `schema_version`, `game`, `items` and `tables`.
            columns: [{name, per: "class" | "key", read: [<reading column>], requires?}
                    | {name, per: "sub", subs: {<sub>: [<reading column>]}, requires?}],
            classes: {<class>: {<column of per class>: ladder}},
-           keys: {<key>: {class, own?: {<role>: <item>}, <column>: <what the key writes>}}}]}
+           keys: {<key>: {class, own?: {<role>: <item>}, <column>: <what the key writes>}}}],
+ names?: {items?:  {<item>: text},
+          tables?: {<table>: {keys?:          {<key>: text},
+                              columns?:       {<column>: text},
+                              subs?:          {<column of per sub>: {<sub>: text}},
+                              classes?:       {<class>: text},
+                              conditions?:    {<condition>: text},
+                              positions?:     {<column>: [segment]},
+                              sub_positions?: {<column of per sub>: {<sub>: [segment]}}}}}}
 
 requires: [{column, at_least: position, from?: position} | {condition}]
 ladder:   {positions: [position], steps: [step]}         one step fewer than positions
 position: [integer]                                       one for each reading column read
 step:     {<item> | "@<role>": amount}
+text:     {<locale>: string}                              a goals.json entry's title (RR4a)
+segment:  {prefix: [integer], text}                       RR4a: how positions are said
 ```
 
 ### Names
@@ -169,6 +184,91 @@ step. And the order is the list's: on the class's level ladder `[0, 1], [0, 2], 
 [2, 1], [2, 2]`, a prerequisite of level at least `[0, 2]` is met at `[0, 2]` and at the four
 positions written after it, `[1, 1]` among them though its second number is the smaller.
 
+## Names for people
+
+Workflow #455 RR4a (0.12.100; [v012-register.md](v012-register.md) §1.546, with the work order's
+addendum 1). Every name of the file is an id, and a position is a tuple of whole numbers: right for
+the computation, and nothing a person can read. A client that lists the records of whom to raise
+and how far invents no word, so the pack declares the names, in the file that already declares
+what they name. The Runtime computes nothing from a name; it keeps them with the tables ("Who
+reads it").
+
+1. **The member.** `names` is optional. Absent, the file is read exactly as before, byte for byte
+   in everything that is kept and hashed, and its names are none.
+2. **A text** is the localized text of a `goals.json` entry's `title`
+   ([standard-pack-goals.md](standard-pack-goals.md), "Texts and limits"): 1 to 16 locales of 1 to
+   35 bytes each, each string 1 to 128 bytes, read by the same check (the contract crate's
+   `Check::text` with a title's bound, the type `GoalText`); a count or a length outside its bound
+   is this file's `table_out_of_limits`.
+3. **What a name names.** Every key of a map of `names` is something the file declares: an item
+   of `items`; a table of `tables`; in a table's names, a key of its `keys`, a column of its
+   `columns`, under `subs` a column of `per: "sub"` and a sub of that column, a class of its
+   `classes`, a condition some prerequisite of the table names (`{condition}`); under `positions`
+   a column of the table; under `sub_positions` a column of `per: "sub"` and a sub of it. A key
+   that names nothing declared is `malformed` at its pointer (an unknown member), so a misspelt
+   name is found when the file is checked. Nothing must be named: every map and every entry is
+   optional, and what has no name is shown by its id.
+4. **How a position is said.** `positions` gives, for a column, a list of 1 to 64 segments. A
+   segment's `prefix` is 0 to 4 whole numbers within the safe integers, no more than the column's
+   width (for a column of `per: "sub"`, its subs' width; subs of one column that differ in width
+   make a prefix longer than the narrowest `malformed`); its `text` is a text whose strings may
+   hold placeholders `{0}` to `{3}`, each naming an element of the position by its index, below
+   that width. In a string of a segment's text a `{` that does not begin such a placeholder, and a
+   `}` that does not end one, is `malformed` at the string; outside `positions` and
+   `sub_positions` braces are ordinary characters. Two segments of one list with the same prefix:
+   the later is `malformed` at its `prefix`. The segments of a column serve every class's and every
+   key's ladder of that column, and every sub of a column of `per: "sub"` that has no list of its
+   own: a segment is not written per class.
+   - *A sub's own list.* `sub_positions` gives, for a sub of a column of `per: "sub"`, a list by
+     the same rules, its prefixes and placeholders held to that sub's own width. A position of a
+     sub is said by the sub's own list when it has one, else by the column's `positions`.
+   - *Saying a position.* Of the list that says it, the segment whose prefix equals the
+     position's first elements, the longest such; its text in every language it writes, each
+     placeholder filled with the decimal number of the position's element. A position no segment
+     of that list matches has no name (a sub's own list is not followed by the column's), nor has
+     one whose segment names an element the position does not have. The contract crate's one
+     pure function says it, `say_goal_position(naming, column, sub, position)`: given the table's
+     names, a column, the sub (none for a column not of `per: "sub"`) and a position, the text
+     with its placeholders filled, or nothing. It chooses no language: a client shows the
+     languages as the pack wrote them, as it shows an entry's `title`, and fills no template
+     itself.
+5. **Limits and problems.** The file's 4 MiB stays; a list of segments holds 1 to 64. Every
+   refusal uses the reader's existing words, each at the pointer of what is wrong: `malformed` for
+   a form, an unknown member, a name of nothing declared, a repeated prefix, a prefix longer than
+   its width and a bad placeholder; `table_out_of_limits` for a count or a length. No word and no
+   code is added. The names are read last of the forms, after the tables, against what the file
+   declares; a file whose `names` are refused is refused whole, as for any other problem of it.
+
+*An example*, on the first example's table ("Examples" below), every name made up: it names every
+kind, and says the positions of a column of width 1 (`phase`), of one of width 2 with two prefixes
+and the fallback of the empty prefix (`level`), and of a column of `per: "sub"` (`mastery`), whose
+sub `2` has a list of its own and whose sub `1` has none.
+
+```json
+{"items": {"gold": {"en": "Gold", "fr": "Or"}, "core_5": {"en": "Core"}},
+ "tables": {"heroes": {
+  "keys": {"hero_a": {"en": "First hero"}},
+  "columns": {"phase": {"en": "Phase"}, "level": {"en": "Level"}, "mastery": {"en": "Mastery"}},
+  "subs": {"mastery": {"1": {"en": "First mastery"}, "2": {"en": "Second mastery"}}},
+  "classes": {"rank_6": {"en": "Class six"}},
+  "conditions": {"side_quest": {"en": "The side quest"}},
+  "positions": {
+   "phase": [{"prefix": [], "text": {"en": "Phase {0}"}}],
+   "level": [{"prefix": [], "text": {"en": "Phase {0}, level {1}"}},
+             {"prefix": [0], "text": {"en": "Level {1}", "fr": "Niveau {1}"}},
+             {"prefix": [2, 2], "text": {"en": "Top level"}}],
+   "mastery": [{"prefix": [], "text": {"en": "Mastery {0}"}}]},
+  "sub_positions": {"mastery": {"2": [{"prefix": [2], "text": {"en": "Second mastery done"}}]}}}}}
+```
+
+As the first example's `names` it reads, and the contract crate's tests read it as written here.
+Of `level`, `[0, 2]` is said `Level 2` and `Niveau 2` by the prefix `[0]`, the longest that is its
+first elements; `[1, 1]` is said `Phase 1, level 1` (in English only) by the empty prefix, and
+`[2, 2]` `Top level`. A position of `mastery`'s sub `1` is said by the column's list (`[1]`,
+`Mastery 1`); one of its sub `2` by that sub's own list alone: `[2]` is `Second mastery done`, and
+`[1]` has no name. `skill` has no list, so its positions have none; `exp`, `hero_b` and every
+other name the example does not give are shown by their ids.
+
 ## Limits
 
 | What | Limit |
@@ -186,6 +286,8 @@ positions written after it, `[1, 1]` among them though its second number is the 
 | a ladder's positions | 2 to 512 |
 | a step | 0 to 16 uses |
 | an amount, `makes` | 1 to 2^53 - 1 |
+| RR4a: a text of `names` | a title's: 1 to 16 locales of 1 to 35 bytes, each string 1 to 128 bytes |
+| RR4a: a list of segments (`positions`, `sub_positions`) | 1 to 64 segments; a prefix 0 to its width's whole numbers (at most 4) |
 
 ## The checks
 
@@ -199,14 +301,17 @@ then the forms and limits in the reader's order (the document's members, `items`
 each table in file order, its members in the order `name`, `progress`, `columns`, `classes`,
 `keys`: the classes and keys are read against the columns, the keys against the classes too; a
 name, a pool or a fact key written a second time where once is allowed is found where the second
-is read), then, for a file whose forms all hold, what it says of itself (the recipes, then each
-table's prerequisites, roles and prerequisites' positions), then the references'.
+is read; RR4a: then `names`, after the tables, read against what the file declares, its
+members in the order `items`, `tables`, and a table's in the order `keys`, `columns`, `subs`,
+`classes`, `conditions`, `positions`, `sub_positions`), then, for a file whose forms all hold,
+what it says of itself (the recipes, then each table's prerequisites, roles and prerequisites'
+positions), then the references'.
 
 | `standard_pack_problem` | When | `json_pointer` |
 |---|---|---|
-| `malformed` | no JSON or no object (a byte-order mark too); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too); a `schema_version` that is not `actingcommand.goal-tables.v1`; a name outside its form (an item beginning with `@`, a column named `class` or `own`, an override index with a leading zero); a `per` none of the three; a second `held_by: true` of a table | the member (empty for the whole document) |
+| `malformed` | no JSON or no object (a byte-order mark too); a member repeated in one object, unknown, missing or not of its type (an integer outside the safe integers too); a `schema_version` that is not `actingcommand.goal-tables.v1`; a name outside its form (an item beginning with `@`, a column named `class` or `own`, an override index with a leading zero); a `per` none of the three; a second `held_by: true` of a table; RR4a: a key of a map of `names` that names nothing the file declares (an unknown member: an item, a table, a key, a column, a class or a condition it does not declare, a column not of `per: "sub"` under `subs` or `sub_positions`, a sub the column does not have), a segment's prefix longer than its width, a prefix a segment before it in its list wrote (at the later's `prefix`), a string of a segment's text with a `{` or a `}` of no placeholder `{0}` to `{3}`, or a placeholder at or above the width (at the string) | the member (empty for the whole document) |
 | `game_mismatch` | `game` is not the directory's | `/game` |
-| `table_out_of_limits` | the file is larger than 4 MiB; a list or a map of a count outside its limit; a name or an id of a length outside its limit; an amount or a `makes` of 0 | what exceeds |
+| `table_out_of_limits` | the file is larger than 4 MiB; a list or a map of a count outside its limit; a name or an id of a length outside its limit; an amount or a `makes` of 0; RR4a: a list of segments of a count outside 1 to 64, a text of `names` whose locales are of a count, or whose locale or string is of a length, outside a title's bounds | what exceeds |
 | `table_name_duplicate` | a table, or a column of a table, has a name an earlier one of its list has | the later `name` |
 | `table_item_unknown` | a recipe's `from` or `cost`, a step or a key's `own` names an item the file does not declare | the name |
 | `table_role_unknown` | a step names `@<role>` that a key which takes the step (its class's, as the key overrides it, or its own) does not declare in its `own`; each pointer once | the step's member |
@@ -222,7 +327,7 @@ table's prerequisites, roles and prerequisites' positions), then the references'
 | `table_list_key_duplicate` | fix round 1: a progress list's `fact_key` is the one of an earlier list of its table | the later list's `fact_key` |
 | `table_reading_column_duplicate` | a reading column listed twice among a table's lists, or twice in one `read` or sub; fix round 1: a list's `key_column` listed among its own `columns` (the list names that column twice) | the later; the key column among the `columns` |
 | `table_pool_unknown` | an item's pool is no pool of the composed `schedule.json` (none without the file) | `/items/<item>/pool` |
-| `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
+| `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. #455 SL2 (since 0.12.101): a pool that writes `spend_line`, which the goal check takes because its goal is the pool's line, gives no step and no importance, so it is refused here too, the map saying which pools are lines. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
 
 `goal_tables_undeclared` is the installer's ("Interface").
 
@@ -336,7 +441,12 @@ Every reader calls the two functions above; none has a copy.
   consequences apart by the code, not by `path`. The offline readers that read
   a root as the workbench does keep nothing between reads. Since Workflow #455 RR3 (0.12.95) the
   needs computed before every evaluation read the tables the workbench keeps for the generation in
-  force, from memory, with their sha256 ("What is computed").
+  force, from memory, with their sha256 ("What is computed"). Since Workflow #455 RR4a (0.12.100)
+  the reader's result carries the file's names (`StandardPackGoalTables::names`), which the
+  workbench keeps with the tables by the same rule, once per content; nothing else of the Runtime
+  reads them, and the needs computed from a file whose only change is `names` are byte for byte
+  those of the file without it, but for the file's sha256, which the set carries by definition. A
+  file without `names` is read, kept and hashed as before.
 
 ## What is computed
 
@@ -395,8 +505,10 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   those items' needs. An item with a recipe whose holding is not known adds nothing below itself
   (`goal_records_holding_unknown`). #455 RR3c (since 0.12.98; register §1.543): nor does one whose
   holding a run left unread, a run that was told enough turns to close a goal's gap on its pool
-  having produced into it after the holding was read; the holding is then not known until a reading
-  observed at or after that run's end (`goal_records_holding_unknown` with `unknown_reason`
+  having produced into it after the holding was read (#455 RR3d, since 0.12.101, register §1.548:
+  or several runs that were told enough together, the production told under the gap summed since
+  the reading); the holding is then not known until a reading observed at or after those runs' end
+  (`goal_records_holding_unknown` with `unknown_reason`
   `fact_stale`; [scheduling/README.md](scheduling/README.md), "Pool lines"). What remains on an item without a recipe is its pool's need;
   an item without a recipe and without a pool is shown (`goal_records_item_unweighed`) and weighs
   nothing.
@@ -432,3 +544,21 @@ and `runtime-outcomes` do not move: the words are the existing vocabulary `stand
 under the existing code `standard_pack_root_invalid`, and the Runtime's record is
 `standard_pack_goal_tables_not_applied` (fix round 1), a new code of the catalog only, with the
 values and the vocabulary `goals_failure` of `standard_pack_goals_not_applied`.
+
+`package` revision 32 (Workflow #455 RR4a, 0.12.100; [component-interfaces.md](component-interfaces.md),
+the row 32): a bundle whose `goal-tables.json` writes `names` declares `package` [32, 32] (the
+contract crate's `GOAL_TABLE_NAMES_PACKAGE_REVISION`), which `standard-pack build`'s revision table
+and `resource verify` count by the member's presence at the document's top, whatever it holds,
+read from the file's bytes by the contract crate's one function (`goal_tables_package_revision`),
+as the version of `pack-catalog.json` is read for row 24; a file without `names` keeps 28. The
+installer's `place` of an earlier build (its range ending below 32) refuses such a bundle through
+its `package` edge (`interface_edge`), in the plan, before the hold and any write; this build's
+`place` keeps its rule of 28 for the file's presence and reads no member of it, so a bundle that
+writes `names` and declares less is placed as declared, as for rows 20 to 31. **A Runtime before
+this build that reads a root whose file writes `names` refuses the file** (`malformed` at
+`/names`, an unknown member): it applies no `records` entry of `goals.json`, records
+`standard_pack_goal_tables_not_applied` (`refused`), every other entry applies and the root runs.
+So the resource side ships a file with `names` only once this build is installed, and replaces it
+by one without before a rollback below this build. No record, event or wire member is new;
+`ledger`, `runtime-client`, `actingd-config` and `runtime-outcomes` do not move, and no code or
+word is added.

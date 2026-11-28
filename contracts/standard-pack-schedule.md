@@ -653,9 +653,12 @@ that spend it**, beside their fixed values. Until a line is set they run as they
 consumption costs nothing and never makes a rule wait for a valuation, so a rule of value `V` that
 spends only the currency is still `B = V` ([scheduling/README.md](scheduling/README.md), "Net
 benefit within a tier", "A declared 0"). Write no `target_defaults` and no valuation on that pool
-(either beside `spend_line` is refused), and put no `resource` entry on it in `goals.json`: a goal on
-such a pool will be its line, set in a later build, never a weight on its producers. A rule that
-also reserves the pool is held by the reserve gate as for any pool.
+(either beside `spend_line` is refused). Until 0.12.101 no `resource` entry was to be put on it in
+`goals.json`; since #455 SL2 (register §1.547) a `resource` entry on it offers the pool's line: a
+goal on such a pool is its line, `{at_least}` alone, never a weight on its producers
+([resource-targets.md](resource-targets.md), "A pool's line"), and the pressing of the rules that
+spend it below the line is a later build's. A rule that also reserves the pool is held by the
+reserve gate as for any pool.
 
 **A goal's gap in two parts** (#455 RR3b, since 0.12.98; register §1.542). On a pool a goal may be
 set on, a pack may write `goal_tiers` (`{"need_importance_milli": I_n, "stock_cap_milli": C}` from
@@ -1100,9 +1103,23 @@ while one is held, each check reads and composes again even when nothing changed
   bound (no `loop_budget`, or one without `daily_limit`) and an `on_failure.escalation_threshold`
   above 10 is one `standard_pack_escalation_threshold_high` warning {`game`, `task_id` the rule,
   `count` its threshold, `limit_count` 10}, once per rule, in file order. Without the daily limit
-  a run that keeps failing is retried until that many failures pause the pair; the no-progress
-  guard ([scheduling/README.md](scheduling/README.md), "No-progress guard") covers successful runs
-  only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
+  what bounds a rule whose run keeps failing depends on its failure (#503 PACE, since 0.12.100,
+  corrects this text, which said every such run was retried until that many failures paused the
+  pair). A failure that accumulates (the main package's own steps no longer matching the screen,
+  a refusal of the prerequisite chain, the navigation and interrupt failures;
+  [policy-suspension.md](policy-suspension.md), "Which failures accumulate") is retried until
+  `escalation_threshold` same failures in a row pause the pair: there the threshold counts the
+  same failure repeated. Every other failure is rerun only, never repeats, and the threshold never
+  pauses for it: from its second failure in a row the pair waits a growing interval before it is
+  dispatched again (one minute, doubling to thirty with the shipped values), and once its failures
+  whose wait is the longest interval (the seventh in a row and every later one with the shipped
+  values; fix round 2 of #503 PACE) that came although another rule's run succeeded on the
+  instance reach `escalation_threshold` it is set aside on that instance until its activity window
+  ends ("A pair whose runs keep failing"): there the threshold counts failures that came after the
+  pair had waited through every shorter interval, with evidence that the instance works (with a
+  threshold of 2 or 3 about an hour or an hour and a half after its first failure). The
+  no-progress guard ([scheduling/README.md](scheduling/README.md), "No-progress guard") covers
+  successful runs only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
   threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack
   compose` and the Runtime's workbench do not report it.
 - **What a rule's budget and threshold count** (Workflow #490 ENTRY-A, since 0.12.77, register

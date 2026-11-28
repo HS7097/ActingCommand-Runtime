@@ -256,7 +256,8 @@ pub enum RootGoalTables {
     /// The root holds none.
     Absent,
     /// The reader accepted it: the parsed tables, shared with the read it was kept from, and the
-    /// sha256 of its bytes.
+    /// sha256 of its bytes. Workflow #455 RR4a: the parsed tables carry the names the file writes
+    /// (`StandardPackGoalTables::names`), kept with them by the same rule; nothing here reads them.
     Accepted {
         sha256: String,
         tables: Arc<StandardPackGoalTables>,
@@ -1400,6 +1401,9 @@ impl HostShared {
             state.pair_marks.extend(now);
             if changed {
                 self.clear_entry_pairs()?;
+                // #503 PACE (register §1.545, ruling 5): every pair whose scheduled runs keep
+                // failing is freed the same way.
+                self.clear_failure_pairs()?;
             }
         }
         // G-R2s round 2: while a game is noted uncomposed, the check reads and composes again

@@ -92,11 +92,17 @@ fn unit_with(change: impl Fn(&mut Value)) -> Value {
     value
 }
 
-/// References whose pools are `valued`, each `true` (a goal can be put on it) or not.
+/// References whose pools are `valued`, each `true` (a goal can be put on it) or not (#455 SL2: the
+/// map's [`GoalPool::Valued`] and [`GoalPool::Unvalued`]).
 fn references(valued: &[(&str, bool)]) -> GoalReferences {
     let mut references = GoalReferences::new(BTreeSet::new());
     for (pool, takes_a_goal) in valued {
-        references.pools.insert((*pool).to_owned(), *takes_a_goal);
+        let offered = if *takes_a_goal {
+            GoalPool::Valued
+        } else {
+            GoalPool::Unvalued
+        };
+        references.pools.insert((*pool).to_owned(), offered);
     }
     references
 }
@@ -863,5 +869,382 @@ fn rr1_fix1_a_prerequisite_on_a_sub_column_or_on_its_own_column_is_refused() {
             StandardPackProblem::TableRequiresCycle,
             "/tables/0/columns/0/requires"
         )])
+    );
+}
+
+// #455 SL2 (0.12.101; register §1.547; contracts/standard-pack-goal-tables.md, the row of
+// `table_pool_unvalued`; contracts/standard-pack-goals.md, the row of `goal_pool_unvalued`): the
+// references' one map says what each pool offers a goal, and each check reads it by its own rule.
+// On the first example's root whose `gel_3` and `core_5` pools write `spend_line` (the map's
+// `Line`): `gel_3`, an item without a recipe, is `table_pool_unvalued` at its pool, the only
+// problem, as on a pool that offers nothing; `core_5`, an item with a recipe, is taken. A
+// `resource` entry of `goals.json` governing such a pool is accepted; one governing a pool that
+// offers nothing is `goal_pool_unvalued` at its pool, as before.
+#[test]
+fn sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it() {
+    use StandardPackProblem as P;
+    let tables = read(&example(HERO_EXAMPLE), GAME)
+        .unwrap_or_else(|issues| panic!("the first example reads: {issues:?}"));
+    let mut root = hero_references();
+    for pool in ["pool.neutral.gel_3", "pool.neutral.core_5"] {
+        root.pools.insert(pool.to_owned(), GoalPool::Line);
+    }
+    assert_eq!(
+        check_standard_pack_goal_table_references(&tables, &root),
+        [issue(P::TablePoolUnvalued, "/items/gel_3/pool")]
+    );
+    root.pools
+        .insert("pool.neutral.gold".to_owned(), GoalPool::Unvalued);
+    let governing = |pool: &str| {
+        let document = json!({"schema_version": "actingcommand.goals.v3", "game": GAME,
+            "entries": [{"name": "saved", "type": "resource", "governs": {"pool": pool},
+                         "title": {"en": "Saved"}}]});
+        crate::parse_standard_pack_goals(&serde_json::to_vec(&document).expect("JSON"), GAME)
+            .unwrap_or_else(|issues| panic!("the goals read: {issues:?}"))
+    };
+    let on_line =
+        crate::check_standard_pack_goal_references(&governing("pool.neutral.gel_3"), &root);
+    assert!(on_line.is_empty(), "{on_line:?}");
+    assert_eq!(
+        crate::check_standard_pack_goal_references(&governing("pool.neutral.gold"), &root),
+        [StandardPackRootIssue {
+            file: crate::STANDARD_PACK_GOALS_FILE,
+            problem: P::GoalPoolUnvalued,
+            pointer: "/entries/0/governs/pool".to_owned(),
+        }]
+    );
+}
+
+/// Workflow #455 RR4a (register §1.546; contracts/standard-pack-goal-tables.md, "Names for
+/// people"): the contract's example of `names` on the first example's table, as the contract
+/// prints it. It names every kind; it says the positions of a column of width 1 (`phase`), of one
+/// of width 2 with two prefixes and the fallback of the empty prefix (`level`) and of a column of
+/// `per: "sub"` (`mastery`), whose sub `2` has a list of its own and whose sub `1` has none.
+const NAMES_EXAMPLE: &str = r#"{"items": {"gold": {"en": "Gold", "fr": "Or"}, "core_5": {"en": "Core"}},
+ "tables": {"heroes": {
+  "keys": {"hero_a": {"en": "First hero"}},
+  "columns": {"phase": {"en": "Phase"}, "level": {"en": "Level"}, "mastery": {"en": "Mastery"}},
+  "subs": {"mastery": {"1": {"en": "First mastery"}, "2": {"en": "Second mastery"}}},
+  "classes": {"rank_6": {"en": "Class six"}},
+  "conditions": {"side_quest": {"en": "The side quest"}},
+  "positions": {
+   "phase": [{"prefix": [], "text": {"en": "Phase {0}"}}],
+   "level": [{"prefix": [], "text": {"en": "Phase {0}, level {1}"}},
+             {"prefix": [0], "text": {"en": "Level {1}", "fr": "Niveau {1}"}},
+             {"prefix": [2, 2], "text": {"en": "Top level"}}],
+   "mastery": [{"prefix": [], "text": {"en": "Mastery {0}"}}]},
+  "sub_positions": {"mastery": {"2": [{"prefix": [2], "text": {"en": "Second mastery done"}}]}}}}}"#;
+
+/// RR4a: the first example with the contract's `names`.
+fn hero_named() -> Value {
+    let mut value = example(HERO_EXAMPLE);
+    value["names"] = example(NAMES_EXAMPLE);
+    value
+}
+
+/// RR4a: a localized text of `languages`, each a language and its string, in their order.
+fn localized(languages: &[(&str, &str)]) -> GoalText {
+    languages
+        .iter()
+        .map(|(language, text)| ((*language).to_owned(), (*text).to_owned()))
+        .collect()
+}
+
+/// RR4a: the first example whose `names`, changed by `change`, is refused with the one problem
+/// `problem` at `pointer`.
+#[track_caller]
+fn assert_names_refused(change: impl Fn(&mut Value), problem: StandardPackProblem, pointer: &str) {
+    let mut value = hero_named();
+    change(&mut value["names"]);
+    assert_eq!(
+        read(&value, GAME).map(|_| ()),
+        Err(vec![issue(problem, pointer)]),
+        "{pointer}"
+    );
+}
+
+/// RR4a: `count` segments of distinct prefixes of one element, for a column of width 1 or more.
+fn segments_of(count: usize) -> Value {
+    Value::Array(
+        (0..count)
+            .map(|index| json!({"prefix": [index], "text": {"en": "Level"}}))
+            .collect(),
+    )
+}
+
+// Workflow #455 RR4a (0.12.100; register §1.546), tests 1 and 4: the contract's first example with
+// its example of `names`, which names every kind, reads, every name and every list kept as
+// written; what the file declares besides reads to what the same file without the member reads
+// to, and that file's names are none.
+#[test]
+fn rr4a_the_first_example_with_names_reads_and_its_tables_are_those_of_the_file_without() {
+    let named = read(&hero_named(), GAME)
+        .unwrap_or_else(|issues| panic!("the first example with names reads: {issues:?}"));
+    let plain = read(&example(HERO_EXAMPLE), GAME)
+        .unwrap_or_else(|issues| panic!("the first example reads: {issues:?}"));
+    assert_eq!(plain.names, GoalTableNames::default());
+    assert_eq!(named.game, plain.game);
+    assert_eq!(named.items, plain.items);
+    assert_eq!(named.tables, plain.tables);
+
+    let names = &named.names;
+    assert_eq!(
+        names
+            .items
+            .iter()
+            .map(|(item, _)| item.as_str())
+            .collect::<Vec<_>>(),
+        ["gold", "core_5"]
+    );
+    assert_eq!(
+        names.item("gold"),
+        Some(&localized(&[("en", "Gold"), ("fr", "Or")]))
+    );
+    assert_eq!(names.item("exp"), None, "an item without a name");
+    assert!(names.table("other").is_none());
+    let heroes = names.table("heroes").expect("the table's names");
+    assert_eq!(
+        heroes.key("hero_a"),
+        Some(&localized(&[("en", "First hero")]))
+    );
+    assert_eq!(heroes.key("hero_b"), None, "a key without a name");
+    assert_eq!(heroes.column("level"), Some(&localized(&[("en", "Level")])));
+    assert_eq!(
+        heroes.sub("mastery", "2"),
+        Some(&localized(&[("en", "Second mastery")]))
+    );
+    assert_eq!(
+        heroes.class("rank_6"),
+        Some(&localized(&[("en", "Class six")]))
+    );
+    assert_eq!(
+        heroes.condition("side_quest"),
+        Some(&localized(&[("en", "The side quest")]))
+    );
+    let level = heroes.segments("level").expect("the level's segments");
+    assert_eq!(
+        level
+            .iter()
+            .map(|segment| segment.prefix.clone())
+            .collect::<Vec<_>>(),
+        [vec![], vec![0], vec![2, 2]]
+    );
+    assert_eq!(
+        level[1].text,
+        localized(&[("en", "Level {1}"), ("fr", "Niveau {1}")])
+    );
+    assert_eq!(heroes.segments("phase").map(<[_]>::len), Some(1));
+    assert_eq!(heroes.segments("mastery").map(<[_]>::len), Some(1));
+    assert_eq!(heroes.segments("skill"), None, "a column without a list");
+    assert_eq!(heroes.sub_segments("mastery", "1"), None);
+    assert_eq!(
+        heroes
+            .sub_segments("mastery", "2")
+            .map(|list| list[0].prefix.clone()),
+        Some(vec![2])
+    );
+}
+
+// RR4a, test 2 and addendum 1: each refusal of `names` at its pointer, the only problem, in the
+// reader's existing words. A name of an item, a table, a key, a column, a sub, a class or a
+// condition the file does not declare; a sub named under a column that is not of `per: "sub"`;
+// an unknown member of a table's names and of `names`; a prefix longer than the column's width (a
+// column of `per: "sub"`: its subs' width), two segments of one prefix, a placeholder at the
+// width, a lone `{` and a lone `}`: `malformed`. 65 segments and none, and a text the localized
+// form refuses (a string of 129 bytes, one over a title's 128): `table_out_of_limits`. Of
+// `sub_positions`: a column not of `per: "sub"` and a sub the column does not have, `malformed` at
+// the key; a prefix longer than the sub's own width at it. 64 segments and a string of 128 bytes
+// read.
+#[test]
+fn rr4a_each_name_of_nothing_declared_and_each_bad_segment_is_refused_at_its_pointer() {
+    use StandardPackProblem as P;
+    assert_names_refused(
+        |names| names["items"]["silver"] = json!({"en": "Silver"}),
+        P::Malformed,
+        "/names/items/silver",
+    );
+    assert_names_refused(
+        |names| names["tables"]["villains"] = json!({}),
+        P::Malformed,
+        "/names/tables/villains",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["keys"]["hero_z"] = json!({"en": "Last hero"}),
+        P::Malformed,
+        "/names/tables/heroes/keys/hero_z",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["columns"]["grade"] = json!({"en": "Grade"}),
+        P::Malformed,
+        "/names/tables/heroes/columns/grade",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["subs"]["mastery"]["3"] = json!({"en": "Third"}),
+        P::Malformed,
+        "/names/tables/heroes/subs/mastery/3",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["classes"]["rank_5"] = json!({"en": "Class five"}),
+        P::Malformed,
+        "/names/tables/heroes/classes/rank_5",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["conditions"]["main_quest"] = json!({"en": "Main"}),
+        P::Malformed,
+        "/names/tables/heroes/conditions/main_quest",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["subs"]["phase"] = json!({"1": {"en": "First"}}),
+        P::Malformed,
+        "/names/tables/heroes/subs/phase",
+    );
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["rows"] = json!({}),
+        P::Malformed,
+        "/names/tables/heroes/rows",
+    );
+    assert_names_refused(
+        |names| names["titles"] = json!({}),
+        P::Malformed,
+        "/names/titles",
+    );
+    assert_names_refused(
+        |names| {
+            names["tables"]["heroes"]["positions"]["phase"] =
+                json!([{"prefix": [0, 1], "text": {"en": "Phase"}}]);
+        },
+        P::Malformed,
+        "/names/tables/heroes/positions/phase/0/prefix",
+    );
+    assert_names_refused(
+        |names| {
+            names["tables"]["heroes"]["positions"]["mastery"] =
+                json!([{"prefix": [0, 1], "text": {"en": "Mastery"}}]);
+        },
+        P::Malformed,
+        "/names/tables/heroes/positions/mastery/0/prefix",
+    );
+    assert_names_refused(
+        |names| {
+            names["tables"]["heroes"]["positions"]["level"] = json!([
+                {"prefix": [0], "text": {"en": "Level"}},
+                {"prefix": [0], "text": {"en": "Low level"}}
+            ]);
+        },
+        P::Malformed,
+        "/names/tables/heroes/positions/level/1/prefix",
+    );
+    for template in ["Phase {1}", "Phase {0", "Phase 0}", "Phase {x}"] {
+        assert_names_refused(
+            |names| {
+                names["tables"]["heroes"]["positions"]["phase"][0]["text"]["en"] = json!(template)
+            },
+            P::Malformed,
+            "/names/tables/heroes/positions/phase/0/text/en",
+        );
+    }
+    for count in [MAX_GOAL_POSITION_SEGMENTS + 1, 0] {
+        assert_names_refused(
+            |names| names["tables"]["heroes"]["positions"]["level"] = segments_of(count),
+            P::TableOutOfLimits,
+            "/names/tables/heroes/positions/level",
+        );
+    }
+    assert_names_refused(
+        |names| names["tables"]["heroes"]["columns"]["phase"]["en"] = json!("p".repeat(129)),
+        P::TableOutOfLimits,
+        "/names/tables/heroes/columns/phase/en",
+    );
+    assert_names_refused(
+        |names| {
+            names["tables"]["heroes"]["sub_positions"]["level"] =
+                json!({"1": [{"prefix": [], "text": {"en": "Level"}}]});
+        },
+        P::Malformed,
+        "/names/tables/heroes/sub_positions/level",
+    );
+    assert_names_refused(
+        |names| {
+            names["tables"]["heroes"]["sub_positions"]["mastery"]["3"] =
+                json!([{"prefix": [], "text": {"en": "Third"}}]);
+        },
+        P::Malformed,
+        "/names/tables/heroes/sub_positions/mastery/3",
+    );
+    assert_names_refused(
+        |names| {
+            names["tables"]["heroes"]["sub_positions"]["mastery"]["2"][0]["prefix"] = json!([2, 0]);
+        },
+        P::Malformed,
+        "/names/tables/heroes/sub_positions/mastery/2/0/prefix",
+    );
+
+    let mut bounds = hero_named();
+    bounds["names"]["tables"]["heroes"]["positions"]["level"] =
+        segments_of(MAX_GOAL_POSITION_SEGMENTS);
+    bounds["names"]["tables"]["heroes"]["columns"]["phase"]["en"] = json!("p".repeat(128));
+    assert_eq!(read(&bounds, GAME).map(|_| ()), Ok(()));
+}
+
+// RR4a, test 3 and addendum 1: a position is said by the segment whose prefix is its first
+// elements, the longest such (the empty prefix the fallback), its placeholders filled with the
+// decimal numbers, in every language that segment writes (one it does not write is not in the
+// answer); a column without a list and a placeholder past the position say nothing. A sub with a
+// list of its own is said by it alone (a position none of its prefixes begins has no name); a sub
+// without one by its column's list.
+#[test]
+fn rr4a_a_position_is_said_by_its_longest_prefix_in_every_language_of_its_segment() {
+    let named = read(&hero_named(), GAME)
+        .unwrap_or_else(|issues| panic!("the first example with names reads: {issues:?}"));
+    let heroes = named.names.table("heroes").expect("the table's names");
+    let say = |column: &str, sub: Option<&str>, position: &[i64]| {
+        say_goal_position(heroes, column, sub, position)
+    };
+    assert_eq!(
+        say("level", None, &[0, 2]),
+        Some(localized(&[("en", "Level 2"), ("fr", "Niveau 2")])),
+        "the longest prefix"
+    );
+    assert_eq!(
+        say("level", None, &[1, 1]),
+        Some(localized(&[("en", "Phase 1, level 1")])),
+        "the empty prefix"
+    );
+    assert_eq!(
+        say("level", None, &[2, 2]),
+        Some(localized(&[("en", "Top level")]))
+    );
+    assert_eq!(
+        say("level", None, &[2, 1]),
+        Some(localized(&[("en", "Phase 2, level 1")]))
+    );
+    assert_eq!(
+        say("phase", None, &[1]),
+        Some(localized(&[("en", "Phase 1")]))
+    );
+    assert_eq!(
+        say("phase", None, &[-3]),
+        Some(localized(&[("en", "Phase -3")]))
+    );
+    assert_eq!(say("level", None, &[1]), None, "a placeholder past it");
+    assert_eq!(say("skill", None, &[3]), None, "a column without a list");
+    assert_eq!(
+        say("mastery", Some("1"), &[1]),
+        Some(localized(&[("en", "Mastery 1")])),
+        "a sub without a list of its own"
+    );
+    assert_eq!(
+        say("mastery", None, &[0]),
+        Some(localized(&[("en", "Mastery 0")]))
+    );
+    assert_eq!(
+        say("mastery", Some("2"), &[2]),
+        Some(localized(&[("en", "Second mastery done")])),
+        "a sub's own list"
+    );
+    assert_eq!(
+        say("mastery", Some("2"), &[1]),
+        None,
+        "a sub's own list alone"
     );
 }

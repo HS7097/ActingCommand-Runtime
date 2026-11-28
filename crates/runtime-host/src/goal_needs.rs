@@ -28,10 +28,10 @@
 //! - **Taking apart**: the records' needs are summed by item, then the items are taken in the
 //!   recipes' topological order from the top: an item with a recipe is covered by its holding up
 //!   to its need and the rest is made (rounded up by `makes`), adding its `from` and `cost`; one
-//!   whose holding is not known adds nothing below itself (#455 RR3c: nor one whose holding a run
-//!   told enough turns to close a goal's gap on its pool left unread). What remains on an item
-//!   without a recipe is its pool's need; an item without a recipe and without a pool is noted and
-//!   weighs nothing.
+//!   whose holding is not known adds nothing below itself (#455 RR3c: nor one whose holding the
+//!   production told under a goal's gap on its pool since its reading left unread). What remains
+//!   on an item without a recipe is its pool's need; an item without a recipe and without a pool
+//!   is noted and weighs nothing.
 //!
 //! Nothing here reads a clock, a file, a lock or the ledger, and nothing computed is stored.
 
@@ -708,9 +708,9 @@ fn take_apart(
                         reason,
                     });
                 }
-                // #455 RR3c (register §1.543): a holding a run told enough turns to close a goal's
-                // gap on its pool left unread is not known either: the same lower bound, its own
-                // note (`fact_stale`).
+                // #455 RR3c (register §1.543): a holding the production told under a goal's gap on
+                // its pool since its reading left unread is not known either: the same lower bound,
+                // its own note (`fact_stale`).
                 NeedHolding::Unread => {
                     pools.insert(
                         pool.clone(),

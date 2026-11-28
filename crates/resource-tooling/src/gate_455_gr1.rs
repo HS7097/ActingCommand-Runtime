@@ -48,7 +48,9 @@ use crate::{
 };
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{LabError, LabResult};
-use actingcommand_policy::{BENEFIT_FIXED_VALUE_SUBSYSTEM, POOL_TARGET_DEFAULTS_SUBSYSTEM};
+use actingcommand_policy::{
+    BENEFIT_FIXED_VALUE_SUBSYSTEM, POOL_SPEND_LINE_SUBSYSTEM, POOL_TARGET_DEFAULTS_SUBSYSTEM,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -73,6 +75,8 @@ const UNVALUED: &str = "pool.neutral.stock";
 const MATERIAL: &str = "pool.neutral.material";
 /// #455 B3-P: a pool with neither a valuation nor `target_defaults`.
 const NEITHER: &str = "pool.neutral.bare";
+/// #455 SL2: a pool without a valuation that writes `spend_line`.
+const SAVED: &str = "pool.neutral.saved";
 /// A table of the root, which (Workflow #463 V1) no entry reads any more.
 const TABLE: &str = "neutral_members";
 const ROOT_INVALID: &str = "standard_pack_root_invalid";
@@ -1074,4 +1078,52 @@ fn b3p_fix1_a_null_valuation_beside_target_defaults_is_no_valuation_for_the_goal
         &goals_with(|value| value["entries"][2]["governs"]["pool"] = json!(MATERIAL)),
     );
     assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+// #455 SL2 (0.12.101; register §1.547, ruling 2; contracts/standard-pack-goals.md, the row of
+// `goal_pool_unvalued`): on G-R1's root with two more pools that declare no valuation, one writing
+// `spend_line` (its `schedule.json` naming `pool_spend_line` in `requires`) and one writing
+// neither it nor `target_defaults`: the valid file whose `resource` entry governs the first is
+// accepted without a warning, the entry's goal being that pool's line; governing the second, or
+// the pool whose valuation has no gap weight, is `goal_pool_unvalued` at the entry's pool, as
+// before.
+#[test]
+fn sl2_a_resource_entry_on_a_pool_that_writes_spend_line_is_accepted() {
+    let without_valuation = |id: &str| {
+        let mut declared = pool(id, false);
+        declared
+            .as_object_mut()
+            .expect("a pool object")
+            .shift_remove("valuation");
+        declared
+    };
+    let mut saved = without_valuation(SAVED);
+    saved["spend_line"] =
+        json!({"price_milli": 33333, "scale": 6000, "income_floor_milli_per_day": 71429});
+    let mut lined = schedule();
+    lined["pools"]
+        .as_array_mut()
+        .expect("the pools")
+        .extend([saved, without_valuation(NEITHER)]);
+    lined["requires"]
+        .as_array_mut()
+        .expect("the requires")
+        .push(json!(POOL_SPEND_LINE_SUBSYSTEM));
+    let (_temp, game_root) = installed_with(packs(), &lined);
+    let governing =
+        |pool_id: &str| goals_with(|value| value["entries"][2]["governs"]["pool"] = json!(pool_id));
+    let (warnings, _) = checked_with(&game_root, &governing(SAVED));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    for pool_id in [NEITHER, UNVALUED] {
+        let (warnings, _) = checked_with(&game_root, &governing(pool_id));
+        assert_eq!(
+            warnings,
+            [goal_warning(
+                &game_root,
+                "goal_pool_unvalued",
+                "/entries/2/governs/pool"
+            )],
+            "{pool_id}"
+        );
+    }
 }

@@ -307,6 +307,7 @@ reason set is unchanged.
 | `apply.mode`, `apply.weight` | as v1 | as v1 |
 | `apply.manual_offset` | optional, `keep` or `supersede`, only in `override` mode; absent is `keep` | `invalid_value` @ `/targets/i/apply/manual_offset` in `adjust` mode; `invalid_type` for another value |
 | `tasks` | optional in `adjust` mode, required in `override` mode; when given, the v1 task checks; when absent, at least one task of the instance (scope covers it, not disabled) must produce the resource (`r > 0`) | `missing_field` @ `/targets/i/tasks`; as v1 @ `/targets/i/tasks/j`; `unmapped_task` @ `/targets/i/resource` |
+| a line (#455 SL2, since 0.12.101) | a target whose pool writes `spend_line` is the pool's line ("A pool's line"): `at_least` and no `scale`, `importance_milli` or `tasks`, checked right after its resource, in that order; no task need produce the pool; a v1 target on such a pool (it always writes its own terms) is refused at its `scale` | `unknown_field` @ `/targets/i/scale`, `/targets/i/importance_milli` or `/targets/i/tasks` |
 
 **Version probe.** The Runtime first reads the document as plain JSON: exactly when its
 top-level `schema_version` is the string `actingcommand.resource-targets.v2` it takes the v2
@@ -690,7 +691,8 @@ another request wrote with who set them:
   `score_stage`, its step and importance the pool's valuation's, or (#455 B3-P, since 0.12.82) its
   `target_defaults` on a pool without a valuation, read at each evaluation and never written in the
   row (a pool that gives neither is refused `pool_unvalued`; "Who gives a goal its step and
-  importance"), no tasks and no lifetime; it replaces the target on that pool
+  importance"; #455 SL2, since 0.12.101: on a pool that writes `spend_line` the target is the pool's
+  line, which gives none and is taken, "A pool's line"), no tasks and no lifetime; it replaces the target on that pool
   whatever its id (the answer's `replaced_target_id`) and a target of the same id on another pool.
   `clear` removes the target and its task rows. #503 GOAL-1 (since 0.12.88; "A target's pool"):
   the row's `resource` is the pool's id as the game root's files write it, the resource entry's
@@ -1067,10 +1069,31 @@ then a target on the pool, on every instance its scope covers, is pending as a s
 it (`<id>@<pool>:pending reason=expired gap_weight=pending`): `Γ = 0`, so it weighs nothing in `W`,
 the goal terms of a fixed value and the capped order, and its gap is unknown, so no goal term of
 `run_cap` and no `gap_remaining` come from it. The one judgement the evaluation's pool values read
-decides it; an observation pending for its own reason keeps that reason. A run told fewer turns
-than its gap needs (a stock gap of 150 at three turns of one unit) leaves the pool read, as before.
-A stale reading would otherwise keep a need of two looking open after the run that met it, and send
-a rule of a negative value of its own first again and again until some scheduled reading came.
+decides it; an observation pending for its own reason keeps that reason. A stale reading would
+otherwise keep a need of two looking open after the run that met it, and send a rule of a negative
+value of its own first again and again until some scheduled reading came.
+
+#455 RR3d (since 0.12.101; register §1.548; the coordinator's rulings of 11-28). **The production
+told under the gap adds up since the pool's reading.** The dispatches counted are every admitted
+dispatch the host's journal holds whose run has not ended, or ended after the reading was observed,
+and that was handed `gap_remaining` on the pool, of any task and pair, in the order of their
+admission; the pool is unread once, for one of them, the turns times the production per run of it
+and of those before it reach the gap it was itself told. With one dispatch this is the rule above,
+byte for byte. So runs that each fall short of the gap but together reach it leave the pool unread
+too: a stock gap of 150 at three turns of one unit is read through its 49th dispatch since the
+reading and unread at its 50th, where until 0.12.100 it was sent on that one reading again and
+again; and a later dispatch of the same pair that carries no `gap_remaining` for the pool (its
+goal pending, or it ran for another pool) no longer takes the place of the one that closed the gap.
+**A run that failed at its entry counts for nothing** (its record a condition whose failure identity
+carries the entry mark, [policy-suspension.md](policy-suspension.md), "A failure at the entry"): its
+main package executed no step, so the reading is as true as before; every other end (a success,
+any other failure, a stop, an interrupted settlement) counts what the run was told, since it may
+have done some turns. Limits: a pair's dispatches older than what the journal keeps of it (its
+latest 64 admitted dispatches) are not counted; a run that still ran when the reading was observed
+is counted whole though the reading may show part of what it produced (the sum errs toward
+unread, at the cost of a reading); a pool whose scope covers several instances is unread on all of
+them, as before ([scheduling/README.md](scheduling/README.md), "Pool lines", "At each
+evaluation").
 
 ## Needs computed from the records
 
@@ -1127,8 +1150,9 @@ records"). The evaluator stacks it on the instance's stored record for that eval
   holding through the judgement the evaluation reads ("Resource weights (v2)", "A pool a run was
   told enough to close the gap on"): the host hands their computation the handed runs the
   evaluation is given, the one list, read once. While a run told enough turns to close a goal's gap
-  on the pool of an item with a recipe has not been followed by a reading observed at or after its
-  end, that holding is not known: the item's whole need is its pool's, nothing below it is taken
+  on the pool of an item with a recipe (#455 RR3d, since 0.12.101: or the runs told under the gap
+  since the reading, together) has not been followed by a reading observed at or after its end,
+  that holding is not known: the item's whole need is its pool's, nothing below it is taken
   apart, and the note is `goal_records_holding_unknown` with `unknown_reason` `fact_stale` (the
   lower bound RR3 keeps). The goal a need of an item without a recipe gives its pool is pending
   then, as every target on the pool is.
@@ -1183,6 +1207,56 @@ only, the pool's `goal_tiers`, read from the catalogue in force at each evaluati
 function that computes a v2 target's `Γ` (`gap_weight`, in the policy crate). A target carries no
 `I_n` and no `C` of its own, and nothing of them is copied into a stored goal: a later catalogue's
 numbers weigh every goal already set at the next evaluation, with nothing set again.
+
+## A pool's line
+
+#455 SL2 (since 0.12.101; register §1.547; the coordinator's rulings of 11-28, after the owner's
+that a goal never changes the weights of the business layer and that a line on a currency saved for
+something has no date). A stored target on a pool that writes `spend_line`
+([scheduling/README.md](scheduling/README.md), "A pool whose spending a line governs") is that
+pool's **line**: what a person wants kept of a currency that is spent with care. It is not a goal to
+produce. Whether a target is a line is read from the pool's declaration in the catalogue in force,
+in one place of the policy crate (`line_pool`), and nowhere copied.
+
+- **What it carries.** `at_least` and nothing else of a target's terms. A `scale`, an
+  `importance_milli` or `tasks` written on it is refused `unknown_field` at that member, the first of
+  them in that order, in a v2 and in a v3 document; a v1 target, which always writes its own terms
+  and tasks, is refused `unknown_field` at its `scale`. `rule` and `apply` are read as on every
+  target and change nothing. A line needs no producer: the rule that some task of the instance
+  produces a target's pool (`unmapped_task` at `/targets/i/resource`) is not asked of it.
+- **Where it is set.** By `ApplyResourceTargets` and by the goal page. `ResourceTargetView`'s
+  targetable list names the pool whatever its producers, its `default_scale` and
+  `default_importance_milli` the pool's `spend_line.scale` and `spend_line.price_milli` (read from
+  the catalogue at each listing, never written in a row) and neither term required, so `EditGoal`
+  takes `{at_least}` on the pool's `resource` entry and `{resource, at_least}` by its pool id with
+  the check of any pool ("One value by name"): `by_unix_ms` is still `deadline_unsupported`, an
+  amount outside 1 and the pool's capacity `out_of_range`. Its row is a target row like any other,
+  with fewer members. The Lab's check of `goals.json` takes a `resource` entry on such a pool
+  ([standard-pack-goals.md](standard-pack-goals.md), the row of `goal_pool_unvalued`); no need of
+  the records lands on it ([standard-pack-goal-tables.md](standard-pack-goal-tables.md), the row of
+  `table_pool_unvalued`).
+- **It never weighs.** The evaluation reads each stored record without its lines
+  (`weighed_target_policies`, before the needs computed from the records are stacked): a line adds
+  nothing to any task's benefit, order, run count or reasons. It covers no producer in the resource
+  weights (no `Γ`, no `resource_targets` item, no override), gives no `gap_remaining` and no goal
+  term of `run_cap`, leaves no pool unread after a run, takes no part in the two tiers (`goal_tiers`
+  is never written beside `spend_line`) and takes no stacked need; a line past a v3 target's own
+  lifetime says no expiry either. So a task that produces the pool is judged exactly as with no
+  target on it, a task that consumes it exactly as in 0.12.99 (the consumption costs nothing, its
+  item `<pool>:-0`), and a record of lines alone is read as a record that holds no target. The
+  pressing of the spenders below the line is a later slice's, which reads the lines from the same
+  records where this one leaves them out.
+- **No end of its own.** Nothing gives a line a date. A document's own validity and a v3 target's
+  own lifetime apply to it as to every row.
+- **Shown as a goal is shown.** `ResourceTargetView`'s `active` lists it as stored, with its
+  condition, and the goal page lists the entry with its `{at_least}`, who set it, the pool's
+  reading and the gap, how far the holding is below the line, by the code that shows any resource
+  entry. No wire member is new.
+- **A target with its own terms stored before.** The builds of 0.12.97 to 0.12.100 took a target
+  with its own `scale` and `importance_milli` on such a pool, which then weighed its producers. A
+  stored record is never checked again, so this build loads such a record as it is, reads that
+  target as the pool's line (it weighs nothing) and shows it; only applying the same document again
+  is refused at its `scale`.
 
 ## Choosing scale and importance
 
@@ -1318,7 +1392,11 @@ between the phases is named by `checked_catalog_hash`.
   (else `unmapped_task`). `default_scale` / `default_importance_milli` are the pool valuation's
   `scale` / `gap.weight_milli`, else (#455 B3-P, since 0.12.82) its `target_defaults`' `scale` /
   `importance_milli` ("Who gives a goal its step and importance"); `scale_required` /
-  `importance_required` say a target must state its own. `observation` reads the inventory through the time-validity projection
+  `importance_required` say a target must state its own. #455 SL2 (since 0.12.101; "A pool's
+  line"): a pool that writes `spend_line` is targetable whatever its producing tasks (none
+  included), its `default_scale` / `default_importance_milli` its `spend_line`'s `scale` /
+  `price_milli`, the numbers its line is pressed by, and neither is required, as a line carries
+  `at_least` alone. `observation` reads the inventory through the time-validity projection
   exactly as a target condition does: `current` and `observed_at_unix_ms`, or `pending` with
   its reason. Without an active catalog both lists are empty and `catalog_hash` is absent.
   #455 P2 (since 0.12.79): a pool read from rows of a list is targetable under its list's key,

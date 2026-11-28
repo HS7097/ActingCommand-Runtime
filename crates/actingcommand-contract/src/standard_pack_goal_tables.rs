@@ -26,11 +26,20 @@
 //! record needs is a later slice's.
 //!
 //! The core stays game-neutral: every name is an opaque string, compared for equality.
+//!
+//! Workflow #455 RR4a (register §1.546; `contracts/standard-pack-goal-tables.md`, "Names for
+//! people"): the document may have a fifth member, `names`, the names a person reads of what the
+//! file declares (its items; a table's keys, columns, subs, classes and conditions) and how a
+//! position of a column, or of one sub, is said ([`GoalTableNames`]), each text the localized text
+//! of a `goals.json` entry's `title` ([`GoalText`], [`Check::text`]). The reader reads it last of
+//! the forms, against what the file declares; a file without it reads as before, its names empty.
+//! [`say_goal_position`] says a position; nothing else is computed from a name.
 
 use crate::standard_pack::{StandardPackProblem, StandardPackRootIssue};
-use crate::standard_pack_catalog::{at, read_document};
+use crate::standard_pack_catalog::{MAX_PACK_CATALOG_TITLE_BYTES, at, read_document};
 use crate::standard_pack_goals::{
-    Check, GoalReferences, MAX_GOAL_NAME_BYTES, MAX_GOAL_REFERENCE_BYTES, goal_name,
+    Check, GoalPool, GoalReferences, GoalText, MAX_GOAL_NAME_BYTES, MAX_GOAL_REFERENCE_BYTES,
+    goal_name,
 };
 use crate::taskflow::{
     MAX_LIST_READING_COLUMNS, list_reading_column_valid, list_reading_fact_key_valid,
@@ -77,9 +86,29 @@ pub const MAX_GOAL_RECIPE_INPUTS: usize = 16;
 pub const MAX_GOAL_KEY_ROLES: usize = 8;
 /// The longest name of an item or a key, in bytes.
 pub const MAX_GOAL_TABLE_ID_BYTES: usize = 128;
+/// Workflow #455 RR4a: the `package` interface revision a bundle whose `goal-tables.json` writes
+/// `names` declares: `[32, 32]` (`contracts/component-interfaces.md`, the `package` row 32); a file
+/// without the member keeps [`GOAL_TABLES_PACKAGE_REVISION`] ([`goal_tables_package_revision`]).
+pub const GOAL_TABLE_NAMES_PACKAGE_REVISION: u64 = 32;
+/// Workflow #455 RR4a: the fewest segments of one list of how positions are said.
+pub const MIN_GOAL_POSITION_SEGMENTS: usize = 1;
+/// Workflow #455 RR4a: the most segments of one list of how positions are said.
+pub const MAX_GOAL_POSITION_SEGMENTS: usize = 64;
 
 /// The prefix of a step's member that names a role of the key, not an item: `@<role>`.
 const ROLE_PREFIX: &str = "@";
+/// Workflow #455 RR4a: the document's member that holds the names a person reads.
+const NAMES_MEMBER: &str = "names";
+/// Workflow #455 RR4a: the members of one table's names.
+const TABLE_NAMING_MEMBERS: [&str; 7] = [
+    "keys",
+    "columns",
+    "subs",
+    "classes",
+    "conditions",
+    "positions",
+    "sub_positions",
+];
 /// The longest name of a reading column (a list reading's column), in bytes.
 const MAX_READING_COLUMN_BYTES: usize = 32;
 /// The members of a key that are no column's: no column may be named like them.
@@ -92,6 +121,9 @@ pub struct StandardPackGoalTables {
     pub game: String,
     pub items: Vec<GoalTableItem>,
     pub tables: Vec<GoalTable>,
+    /// Workflow #455 RR4a: the names a person reads, as `names` writes them; empty for a file
+    /// without the member. The Runtime computes nothing from them.
+    pub names: GoalTableNames,
 }
 
 impl StandardPackGoalTables {
@@ -342,6 +374,228 @@ pub enum GoalKeyColumn {
     Subs(Vec<(String, GoalLadder)>),
 }
 
+/// Workflow #455 RR4a: texts by the id of what they name, in the file's order, each a localized
+/// text of a `goals.json` entry's `title` ([`GoalText`]).
+pub type GoalNamed = Vec<(String, GoalText)>;
+/// Workflow #455 RR4a: how the positions of one column, or of one sub, are said: its segments, in
+/// the file's order.
+pub type GoalSegments = Vec<GoalPositionSegment>;
+/// Workflow #455 RR4a: the lists of a column's subs that have their own ([`GoalSegments`]), by
+/// sub, in the file's order.
+pub type GoalSubSegments = Vec<(String, GoalSegments)>;
+
+/// Workflow #455 RR4a (`contracts/standard-pack-goal-tables.md`, "Names for people"): the names a
+/// person reads, as the file's `names` writes them, each in the file's order. Nothing must be
+/// named: what has no name here is shown by its id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalTableNames {
+    /// The items' names, by item.
+    pub items: GoalNamed,
+    /// The tables' names, by table.
+    pub tables: Vec<(String, GoalTableNaming)>,
+}
+
+impl GoalTableNames {
+    /// The name of the item `item`.
+    pub fn item(&self, item: &str) -> Option<&GoalText> {
+        find_named(&self.items, item)
+    }
+
+    /// The names of the table `table`.
+    pub fn table(&self, table: &str) -> Option<&GoalTableNaming> {
+        find_named(&self.tables, table)
+    }
+}
+
+/// Workflow #455 RR4a: one table's names, each by what it names, in the file's order, and how its
+/// positions are said ([`say_goal_position`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoalTableNaming {
+    pub keys: GoalNamed,
+    pub columns: GoalNamed,
+    /// By column of `per: "sub"`, its subs' names.
+    pub subs: Vec<(String, GoalNamed)>,
+    pub classes: GoalNamed,
+    /// The names of conditions the table's prerequisites name.
+    pub conditions: GoalNamed,
+    /// By column, how its positions are said (for a column of `per: "sub"`, every sub without a
+    /// list of its own).
+    pub positions: Vec<(String, GoalSegments)>,
+    /// By column of `per: "sub"`, the lists of the subs that have their own.
+    pub sub_positions: Vec<(String, GoalSubSegments)>,
+}
+
+impl GoalTableNaming {
+    /// The name of the key `key`.
+    pub fn key(&self, key: &str) -> Option<&GoalText> {
+        find_named(&self.keys, key)
+    }
+
+    /// The name of the column `column`.
+    pub fn column(&self, column: &str) -> Option<&GoalText> {
+        find_named(&self.columns, column)
+    }
+
+    /// The name of the sub `sub` of the column `column`.
+    pub fn sub(&self, column: &str, sub: &str) -> Option<&GoalText> {
+        find_named(find_named(&self.subs, column)?, sub)
+    }
+
+    /// The name of the class `class`.
+    pub fn class(&self, class: &str) -> Option<&GoalText> {
+        find_named(&self.classes, class)
+    }
+
+    /// The name of the condition `condition`.
+    pub fn condition(&self, condition: &str) -> Option<&GoalText> {
+        find_named(&self.conditions, condition)
+    }
+
+    /// The segments of the column `column`'s `positions`.
+    pub fn segments(&self, column: &str) -> Option<&[GoalPositionSegment]> {
+        find_named(&self.positions, column).map(Vec::as_slice)
+    }
+
+    /// The segments the sub `sub` of the column `column` has of its own (`sub_positions`).
+    pub fn sub_segments(&self, column: &str, sub: &str) -> Option<&[GoalPositionSegment]> {
+        find_named(find_named(&self.sub_positions, column)?, sub).map(Vec::as_slice)
+    }
+}
+
+/// Workflow #455 RR4a: one segment of how positions are said: the first elements of a position it
+/// says (`prefix`, 0 to the width's elements) and its text, whose strings may hold placeholders
+/// `{0}` to `{3}`, each naming an element of the position by its index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalPositionSegment {
+    pub prefix: GoalPosition,
+    pub text: GoalText,
+}
+
+/// Workflow #455 RR4a (`contracts/standard-pack-goal-tables.md`, "Names for people"): how the table
+/// whose names are `naming` says the position `position` of its column `column`, of the sub `sub`
+/// for a column of `per: "sub"`: by the sub's own list when the file gives it one, else by the
+/// column's `positions`; of that list, by the segment whose prefix equals the position's first
+/// elements, the longest such; its text in every language it is written in, each placeholder `{i}`
+/// filled with the decimal number of the position's element `i`. `None` when no list or no segment
+/// says it, or a placeholder names an element the position does not have. It chooses no language:
+/// the caller shows the languages as the pack wrote them.
+pub fn say_goal_position(
+    naming: &GoalTableNaming,
+    column: &str,
+    sub: Option<&str>,
+    position: &[i64],
+) -> Option<GoalText> {
+    let list = sub
+        .and_then(|named| naming.sub_segments(column, named))
+        .or_else(|| naming.segments(column))?;
+    let said = list
+        .iter()
+        .filter(|segment| position.starts_with(&segment.prefix))
+        .max_by_key(|segment| segment.prefix.len())?;
+    said.text
+        .iter()
+        .map(|(language, template)| Some((language.clone(), fill_template(template, position)?)))
+        .collect()
+}
+
+/// Workflow #455 RR4a (`contracts/component-interfaces.md`, the `package` rows 28 and 32): the
+/// `package` revision a bundle zip that carries `goal-tables.json` (`bytes`) needs: 32
+/// ([`GOAL_TABLE_NAMES_PACKAGE_REVISION`]) for a document that writes the member `names`, whatever
+/// it holds, 28 ([`GOAL_TABLES_PACKAGE_REVISION`]) for any other, as the revision of
+/// `pack-catalog.json` is read from its bytes (`catalog_package_revision`; a file the bundle step
+/// refuses is never built into a zip).
+pub fn goal_tables_package_revision(bytes: &[u8]) -> u64 {
+    let document = serde_json::from_slice::<Value>(bytes).ok();
+    let names = document
+        .as_ref()
+        .and_then(Value::as_object)
+        .is_some_and(|members| members.contains_key(NAMES_MEMBER));
+    if names {
+        GOAL_TABLE_NAMES_PACKAGE_REVISION
+    } else {
+        GOAL_TABLES_PACKAGE_REVISION
+    }
+}
+
+/// The value named `name` of a list of names in the file's order.
+fn find_named<'n, T>(list: &'n [(String, T)], name: &str) -> Option<&'n T> {
+    list.iter()
+        .find(|(named, _)| named == name)
+        .map(|(_, found)| found)
+}
+
+/// Workflow #455 RR4a: a piece of one string of a segment's text: a run of characters, or a
+/// placeholder naming an element of the position by its index.
+enum TemplatePiece<'t> {
+    Run(&'t str),
+    Element(usize),
+}
+
+/// Workflow #455 RR4a: the pieces of the segment's string `template`: every `{` begins a
+/// placeholder `{<i>}` of one decimal digit `i` below [`MAX_GOAL_TABLE_READ`] (`{0}` to `{3}`), and
+/// every `}` ends one; `None` when a brace does not. Outside a segment's text a brace is an
+/// ordinary character.
+fn template_pieces(template: &str) -> Option<Vec<TemplatePiece<'_>>> {
+    let mut pieces = Vec::new();
+    let mut rest = template;
+    while let Some(brace) = rest.find(['{', '}']) {
+        let (run, from) = rest.split_at(brace);
+        if !run.is_empty() {
+            pieces.push(TemplatePiece::Run(run));
+        }
+        let [b'{', digit @ b'0'..=b'9', b'}', ..] = from.as_bytes() else {
+            return None;
+        };
+        let index = usize::from(digit - b'0');
+        if index >= MAX_GOAL_TABLE_READ {
+            return None;
+        }
+        pieces.push(TemplatePiece::Element(index));
+        rest = &from[3..];
+    }
+    if !rest.is_empty() {
+        pieces.push(TemplatePiece::Run(rest));
+    }
+    Some(pieces)
+}
+
+/// Workflow #455 RR4a: `template` with each placeholder filled with the decimal number of the
+/// element of `position` it names; `None` when a brace is no placeholder or a placeholder names an
+/// element the position does not have.
+fn fill_template(template: &str, position: &[i64]) -> Option<String> {
+    let mut filled = String::with_capacity(template.len());
+    for piece in template_pieces(template)? {
+        match piece {
+            TemplatePiece::Run(run) => filled.push_str(run),
+            TemplatePiece::Element(index) => filled.push_str(&position.get(index)?.to_string()),
+        }
+    }
+    Some(filled)
+}
+
+/// Workflow #455 RR4a: the width a column's `positions` are held to: the count of the reading
+/// columns it reads, for a column of `per: "sub"` its narrowest sub's.
+fn column_width(column: &GoalColumn) -> usize {
+    match &column.read {
+        GoalColumnRead::Class(read) | GoalColumnRead::Key(read) => read.len(),
+        GoalColumnRead::Sub(subs) => subs.iter().map(|(_, read)| read.len()).min().unwrap_or(0),
+    }
+}
+
+/// Workflow #455 RR4a: the subs of the column `column` of `table`, each with its width (the count
+/// of the reading columns it reads), when the column is of `per: "sub"`; `None` for any other
+/// column and for a name that is no column of the table.
+fn sub_widths<'t>(table: &'t GoalTable, column: &str) -> Option<Vec<(&'t str, usize)>> {
+    match &table.column(column)?.read {
+        GoalColumnRead::Sub(subs) => Some(
+            subs.iter()
+                .map(|(sub, read)| (sub.as_str(), read.len()))
+                .collect(),
+        ),
+        GoalColumnRead::Class(_) | GoalColumnRead::Key(_) => None,
+    }
+}
+
 /// `goal-tables.json`'s bytes, read for the game directory `game` (contract "The checks", the
 /// file alone). Every violation is one issue at its JSON pointer, at most
 /// [`crate::MAX_STANDARD_PACK_GOALS_ISSUES`]: every member repeated in one object first, then the forms
@@ -357,7 +611,11 @@ pub enum GoalKeyColumn {
 /// `table_reading_column_duplicate`; fix round 1: `table_pool_duplicate` (a pool an earlier item
 /// names) and `table_list_key_duplicate` (a fact key an earlier list of the table names), each in
 /// the reader's order at the later, and a list's key column among its own columns
-/// `table_reading_column_duplicate` there.
+/// `table_reading_column_duplicate` there. Workflow #455 RR4a: the member `names` is read last of
+/// the forms, after the tables, against what the file declares, with the words `malformed` (a form,
+/// a key that names nothing the file declares, a repeated prefix, a prefix longer than its width, a
+/// brace of a segment's string that is no placeholder or a placeholder at or above its width) and
+/// `table_out_of_limits` (a count or a length), each at the pointer of what is wrong.
 pub fn parse_standard_pack_goal_tables(
     bytes: &[u8],
     game: &str,
@@ -401,8 +659,10 @@ pub fn parse_standard_pack_goal_tables(
 /// against the root), item by item in file order: `table_pool_unknown` (an item's pool is no pool
 /// of the composed `schedule.json`, [`GoalReferences::pools`]) and `table_pool_unvalued` (the pool
 /// of an item without a recipe, the one a need lands on, is one a goal cannot be put on: the
-/// judgement `goal_pool_unvalued` reads, the same map). The pool of an item with a recipe need only
-/// be a pool of the root (every pool declares its reading); an item without a pool names nothing.
+/// judgement `goal_pool_unvalued` reads, the same map; #455 SL2, so is a pool whose goal is its line,
+/// [`GoalPool::Line`], which a `resource` entry may govern and no need may land on). The pool of an
+/// item with a recipe need only be a pool of the root (every pool declares its reading); an item
+/// without a pool names nothing.
 pub fn check_standard_pack_goal_table_references(
     tables: &StandardPackGoalTables,
     references: &GoalReferences,
@@ -418,7 +678,7 @@ pub fn check_standard_pack_goal_table_references(
         let at_pool = at(&at("/items", &item.name), "pool");
         match references.pools.get(pool) {
             None => check.issue(StandardPackProblem::TablePoolUnknown, at_pool),
-            Some(false) if item.recipe.is_none() => {
+            Some(GoalPool::Unvalued | GoalPool::Line) if item.recipe.is_none() => {
                 check.issue(StandardPackProblem::TablePoolUnvalued, at_pool);
             }
             Some(_) => {}
@@ -539,7 +799,7 @@ impl Reader {
             value,
             "",
             &["schema_version", "game", "items", "tables"],
-            &[],
+            &[NAMES_MEMBER],
         )?;
         match document.get("schema_version").map(Value::as_str) {
             None | Some(Some(STANDARD_PACK_GOAL_TABLES_SCHEMA_VERSION)) => {}
@@ -563,11 +823,386 @@ impl Reader {
         let tables = document
             .get("tables")
             .and_then(|tables| self.tables(tables, &names));
+        let (items, tables) = (items?, tables?);
+        // Workflow #455 RR4a: the names, read against what the file declares, so after the
+        // tables; a file without them reads as before.
+        let named = match document.get(NAMES_MEMBER) {
+            None => GoalTableNames::default(),
+            Some(declared) => self.names(declared, &items, &tables)?,
+        };
         Some(StandardPackGoalTables {
             game: game.to_owned(),
-            items: items?,
-            tables: tables?,
+            items,
+            tables,
+            names: named,
         })
+    }
+
+    /// Workflow #455 RR4a: `names`, `{items?, tables?}`, read against the items and the tables the
+    /// file declares (`items`, `tables`): every key of its maps names something the file declares
+    /// (`malformed` at the key otherwise: an unknown member), and every text is a `goals.json`
+    /// entry's `title` ([`Check::text`], its bounds and its word for a bound,
+    /// `table_out_of_limits`).
+    fn names(
+        &mut self,
+        value: &Value,
+        items: &[GoalTableItem],
+        tables: &[GoalTable],
+    ) -> Option<GoalTableNames> {
+        let pointer = at("", NAMES_MEMBER);
+        let object = self
+            .check
+            .object(value, &pointer, &[], &["items", "tables"])?;
+        let named_items = self.named_member(object, &pointer, "items", |name| {
+            items.iter().any(|item| item.name == name)
+        });
+        let named_tables = match object.get("tables") {
+            None => Some(Vec::new()),
+            Some(map) => self.named_tables(map, &at(&pointer, "tables"), tables),
+        };
+        Some(GoalTableNames {
+            items: named_items?,
+            tables: named_tables?,
+        })
+    }
+
+    /// The member `member` of `object`, the object at `pointer`: a map of texts by what they name
+    /// ([`Self::named_texts`]); none when it is absent.
+    fn named_member(
+        &mut self,
+        object: &Map<String, Value>,
+        pointer: &str,
+        member: &str,
+        declared: impl Fn(&str) -> bool,
+    ) -> Option<GoalNamed> {
+        match object.get(member) {
+            None => Some(Vec::new()),
+            Some(map) => self.named_texts(map, &at(pointer, member), declared),
+        }
+    }
+
+    /// A map of texts by what they name: each key one `declared` takes (`malformed` at the key
+    /// otherwise), each text a title's ([`Check::text`]).
+    fn named_texts(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        declared: impl Fn(&str) -> bool,
+    ) -> Option<GoalNamed> {
+        let Some(map) = value.as_object() else {
+            self.check.malformed(pointer);
+            return None;
+        };
+        let mut named = Vec::new();
+        let mut complete = true;
+        for (name, written) in map {
+            let at_name = at(pointer, name);
+            if !declared(name.as_str()) {
+                self.check.malformed(at_name);
+                complete = false;
+                continue;
+            }
+            match self
+                .check
+                .text(written, &at_name, MAX_PACK_CATALOG_TITLE_BYTES)
+            {
+                Some(text) => named.push((name.clone(), text)),
+                None => complete = false,
+            }
+        }
+        complete.then_some(named)
+    }
+
+    /// `names.tables`: by table, a table the file declares (`malformed` at its key otherwise), its
+    /// names ([`Self::table_naming`]).
+    fn named_tables(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        tables: &[GoalTable],
+    ) -> Option<Vec<(String, GoalTableNaming)>> {
+        let Some(map) = value.as_object() else {
+            self.check.malformed(pointer);
+            return None;
+        };
+        let mut named = Vec::new();
+        let mut complete = true;
+        for (name, naming) in map {
+            let at_table = at(pointer, name);
+            let Some(table) = tables.iter().find(|declared| declared.name == *name) else {
+                self.check.malformed(at_table);
+                complete = false;
+                continue;
+            };
+            match self.table_naming(naming, &at_table, table) {
+                Some(read) => named.push((name.clone(), read)),
+                None => complete = false,
+            }
+        }
+        complete.then_some(named)
+    }
+
+    /// One table's names, `{keys?, columns?, subs?, classes?, conditions?, positions?,
+    /// sub_positions?}`, read against `table`: its keys, its columns, the subs of its columns of
+    /// `per: "sub"`, its classes, the conditions its prerequisites name, and its columns' widths.
+    fn table_naming(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        table: &GoalTable,
+    ) -> Option<GoalTableNaming> {
+        let object = self
+            .check
+            .object(value, pointer, &[], &TABLE_NAMING_MEMBERS)?;
+        let conditions = table
+            .columns
+            .iter()
+            .flat_map(|column| &column.requires)
+            .filter_map(|requirement| match requirement {
+                GoalRequirement::Condition(condition) => Some(condition.as_str()),
+                GoalRequirement::Column { .. } => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let keys = self.named_member(object, pointer, "keys", |name| table.key(name).is_some());
+        let columns = self.named_member(object, pointer, "columns", |name| {
+            table.column(name).is_some()
+        });
+        let subs = match object.get("subs") {
+            None => Some(Vec::new()),
+            Some(map) => self.named_subs(map, &at(pointer, "subs"), table),
+        };
+        let classes = self.named_member(object, pointer, "classes", |name| {
+            table.class(name).is_some()
+        });
+        let named_conditions = self.named_member(object, pointer, "conditions", |name| {
+            conditions.contains(name)
+        });
+        let positions = match object.get("positions") {
+            None => Some(Vec::new()),
+            Some(map) => self.position_lists(map, &at(pointer, "positions"), table),
+        };
+        let sub_positions = match object.get("sub_positions") {
+            None => Some(Vec::new()),
+            Some(map) => self.sub_position_lists(map, &at(pointer, "sub_positions"), table),
+        };
+        Some(GoalTableNaming {
+            keys: keys?,
+            columns: columns?,
+            subs: subs?,
+            classes: classes?,
+            conditions: named_conditions?,
+            positions: positions?,
+            sub_positions: sub_positions?,
+        })
+    }
+
+    /// A table's `subs`: by column, one of `per: "sub"` (`malformed` at its key otherwise, a name
+    /// that is no column of the table too), the names of its subs.
+    fn named_subs(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        table: &GoalTable,
+    ) -> Option<Vec<(String, GoalNamed)>> {
+        let Some(map) = value.as_object() else {
+            self.check.malformed(pointer);
+            return None;
+        };
+        let mut named = Vec::new();
+        let mut complete = true;
+        for (column, texts) in map {
+            let at_column = at(pointer, column);
+            let Some(widths) = sub_widths(table, column) else {
+                self.check.malformed(at_column);
+                complete = false;
+                continue;
+            };
+            let declared = |sub: &str| widths.iter().any(|(written, _)| *written == sub);
+            match self.named_texts(texts, &at_column, declared) {
+                Some(read) => named.push((column.clone(), read)),
+                None => complete = false,
+            }
+        }
+        complete.then_some(named)
+    }
+
+    /// A table's `positions`: by column, a column of the table (`malformed` at its key otherwise),
+    /// how its positions are said, held to its width ([`column_width`]).
+    fn position_lists(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        table: &GoalTable,
+    ) -> Option<Vec<(String, GoalSegments)>> {
+        let Some(map) = value.as_object() else {
+            self.check.malformed(pointer);
+            return None;
+        };
+        let mut lists = Vec::new();
+        let mut complete = true;
+        for (column, list) in map {
+            let at_column = at(pointer, column);
+            let Some(declared) = table.column(column) else {
+                self.check.malformed(at_column);
+                complete = false;
+                continue;
+            };
+            match self.segment_list(list, &at_column, column_width(declared)) {
+                Some(read) => lists.push((column.clone(), read)),
+                None => complete = false,
+            }
+        }
+        complete.then_some(lists)
+    }
+
+    /// A table's `sub_positions`: by column, one of `per: "sub"` (`malformed` at its key
+    /// otherwise), by sub, one of its subs (`malformed` at its key otherwise), how that sub's
+    /// positions are said, held to the sub's own width.
+    fn sub_position_lists(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        table: &GoalTable,
+    ) -> Option<Vec<(String, GoalSubSegments)>> {
+        let Some(map) = value.as_object() else {
+            self.check.malformed(pointer);
+            return None;
+        };
+        let mut lists = Vec::new();
+        let mut complete = true;
+        for (column, by_sub) in map {
+            let at_column = at(pointer, column);
+            let (Some(widths), Some(subs)) = (sub_widths(table, column), by_sub.as_object()) else {
+                self.check.malformed(at_column);
+                complete = false;
+                continue;
+            };
+            let mut read = Vec::new();
+            let mut whole = true;
+            for (sub, list) in subs {
+                let at_sub = at(&at_column, sub);
+                let Some(&(_, width)) = widths.iter().find(|(written, _)| *written == sub.as_str())
+                else {
+                    self.check.malformed(at_sub);
+                    whole = false;
+                    continue;
+                };
+                match self.segment_list(list, &at_sub, width) {
+                    Some(segments) => read.push((sub.clone(), segments)),
+                    None => whole = false,
+                }
+            }
+            if whole {
+                lists.push((column.clone(), read));
+            } else {
+                complete = false;
+            }
+        }
+        complete.then_some(lists)
+    }
+
+    /// How positions of `width` elements are said: [`MIN_GOAL_POSITION_SEGMENTS`] to
+    /// [`MAX_GOAL_POSITION_SEGMENTS`] segments (`table_out_of_limits` at the list otherwise), each
+    /// prefix written once (the later `malformed` at its `prefix`).
+    fn segment_list(&mut self, value: &Value, pointer: &str, width: usize) -> Option<GoalSegments> {
+        let list = self.check.list(
+            value,
+            pointer,
+            (MIN_GOAL_POSITION_SEGMENTS, MAX_GOAL_POSITION_SEGMENTS),
+        )?;
+        let mut prefixes = BTreeSet::new();
+        let mut read = Vec::new();
+        let mut complete = true;
+        for (index, item) in list.iter().enumerate() {
+            match self.segment(item, &format!("{pointer}/{index}"), width, &mut prefixes) {
+                Some(segment) => read.push(segment),
+                None => complete = false,
+            }
+        }
+        complete.then_some(read)
+    }
+
+    /// One segment `{prefix, text}`: its `prefix` ([`Self::segment_prefix`]) new to `prefixes`, the
+    /// prefixes of the segments before it in its list (`malformed` at it otherwise), and its `text`
+    /// ([`Self::segment_text`]).
+    fn segment(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        width: usize,
+        prefixes: &mut BTreeSet<GoalPosition>,
+    ) -> Option<GoalPositionSegment> {
+        let object = self
+            .check
+            .object(value, pointer, &["prefix", "text"], &[])?;
+        let at_prefix = at(pointer, "prefix");
+        let prefix = object.get("prefix").and_then(|written| {
+            let read = self.segment_prefix(written, &at_prefix, width)?;
+            if prefixes.insert(read.clone()) {
+                Some(read)
+            } else {
+                self.check.malformed(&at_prefix);
+                None
+            }
+        });
+        let text = object
+            .get("text")
+            .and_then(|written| self.segment_text(written, &at(pointer, "text"), width));
+        Some(GoalPositionSegment {
+            prefix: prefix?,
+            text: text?,
+        })
+    }
+
+    /// A segment's `prefix`: safe integers (`malformed` at an element otherwise), at most `width`
+    /// of them (`malformed` at the prefix otherwise; a width is never more than 4).
+    fn segment_prefix(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+        width: usize,
+    ) -> Option<GoalPosition> {
+        let Some(parts) = value.as_array() else {
+            self.check.malformed(pointer);
+            return None;
+        };
+        let mut elements = Vec::with_capacity(parts.len());
+        for (index, part) in parts.iter().enumerate() {
+            if let Some(element) = self.check.integer(part, &format!("{pointer}/{index}")) {
+                elements.push(element);
+            }
+        }
+        if elements.len() != parts.len() {
+            return None;
+        }
+        if elements.len() > width {
+            self.check.malformed(pointer);
+            return None;
+        }
+        Some(elements)
+    }
+
+    /// A segment's `text`: a title's text ([`Check::text`]) every string of which holds a brace
+    /// only in a placeholder `{0}` to `{3}` that names an element below `width`
+    /// ([`template_pieces`]; `malformed` at the string otherwise).
+    fn segment_text(&mut self, value: &Value, pointer: &str, width: usize) -> Option<GoalText> {
+        let text = self
+            .check
+            .text(value, pointer, MAX_PACK_CATALOG_TITLE_BYTES)?;
+        let mut complete = true;
+        for (language, template) in &text {
+            let fills = template_pieces(template).is_some_and(|pieces| {
+                pieces.iter().all(|piece| match *piece {
+                    TemplatePiece::Run(_) => true,
+                    TemplatePiece::Element(index) => index < width,
+                })
+            });
+            if !fills {
+                self.check.malformed(at(pointer, language));
+                complete = false;
+            }
+        }
+        complete.then_some(text)
     }
 
     /// `items`: 1 to [`MAX_GOAL_TABLE_ITEMS`] items by name, each pool named by one of them.
