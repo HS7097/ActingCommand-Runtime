@@ -85,8 +85,9 @@ fn is_false(value: &bool) -> bool {
 
 impl CandidatePoolTemplate {
     /// The key a key entry names, its `id` and `variant`; `None` for an `other` entry (and for an
-    /// entry that names no `id`, which admission refuses).
-    pub fn key(&self) -> Option<(&str, Option<&str>)> {
+    /// entry that names no `id`, which admission refuses). Named `keyed`, not `key`: the outcome
+    /// guard keeps the getter name `key` for typed codes (fix round 1, the first build).
+    pub fn keyed(&self) -> Option<(&str, Option<&str>)> {
         if self.other {
             return None;
         }
@@ -504,7 +505,7 @@ impl CandidateIdentityDeclaration {
             .filter(|(_, score)| score.colour_held != Some(false))
         {
             let milli = score.score_milli;
-            let best = match entry.key() {
+            let best = match entry.keyed() {
                 Some((id, variant)) => {
                     keys.push((id, variant, 1000 - milli));
                     &mut best_key
@@ -548,7 +549,7 @@ impl CandidateIdentityDeclaration {
             mark,
             unread_cause: unread_cause(&feature),
             best_key: best_key.and_then(|(entry, milli)| {
-                entry.key().map(|(key, variant)| CandidatePictureKey {
+                entry.keyed().map(|(key, variant)| CandidatePictureKey {
                     key: key.to_owned(),
                     variant: variant.map(str::to_owned),
                     target_id: entry.target_id.clone(),

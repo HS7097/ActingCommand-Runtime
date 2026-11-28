@@ -4357,7 +4357,7 @@ fn validate_layout_pool(
             pool.len()
         ));
     }
-    if !pool.iter().any(|entry| entry.key().is_some()) {
+    if !pool.iter().any(|entry| entry.keyed().is_some()) {
         errors.push(format!(
             "{pool_pointer}: a layout's pool holds at least one key entry"
         ));

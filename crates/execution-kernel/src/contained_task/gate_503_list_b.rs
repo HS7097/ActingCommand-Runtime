@@ -462,6 +462,35 @@ fn close() -> Value {
            "expect_after": {"page_id": "done", "timeout_ms": 1000}})
 }
 
+// The policy `pick` names, over the cards' layout: exactly one card, the highest count first. Fix
+// round 1 (the first build): the package's source reads a select step's policy before the kernel
+// judges the step, so the package holds a document that fits the layout.
+fn pick_policy() -> Value {
+    json!({
+        "schema_version": "actingcommand.selection-policy.v1",
+        "policy_id": "cards",
+        "applies_to": {
+            "candidate_layout_id": "layout/cards",
+            "outcome_keys": {"selected": "card_selected", "empty": "card_empty",
+                             "insufficient": "card_insufficient",
+                             "ambiguous": "card_ambiguous", "unknown": "card_unknown"}
+        },
+        "fields": [
+            {"name": "member", "value_type": {"type": "enum_string", "allowed": MEMBERS}},
+            {"name": "count", "value_type": {"type": "integer"}}
+        ],
+        "facts": [],
+        "gates": [],
+        "scoring": [],
+        "selection": {"mode": "exactly_one", "required_count": 1},
+        "tie_break": [
+            {"kind": "value", "value": {"source": "field", "field": "count"},
+             "direction": "highest_first"},
+            {"kind": "candidate_id", "direction": "lowest_first"}
+        ]
+    })
+}
+
 // A select step over the cards' layout, from the list to done.
 fn pick() -> Value {
     json!({"id": "pick", "from": "list", "to": "done",
@@ -565,6 +594,7 @@ fn bytes(value: &Value) -> Vec<u8> {
 
 // The package of the path whose key is read as `identity`, ending with `last`, or its refusal.
 fn load_with(identity: Identity, last: Value) -> Result<PreparedContainedTask, ContainedTaskError> {
+    let selects = last.get("select").is_some();
     let mut entries = vec![
         ("control.json".to_owned(), bytes(&control())),
         (
@@ -591,6 +621,12 @@ fn load_with(identity: Identity, last: Value) -> Result<PreparedContainedTask, C
             picture_png(kind),
         )
     }));
+    if selects {
+        entries.push((
+            "resources/operations/task/policies/select.json".to_owned(),
+            bytes(&pick_policy()),
+        ));
+    }
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for (path, content) in entries {

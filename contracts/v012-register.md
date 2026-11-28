@@ -50988,7 +50988,7 @@ Addendum 1).
   a slot's pool keeps 1 to 16. Of each template its image and its colour check are used; its own
   region is not, and its own threshold judges no entry (as first built this said it "decides
   nothing"; it decides where a colour check is measured at all, which fix round 1 below takes up).
-- *2, two kinds of entry* (`CandidatePoolTemplate`, `key`). `{id, variant?, target_id}` and
+- *2, two kinds of entry* (`CandidatePoolTemplate`, `keyed`). `{id, variant?, target_id}` and
   `{"other": true, target_id}`; at least one key entry, no target twice, an `other` entry names no
   `id` or `variant` and `other` is written only `true`; a slot's pool (`CandidateIdentityTemplate`,
   unchanged) refuses `other` at its pointer on the wire and at the declaration gate.
@@ -51110,6 +51110,11 @@ another entry of the drawing passes is read with confidence as that other entry:
 where the other is an `other` picture, a zero that nothing corrects. The contracts now say it and
 what the author and the acceptance owe ([business-identity-consensus.md](business-identity-consensus.md),
 "What a colour check risks"; [resource-readings.md](resource-readings.md), "The cost").
+The first build failed twice, on things no reader had caught: the outcome guard keeps the getter
+name `key` for typed codes and refused `CandidatePoolTemplate::key`, which returns texts (it is
+`keyed` now); and the test of the refused selection built a package without the policy document
+its select step names, which the package's source reads before the kernel judges the step (the
+fixture holds a document that fits the layout now, and the refusal it pins is the kernel's).
 Also said now: a deadline that falls inside a pool fails the run and publishes no list, and
 admission does not count a template's time. Left as found: a `region` smaller than a pool's
 template is refused at the run and not at admission; the observation of a page projects a pool
