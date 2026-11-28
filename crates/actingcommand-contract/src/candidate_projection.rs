@@ -32,8 +32,13 @@ pub const CANDIDATE_PROJECTION_MAX_FEATURES: usize = 8;
 pub const CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PAGE: usize = 4;
 /// Layouts one package declares.
 pub const CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PACKAGE: usize = 64;
-/// OCR and NN feature evaluations one projection performs.
+/// OCR and NN feature evaluations one projection performs, unless its layout declares more.
 pub const CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS: usize = 16;
+/// Workflow #503 LIST-D (`package` revision 31): the most OCR and NN feature evaluations a
+/// candidate layout may declare for one projection of it (`provider_evaluations`, above
+/// [`CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS`] only), written once for the recognition pack,
+/// which admits and reads the declaration, and the source declaration gate.
+pub const CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS: usize = 64;
 /// Compact JSON bytes of one core projection.
 pub const CANDIDATE_PROJECTION_MAX_BYTES: usize = 32 * 1024;
 /// Compact JSON bytes of every public candidate set one observation carries.

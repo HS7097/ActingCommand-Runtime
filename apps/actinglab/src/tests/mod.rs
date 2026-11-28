@@ -345,6 +345,10 @@ mod gate_503_list_b;
 // 30, in a select step's scan and a list reading's, in a pack of either mode, and nothing else so.
 #[path = "gate_503_list_c.rs"]
 mod gate_503_list_c;
+// Workflow #503 LIST-D: the revision table counts a candidate layout's `provider_evaluations` as
+// `package` 31, on a layout of either kind, in a pack of either mode, and nothing else so.
+#[path = "gate_503_list_d.rs"]
+mod gate_503_list_d;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

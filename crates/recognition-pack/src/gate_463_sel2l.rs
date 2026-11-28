@@ -814,9 +814,10 @@ fn sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_ran
     // gives, Workflow #503 LIST-A (register §1.533) to 27, a list reading of the wanted keys only,
     // Workflow #455 RR1 (register §1.535) to 28, a `goals.json` of version 3 and a root's
     // `goal-tables.json`, Workflow #503 LIST-B (register §1.536) to 29, a `repeated_anchor`
-    // layout's picture pool, and Workflow #503 LIST-C (register §1.541) to 30, a scan's end that
-    // requires the list to be stationary; 20 stays within it.
-    assert_eq!(own, [3, SHARED_READ_REVISION + 10]);
+    // layout's picture pool, Workflow #503 LIST-C (register §1.541) to 30, a scan's end that
+    // requires the list to be stationary, and Workflow #503 LIST-D (register §1.544) to 31, a
+    // layout's own budget of OCR and NN evaluations; 20 stays within it.
+    assert_eq!(own, [3, SHARED_READ_REVISION + 11]);
     assert!(package_edge_holds(own, needs));
     assert!(!package_edge_holds([3, SHARED_READ_REVISION - 1], needs));
     assert!(package_edge_holds(own, [3, SHARED_READ_REVISION - 1]));

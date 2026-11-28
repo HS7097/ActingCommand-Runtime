@@ -4619,3 +4619,21 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_503_list_c::list_c_a_scan_ends_require_stationary_needs_revision_30_and_nothing_else_does",
 ]
 incident = ["#503 LIST-C"]
+
+# Workflow #503 LIST-D (0.12.99; register §1.544; brief rd-1123/brief-503-list-d.md; contracts/candidate-projection.md, "Budgets"; contracts/selection-graph.md, "Source declaration" and "Rules"; contracts/resource-readings.md, "List readings"; contracts/component-interfaces.md, the package row 31): a candidate layout of either kind may declare provider_evaluations, 17 to 64, the most OCR and NN evaluations one projection of it may perform; absent, 16 as before. The pack's reader and the declaration gate take 17, 32 and 64, refuse 16, 0 and 65 at the member and anything but an unsigned integer there, and refuse an unknown member of a layout with UnknownField, the code an older reader gives the member; the parser writes it last. Sixteen synthetic cards of two OCR fields are 32 evaluations: refused at 16 and 31 with count 32 and the layout's limit, projected whole at 32; the admission bound counts eight cards without the member and sixteen with 32; one instance above the declared budget is refused at validation and before any read with the layout's number; a shared read counts once and the cards get what is left; a layout without the member beside one with it is bounded and projected byte for byte as alone; a list reading over the layout reads the sixteen rows of one viewport; the revision table counts the member as package 31.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_d::list_d_the_pack_takes_provider_evaluations_of_17_to_64_only",
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_d::list_d_sixteen_cards_of_two_fields_project_with_a_budget_of_32_and_only_with_it",
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_d::list_d_the_admission_bound_counts_the_cards_the_layouts_budget_lets_one_projection_read",
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_d::list_d_one_instance_above_the_declared_budget_is_refused_at_validation_and_before_any_read",
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_d::list_d_a_shared_read_counts_once_and_the_cards_get_what_is_left_of_the_layouts_budget",
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_d::list_d_a_layout_without_the_member_beside_one_with_it_is_bounded_and_projected_as_before",
+    "actingcommand-pack-containment::lib::source::gate_503_list_d::list_d_the_declaration_gate_takes_provider_evaluations_of_17_to_64_on_either_kind",
+    "actingcommand-pack-containment::lib::source::gate_503_list_d::list_d_the_derived_layout_writes_the_member_last_and_one_without_it_as_before",
+    "actingcommand-execution-kernel::lib::contained_task::gate_503_list_d::list_d_a_list_reading_reads_the_sixteen_rows_of_a_viewport_with_a_budget_of_32",
+    "actingcommand-execution-kernel::lib::contained_task::gate_503_list_d::list_d_an_unknown_layout_member_is_refused_as_an_older_runtime_refuses_the_budget",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_list_d::list_d_a_layouts_own_evaluation_budget_needs_revision_31_and_nothing_else_does",
+]
+incident = ["#503 LIST-D"]

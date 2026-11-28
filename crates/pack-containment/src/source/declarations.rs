@@ -3,7 +3,8 @@
 use super::{Bundle, CliError, CliOutcome, ParseFiles, SourceRead};
 use crate::ExpectedShape;
 use actingcommand_contract::candidate_projection::{
-    CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_FEATURES,
+    CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS,
+    CANDIDATE_PROJECTION_MAX_FEATURES, CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS,
     validate_candidate_feature_name, validate_candidate_layout_id,
 };
 use actingcommand_contract::codes::{SharedCode, TaskflowCode};
@@ -33,6 +34,10 @@ const SCAN_MEMBERS: &[&str] = &[
 /// Workflow #503 LIST-C (`package` revision 30): the optional member of a scan's `end` that makes
 /// the coverage also wait for the list to have stopped moving; it is written only `true`.
 const SCAN_END_STATIONARY: &str = "require_stationary";
+
+/// Workflow #503 LIST-D (`package` revision 31): the optional member of a candidate layout, of
+/// either kind, that raises the OCR and NN evaluations one projection of it may perform.
+const LAYOUT_PROVIDER_EVALUATIONS: &str = "provider_evaluations";
 
 /// Workflow #406 T3 (plan Q17): the click kind of the path drag the kernel generates in a box.
 const PATH_DRAG_KIND: &str = "single_touch_path_drag_v1";
@@ -2915,7 +2920,8 @@ impl Declaration<'_> {
     /// other kind is unknown. Workflow #463 SEL-2L: a layout of either kind may declare
     /// `shared_ocr`; a `repeated_anchor` layout's covers its `readable_band`, or the whole frame
     /// without one (`InvalidValue` at `/candidate_layouts/<i>/shared_ocr/region` otherwise).
-    /// Whether the page is one the task declares, and whether each target exists in the derived
+    /// Workflow #503 LIST-D: a layout of either kind may declare `provider_evaluations`, an
+    /// unsigned integer of 17..=64. Whether the page is one the task declares, and whether each target exists in the derived
     /// pack with a kind the feature can read, is checked while the pack is derived.
     fn candidate_layouts(&self, value: &Value, pointer: &str, frame: [u64; 2]) -> CliOutcome<()> {
         for (index, layout) in self.array(value, pointer)?.iter().enumerate() {
@@ -2941,6 +2947,8 @@ impl Declaration<'_> {
                     "shared_ocr",
                     // Workflow #503 LIST-B.
                     "identity_templates",
+                    // Workflow #503 LIST-D.
+                    LAYOUT_PROVIDER_EVALUATIONS,
                 ],
             )?;
             let id_pointer = child(&pointer, "id");
@@ -2987,6 +2995,23 @@ impl Declaration<'_> {
             }
             if let Some(shared) = object.get("shared_ocr") {
                 self.shared_ocr(shared, &child(&pointer, "shared_ocr"))?;
+            }
+            // Workflow #503 LIST-D (`contracts/selection-graph.md`, "Source declaration"): a layout
+            // of either kind may raise the OCR and NN evaluations one projection of it may perform,
+            // as `max_instances` is bounded: an unsigned integer, 17..=64 (it never lowers them).
+            if let Some(declared) = object.get(LAYOUT_PROVIDER_EVALUATIONS) {
+                let declared_pointer = child(&pointer, LAYOUT_PROVIDER_EVALUATIONS);
+                self.unsigned(declared, &declared_pointer)?;
+                let raised = (CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS as u64 + 1)
+                    ..=CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS as u64;
+                if !declared
+                    .as_u64()
+                    .is_some_and(|evaluations| raised.contains(&evaluations))
+                {
+                    return Err(
+                        self.error(&declared_pointer, ResourceDeclarationReason::InvalidValue)
+                    );
+                }
             }
             let features_pointer = child(&pointer, "features");
             let features = self.array(

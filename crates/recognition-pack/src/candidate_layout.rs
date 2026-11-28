@@ -22,6 +22,10 @@
 //! Workflow #463 SEL-2L (since 0.12.74): a layout of either kind may declare one shared OCR
 //! read (`shared_ocr`); a `repeated_anchor` layout's read covers its readable band, and every
 //! actionable instance takes the text of its targets from it, block by block as a slot does.
+//!
+//! Workflow #503 LIST-D (since 0.12.99): a layout of either kind may declare its own budget of OCR
+//! and NN evaluations for one projection (`provider_evaluations`, 17..=64); every reader of the
+//! budget takes it through [`CandidateLayout::provider_evaluation_budget`].
 
 use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
 use crate::{
@@ -39,14 +43,14 @@ use crate::{
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
-    CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_FEATURES,
-    CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PACKAGE, CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PAGE,
-    CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS, CandidateFeature, CandidateFeatureMap,
-    CandidateFrame, CandidateLayoutKind, CandidateProjection, CandidateProjectionError,
-    CandidateRecognitionEvidence, CandidateRecognitionInput, CandidateRecognitionSample,
-    CandidateRect, CandidateUnknownReason, INVALID_CANDIDATE_PROJECTION, NAME_BOX_LINE_HEIGHT_MIN,
-    NAME_BOX_LINES_MAX, ProjectedCandidate, candidate_id, validate_candidate_feature_name,
-    validate_candidate_layout_id,
+    CANDIDATE_PROJECTION_MAX_CANDIDATES, CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS,
+    CANDIDATE_PROJECTION_MAX_FEATURES, CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PACKAGE,
+    CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PAGE, CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS,
+    CandidateFeature, CandidateFeatureMap, CandidateFrame, CandidateLayoutKind,
+    CandidateProjection, CandidateProjectionError, CandidateRecognitionEvidence,
+    CandidateRecognitionInput, CandidateRecognitionSample, CandidateRect, CandidateUnknownReason,
+    INVALID_CANDIDATE_PROJECTION, NAME_BOX_LINE_HEIGHT_MIN, NAME_BOX_LINES_MAX, ProjectedCandidate,
+    candidate_id, validate_candidate_feature_name, validate_candidate_layout_id,
 };
 use actingcommand_contract::outcome::{Code, Outcome};
 use serde::{Deserialize, Serialize};
@@ -89,6 +93,8 @@ const LAYOUT_FIELDS: &[&str] = &[
     "shared_ocr",
     // Workflow #503 LIST-B.
     "identity_templates",
+    // Workflow #503 LIST-D.
+    LAYOUT_PROVIDER_EVALUATIONS,
 ];
 const FIXED_SLOTS_FIELDS: &[&str] = &[
     "id",
@@ -99,6 +105,8 @@ const FIXED_SLOTS_FIELDS: &[&str] = &[
     "unknown_identity",
     "sample_interval_ms",
     "shared_ocr",
+    // Workflow #503 LIST-D.
+    LAYOUT_PROVIDER_EVALUATIONS,
 ];
 const REPEATED_ANCHOR_FIELDS: &[&str] = &[
     "id",
@@ -118,7 +126,13 @@ const REPEATED_ANCHOR_FIELDS: &[&str] = &[
     "shared_ocr",
     // Workflow #503 LIST-B: the pools of its picture identity features.
     "identity_templates",
+    // Workflow #503 LIST-D: its own budget of OCR and NN evaluations, as a `fixed_slots` layout's.
+    LAYOUT_PROVIDER_EVALUATIONS,
 ];
+/// Workflow #503 LIST-D (`package` revision 31; `contracts/candidate-projection.md`, "Budgets"):
+/// the member of a layout of either kind that raises the OCR and NN evaluations one projection of
+/// it may perform.
+const LAYOUT_PROVIDER_EVALUATIONS: &str = "provider_evaluations";
 const FEATURE_FIELDS: &[&str] = &[
     "name",
     "value",
@@ -206,6 +220,13 @@ pub struct CandidateLayout {
     /// (not by slot), 1..=[`crate::MAX_LAYOUT_IDENTITY_TEMPLATES`] entries.
     #[serde(default)]
     pub identity_templates: BTreeMap<String, Vec<CandidatePoolTemplate>>,
+    /// Workflow #503 LIST-D (`package` revision 31; `contracts/candidate-projection.md`,
+    /// "Budgets"): either kind: the most OCR and NN evaluations one projection of this layout may
+    /// perform, 17..=[`CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS`]; absent,
+    /// [`CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS`]. Every reader takes it through
+    /// [`CandidateLayout::provider_evaluation_budget`].
+    #[serde(default)]
+    pub provider_evaluations: Option<u64>,
 }
 
 /// Workflow #396 REC-8: one OCR detection read of a `fixed_slots` layout. Every OCR target its
@@ -986,12 +1007,14 @@ impl SceneEvaluation<'_> {
             evaluator.pack.coordinate_space,
             |target_id| evaluator.target(target_id).ok(),
         );
+        // Workflow #503 LIST-D: the layout's own budget, else the contract's.
+        let budget = layout.provider_evaluation_budget();
         let one = provider.for_instances(1);
-        if one > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
+        if one > budget {
             return Err(CandidateProjectionError::budget_exceeded(
                 "provider_evaluations",
                 format!(
-                    "layout '{layout_id}' needs {one} OCR and NN evaluations above the {CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS}-evaluation budget"
+                    "layout '{layout_id}' needs {one} OCR and NN evaluations above the {budget}-evaluation budget"
                 ),
             )
             .into());
@@ -1048,12 +1071,10 @@ impl SceneEvaluation<'_> {
                         .filter(|instance| instance.actionable)
                         .count(),
                 );
-                if needed > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
+                if needed > budget {
                     return Err(CandidateProjectionError::budget_exceeded(
                         "provider_evaluations",
-                        format!(
-                            "layout_id={layout_id} count={needed} limit_count={CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS}"
-                        ),
+                        format!("layout_id={layout_id} count={needed} limit_count={budget}"),
                     )
                     .into());
                 }
@@ -2874,10 +2895,22 @@ impl CandidateLayout {
             .any(|feature| feature.consensus.is_some())
     }
 
+    /// Workflow #503 LIST-D (`contracts/candidate-projection.md`, "Budgets"): the most OCR and NN
+    /// evaluations one projection of this layout may perform, the one rule every reader of the
+    /// budget calls: the layout's declared `provider_evaluations`, else
+    /// [`CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS`]. Admission holds a declared number to
+    /// 17..=[`CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS`].
+    pub fn provider_evaluation_budget(&self) -> usize {
+        self.provider_evaluations
+            .and_then(|declared| usize::try_from(declared).ok())
+            .unwrap_or(CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS)
+    }
+
     /// Declared worst provider time plus waits. Capture/CPU work still uses the original
     /// task and step deadline; this admission lower bound never allocates another budget. A
     /// `repeated_anchor` layout counts its per-instance provider time once for each instance
-    /// the provider-evaluation budget lets one projection evaluate, at most `max_instances`.
+    /// the provider-evaluation budget lets one projection evaluate, at most `max_instances`
+    /// (Workflow #503 LIST-D: the layout's own budget, [`Self::provider_evaluation_budget`]).
     /// Workflow #463 SEL-2L: its shared read takes its timeout once on each frame it serves, as a
     /// `fixed_slots` layout's does, whatever the instances, and leaves the instances what is left
     /// of the evaluation budget after it.
@@ -2924,7 +2957,10 @@ impl CandidateLayout {
                     evaluator.pack.coordinate_space,
                     lookup,
                 );
-                let budgeted = CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS
+                // Workflow #503 LIST-D: as many as the layout's own budget lets one projection
+                // evaluate.
+                let budgeted = self
+                    .provider_evaluation_budget()
                     .saturating_sub(calls.shared)
                     .checked_div(calls.own)
                     .unwrap_or(0);
@@ -3348,6 +3384,20 @@ pub(crate) fn validate_candidate_layouts_wire(value: &Value) -> RecognitionPackR
         }
         if let Some(shared) = layout.get("shared_ocr") {
             validate_shared_ocr_wire(shared, &format!("{pointer}/shared_ocr"))?;
+        }
+        // Workflow #503 LIST-D: a layout's own budget of evaluations is an unsigned integer; its
+        // bounds are the pack's rules (`validate_candidate_layouts`).
+        if layout
+            .get(LAYOUT_PROVIDER_EVALUATIONS)
+            .is_some_and(|declared| !declared.is_u64())
+        {
+            let field = format!("{pointer}/{LAYOUT_PROVIDER_EVALUATIONS}");
+            let message = format!("{field} must be an unsigned integer");
+            return Err(declaration(
+                field,
+                ResourceDeclarationReason::InvalidType,
+                message,
+            ));
         }
         if let Some(features) = layout.get("features") {
             let features_pointer = format!("{pointer}/features");
@@ -3840,13 +3890,27 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
             |target_id| targets.get(target_id).copied(),
         )
         .for_instances(1);
-        if provider > CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS {
+        // Workflow #503 LIST-D: the layout's own budget, raised only, 17..=64, as `max_instances`
+        // is bounded; the count is held to the budget the layout gives itself.
+        let raised = CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS + 1
+            ..=CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS;
+        if layout.provider_evaluations.is_some_and(|declared| {
+            !usize::try_from(declared).is_ok_and(|count| raised.contains(&count))
+        }) {
+            errors.push(format!(
+                "{pointer}/{LAYOUT_PROVIDER_EVALUATIONS} must be {}..={}",
+                raised.start(),
+                raised.end()
+            ));
+        }
+        let budget = layout.provider_evaluation_budget();
+        if provider > budget {
             let field = match layout.kind {
                 CandidateLayoutKind::FixedSlots => "slots",
                 CandidateLayoutKind::RepeatedAnchor => "features",
             };
             errors.push(format!(
-                "{pointer}/{field}: {provider} OCR and NN evaluations exceed the {CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS}-evaluation projection budget"
+                "{pointer}/{field}: {provider} OCR and NN evaluations exceed the {budget}-evaluation projection budget"
             ));
         }
         if let Some(shared) = &layout.shared_ocr {
@@ -4657,3 +4721,8 @@ mod gate_463_g2;
 #[cfg(test)]
 #[path = "gate_503_list_b.rs"]
 mod gate_503_list_b;
+
+// Workflow #503 LIST-D: a layout's own budget of OCR and NN evaluations for one projection.
+#[cfg(test)]
+#[path = "gate_503_list_d.rs"]
+mod gate_503_list_d;

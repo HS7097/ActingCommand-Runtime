@@ -145,7 +145,8 @@ field:
 
 | Rule | Pointer | Checked by |
 | --- | --- | --- |
-| The fields of the layout's kind, of the right JSON types: `id`, `page_id`, `kind` and `features`, with `slots` for `fixed_slots`, or `anchor`, `max_instances`, `order`, `instance_rect`, `click` and the optional `suppress_iou_milli` and `readable_band` for `repeated_anchor`. Either kind may add `shared_ocr` (a `repeated_anchor` layout since 0.12.74, Workflow #463 SEL-2L). Unknown fields and fields of the other kind are refused. | the field | gate |
+| The fields of the layout's kind, of the right JSON types: `id`, `page_id`, `kind` and `features`, with `slots` for `fixed_slots`, or `anchor`, `max_instances`, `order`, `instance_rect`, `click` and the optional `suppress_iou_milli` and `readable_band` for `repeated_anchor`. Either kind may add `shared_ocr` (a `repeated_anchor` layout since 0.12.74, Workflow #463 SEL-2L) and (Workflow #503 LIST-D, since 0.12.99) `provider_evaluations`. Unknown fields and fields of the other kind are refused. | the field | gate |
+| Workflow #503 LIST-D (since 0.12.99, `package` revision 31): `provider_evaluations`, a layout's own limit of OCR and NN evaluations for one projection, is an unsigned integer of 17 to 64, as `max_instances` is bounded: 16 and less, and above 64, `InvalidValue`; another type, `null` included, `InvalidType`. A Runtime before 0.12.99 refuses the member with `UnknownField` (section Rules). | `/candidate_layouts/i/provider_evaluations` | gate |
 | The ID matches `^[a-z0-9][a-z0-9_./-]{0,63}$`. | `/candidate_layouts/i/id` | gate |
 | The kind is `fixed_slots` or `repeated_anchor`. | `/candidate_layouts/i/kind` | gate |
 | 1 to 8 features `{name, value}`, with distinct names matching `^[a-z][a-z0-9_]{0,31}$` and a value of `passed`, `measure_milli`, `identity`, `ocr_integer` or (Workflow #404 FS-2, since 0.12.43) `anchor_milli`. A feature may add its own `target` (a string) and `offset` (`{x, y}` integers), both or neither; every `repeated_anchor` feature declares both, except an `anchor_milli` feature, which declares neither (`UnknownField` at the `target` or `offset` it names). Only a `repeated_anchor` layout declares `anchor_milli` (`InvalidValue` at `…/features/j/value` in a `fixed_slots` layout). | `…/features`, `…/features/j/name`, `…/features/j/value`, `…/features/j/target`, `…/features/j/offset` | gate |
@@ -170,7 +171,7 @@ feature, a slot and a rectangle are written in the order of the examples below; 
 `targets` keep their declared order. A feature writes `name`, `value`, `target` and `offset`,
 then `identity`, `consensus` and `integer` as declared. A layout writes its `shared_ocr` last,
 with its region in the pack's form (a rectangle or `full_frame`) and its other members as
-declared (since 0.12.76 its `lines`, when it declares them, last of them). Layouts are written in the order the tasks declare them,
+declared (since 0.12.76 its `lines`, when it declares them, last of them). Workflow #503 LIST-D: a layout that declares `provider_evaluations` writes it last of all, as declared. Layouts are written in the order the tasks declare them,
 after `targets`. The pack's own rules (layouts per page and per pack, OCR and NN evaluations per
 projection) are checked by the recognition pack when the derived pack is validated or loaded
 (section Rules).
@@ -252,6 +253,12 @@ relative to the match's top-left corner:
   region evaluation, the evaluation of one template over the regions of several instances.
 - A layout declares no privacy. A candidate's privacy derives from the targets its features
   read ([candidate-projection.md](candidate-projection.md)).
+- Workflow #503 LIST-D (since 0.12.99, `package` revision 31): a layout of either kind may declare
+  `"provider_evaluations": n`, 17 to 64, the most OCR and NN evaluations one projection of it may
+  perform ([candidate-projection.md](candidate-projection.md), section Budgets). Absent, the limit
+  is 16. A list of cards whose two fields must each be read on the card is the case: sixteen cards
+  are 32 evaluations, and a layout that declares 32 is projected and bounded as 32 evaluations,
+  while every other layout keeps 16 (section Rules).
 
 ### Shared OCR read
 
@@ -390,7 +397,9 @@ card's title box is read by the detector rather than as one block:
   none; a target it does not serve counts once for each actionable instance, as before. The bound
   of provider time admission takes is the read's timeout once for each frame it serves, and the
   instances' own reads for as many instances as the evaluations the read leaves allow, at most
-  `max_instances`.
+  `max_instances`. Workflow #503 LIST-D: of the layout's own limit where it declares
+  `provider_evaluations` (section Rules): the read takes its evaluation once a frame, and the
+  instances get what is left.
 - **Truncation**: as above, `text_read_blocks_truncated` fails the projection.
 - **Unchanged**: a `repeated_anchor` layout without the member (its projection, its count and its
   answers), a `fixed_slots` layout's read, and a located target's own rule
@@ -551,7 +560,8 @@ Each failure message starts with the pointer of the offending field.
 | The region a feature reads at an offset, for each of its samples, lies inside the `instance_rect`, or inside each slot's `rect`; a slot's `targets` never map such a feature. | `…/features/j/offset`, `…/slots/k`, `…/slots/k/targets/<name>` |
 | `rect` and `click` have a non-negative origin and a positive size and lie entirely inside `coordinate_space`. | `…/slots/k/rect`, `…/slots/k/click` |
 | Each `targets` key is a declared feature; its target exists and is a `template`, `color`, `color_digest`, `composite`, `ocr` or `nn` target, never `click_only`; a `measure_milli` feature never reads a composite. | `…/slots/k/targets/<name>` |
-| One projection needs at most 16 OCR and NN evaluations: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most 16; the producer checks the product with the actionable instances on each frame. Workflow #463 SEL-2L: a `repeated_anchor` layout's shared read is counted once for each frame it serves, apart from that product. | `/candidate_layouts/i/slots`, `…/features` |
+| One projection needs at most 16 OCR and NN evaluations, unless the layout declares more (Workflow #503 LIST-D, the next row), up to 64: one per distinct OCR or NN target the slots read, and one per OCR or NN member of each distinct composite they read; a shared OCR read counts one for each frame it serves and the targets it serves none (section Shared OCR read). One instance of a `repeated_anchor` layout needs at most the layout's limit; the producer checks the product with the actionable instances on each frame against the same limit. Workflow #463 SEL-2L: a `repeated_anchor` layout's shared read is counted once for each frame it serves, apart from that product. The message names the layout's limit (`… OCR and NN evaluations exceed the <limit>-evaluation projection budget`). | `/candidate_layouts/i/slots`, `…/features` |
+| Workflow #503 LIST-D (since 0.12.99, `package` revision 31): a layout of either kind may declare `provider_evaluations`, an unsigned integer of 17 to 64, the most OCR and NN evaluations one projection of it may perform; it only raises the limit of 16, which a layout without it keeps. Another value is refused as `max_instances` is (`/candidate_layouts/i/provider_evaluations must be 17..=64`); a value that is not an unsigned integer is refused on the wire, `InvalidType` at the member. The limit counts as the row above says, and the admission bound of a `repeated_anchor` layout counts as many instances as the layout's own limit lets one projection evaluate (section Select step, the provider need admission compares with the step's limit). | `/candidate_layouts/i/provider_evaluations` |
 | Workflow #396 REC-8: a `fixed_slots` layout declares `shared_ocr`, and since 0.12.74 (Workflow #463 SEL-2L) a `repeated_anchor` layout too, whose region covers its `readable_band`, or `coordinate_space` where it declares none. Its region is a rectangle with a non-negative origin and a positive size inside `coordinate_space`, or `full_frame`; `blocks` is `detect` with a `line_merge` whose `gap_factor` is 0 to 16; `timeout_ms` is 1 to 60000; and at least one OCR target of its slots or features takes its text from it. | `/candidate_layouts/i/shared_ocr`, `…/shared_ocr/region`, `…/shared_ocr/blocks`, `…/shared_ocr/line_merge`, `…/shared_ocr/timeout_ms` |
 | Workflow #463 SEL-GRID G2 (since 0.12.76): a shared read's `lines` has `max` 1 to 3 and `line_height` of at least 8, and no OCR target it gives text to has a `template_relative` region. | `…/shared_ocr/lines/max`, `…/shared_ocr/lines/line_height`, `…/shared_ocr/lines` |
 
@@ -842,6 +852,13 @@ the step's frame alone and is not compared. A larger need is refused with
 `recognition_sample_budget_invalid` (`required_ms`, `limit_ms`, `pack_operation_id`), a suspend
 code by default ([policy-suspension.md](policy-suspension.md)); a need equal to the limit is
 admitted.
+
+Workflow #503 LIST-D (since 0.12.99): the declared provider timeouts of a `repeated_anchor` layout
+count one instance's own reads once for each instance its evaluations' limit lets one projection
+evaluate, after its shared read, at most `max_instances`; that limit is the layout's own
+`provider_evaluations` where it declares one (section Rules). So a layout that may evaluate 32
+times is bounded as 32 evaluations, and the step that reads it declares the time for that: nothing
+is waived. A layout without the member is bounded exactly as before.
 
 ### Derived documents
 

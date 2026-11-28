@@ -3054,6 +3054,10 @@ fn derive_candidate_layouts(
                     }
                     derived["identity_templates"] = pools.clone();
                 }
+                // Workflow #503 LIST-D: the layout's own budget of evaluations, as declared, last.
+                if let Some(evaluations) = layout.get("provider_evaluations") {
+                    derived["provider_evaluations"] = evaluations.clone();
+                }
                 keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
                 continue;
             }
@@ -3152,6 +3156,10 @@ fn derive_candidate_layouts(
             // Workflow #396 REC-8: the shared read with its region in the pack's form.
             if let Some(shared) = derived_shared_ocr(layout)? {
                 derived["shared_ocr"] = shared;
+            }
+            // Workflow #503 LIST-D: the layout's own budget of evaluations, as declared, last.
+            if let Some(evaluations) = layout.get("provider_evaluations") {
+                derived["provider_evaluations"] = evaluations.clone();
             }
             keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
         }
@@ -5706,3 +5714,7 @@ mod tests;
 // Workflow #411 B3.
 #[cfg(test)]
 mod gate_411_b3;
+
+// Workflow #503 LIST-D: a layout's own budget of evaluations at the declaration gate and the parser.
+#[cfg(test)]
+mod gate_503_list_d;
