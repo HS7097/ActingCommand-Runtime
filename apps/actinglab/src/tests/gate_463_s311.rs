@@ -7,12 +7,14 @@
 // in a temporary state root and writes down every frame of every connection in the order the
 // product sends them:
 // - `s311_each_run_only_refusal_sends_nothing_and_writes_nothing`: no `--authorization`
-//   (`trial_authorization_missing`), a package the mark flags over `--root` without
-//   `--irreversible` (`trial_irreversible_unacknowledged`), `--dry-run` (`dry_run_unsupported`),
-//   and the run's flags beside the plan or each other (`conflicting`), a `--collect` that is no
-//   request id (`not_recognised`) and a `--wait` that is no duration (`wrong_type`): no
-//   connection, no state directory (adapted by Workflow #463 S3-8, S3-9, register §1.444: a
-//   `--variable` is no refusal any more, `trial_variables_not_carried` is retired);
+//   (`trial_authorization_missing`), `--dry-run` (`dry_run_unsupported`), and the run's flags
+//   beside the plan or each other (`conflicting`), a `--collect` that is no request id
+//   (`not_recognised`) and a `--wait` that is no duration (`wrong_type`): no connection, no state
+//   directory (adapted by Workflow #463 S3-8, S3-9, register §1.444: a `--variable` is no refusal
+//   any more, `trial_variables_not_carried` is retired; adapted by Workflow #503 TRIAL, register
+//   §1.551: a package the mark flags over `--root` with an authorization is no refusal any more,
+//   `trial_irreversible_unacknowledged` is retired, and `--irreversible` is `validation_failed`
+//   `unknown`, a flag the row does not take);
 // - `s311_a_run_ending_on_the_target_page_records_its_key_and_matched`: the run sent once, then
 //   its projection, its facts, the two restart reads and its terminal's record read; the answer's
 //   end `succeeded` with the target's key and page, `expected` and `matched` true, no warning; the
@@ -54,6 +56,12 @@
 // - `s38_a_trial_with_a_value_sends_it_and_its_record_names_it`: the run sent with the value given
 //   in its request's `variables`, the plan and the record naming it, the code
 //   `trial_variables_not_carried` retired.
+// Workflow #503 TRIAL (register §1.551):
+// - `trial_a_marked_package_is_sent_and_recorded_under_its_authorization_alone`: over a root that
+//   marks the package, a line with an authorization and no other flag sends the run once (the
+//   frames of any trial's run) and records it, the plan and the record holding the mark and its
+//   basis, the record `irreversible_acknowledged` false and the plan no such member; the code
+//   `trial_irreversible_unacknowledged` retired in the outcome catalog.
 // No device, no clock read, no sleep: temporary directories, a made-up package, made-up ledgers.
 
 use super::*;
@@ -836,14 +844,18 @@ fn s311_each_run_only_refusal_sends_nothing_and_writes_nothing() {
         details["outcome"]["values"],
         json!({"package_id": PACKAGE_ID})
     );
-    let details = refused(
-        &context.line(&["--authorization", AUTHORIZATION, "--root", root.as_str()]),
-        "trial_irreversible_unacknowledged",
-        2,
-    );
-    assert_eq!(
-        details["outcome"]["values"],
-        json!({"package_id": PACKAGE_ID})
+    // Workflow #503 TRIAL: a marked package's line with an authorization is no refusal any more;
+    // the line has no `--irreversible`, and one given is refused as any flag the row does not take.
+    argument_refused(
+        &context.line(&[
+            "--authorization",
+            AUTHORIZATION,
+            "--root",
+            root.as_str(),
+            "--irreversible",
+        ]),
+        "--irreversible",
+        "unknown",
     );
     // The global `--dry-run`: the run and `--collect` are refused after the flags.
     let package = context.package().display().to_string();
@@ -1711,4 +1723,82 @@ fn s38_a_trial_with_a_value_sends_it_and_its_record_names_it() {
     let retired = &catalog["codes"]["trial_variables_not_carried"];
     assert_eq!(retired["status"], "retired", "{retired}");
     assert_eq!(retired["retired_in"], "0.12.68", "{retired}");
+}
+
+// Workflow #503 TRIAL (register §1.551; contracts/standard-pack-trial.md, "The irreversible
+// mark", "The run"): over a game root that marks the package (one it does not register), the line
+// with an authorization and no other flag sends its one run, as any trial's run is sent (the
+// frames of any trial's run, nothing more), succeeds and records it; the plan and the record hold
+// the mark and its basis, the record `irreversible_acknowledged` false and the plan no such member;
+// the code `trial_irreversible_unacknowledged` is retired in the outcome catalog, in 0.12.101.
+#[test]
+fn trial_a_marked_package_is_sent_and_recorded_under_its_authorization_alone() {
+    let context = Context::new();
+    let root = context.marking_root();
+    let given_root = root.display().to_string();
+    let shown_root = std::path::absolute(&root)
+        .expect("the root made absolute")
+        .display()
+        .to_string();
+    let instance = IdentifierIssuer::new()
+        .expect("identifier issuer")
+        .mint_instance_id()
+        .expect("instance id");
+    let runtime = ScriptedRuntime::start(&context.runtime_root(), |owner_epoch| {
+        vec![sent_run(
+            owner_epoch,
+            instance,
+            End::Keyed(DONE_KEY, "neutral/done"),
+        )]
+    });
+    let answered = context.line(&[
+        "--authorization",
+        AUTHORIZATION,
+        "--root",
+        given_root.as_str(),
+        "--expect",
+        DONE_KEY,
+    ]);
+    let record = runtime.finish();
+    assert_eq!(operations(&record.connections[0]), sent_frames());
+    assert!(record.unscripted.is_empty());
+
+    let shown = answered.envelope_json();
+    assert_eq!(answered.exit_code(), 0, "{shown}");
+    let data = answered.envelope.data.clone().expect("the answer");
+    assert_eq!(data["sent"], true, "{shown}");
+    assert_eq!(
+        data["request_id"],
+        sent_request_id(&record.connections[0]).as_str(),
+        "{shown}"
+    );
+    assert_eq!(data["matched"], true, "{shown}");
+    let basis = json!({
+        "root": shown_root,
+        "registered": false,
+        "capabilities": [],
+        "unreadable_packages": []
+    });
+    assert_eq!(data["plan"]["irreversible"], "marked", "{shown}");
+    assert_eq!(data["plan"]["irreversible_basis"], basis, "{shown}");
+    assert!(
+        data["plan"].get("irreversible_acknowledged").is_none(),
+        "{shown}"
+    );
+
+    let kept = record_at(&data["record"]);
+    assert_eq!(kept["plan"]["authorization"], AUTHORIZATION, "{kept}");
+    assert_eq!(kept["plan"]["irreversible"], "marked", "{kept}");
+    assert_eq!(kept["plan"]["irreversible_basis"], basis, "{kept}");
+    assert_eq!(kept["plan"]["irreversible_acknowledged"], false, "{kept}");
+    assert_eq!(kept["end"]["outcome_key"], DONE_KEY, "{kept}");
+    assert_eq!(kept["matched"], true, "{kept}");
+
+    let catalog: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/outcome-codes/resource-tooling.json"
+    ))
+    .expect("the resource tooling's fragment reads");
+    let retired = &catalog["codes"]["trial_irreversible_unacknowledged"];
+    assert_eq!(retired["status"], "retired", "{retired}");
+    assert_eq!(retired["retired_in"], "0.12.101", "{retired}");
 }

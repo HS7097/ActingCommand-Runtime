@@ -2715,7 +2715,7 @@
     },
     "fixed_value_milli": {
       "type": "integer",
-      "description": "A task's fixed value V in milli of its game's value unit: the value of one run without the cost of the pools it consumes, written in its standard pack (the schedule.json rule member fixed_value_milli, the catalog's benefit_fixed_value_milli); a judged candidate's net benefit is V less the cost of what it consumes (#428 SCHED-C1a, contracts/scheduling/README.md \"Fixed values written in the pack\")."
+      "description": "A task's fixed value V in milli of its game's value unit: the value of one run without the cost of the pools it consumes, written in its standard pack (the schedule.json rule member fixed_value_milli, the catalog's benefit_fixed_value_milli); a judged candidate's net benefit is V less the cost of what it consumes, plus its goal terms (#428 SCHED-C1a, contracts/scheduling/README.md \"Fixed values written in the pack\"). Of either sign, 0 included, since #503 FIXV (0.12.101)."
     },
     "run_origin": {
       "type": "vocab:run_origin",
@@ -7820,7 +7820,7 @@
           "description": "A group of the display file standard-pack catalog --displays reads has the id of a group of the catalog with another title (an error: the line adds a group that is not there and never renames one; a group of the same id and the same title, compared as JSON values without the order of its locales, is simply there; Workflow #477 PC-2 fix round 1, since 0.12.71)."
         },
         "catalog_value_conflict": {
-          "description": "A business part of a version 2 pack-catalog.json, or an item of the values file standard-pack catalog --values reads, writes a fixed value beside a second value of the same run, which the scheduling compiler refuses beside a rule's (fixed_value_conflict): the realization mark, or a production of a pool whose valuation the game root's schedule.json declares or leaves pending; at the value (an error; Workflow #477 CV-1, since 0.12.79)."
+          "description": "A business part of a version 2 pack-catalog.json, or an item of the values file standard-pack catalog --values reads, writes a fixed value beside the realization mark, which the scheduling compiler refuses beside a rule's (fixed_value_conflict); at the value (an error; Workflow #477 CV-1, since 0.12.79). Since #503 FIXV (0.12.101) a value beside a production of a pool whose valuation the game root's schedule.json declares or leaves pending is taken, as the compiler takes it."
         },
         "catalog_rule_unknown": {
           "description": "A per-rule business part of a version 2 pack-catalog.json, or an item of the values file, names a rule_id that is no rule of the game root's schedule.json running the entry's package, at the rule_id: an error of the reader, as an entry of a package the registry does not hold is package_not_listed; standard-pack catalog leaves such a part out of the file it writes and warns of it (standard_pack_catalog_left_out) (Workflow #477 CV-1, since 0.12.79)."
@@ -7898,7 +7898,7 @@
           "description": "A resource entry of goals.json governs a pool that is not a pool of the composed schedule (Workflow #455 G-R1, since 0.12.60)."
         },
         "goal_pool_unvalued": {
-          "description": "A resource entry of goals.json governs a pool that gives a goal no step and importance: neither a valuation with scale and gap nor, on a pool that writes no valuation, target_defaults with scale and importance_milli (Workflow #455 G-R1, since 0.12.60; target_defaults #455 B3-P, since 0.12.82). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
+          "description": "A resource entry of goals.json governs a pool that gives a goal no step and importance: neither a valuation with scale and gap nor, on a pool that writes no valuation, target_defaults with scale and importance_milli (Workflow #455 G-R1, since 0.12.60; target_defaults #455 B3-P, since 0.12.82), nor spend_line, on which the entry's goal is the pool's line (#455 SL2, since 0.12.101). For a pool whose producing rules keep their fixed values the remedy is target_defaults, or since #503 FIXV (0.12.101) a valuation, which a fixed value now stands beside (its base valuation is not read beside the value)."
         },
         "goal_package_unknown": {
           "description": "An entry of goals.json governs a package that is not a package of bundle.json (Workflow #455 G-R1, since 0.12.60): since Workflow #463 V1 the package a tier entry's rule runs, or one that declares a placed variable."
@@ -8000,7 +8000,7 @@
           "description": "An item of goal-tables.json names a pool that is no pool of the game root's composed schedule.json (none without the file), at its pool (Workflow #455 RR1, since 0.12.92)."
         },
         "table_pool_unvalued": {
-          "description": "An item of goal-tables.json without a recipe, the item a need lands on, names a pool a goal cannot be put on: the judgement goal_pool_unvalued gives a resource entry's pool (neither a valuation with scale and gap nor, without a valuation, target_defaults with scale and importance_milli), at its pool; the pool of an item with a recipe need only be a pool of the root (Workflow #455 RR1, since 0.12.92)."
+          "description": "An item of goal-tables.json without a recipe, the item a need lands on, names a pool a goal cannot be put on: the judgement goal_pool_unvalued gives a resource entry's pool (neither a valuation with scale and gap nor, without a valuation, target_defaults with scale and importance_milli), at its pool, and (#455 SL2, since 0.12.101) a pool that writes spend_line, whose goal is its line and gives no step and importance; the pool of an item with a recipe need only be a pool of the root (Workflow #455 RR1, since 0.12.92)."
         },
         "table_pool_duplicate": {
           "description": "An item of goal-tables.json names a pool an earlier item of the file names: a holding has one name in the file, so what a later slice subtracts of a pool's holding it subtracts once. At the later item's pool (Workflow #455 RR1 fix round 1, since 0.12.92)."
@@ -10569,7 +10569,7 @@
           "description": "The pool of a resource value is no pool the application can target (pool_id)."
         },
         "pool_unvalued": {
-          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: it has neither a valuation with scale and gap nor, as a pool without a valuation, target_defaults (#455 B3-P, since 0.12.82) (pool_id). For a pool whose producing rules keep their fixed values the remedy is target_defaults: a valuation beside a fixed value is refused (fixed_value_conflict, catalog_value_conflict)."
+          "description": "The pool of a resource value is targetable only with its own step or importance, which a goal by name does not carry: it has neither a valuation with scale and gap nor, as a pool without a valuation, target_defaults (#455 B3-P, since 0.12.82) nor spend_line (#455 SL2, since 0.12.101: the value is then the pool's line) (pool_id). For a pool whose producing rules keep their fixed values the remedy is target_defaults, or since #503 FIXV (0.12.101) a valuation, which a fixed value now stands beside (its base valuation is not read beside the value)."
         },
         "deadline_unsupported": {
           "description": "A resource value carries by_unix_ms: no reader of this build reads a deadline (Workflow #455 G-R4 builds it), so none is stored."
@@ -11163,7 +11163,7 @@
       }
     },
     "entry_recovery_end": {
-      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Every way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after update_dialog nothing climbs again in the instance's stretch of blocks, after worker_panicked nothing climbs again in that block.",
+      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Every way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after update_dialog nothing climbs again in the instance's stretch of blocks, after worker_panicked or worker_failed nothing climbs again in that block.",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",
@@ -11178,6 +11178,9 @@
         },
         "worker_panicked": {
           "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic), and nothing climbs again in that block."
+        },
+        "worker_failed": {
+          "description": "The result: the instance's own recovery ended because the work that climbed its ladder failed with an error its instance worker contained (no panic); the ladder ended there, and the instance is fenced or the error recorded, as that error's own record under the same links says (a runtime.failed of its code, or the fence's instance_resources_fenced caused by it, a fence that also ends the block). The operation, as after worker_panicked: the entry block stands and nothing climbs again in that block; the instance's next recovery is by its ladder, a person's self-check or resume, or a run that succeeds; read the error's own record first (#503 ISO-A fix round 1, since 0.12.102)."
         }
       }
     },

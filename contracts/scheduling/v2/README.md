@@ -313,20 +313,29 @@ SCHED-C1a (since 0.12.52; register §1.299; `../README.md`, "Fixed values writte
 only: a task may carry `benefit_fixed_value_milli`, an integer, `V`: the value of one run of a
 judged task without the cost of the pools it consumes, in milli of the value unit its instance's
 valuations weigh in. Its net benefit is then `V` without a consumption and `V` less the cost of
-what it consumes otherwise; its `produces` are not read by that benefit (they keep their other
-readers), and a consumed pool still needs its valuation. It is not `value_milli`, which keeps its
-meaning and its reader, the score stage. The standard-pack composer writes it from the
-`schedule.json` rule member `fixed_value_milli` (which is no V2 task member), and refuses a rule
-that writes `benefit_fixed_value_milli` itself. Refused, each at its member:
+what it consumes otherwise, plus its goal terms; its `produces` are read by that benefit only for
+the gap weight a goal in force gives each pool (they keep their other readers), and a consumed
+pool still needs its valuation. It is not `value_milli`, which keeps its meaning and its reader,
+the score stage. The standard-pack composer writes it from the `schedule.json` rule member
+`fixed_value_milli` (which is no V2 task member), and refuses a rule that writes
+`benefit_fixed_value_milli` itself. #503 FIXV (since 0.12.101; register §1.550): `V` is of either
+sign, 0 included (0: worth nothing by itself; below 0: costs more than its priced consumption; a
+rule that must not run is still held or not written, and an unknown value is still the pending
+marker), and a `produces` entry on a pool whose `valuation` is a declared block or the pending
+marker stands beside it: the task's base value is `V` alone, the pool's base valuation is not read
+by the benefit, and its productions feed only its goal terms, the turns a run is told under a goal
+and the pools a run leaves unread (`../README.md`, "Beside priced productions", "What 0 and below
+mean"). Refused, each at its member:
 - in a V1 document, `unknown_field`; a value that is no integer (an explicit `null` included)
-  `type_mismatch`; one outside `1..=9007199254740991` `limit_exceeded` (a value of 0 is no value:
-  a rule that must not run is held or not written);
+  `type_mismatch`; one outside `-9007199254740991..=9007199254740991` `limit_exceeded` (before
+  0.12.101, `1..=9007199254740991`);
 - without `benefit_judged: true`, `missing_required_field` at `benefit_judged`;
-- `fixed_value_conflict` (error) at `benefit_fixed_value_milli`, beside a `produces` entry on a
-  pool whose `valuation` is a declared block or the pending marker, and beside
-  `benefit_realization: true`: the task would have two values, and neither may silently win.
+- `fixed_value_conflict` (error) at `benefit_fixed_value_milli`, beside `benefit_realization:
+  true`: the zero tier reads a modelled value's rounding, which a fixed value does not have.
+  Before 0.12.101 it was given beside a priced or pending product too.
 
-A task without the member serializes, hashes and decides exactly as before.
+A task without the member serializes, hashes and decides exactly as before, and so does one whose
+value is 1 or more beside no priced or pending product.
 
 SCHED-C1c (since 0.12.53; register §1.299; `../README.md`, "Pool lines", "The trigger line", "A
 pool its lines cannot spend"), V2 only: a pool that writes `stop_line` and `hard_line` may also
@@ -465,7 +474,10 @@ member; a number out of its range `limit_exceeded` at it; a missing member
 `missing_required_field`, any other member `unknown_field`, a member of another type
 `type_mismatch` (the reader). A `schedule.json` whose pool writes it names `pool_spend_line` in
 `requires`, which a Runtime names from 0.12.97 on. A pool without it serializes, hashes and decides
-exactly as before.
+exactly as before. #455 SL2 (since 0.12.101; register §1.547; `../../resource-targets.md`, "A
+pool's line"): the line can now be given: a stored target on such a pool is its line, set by
+`{at_least}` alone; it never weighs the pool's producers and has no date of its own. The pressing of
+the spenders below it is still to come.
 
 #455 RR3b (since 0.12.98; register §1.542; `../README.md`, "A goal's gap in two parts"), V2 only: a
 pool may write `goal_tiers`, `{"need_importance_milli": I_n, "stock_cap_milli": C}`, both required,

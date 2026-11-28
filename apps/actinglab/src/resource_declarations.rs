@@ -8,11 +8,13 @@ use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_contract::{
     BundleMaintenance, LabErrorClass, MAX_STANDARD_PACK_TABLES, ResourceAdjustmentDeclaration,
-    ResourceDeclarationIssue, ResourceReadingDeclaration, STANDARD_PACK_INTERRUPTS_FILE,
+    ResourceDeclarationIssue, ResourceReadingDeclaration, STANDARD_PACK_CATALOG_FILE,
+    STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE, STANDARD_PACK_INTERRUPTS_FILE,
     STANDARD_PACK_LOADING_FILE, STANDARD_PACK_NAVIGATION_FILE, STANDARD_PACK_PAGES_FILE,
     STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackProblem,
     StandardPackRootIssue, StandardPackTableIssue, page_projection::ProjectionMetadata,
-    parse_pack_loading, parse_standard_pack_interrupts, parse_standard_pack_loading,
+    parse_pack_loading, parse_standard_pack_catalog_alone, parse_standard_pack_goal_tables,
+    parse_standard_pack_goals, parse_standard_pack_interrupts, parse_standard_pack_loading,
     parse_standard_pack_navigation, parse_standard_pack_pages, parse_standard_pack_schedule,
     parse_standard_pack_table, replacement_leftover_name,
     resource_declaration::ProcedureBindingConfigFile, validate_bundle_maintenance_declarations,
@@ -666,12 +668,48 @@ impl DeclarationReader {
             check_pack_loading_copy(root_file.as_deref(), &pack)
                 .map_err(|error| loading_tool_refusal(path, error))?;
             "pack_loading"
+        } else if path == Path::new(STANDARD_PACK_GOALS_FILE) {
+            // Workflow #503 NOISE-B: the game's goal declaration by its one reader, for the game of
+            // the page list beside it; what it names of the root (its pools, packages, rules and
+            // tables) is held by `resource verify`'s bundle step and `standard-pack build`.
+            let game = self.root_game()?;
+            parse_standard_pack_goals(&bytes, &game)
+                .map_err(|issues| loading_refusal(path, &issues))?;
+            "standard_pack_goals"
+        } else if path == Path::new(STANDARD_PACK_GOAL_TABLES_FILE) {
+            // Workflow #503 NOISE-B: the game's tables of goals by their one reader, the file alone,
+            // for the game of the page list beside it.
+            let game = self.root_game()?;
+            parse_standard_pack_goal_tables(&bytes, &game)
+                .map_err(|issues| loading_refusal(path, &issues))?;
+            "standard_pack_goal_tables"
+        } else if path == Path::new(STANDARD_PACK_CATALOG_FILE) {
+            // Workflow #503 NOISE-B: the package declaration of either version by the contract
+            // crate's check of the file alone, for the game of the page list beside it; its package
+            // ids against the bundle's registry and its references to `schedule.json` are held by
+            // `resource verify`'s bundle step and `standard-pack build`. Display defects are
+            // warnings of those readers and are not reported here.
+            let game = self.root_game()?;
+            parse_standard_pack_catalog_alone(&bytes, &game)
+                .map_err(|issues| loading_refusal(path, &issues))?;
+            "standard_pack_catalog"
         } else if let Some(family) = self.validate_task_dependency(path)? {
             family
         } else {
             return self.unmapped(path, "program declaration family has no mapped parser");
         };
         Ok(json!({"path": path_text(path), "status": "valid", "family": family}))
+    }
+
+    /// Workflow #503 NOISE-B: the game of the repository root's `pages.json`, read as the
+    /// `interrupts.json` and `navigation.json` families read it: a root without the file, or with
+    /// one its reader refuses, is refused naming `pages.json`.
+    fn root_game(&mut self) -> CliOutcome<String> {
+        let pages_path = Path::new(STANDARD_PACK_PAGES_FILE);
+        let pages = self.read(pages_path, MAX_DOCUMENT_BYTES)?;
+        parse_standard_pack_pages(&pages, None)
+            .map(|list| list.game)
+            .map_err(|issue| invalid(pages_path, &issue.to_string()))
     }
 
     /// Workflow #357 DB-1 (M-357a v1.1 §2.2, §2.3): one table file of the repository root's
@@ -868,6 +906,9 @@ impl DeclarationReader {
         Ok(())
     }
 
+    /// Workflow #503 NOISE-B: a removed root `goals.json`, `goal-tables.json` or
+    /// `pack-catalog.json` is accepted as a removed `privacy-zones.json` is: no declaration this
+    /// reader checks reads them (what they name of the root is `resource verify`'s to hold).
     fn removal(&mut self, path: &Path) -> CliOutcome<Value> {
         // Recheck every remaining task in the same operation scope. The shared
         // declaration owner supplies all required JSON dependencies, including removed ones.
@@ -1004,6 +1045,9 @@ impl DeclarationReader {
             && !is_applications_table(path)
             && path != Path::new(DECLARATION_EXCLUSIONS_FILE)
             && path != Path::new(PRIVACY_ZONES_FILE)
+            && path != Path::new(STANDARD_PACK_GOALS_FILE)
+            && path != Path::new(STANDARD_PACK_GOAL_TABLES_FILE)
+            && path != Path::new(STANDARD_PACK_CATALOG_FILE)
         {
             return self.unmapped(
                 path,
@@ -1635,7 +1679,8 @@ fn declaration_parser_error(
 
 /// Workflow #407 LOAD-2: `loading.json` or a pack's loading copy refused by the contract's check:
 /// `resource_declaration_invalid` naming the file, every issue in the message and the first one's
-/// `standard_pack_problem` and `json_pointer` in the details.
+/// `standard_pack_problem` and `json_pointer` in the details. Workflow #503 NOISE-B: so are a root
+/// `goals.json`, `goal-tables.json` and `pack-catalog.json` their readers refuse.
 fn loading_refusal(path: &Path, issues: &[StandardPackRootIssue]) -> CliError {
     let first = issues.first();
     let reason = issues

@@ -61,8 +61,10 @@
 //! - **A fixed value** (SCHED-C1a, register §1.299; Alice's two kinds of scoring of 11-09 15:47
 //!   and 15:50; `contracts/scheduling/README.md`, "Fixed values written in the pack"). A task
 //!   that writes `benefit_fixed_value_milli` `V` is judged by
-//!   `B = V + Σ_g produce(k,g)·W(k,g)/Q_g − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a
-//!   consumption and without a goal term. A consumed pool still needs its valuation and a
+//!   `B = V + Σ_g produce(k,g)·Γ(k,g)/Q_g − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a
+//!   consumption and without a goal term. #503 FIXV (register §1.550): `V` is of either sign, 0
+//!   included, and its base value alone: a produced pool's base valuation is never added to it. A
+//!   consumed pool still needs its valuation and a
 //!   regenerating one its reading, as above; a fixed value is exact and adds nothing to `ε`. So
 //!   below the cap a consumer's `B` is `V − W·c` plus its goal terms, and in a capped round its
 //!   value without the pool's cost is `V` plus its goal terms less the other pools' cost
@@ -71,13 +73,15 @@
 //!   its other reasons.
 //! - **A goal term of a fixed value** (#455 B1, register §1.518; the coordinator's rulings of
 //!   11-23; `contracts/resource-targets.md`, "Resource weights (v2)"). Each pool `g` the task
-//!   produces that the resource layer weighs above 0 for it adds `produce(k,g)·W(k,g)/Q_g`, its
-//!   production term as for a task without a fixed value, with its share of `ε` and its item: such
-//!   a pool declares no valuation (the compiler refuses a fixed value beside a priced product), so
-//!   it is weighed only by a goal in force that covers the task with an open gap, `W = Γ` and `Q`
-//!   the goal's `scale`. Any other pool it produces is not read: no goal, a pending goal (an
-//!   unknown reading, `Γ = 0`) and a met goal add nothing, so without such a goal `B`, `ε` and every
-//!   record are those of before, and a goal never lowers a `B`. Ruling 9 (a goal chooses which task
+//!   produces whose gap weight `Γ` the resource layer gives above 0 for it adds
+//!   `produce(k,g)·Γ(k,g)/Q_g`, with its share of `ε` (`Γ` as its `W`) and its item: `Γ` comes only
+//!   from a goal in force that covers the task with an open gap, and `Q` is the step its term
+//!   divides by (a priced pool's `valuation.scale`, else the goal's `scale`). #503 FIXV: a priced
+//!   or pending pool may be produced beside `V`, and its base valuation is not read; for a pool
+//!   without a valuation `Γ` is its whole weight, as before. Any other pool it produces is not read:
+//!   no goal, a pending goal (an unknown reading, `Γ = 0`) and a met goal add nothing, so without
+//!   such a goal `B`, `ε` and every record are `V`'s and the consumption's alone, and a goal never
+//!   lowers a `B`. Ruling 9 (a goal chooses which task
 //!   spends a pool, the pool's lines choose when), as corrected: below the trigger line of a
 //!   regenerating pool it consumes (the capacity without a written one; a pool whose lines give no
 //!   value counts as below), with no capped episode under way ([`super::capped`]), whether the task
@@ -96,13 +100,14 @@ use std::collections::BTreeMap;
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_selection_policy::UnknownReason;
 
-use super::capped::{self, CappedMemory, Disposition};
+use super::capped::{self, CappedMemory, Disposition, TriggerAt};
 use super::fact_refresh::{self, AffectedCandidate};
 use super::{
     DecisionReason, DetectionSuggestion, EvaluationFacts, InstanceSnapshot, PlacementCandidate,
     PlacementContext, PolicyEvaluationError, PolicyEvaluationResult, SchedulingDecisionState,
-    TaskWork, UnknownReasonToken, min_wake, next_pool_projection_change, offset_rank,
-    project_pool_value, reason_with, resource_suggestion, scope_matches_instance, unknown_token,
+    TaskWork, UnknownReasonToken, activity_window_at, asleep_below_trigger_reason, min_wake,
+    next_pool_projection_change, offset_rank, project_pool_value, reason_with, resource_suggestion,
+    scope_matches_instance, unknown_token,
 };
 use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
 use crate::resource_targets::PoolWeight;
@@ -479,8 +484,12 @@ fn goal_tiers_pool(
 /// (register §1.518): of its `produces` only the pools its term weighs above 0 are read, each a
 /// production term at its term's step `Q` (a goal's `scale`), with its share of `ε` and its item;
 /// no other produced pool is looked up, so neither its valuation nor an entry's pending amount
-/// makes `B` unknown. #455 SL1 (register §1.540): a consumed pool that writes `spend_line` needs no
-/// valuation and adds no term, no share of `ε` and no consumed term, only its item `<pool>:-0`.
+/// makes `B` unknown. #503 FIXV (register §1.550): `V` of either sign; a produced pool is read by
+/// its gap weight `Γ` alone ([`PoolWeight::gap_weight_milli`]), at the step its term divides by (a
+/// priced pool's `valuation.scale`), so its base valuation is never added to `V`; for a pool
+/// without a valuation `Γ` is the whole weight, as before. #455 SL1 (register §1.540): a consumed
+/// pool that writes `spend_line` needs no valuation and adds no term, no share of `ε` and no
+/// consumed term, only its item `<pool>:-0`.
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
@@ -521,15 +530,11 @@ fn judge(
         ))
     };
     let mut sum = ExactSum::new();
-    // SCHED-C1a: a fixed value is exact, so it adds nothing to `ε`.
+    // SCHED-C1a: a fixed value is exact, so it adds nothing to `ε`. #503 FIXV (register §1.550):
+    // of either sign, 0 included, added as it is written.
     if let Some(value) = fixed_value {
-        let value = u128::try_from(value).map_err(|_| {
-            PolicyEvaluationError::invalid(format!(
-                "task '{}' has a negative fixed value on instance '{}'",
-                task.id, instance.instance_id
-            ))
-        })?;
-        sum.add(value, 1, false).ok_or_else(overflow)?;
+        sum.add(u128::from(value.unsigned_abs()), 1, value < 0)
+            .ok_or_else(overflow)?;
     }
     // SS-2d: the rounding bound `ε` of `sum`, accumulated as exactly (module doc).
     let mut tolerance = ExactSum::new();
@@ -552,7 +557,9 @@ fn judge(
         }
         seen.push(effect.pool_id.as_str());
         // `W` and `Q`: the pool's valuation's, its term's weight where it holds one; #455 B1, with
-        // a fixed value, only a pool its term weighs above 0, at that term's step.
+        // a fixed value, only a pool its term weighs above 0, at that term's step; #503 FIXV
+        // (register §1.550): by its gap weight `Γ` alone, so a priced product's base valuation is
+        // never added to the fixed value.
         let (weight_milli, scale) = match fixed_value {
             None => {
                 let (_, valuation) =
@@ -568,7 +575,7 @@ fn judge(
                 )
             }
             Some(_) => match weight(&effect.pool_id) {
-                Some(term) if term.weight_milli > 0 => (term.weight_milli, term.step),
+                Some(term) if term.gap_weight_milli > 0 => (term.gap_weight_milli, term.step),
                 _ => continue,
             },
         };
@@ -910,7 +917,7 @@ pub(super) fn gate(
                 };
                 // SS-2h: a capped pool's order decides before the sign of `B`. SCHED-C1a: a `B`
                 // computed from a fixed value says so first, whatever the gate then decides.
-                let (hold, below_trigger) = match disposition {
+                let (hold, below_trigger, trigger_at) = match disposition {
                     Disposition::Held(reason) => {
                         note_fixed_value(task_work, task, saturating_milli(sum.floor()), expected);
                         defer(task_work, reason);
@@ -933,7 +940,8 @@ pub(super) fn gate(
                     Disposition::Normal {
                         hold,
                         below_trigger,
-                    } => (hold, below_trigger),
+                        trigger_at,
+                    } => (hold, below_trigger, trigger_at),
                 };
                 let benefit_milli = saturating_milli(sum.floor());
                 // #455 B1 ruling 9 (register §1.518): below the trigger line of a regenerating pool
@@ -1016,6 +1024,25 @@ pub(super) fn gate(
                         defer(task_work, hold);
                         continue;
                     }
+                    // #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "Below a
+                    // pool's trigger line"): on an asleep instance, below the trigger line of a
+                    // regenerating pool it consumes whose lines read, it is no reason to wake the
+                    // instance before its release; it waits, kept by no later gate, and the round
+                    // goes on to the instance's next candidate. With no release after now it
+                    // passes as on an awake instance.
+                    if let Some(trigger) = &trigger_at
+                        && let Some(release) =
+                            asleep_release(context, &candidate, task_work, trigger, expected)?
+                    {
+                        task_work.state = SchedulingDecisionState::Deferred;
+                        task_work.reasons.push(asleep_below_trigger_reason(
+                            &candidate.instance_id,
+                            trigger,
+                            release,
+                        ));
+                        task_work.next_wake_unix_ms = Some(release);
+                        continue;
+                    }
                     let known = KnownBenefit {
                         benefit_milli,
                         expected_duration_ms: expected,
@@ -1067,6 +1094,43 @@ pub(super) fn gate(
         }
     }
     Ok(kept)
+}
+
+/// #503 WAKE (register §1.549, the coordinator's ruling 1 as fix round 1 states it;
+/// `contracts/scheduling/README.md`, "Below a pool's trigger line"): when a consumer that would
+/// pass on an asleep instance below a regenerating pool's trigger line is let through: the earlier
+/// of the time the pool reaches the line (`trigger`, the earliest of such pools it consumes) and
+/// the end of its chance less its expected duration `expected`. Its chance ends at the earliest
+/// time at which what lets it run now stops for a reason of time: its trigger's and its feedback
+/// stop's own boundaries (`TaskWork::chance_end_unix_ms`, which never holds a regenerating pool's
+/// projection step, whatever its value: that is the evaluation's next reading of the pool, no end
+/// of anything) and the end of the activity window open now. `None` when that release is not after
+/// the evaluation: the consumer passes as on an awake instance. Fix round 2 (review F7): the run
+/// that release leaves room for is the longer of `expected` and the duration the candidate's
+/// dispatch would carry (its pair's measured `E`, else the declared one), which the host's
+/// day-boundary fit checks, so a release at a window's end is never later than that fit allows.
+fn asleep_release(
+    context: &PlacementContext<'_>,
+    candidate: &PlacementCandidate,
+    task_work: &TaskWork,
+    trigger: &TriggerAt,
+    expected: u64,
+) -> PolicyEvaluationResult<Option<u64>> {
+    let now = context.time.unix_ms;
+    let window_end = context
+        .profiles
+        .iter()
+        .find(|profile| profile.id == candidate.activity_profile_id)
+        .map(|profile| activity_window_at(profile, now))
+        .transpose()?
+        .flatten()
+        .map(|window| window.until_unix_ms);
+    let run = expected.max(candidate.expected_duration_ms);
+    let release = match min_wake(task_work.chance_end_unix_ms, window_end) {
+        Some(end) => trigger.unix_ms.min(end.saturating_sub(run)),
+        None => trigger.unix_ms,
+    };
+    Ok((release > now).then_some(release))
 }
 
 /// `B` or `ε` in milli as a record value, saturated at the `i64` range.

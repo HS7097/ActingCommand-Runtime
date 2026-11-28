@@ -1039,16 +1039,19 @@ fn set_fields(
 /// v2 policy's, whose lifetime is the earliest of theirs, and the others its lapsed targets; when
 /// every target's lifetime has passed, an expired v2 policy whose lifetime is the latest of
 /// theirs. Its version is the record's `policy_sha256` and `observed_at_unix_ms`, as a v2 record's.
+/// #455 SL2: all of it without the targets `line` names (the evaluation's lines; none for the
+/// view's reading).
 pub(super) fn stored_policy_state_v3(
     fact: &ObservedFact,
     rows: &[BTreeMap<String, FactScalar>],
     instance_id: &str,
     time: EvaluationTime,
+    line: &dyn Fn(&str) -> bool,
 ) -> Option<TargetPolicyState> {
     let unreadable = |code| Some(TargetPolicyState::Unreadable { code });
     let DecodedResourceTargetsV3 {
         policy_sha256,
-        targets,
+        mut targets,
         ..
     } = match decode_rows_v3(rows, instance_id) {
         Ok(decoded) => decoded,
@@ -1057,6 +1060,9 @@ pub(super) fn stored_policy_state_v3(
     if fact.expires_at_unix_ms.is_some() {
         return unreadable(RowsDecodeError::MalformedRows.code());
     }
+    // #455 SL2 (register §1.547): the targets `line` names, each with its own lifetime, are left out
+    // before the record is read as a policy; a record of lines alone holds no target.
+    targets.retain(|target| !line(target.target.resource.as_str()));
     if targets.is_empty() {
         return None;
     }

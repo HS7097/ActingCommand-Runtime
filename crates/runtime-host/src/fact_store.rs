@@ -1589,6 +1589,16 @@ impl InstanceFactStore {
             .map(|stored| &stored.record)
     }
 
+    /// #503 ISO-A: the latest observation the store keeps for exactly this scope and key, its
+    /// record active or not (an invalidated key keeps its invalidation's), which a new record of
+    /// the key must be newer than while none is active (`preview_publish`); `None` for a key never
+    /// observed.
+    pub(crate) fn latest_observed_unix_ms(&self, scope: &FactScope, key: &str) -> Option<u64> {
+        self.latest_observed
+            .get(&(scope.clone(), key.to_owned()))
+            .copied()
+    }
+
     /// The active record under exactly this scope and key with the sequence and id of the
     /// `fact.published` event that carried it (Workflow #308 RT-S1a).
     pub(crate) fn active_revision(

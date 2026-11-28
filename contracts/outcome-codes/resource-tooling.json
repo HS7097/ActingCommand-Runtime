@@ -1403,11 +1403,12 @@
         "package_id": "required"
       },
       "review": "pending",
-      "status": "active",
+      "status": "retired",
       "since": "0.12.65",
-      "description": "Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): the irreversible mark, judged over the root --root names, flags the package package_id (a capability of the root marked irreversible that it provides or its remedies list, a package the root does not register, or a root with an unreadable package), and its run was asked for without --irreversible. Nothing was sent and nothing was written. Without --root the mark is not judged and refuses nothing.",
-      "common_causes": "A package whose run may do something that cannot be undone, tried without acknowledging it.",
-      "handling": "Read the plan's irreversible_basis; when the owner's authorization covers it, give --irreversible."
+      "retired_in": "0.12.101",
+      "description": "Retired (Workflow #503 TRIAL): the trial's run asks for no acknowledgement of a package the irreversible mark flags, so a marked package is sent under its authorization alone and nothing refuses it for this cause; the line has no --irreversible (one given is validation_failed, a flag the row does not take), and the mark stays shown in the plan and kept in the record. Was: Workflow #463 S3-11 (contracts/standard-pack-trial.md, \"The run\"): the irreversible mark, judged over the root --root names, flags the package package_id (a capability of the root marked irreversible that it provides or its remedies list, a package the root does not register, or a root with an unreadable package), and its run was asked for without --irreversible. Nothing was sent and nothing was written. Without --root the mark is not judged and refuses nothing.",
+      "common_causes": "Before 0.12.101: a package whose run may do something that cannot be undone, tried without acknowledging it.",
+      "handling": "None in 0.12.101 and later: the code is no longer emitted."
     },
     "trial_variables_not_carried": {
       "category": "error",

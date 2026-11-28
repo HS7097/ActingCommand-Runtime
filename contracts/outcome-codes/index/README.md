@@ -23,26 +23,26 @@ here.
 | Status | Codes |
 |---|---:|
 | active | 3990 |
-| retired | 90 |
-| all | 4080 |
+| retired | 91 |
+| all | 4081 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 124 |
-| info | 238 |
+| info | 239 |
 | warning | 197 |
-| error | 3416 |
+| error | 3415 |
 | fatal | 15 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 837 |
+| `common_causes` and `handling` both written | 838 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3149 |
+| neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
 | `pending` | 3836 |
 | all active codes | 3990 |
@@ -69,16 +69,16 @@ here.
 | [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
-| [policy](policy.md) | 131 | 128 | 67 | 0 |
+| [policy](policy.md) | 132 | 129 | 68 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 115 | 114 | 38 | 0 |
+| [resource-tooling](resource-tooling.md) | 115 | 113 | 37 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1204 | 1157 | 236 | 6 |
+| [runtime-host](runtime-host.md) | 1204 | 1157 | 237 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4080 | 3990 | 837 | 154 |
+| all | 4081 | 3990 | 838 | 154 |

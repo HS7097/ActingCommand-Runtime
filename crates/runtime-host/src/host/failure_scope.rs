@@ -18,7 +18,8 @@
 //!   fails latches (R0.7).
 //! - **The five boundaries** that call it (R0.5): the request door, which is also the direct
 //!   run's boundary (`requests.rs`, since ISO-1); the scheduled and host-package run boundaries
-//!   (ISO-2), the instance worker (ISO-3), each per-instance step of a shared loop (ISO-4a), and
+//!   (ISO-2), the instance worker (`host_claims.rs`, since #503 ISO-A; planned as ISO-3), each
+//!   per-instance step of a shared loop (ISO-4a), and
 //!   actingd's driver per intent (ISO-6, through [`RuntimeHostError::halts_runtime`]).
 //!
 //! No source-text guard holds this (#420 S5 retired them): the fail-safe default keeps an
@@ -729,6 +730,33 @@ impl HostShared {
         Ok(())
     }
 
+    /// #503 ISO-A (R-A1-3; ISO-M #419 R8): after a panic of a payload of `instance` on its
+    /// worker, clears the poison the unwind left on the instance's own two locks, its device's
+    /// admission guard and queue-order lock, and says whether either was poisoned. Neither guards
+    /// data (each is a `Mutex<()>`), so clearing leaves nothing half written behind it; what the
+    /// panic left half done on the device is its fence's to take care of. Nothing is locked or
+    /// waited for: the poison is read and cleared on the lock itself. A poisoned map of those
+    /// locks, which every instance shares, stays `Global` (`lock`).
+    pub(super) fn clear_instance_lock_poison(
+        &self,
+        instance: InstanceId,
+    ) -> RuntimeHostResult<bool> {
+        let guard = self
+            .instance_guard(instance)
+            .map_err(|failure| *failure.error)?;
+        let order = self
+            .queue_order_lock(instance)
+            .map_err(|failure| *failure.error)?;
+        let mut poisoned = false;
+        for instance_lock in [guard, order] {
+            if instance_lock.is_poisoned() {
+                instance_lock.clear_poison();
+                poisoned = true;
+            }
+        }
+        Ok(poisoned)
+    }
+
     /// ISO-2b (#419 R1): `failure`, a capture of `instance` whose session died for the second
     /// time in a row, holds only that instance. It goes to the one decision point at once
     /// ([`Self::contain_failure`]), whatever boundary its work has: the instance is fenced and the
@@ -776,6 +804,22 @@ pub(crate) fn lock_instance(
             instance,
         )
     })
+}
+
+/// #503 ISO-A, tests: what a test payload of an instance's worker does
+/// (`RuntimeHost::post_worker_payload_for_test`).
+#[cfg(test)]
+pub(crate) enum WorkerActForTest {
+    /// Sets `done` and ends.
+    Finish(std::sync::Arc<std::sync::atomic::AtomicBool>),
+    /// Ends with this error.
+    Fail(RuntimeHostError),
+    /// Panics holding no lock.
+    Panic,
+    /// Panics while it holds its instance's device admission guard and queue-order lock.
+    PanicHoldingInstanceLocks,
+    /// Panics while it holds the scheduler's lock, which every instance shares.
+    PanicHoldingSharedLock,
 }
 
 impl RuntimeHost {

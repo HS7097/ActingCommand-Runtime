@@ -235,8 +235,10 @@ serializes, hashes and decides exactly as before.
 words that such a currency has a line: above it the spending goes on as today, below it the rules
 that spend are pressed, the harder the farther below, the pressing depends on time, and close to
 the date nothing more may be spent). Some pools are what a player saves for a dated event: they
-carry no valuation and cannot carry one (every rule that produces them keeps a fixed value, and a
-fixed value beside a production of a valued pool is refused). In a V2 catalog a pool that writes
+carry no valuation and could not carry one (every rule that produces them keeps a fixed value, and
+before #503 FIXV, 0.12.101, a fixed value beside a production of a valued pool was refused; since,
+such a pool's valuation would not be read beside the value: "Fixed values written in the pack",
+"Beside priced productions"). In a V2 catalog a pool that writes
 **neither a `valuation`** (a block or the pending marker) **nor `target_defaults`** may write
 `spend_line`, which declares that a line a person may set governs its spending:
 
@@ -246,7 +248,7 @@ fixed value beside a production of a valued pool is refused). In a V2 catalog a 
 
 | Field | Bound | What it will be read for | Diagnostic |
 | --- | --- | --- | --- |
-| `price_milli` | required, 1..=9,007,199,254,740,991, the bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line | `limit_exceeded` at it; missing: `missing_required_field` |
+| `price_milli` | required, 1..=9,007,199,254,740,991, the upper bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line | `limit_exceeded` at it; missing: `missing_required_field` |
 | `scale` | required, 1..=9,007,199,254,740,991, the bound of a valuation's `scale` | the amount the price is of, and the shortfall below the line at which the pressing reaches the full price | as `price_milli` |
 | `income_floor_milli_per_day` | required, 0..=9,007,199,254,740,991 | the thousandths of a unit the pool gains each day at the least, with nothing spent; 0 says nothing is sure; read for a line with a date | as `price_milli` |
 
@@ -265,10 +267,19 @@ it reads any pool without a valuation: the reserve gate holds a consumer whose r
 ("Task Reserves"), the forward projection applies the consumption, a run handed a `run_cap` leaves
 the pools its task consumes unread until they are read after it ("Pool lines"), a reserve on the
 pool gives its spend values; the pool's lines and the capped spending order act on valued pools
-only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). The goal page and
-the stored goals are untouched: the pool is not offered as one a goal can be set on by
-`{at_least}`, a goal by its pool id is refused `pool_unvalued`, and the Lab's root check refuses a
-`resource` entry on it (`goal_pool_unvalued`). The line itself, its date, the pressing, the hold
+only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). Until #455 SL2
+the goal page and the stored goals were untouched: the pool was not offered as one a goal can be set
+on by `{at_least}`, a goal by its pool id was refused `pool_unvalued`, and the Lab's root check
+refused a `resource` entry on it (`goal_pool_unvalued`).
+
+**With a line** (#455 SL2, since 0.12.101; register §1.547; [../resource-targets.md](../resource-targets.md),
+"A pool's line"). There is now a way to give such a pool its line: a stored target on it is the
+pool's line, set by `{at_least}` alone on the goal page or in a document, with no producer asked,
+listed with the member's `scale` and `price_milli` as its numbers and neither required, and taken by
+a `resource` entry of `goals.json`; no need of the records lands on it. A line has no date of its
+own, and it never weighs: the evaluation reads each stored record without its lines, so the tasks
+that produce the pool are judged as with no target on it and the tasks that consume it as above, the
+consumption still costing nothing. The pressing of the spenders below the line, its date, the hold
 and the statement of a shortfall are later slices. A `schedule.json` whose pool writes the member
 names `pool_spend_line` in `requires`
 ([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
@@ -1246,7 +1257,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   ("Capped spending order"), which also gives the head of its order its own `B` (below). Nothing
   here writes a pool weight (the one-way rule, SS-1). #455 B1 (since 0.12.82; register §1.518):
   a task with a fixed value reads of what it produces only its goal terms, each at its goal's
-  `scale` ("Fixed values written in the pack" below, "A goal on what it produces").
+  `scale` ("Fixed values written in the pack" below, "A goal on what it produces"); #503 FIXV
+  (since 0.12.101; register §1.550): each the pool's gap weight `Γ` alone, at the step its term
+  divides by, whatever valuation the pool carries.
 - **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
   entry (SCHED-C1a, since 0.12.52: and no fixed value, "Fixed values written in the pack" below,
   which reads of its `produces` only its goal terms, so a pool it produces never makes its `B`
@@ -1267,7 +1280,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) carry
   `<pool>:-0` at its place in the consumption's declaration order, so a reader of the decision sees
   the consumption was read and cost nothing. This 0 is a declared one, not an unknown read as 0:
-  the pool says its spending is governed by a line, and no line is set. Its reading is not read for
+  the pool says its spending is governed by a line, and no line is set. #455 SL2 (since 0.12.101):
+  with a line set it is the same 0, as the evaluation reads no line yet (the pressing below it is a
+  later slice's). Its reading is not read for
   the cost, and the pool takes no part in the pools' lines (below). An entry on it whose `amount`
   is the pending marker stays `entry_pending`; a task that produces it is judged as with any pool
   without a valuation (without a fixed value `valuation_missing`). A task without a fixed value
@@ -1403,7 +1418,8 @@ urgency_total_milli / cost_ms`, added to a candidate's `total` whether or not it
 task that writes it enters the score stage); the benefit gate never reads it.
 
 - **The member.** A V2 task may write `benefit_fixed_value_milli`, an integer in
-  `1..=9007199254740991`: `V`, the value of one run of the task without the cost of the pools it
+  `-9007199254740991..=9007199254740991` (#503 FIXV, since 0.12.101, register §1.550; before,
+  `1..=9007199254740991`): `V`, the value of one run of the task without the cost of the pools it
   consumes, in milli of the value unit its instance's valuations weigh in (the unit of `W`: a
   weight is the milli of value of `Q` steps of a pool). It requires `benefit_judged: true`.
   `value_milli` is not reused: its reader, the score stage, multiplies it by urgency and divides it
@@ -1414,8 +1430,9 @@ task that writes it enters the score stage); the benefit gate never reads it.
   catalog writes the task member itself.
 - **Without a consumption** `B = V`, known: such a rule is never `benefit_unknown` for lack of
   effects or of a priced pool. A fixed value is exact, so it adds nothing to `ε` ("Within
-  tolerance"); since `V ≥ 1`, the candidate is positive and ranks by `B ÷ E`. #455 B1 (since
-  0.12.82): plus its goal terms, "A goal on what it produces" below; without one, `B = V`.
+  tolerance"); with `V ≥ 1` the candidate is positive and ranks by `B ÷ E` (with `V ≤ 0`, "What 0
+  and below mean" below). #455 B1 (since 0.12.82): plus its goal terms, "A goal on what it
+  produces" below; without one, `B = V`.
 - **With a consumption** `B = V − Σ_p C_p·W_p/(1000·Q_p)`, the cost term of "Net benefit within a
   tier" unchanged (#455 B1: plus its goal terms). So below the cap (below the trigger line, "Pool lines") its net benefit is
   `V − W·c` as today, and in a capped round its value without the pool's cost is `V` less the cost
@@ -1428,17 +1445,19 @@ task that writes it enters the score stage); the benefit gate never reads it.
   above), so `B = V` less the other pools' cost. `ε` holds the consumption's terms only. A pool the pack values takes part in the lines and the capped order as
   any valued pool.
 - **Its `produces`** entries are not read by `B` but for its goal terms (#455 B1, the next item);
-  they keep their other readers (forward projection, resource targets). A produced pool that is
-  priced is refused (below).
+  they keep their other readers (forward projection, resource targets, the turns a run is told
+  under a goal, the pools a run leaves unread). #503 FIXV (since 0.12.101): a produced pool may be
+  priced or pending ("Beside priced productions" below).
 - **A goal on what it produces** (#455 B1, since 0.12.82; register §1.518; the coordinator's
-  rulings of 11-23, not the owner's words). Each pool the task produces that declares no valuation
-  (a priced or pending one is refused beside `V`, below) and that a goal in force covers with an
-  open gap adds its *goal term* to `B`: its per-run yield `r(k,p)` times the weight the resource
-  layer gives the pool for the goal over the goal's own `scale`, exactly as a production term of
-  "Net benefit within a tier" ([../resource-targets.md](../resource-targets.md), "Resource weights
-  (v2)": `W = B_p + Γ` with `B_p` 0 for a pool without a valuation, `Γ = min(⌊I·g/S⌋,
-  1 000 000)`, `S` the goal's `scale` and `I` its `importance_milli`, which the goal must carry for
-  such a pool). So `B = V + Σ_g r(k,g)·Γ_g/(1000·S_g) − Σ_p C_p·W_p/(1000·Q_p)`. An expected yield
+  rulings of 11-23, not the owner's words). Each pool the task produces that a goal in force
+  covers with an open gap adds its *goal term* to `B`: its per-run yield `r(k,p)` times the gap
+  weight `Γ` the resource layer gives the pool for the goal over the step its term divides by
+  ([../resource-targets.md](../resource-targets.md), "Resource weights (v2)": `Γ =
+  min(⌊I·g/S⌋, 1 000 000)`, `S` the goal's step and `I` its importance; the step `Q` the term
+  divides by is the pool's `valuation.scale` for a priced pool, else the goal's `scale`). For a
+  pool without a valuation `Γ` is its whole weight `W = B_p + Γ`, `B_p` 0, as since 0.12.82; #503
+  FIXV: for a priced pool only `Γ` is read, never `B_p`. So `B = V + Σ_g r(k,g)·Γ_g/(1000·Q_g) −
+  Σ_p C_p·W_p/(1000·Q_p)`. An expected yield
   brings its rounding bound to `ε` as a production term does ("Within tolerance"), and the
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) name each term as
   `<pool>:+<term>`, before the consumption's (but not where they are not counted, the next
@@ -1461,7 +1480,11 @@ task that writes it enters the score stage); the benefit gate never reads it.
   ⌈gap·1000 ÷ the yield in thousandths⌉ runs, at least 1, where before it removed it ("Expected
   quantities (v2)", SS-6); #455 RR3b (since 0.12.98): on a pool that writes `goal_tiers` the gap a
   run is bounded by and handed is the need's part while it is open, else the stock's, and the goal
-  term is that pool's `Γ` of two parts ("A goal's gap in two parts"). Without such a goal every value, record, decision and identity is as before; what a
+  term is that pool's `Γ` of two parts ("A goal's gap in two parts"); #503 FIXV (since 0.12.101;
+  the coordinator's ruling 2): for a task with a fixed value the goal's runs bound `run_cap`
+  whatever valuations its produced pools carry (the goal term of `run_cap` makes no base-weight
+  test for it, where a priced product beside the goal's pool would otherwise remove the bound).
+  Without such a goal every value, record, decision and identity is as before; what a
   catalog accepts or refuses, its hash and the `requires` names are unchanged, and an older
   Runtime ignores these productions as before.
 - **A goal chooses which task spends a pool, the pool's lines choose when** (#455 B1 ruling 9,
@@ -1511,7 +1534,11 @@ task that writes it enters the score stage); the benefit gate never reads it.
   is −2 of its own; with a stock's capped term of 4 (`C` 40 at the step 10, one unit a run) it is
   `B = 2` below the line and spends there; a rule of `V` 900 (−100 of its own) is −96 with the
   stock's term and waits, and with a need of 2 units (`I_n` 100 000: a term of 2000) it spends. A
-  pool without the member is ruled as above, byte for byte.
+  pool without the member is ruled as above, byte for byte. #503 WAKE (since 0.12.101): on an
+  asleep instance such a task, and any task that passes below the line, waits for the line before
+  it spends there, so the instance is not started for one run each time one run's cost has
+  regenerated; awake, it spends as described here ("An asleep instance", "Below a pool's trigger
+  line").
 - **One scale** (the coordinator's point 3). Static and dynamic candidates of one instance are
   ordered by the keys the business tier already has, with no second stage: `promoted`, the tier,
   SS-2f's turns across instances, then `B ÷ E` compared exactly (`B·E' > B'·E`), then `affinity`
@@ -1522,15 +1549,46 @@ task that writes it enters the score stage); the benefit gate never reads it.
   the unit of its valuations, in which the pack writes its fixed values and its constant valuations
   (`B` of two games is never compared: "Turns across instances").
 - **Refused at compile time** (point 4), each at its pointer: in a V1 document the member is
-  `unknown_field`; a value that is no integer `type_mismatch`, one outside `1..=9007199254740991`
-  `limit_exceeded`; without `benefit_judged: true`, `missing_required_field` at `benefit_judged`.
-  With the new diagnostic `fixed_value_conflict` (error) at `benefit_fixed_value_milli`: (a) a
-  `produces` entry on a pool whose `valuation` is a declared block or the pending marker, since the
-  rule would then have two values, the fixed one and its priced effects. Refusal, not precedence:
-  neither may silently win, and a model export that prices a rule's effects removes its fixed value
-  in the same change. (b) `benefit_realization: true`, since the zero tier reads a modelled value's
-  rounding and a product weighed above 0, which a fixed value does not have. A value of 0 is no
-  value: a rule that must not run is held or not written.
+  `unknown_field`; a value that is no integer `type_mismatch`, one outside
+  `-9007199254740991..=9007199254740991` `limit_exceeded` (#503 FIXV, since 0.12.101: 0 and
+  negative values are taken; before, `1..=9007199254740991`); without `benefit_judged: true`,
+  `missing_required_field` at `benefit_judged`. The diagnostic `fixed_value_conflict` (error) at
+  `benefit_fixed_value_milli` beside `benefit_realization: true`, since the zero tier reads a
+  modelled value's rounding and a product weighed above 0, which a fixed value does not have.
+  Before 0.12.101 it was given beside a `produces` entry on a pool whose `valuation` is a declared
+  block or the pending marker too, as a refusal rather than a precedence, so that neither of the
+  rule's two values (the fixed one and its priced effects) silently won; #503 FIXV replaces that
+  refusal by the precedence of the next item.
+- **Beside priced productions** (#503 FIXV, since 0.12.101; register §1.550; the coordinator's
+  rulings on the owner's direction of 11-28, which has people edit these files and asks that they
+  can write what is true). A task with a fixed value may write a `produces` entry on a pool whose
+  `valuation` is a declared block or the pending marker. The precedence is written, and nothing is
+  counted twice: **with a fixed value the task's base value is `V` alone.** Its productions stay as
+  written and feed everything that is not the base value: the goal terms of "A goal on what it
+  produces" (each pool's gap weight `Γ` alone, never its base valuation `B_p`), the turns a run is
+  told under a goal (`gap_remaining` and the goal term of `run_cap`) and the pools a run told
+  enough turns leaves unread (#455 RR3c, "Pool lines"). A produced pool's pending amount or pending
+  valuation never makes `B` unknown beside `V`, and its reading is read only for a goal on it. So a
+  rule writes its real drops beside its value, and a goal on what it really produces reaches it.
+  Provenance still lists every rule that runs on a fixed value, the list a model export that prices
+  a rule's effects replaces; whether that export then removes the value is the model's choice.
+  Without a goal on such a pool every `B`, `ε`, item and reason is `V`'s and the consumption's
+  alone, as for a rule that wrote no such production.
+- **What 0 and below mean** (#503 FIXV, since 0.12.101). `V` is the value of one run without the
+  cost of what it consumes, in the game's unit, of either sign: 0 says "worth nothing by itself",
+  a negative value "costs more than its priced consumption". With 0 and no consumption and no goal
+  term `S = ε = 0`, exact, so `policy_benefit_nonpositive` with `benefit_milli` 0 (after
+  `benefit_fixed_value` with `fixed_value_milli` 0); with a consumption `B = V − W·c < 0`, the same
+  reason. Such a task runs only where its goal terms make it positive outside the band (and only
+  where they are counted: below the trigger line of a regenerating pool it consumes, only those of
+  pools that write `goal_tiers`), or at an evaluation where it is not judged (a manual request, or
+  a ride in its chain head's run window); within the band it is `benefit_within_tolerance`
+  `unmarked`. In a capped round a consumer is listed only when its value without the pool's cost
+  is above that value's bound, so a `V ≤ 0` without goal terms is never listed. A rule that must
+  not run is still held or not written, and an unknown value is still the pending marker: neither
+  is 0. A step that costs something and yields nothing by itself is **not** helped by a value of 0
+  or below ([../standard-pack-schedule.md](../standard-pack-schedule.md), "What a resource
+  repository writes").
 - **What a person sees** (point 5). The decision of a judged candidate whose `B` was computed from
   a fixed value carries `benefit_fixed_value` (info; `benefit_milli` `B`, `fixed_value_milli` `V`,
   `expected_duration_ms`) before its other reasons, whether it was dispatched, deferred
@@ -1548,8 +1606,19 @@ task that writes it enters the score stage); the benefit gate never reads it.
   writes `valuation_origin`, lists it in `requires`; the composer refuses the file without it, so a
   Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of
   reading the rule without its value. An older Runtime given a catalog with the member refuses it
-  at its reader (`unknown_field`).
-- **Identity.** A task without the member serializes, hashes and decides byte for byte as before.
+  at its reader (`unknown_field`). #503 FIXV (since 0.12.101): a Runtime that reads a value of any
+  sign and beside priced productions also reports the always-on `fixed_value_any`; a
+  `schedule.json` whose rule's `fixed_value_milli` is 0 or below, or whose rule with a fixed value
+  writes a production of a pool whose `valuation` is a block or the pending marker, lists it beside
+  `benefit_fixed_value` ([../standard-pack-schedule.md](../standard-pack-schedule.md),
+  "`requires`"), so a Runtime before 0.12.101 refuses the file at `requires` and the installer's
+  plan refuses a rollback below it while such a file is in use. A raw V2 catalog carries no
+  `requires`: an older Runtime refuses its value of 0 or below (`limit_exceeded`) or beside a priced
+  product (`fixed_value_conflict`) at its compiler.
+- **Identity.** A task without the member serializes, hashes and decides byte for byte as before;
+  so does one whose value is 1 or more beside no priced or pending product (#503 FIXV: for it the
+  gap weight read equals the weight read before, and the goal term of `run_cap` meets no
+  base-weighted product).
 
 ## Task Reserves (Workflow #411 B16 part 2)
 
@@ -2805,7 +2874,8 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
   whose root cannot be composed" in [../resource-targets.md](../resource-targets.md)); a reading
   is not made old by a run that has produced into it since (the gap reads the holding as it was
   read), unless (#455 RR3c, since 0.12.98) that run was told enough turns to close a goal's gap on
-  the pool: then the holding is unread until a reading observed at or after the run's end ("Pool
+  the pool (#455 RR3d, since 0.12.101: or the runs told under the gap since the reading were,
+  together): then the holding is unread until a reading observed at or after their end ("Pool
   lines"), the goal on the pool pending and, for an item with a recipe,
   `goal_records_holding_unknown` with `unknown_reason` `fact_stale`, nothing taken apart below it;
   a rule that produces an item with a recipe counts for what it produces, not for what it is made
@@ -2863,7 +2933,16 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   the evaluation, beside the left-out facts, the pairs whose latest admitted dispatch at the
   inputs' ledger position carried a `run_cap` on its recorded reasons, each with when its run
   ended (the observation of its settlement) or that it has not; no record, event or wire member
-  is new, and a start reads the same from the ledger. Limits: a package that runs one turn
+  is new, and a start reads the same from the ledger. #455 RR3d (since 0.12.101; register §1.548;
+  the coordinator's rulings of 11-28): **a run that failed at its entry leaves nothing unread.** A
+  dispatch whose execution record, at the inputs' ledger position, is a failure its settlement
+  settled as one at its run's entry (a condition whose failure identity carries the entry mark,
+  [../policy-suspension.md](../policy-suspension.md), "A failure at the entry") is passed over
+  before a pair's latest is chosen: its main package executed no step, so it consumed and produced
+  nothing, and the pair's previous admitted dispatch stands, judged by the same rule. Every other
+  end leaves the pool unknown as before: a success, any other failure (one at the entry of another
+  class and one a start's reconciliation settled included), a stop and an interrupted settlement
+  may each have done some turns, and nothing the host holds says how many. Limits: a package that runs one turn
   whatever its `run_cap` still leaves the pool unknown until the next reading; a pool whose scope
   covers several instances is unknown on all of them after such a run on any one; a run whose
   settlement is not recorded keeps it unknown until it is (a start settles an earlier epoch's
@@ -2871,33 +2950,47 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   and a pair whose latest admitted dispatch the host's journal no longer holds is not noted; the
   resource targets' conditions and a goal's gap read the pool's observation themselves, as
   before.
-  #455 RR3c (since 0.12.98; register §1.543; the coordinator's rulings of 11-28): **a run told
-  enough to close a goal's gap leaves the pool it produced unread.** For the latest scheduled
-  dispatch of a pair whose recorded `policy_dispatch_parameters` carry `gaps_remaining`, each record
-  `{effect_index: j, gap_remaining: g}` with `g ≥ 1` whose entry `j` of the task's `produces` (as
-  the catalogue in force at the evaluation declares it; an entry the task no longer has is passed
-  over) is on a pool, and for which `n·y ≥ g·1000`, leaves that pool unread: `n` the `run_cap` the
-  same reason carries (1 without one), `y` the task's production of the pool per run in thousandths
-  as the goal term of `run_cap` reads it (its integer amounts times 1000, else its expected yield;
-  a pending amount yields 0 and the record is passed over), checked arithmetic, an overflow counting
-  as enough. Unread means what it means above, for the same span: a pool read from a fact or from
-  rows of a list is unknown to the whole evaluation, `fact_stale` under its own key, for every
-  reader of the pool values (the triggers, which ask the fact refresh for it, the net benefit, the
-  lines, the reserve gate, the spend values), from that dispatch's admission until a reading
-  observed at or after its run's end; and, for this pool alone, also for the two readers that do not
-  read the pool values: a resource target's observation of it (pending, `Γ` 0, no goal term of
-  `run_cap` and no `gap_remaining` from it; [../resource-targets.md](../resource-targets.md),
-  "Resource weights (v2)") and the holdings of the needs computed from the records ("Needs computed
-  from the records" above). One judgement decides all three, and the host hands the needs and the
-  evaluation the one list, read once under the gates the inputs are projected under. A run that was
-  not told enough to close its gap (a gap of 150 at three turns of one unit), and a dispatch that
+  #455 RR3c (since 0.12.98; register §1.543) and RR3d (since 0.12.101; register §1.548; the
+  coordinator's rulings of 11-28): **the production told under a goal's gap leaves the pool unread
+  once it reaches the gap.** For a pool whose current reading was observed at `t`, take the
+  admitted dispatches the host's journal holds at the inputs' ledger position (of any pair, but one
+  whose run failed at its entry, above) whose run has not ended or ended after `t` and whose
+  recorded `policy_dispatch_parameters` carry `gaps_remaining` with a record
+  `{effect_index: j, gap_remaining: g}`, `g ≥ 1`, whose entry `j` of the task's `produces` (as the
+  catalogue in force at the evaluation declares it; an entry the task no longer has is passed over)
+  is on the pool, in the order of their admission. The pool is unread when for one of them the sum,
+  over it and those before it, of `n·y` reaches `g·1000`, `g` the gap that dispatch was itself told
+  (the least where it was told several on the pool): `n` the `run_cap` each one's reason carries (1
+  without one), `y` its task's production of the pool per run in thousandths as the goal term of
+  `run_cap` reads it (its integer amounts times 1000, else its expected yield; a pending amount
+  yields 0 and the dispatch is passed over), checked arithmetic, an overflow counting as reached.
+  With one such dispatch this is 0.12.98's rule, `n·y ≥ g·1000`, byte for byte. So dispatches that
+  each fall short of the gap but together reach it leave the pool unread (a gap of 6 told 3 twice;
+  a stock gap of 150 at three turns of one unit at its fiftieth dispatch since the reading, read
+  before), and a later dispatch of the pair that carries no gap for the pool (its goal pending, or it
+  ran for another pool) no longer takes the place of one that closed it. Unread means what it means
+  above, for the same span: a pool read from a fact or from rows of a list is unknown to the whole
+  evaluation, `fact_stale` under its own key, for every reader of the pool values (the triggers,
+  which ask the fact refresh for it, the net benefit, the lines, the reserve gate, the spend
+  values), until a reading observed at or after the end of every run of the sum that reached the
+  gap (a reading observed at a run's end or after counts only the dispatches after it); and, for
+  this pool alone, also for the two readers that do not read the pool values: a resource target's
+  observation of it (pending, `Γ` 0, no goal term of `run_cap` and no `gap_remaining` from it;
+  [../resource-targets.md](../resource-targets.md), "Resource weights (v2)") and the holdings of the
+  needs computed from the records ("Needs computed from the records" above). One judgement decides
+  all three, and the host hands the needs and the evaluation the one list, read once under the gates
+  the inputs are projected under. Dispatches whose sum does not reach the gap, and a dispatch that
   carried no `gaps_remaining`, leave the pool read, as before; the rule above for the pools a run
-  consumes is unchanged, and a pool both name is unknown once. The host notes such a dispatch from
-  its recorded reasons, with its gaps and its `run_cap`, as it notes one that carried a `run_cap`;
-  nothing recorded is new, memory only, and a start reads the same from the ledger. Limits: a pool
-  whose scope covers several instances is unread on all of them after such a run on one; a run
-  that did fewer turns than it was told still leaves the pool unread until it is read; the yield is
-  the catalogue's expectation, so a run with poor drops is read once and sent again.
+  consumes reads each pair's latest dispatch as before, and a pool both name is unknown once. The
+  host notes every admitted dispatch from its recorded reasons, in the order of their admission,
+  with its end, its gaps and its `run_cap`; nothing recorded is new, memory only, and a start reads
+  the same from the ledger. Limits: a pool whose scope covers several instances is unread on all of
+  them after such runs on one; a run that did fewer turns than it was told still counts what it was
+  told until the pool is read; the yield is the catalogue's expectation, so a run with poor drops is
+  read once and sent again; a run that still ran when the reading was observed is counted whole
+  though the reading may show part of what it produced (the sum errs toward unread, at the cost of a
+  reading); a pair's dispatches older than what the host's journal keeps of it (its latest 64
+  admitted dispatches) are not counted, as a pair the journal no longer holds is not noted.
 - **Below the cap** (SCHED-C1c, since 0.12.53: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,
@@ -2906,7 +2999,12 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   0.12.82): below the trigger line of a pool that regenerates (the capacity without a written
   `trigger_line`), and while its lines give no value with no episode under way, whether a
   candidate with a fixed value would pass is judged without its goal terms ("Fixed values written
-  in the pack", "A goal chooses which task spends a pool, the pool's lines choose when").
+  in the pack", "A goal chooses which task spends a pool, the pool's lines choose when"). #503 WAKE
+  (since 0.12.101): on an asleep instance, below the trigger line of a regenerating pool whose
+  lines read, a candidate that would pass and that no line holds waits for the line (or for the end
+  of its chance less its run) with `instance_asleep_below_trigger_line`, and is no reason to wake
+  the instance before then; on an awake instance it spends as above ("An asleep instance", "Below a
+  pool's trigger line").
 - **Unknown or invalid.** A pool that writes its lines and whose capacity, reading or a line's fact
   gives no value enters no capped state, and its judged candidates that would pass are deferred
   with `pool_line_held` `capped_cap_unknown` (`fact_key`, `unknown_reason` when a fact gives
@@ -3431,21 +3529,28 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   probe, so **nothing probes the instance again in that unavailability**, whether or not the panic
   poisoned anything; a person is told at once (below); the climbing mark comes off whatever state
   the entry is in; and a failure of this clean-up is returned only after the panic's own record
-  and the fatal mark a second panic of the worker owes. The instance leaves that state as it
+  and the fence the panic owes (below), and stops the Runtime. The instance leaves that state as it
   leaves the set: a decision of the gate that no longer holds it (a person's self-check or resume
   whose self-check passes, any other preparation that passes, a fence, a device link or state, the
   configuration), or a restart (the set is memory). A person's self-check that fails keeps it
-  there. The panicked payload's key lapses at its TTL, as every panicked payload's does.
-- **A fact this slice does not change** (verified in fix round 2; board issue #496). A panic
-  inside the preparation unwinds through the guard of the device's admission lock
+  there. The panicked payload's key lapses at its TTL, as every panicked payload's does. #503
+  ISO-A (Runtime 0.12.102): a probe whose payload ends with an error its worker contains (an
+  operation's error, recorded once; an instance's, which fences the instance) ends the same way,
+  the person told with the error's own code as `failure_code`; without it the probe would stay
+  queued or running and nothing would probe the instance again, silently.
+- **The device's locks after a panic** (#503 ISO-A, Runtime 0.12.102; until then board issue
+  #496). A panic inside the preparation unwinds through the guard of the device's admission lock
   (`HostShared::instance_guard`, an `Arc<Mutex<()>>` per device key, held by the probe's
-  `run_unavailable_probe` across `prepare_recovery_connection`) and poisons it. The next lock of it
-  answers `runtime_state_poisoned` (the host's `lock` maps a poisoned lock to that fatal code,
-  `runtime_halted`, a global shared-lock failure) and stops the Runtime: the emulator watch's poll
-  of a discovery-bound instance (its `try_lock` maps `Poisoned` to the same code), or a later
-  preparation, run or observation of that device. Two panics of one worker without a finished
-  payload between them are `runtime_restart_required`. So a panic inside the preparation still
-  stops the whole Runtime at the next touch of that device; the probes no longer add a touch.
+  `run_unavailable_probe` across `prepare_recovery_connection`) and poisons it. The worker's root
+  clears that poison, and the queue-order lock's, first of all and without waiting, and after the
+  panic's record fences the payload's instance (`instance_lock_poisoned`), so the next lock of
+  either (the emulator watch's poll, the sweep's lease expiry when the panicked key lapses, a later
+  preparation, run or observation of that device) takes it as before and the Runtime goes on; the
+  fence holds the instance until it is lifted as any fence is. Two panics of one worker without a
+  finished payload between them fence the payload's instance (`panic_caught`), and the worker goes
+  on. The locks' sites still take them through the shared `lock`, so a touch in the moment between
+  the unwind and the clear still answers `runtime_state_poisoned` ([runtime-outcomes.md](../runtime-outcomes.md),
+  "Failure scope").
 - **When** (`scheduling.unavailable_probe.*`, [runtime-config.md](../runtime-config.md)):
   `first_interval_ms` after the instance became one, then after each failed probe the interval
   times `factor`, at most `max_interval_ms`; an interval counts from the latest of the probe before,
@@ -3563,7 +3668,19 @@ then held back; the idle check stopped it again, with no end.
   emulator start), a decision a gate without a time holds (the benefit gate, the no-progress guard,
   a pool's lines) is not due and names no wake, whatever next time its trigger names; on any other
   instance it names its own wake as before. The wake is the emulator's start, then the startup
-  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance").
+  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance"). #503 WAKE
+  (since 0.12.101, register §1.549, ruling 3): on every instance three more answers count as held
+  by a gate without a time, read from the decision's last reason: `fact_refresh_unbound` (a
+  realistic key no reader can read), `selection_input_unknown` (a selection input no reading
+  supplies) and `resource_reserve_insufficient` carrying `amount_after` (a known amount below the
+  reserve). Nothing but a change of the facts, the catalog or the configuration lets them through,
+  and each such change wakes the policy driver, so they are not due; an awake instance whose only
+  candidates are of these kinds now takes its idle action, and an asleep one is not woken for them.
+  The list stays closed: a reserve hold without `amount_after` (its amount unknown, a reading may be
+  what is missing), the shared run limits' waits, `instance_already_selected`, `device_group_waiting`,
+  `policy_chain_handover_waiting` and the fact refresh's waits for a reading stay due as before.
+  The decision a consumer below its pool's trigger line waits with is not due either ("Below a
+  pool's trigger line" below).
 - **After a Runtime start** (fix round 1, ruling 5) the instance is asleep as before it: the start
   restores it stopped with its wake, withdraws its availability (`backend_selfcheck:unchecked`) and
   does not prepare it (its emulator is stopped, so a preparation could only fail and take it into
@@ -3670,6 +3787,112 @@ then held back; the idle check stopped it again, with no end.
   not due yet), and its idle check starts the wake. What a cycle computes is unchanged: the
   selection, the order of the deferrals, the idle plan's decision to wake, the cool-down. No
   periodic evaluation is added.
+- **Below a pool's trigger line** (#503 WAKE, since 0.12.101; [v012-register.md](../v012-register.md)
+  §1.549, the coordinator's rulings 1 to 6 after the owner's direction of 11-28 that an asleep
+  instance waits until the pool has reached its trigger line and is then woken to spend it, while an
+  awake one counts goals and spends as before). Before it, a judged consumer of a regenerating pool
+  below its trigger line, with no capped episode under way, had only its hard line to respect
+  ("Pool lines", "Below the cap"): as soon as the pool had regenerated one run's cost above the
+  hard line it passed, became the task an asleep instance is woken for, and the instance was started
+  for one run and stopped again, each time one run's cost had regenerated; the batch at the trigger
+  line never came. Now, on an asleep instance, a candidate to which the pools' lines give their
+  normal answer below the trigger line of a regenerating pool it consumes whose lines read (no line
+  holds it, no episode is under way) and that passes the benefit gate (a positive `B`; one in the
+  zero tier is not touched) is deferred and kept by no later gate: its last reason is
+  `instance_asleep_below_trigger_line` (info; `instance_id`, `pool_id` the pool whose line comes
+  first, `pool_reading` and `trigger_line` as read now, `next_eligible_unix_ms`, `lines_source`),
+  after `benefit_fixed_value` when the task has one, and its wake is its release, the earlier of two
+  times:
+  - *the line*: when the pool's projection, less the consumption its reading does not show yet,
+    reaches the trigger line as read now. With the reading's snapshot `v` at `t0`, its regeneration
+    `a` every `p` milliseconds, the unshown consumption `u` and the trigger line `T`,
+    `r(t) = min(v + ⌊(t − t0) ÷ p⌋·a, cap) − u` is at least `T` from `t_T = t0 + p·⌈(T + u − v) ÷ a⌉`,
+    a step of the projection. There is no such time when `a` is 0, when `T + u` is above the
+    capacity, or when the snapshot is above a capacity read from its fact (it does not regenerate).
+    Over several such pools the candidate consumes, the earliest. A pool without written lines has
+    its capacity as its trigger line, so it waits for its capacity.
+  - *the chance*: the end of the task's chance less its run, the longer of its expected duration
+    `E` as the benefit gate reads it and the one its dispatch would carry (the pair's measured `E`,
+    else the declared one), which the host's day-boundary fit checks, so a release at a window's
+    end is never later than that fit allows (fix round 2 of 0.12.101). Its chance ends at the
+    earliest time at which what lets it run now stops for a reason of time: its trigger's and its
+    feedback stop's own boundaries (a timeline interval's end, a clock's next occurrence or the end
+    of its grace, a fact's freshness end where the decision's wake counts it, a feedback result's
+    expiry), and the end of the activity window open now. The freshness end of a reading a
+    `resource_projection` reads is such an end, the consumed pool's own included: a trigger that
+    reads the consumed pool releases the consumer at that reading's expiry plus one less its run,
+    so the instance is woken before the knowledge lapses, never after (fix round 2, kept as built).
+    A regenerating pool's next projection step is never one, wherever it enters the decision's wake
+    (a `resource_projection` of the trigger or of the feedback stop, alone or under `all`, `any` or
+    `not`): it is when the evaluation reads the pool again. An end is known by where it comes from,
+    never by its value, so a time that is both a pool's step and such a boundary is an end. (Fix
+    round 1 of 0.12.101: the first build dropped the decision's whole wake whenever it equalled a
+    pool's next step, so a chance that ended on a step was missed and the consumer waited for the
+    line past it.)
+  With no time for the line, or a release not after the evaluation, the candidate passes exactly
+  as before. The round goes on to the instance's next candidate through every gate: if that one is
+  eligible it is the task the instance is woken for, as before, and two consumers below the line
+  both wait, neither behind the other. Once the instance is awake for any reason this item no longer
+  applies to it: its consumers below the line are judged and dispatched as on any awake instance.
+  The idle plan does not count the deferred decision due, and its release is its wake on every
+  instance, on one whose idle action can put it to sleep too, even when it is a pool's next
+  projection step (ruling 7 drops such a step as the evaluation's next reading; this one is the time
+  the task is due), so the instance is woken at the release less the wake lead
+  ([runtime-config.md](../runtime-config.md), "What wakes an idle instance"). A time-bound gate that
+  holds the instance as the evaluation runs (a blackout covering it, its activity window closed:
+  the time the idle plan reads for a due decision) holds the release too: its wake is the later of
+  the release and the time that gate lets the instance through, and none when the gate names no
+  time. Before 0.12.101 the eligibility closure deferred the same consumer there with that time,
+  and the instance is not started for a run its admission would refuse (fix round 2 of 0.12.101).
+  Unchanged: every instance not asleep and an evaluation with no asleep instance, byte for byte; on
+  an asleep instance every other candidate (one that does not pass, one a line holds, a pool that
+  does not regenerate, an episode under way, a pool at or above its trigger line); the capped order
+  and its memory, the turns a run is told, the goal terms; every record (the reason lives in the
+  not-run explanation only: no decision record, no `task_held`, no clock-slot record). The hard
+  line, the reserve gate and every later gate still judge whatever runs. Known limits:
+  - *Ends that end nothing*, each costing one early wake, never a chance: an interval clock's next
+    occurrence; an activity window that closes at a day's end to open again at once (a whole-day
+    window's midnight); in an `any`, the time a side that is false turns true, and the end a first
+    true side names while a later side would stay true; a feedback stop's result expiry, at which
+    the stop is false and the task stays eligible.
+  - *Ends not seen*: a trigger that the filling pool turns false, as pool steps are not counted as
+    an end; a goal's lifetime (its inventory's expiry, its validity), so a consumer lifted only by a
+    goal that lapses before the line loses that chance, which is to be settled before deadlines on
+    goals are built; a trigger override (an immediate retry, a remedy request, an owed rerun) keeps
+    the original trigger's end, which may release it early.
+  - *Holds the evaluation does not read*: the eligibility closure's other timed positions (a spent
+    budget, a backoff, since 0.12.100 a failing pair's wait at position 4b, a pack schedule's row
+    with an opening, the quiet before a blackout) and a pack schedule's row or a blackout that
+    closes the task before the line. Reading them for the
+    release needs the host's look ahead, a later slice; until then such a release may start the
+    instance once for a run its admission refuses.
+  - *The wake lead*: a release at an end (a window's, an interval's, a clock's) relies on the wake
+    lead covering the instance's start and its startup package; a start that takes longer
+    dispatches after the release, and at an activity window's end the run is then deferred to the
+    next window.
+  - *A reading the reader refreshes*: with a reader bound for the consumed pool's key, the reading's
+    expiry while the instance sleeps makes the consumer's row `fact_refresh_pending`, which the idle
+    plan counts due, so the instance is woken at the expiry for the reading and, awake, the consumer
+    spends below the line: an installation's asleep instance sleeps no longer than the consumed
+    reading stays valid (host test h5 pins it as built).
+  - *The capacity as the trigger line*: with no written trigger line and a dispatch the reading does
+    not show yet, `T + u` is above the capacity, so there is no time for the line and the consumer
+    passes as before, until a reading taken after that dispatch arrives.
+  - *A device group*: the asleep member's consumer is deferred before the allocation, so it no
+    longer takes the device for the round, and an awake member of the same device that waited
+    behind it (`device_group_waiting`) is selected.
+  - *Ruling 3's held answers*: a key whose only source is a run on the instance itself (its startup
+    package's reading, say) is no longer refreshed by a wake that `fact_refresh_unbound` or
+    `selection_input_unknown` used to cause for nothing ("The idle plan" above).
+
+  Not built: a wake planned while the instance was awake for such a consumer's own later time (its
+  cooldown's end, its clock's next time) still wakes it then less the lead. A consumed pool's
+  reading that expires while the instance sleeps makes the consumer's benefit unknown, as before,
+  unless the trigger reads that pool, whose reading's freshness end then ends the chance and
+  releases the consumer before the expiry (*the chance* above). With no reader bound the consumer's
+  `fact_refresh_unbound` is held by the idle plan ("The idle plan" above and
+  [runtime-config.md](../runtime-config.md)) and the wake planned from the release stays (host test
+  h4); with a reader bound, see the known limits.
 - **Not asleep.** An instance unavailable for any other cause, an application closed among them
   (its candidates are blocked at placement as before, and #484's fix round 2 holds for it); an
   instance whose emulator a person stopped. An asleep instance under a person's pause waits for the
@@ -3741,7 +3964,10 @@ finishes and is settled there whatever the switch says afterwards.
 - **Failures (#419).** The run's failures go through the instance's failure containment: an
   instance-level failure fences that instance and the other lanes go on; only a global fault
   stops the Runtime. A worker panic drops the run (not retried, its lease lapses at its TTL);
-  its registration stays, marked abandoned, so the instance stays occupied. A run whose
+  its registration stays, marked abandoned, so the instance stays occupied. Since #503 ISO-A
+  (Runtime 0.12.102) a run whose worker contained its error at the worker's root (a failure of
+  its settlement that fenced its instance) is dropped the same way and the driver told so; only a
+  failure of the whole still ends the worker. A run whose
   settlement failed without stopping the Runtime is left the same way. Once such a run's lease
   ended, the reconciliation settles it by the start's rule (fix 1, review M1): as at start, a
   lease that already ended without a run-linked release (its expiry, a release without run
@@ -4049,7 +4275,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation name / unit | 128 / 32 UTF-8 bytes |
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
-| A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
+| A task's fixed value (SCHED-C1a, since 0.12.52; of either sign since #503 FIXV, 0.12.101) | -9,007,199,254,740,991..=9,007,199,254,740,991 milli |
 | A consumption's fallback, and a usable amount read from a fact (SCHED-C1f1, since 0.12.54) | 1..=9,007,199,254,740,991, at most a constant capacity |
 | Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (since S168-LB1a, 0.12.55, the projection leaves a longer record out, "Record lists and the projection") |
 

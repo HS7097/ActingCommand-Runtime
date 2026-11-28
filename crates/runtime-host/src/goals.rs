@@ -795,7 +795,9 @@ fn item_at(variable: &PackageVariable, value: &Value, word: GoalProblem) -> Opti
 /// capacity reads one (else `out_of_range`); the pool is one the application can target (else
 /// `pool_not_targetable`: the targetable list names each pool of the application by that same id)
 /// that gives the step and the importance a goal by name does not carry, by its valuation or
-/// (#455 B3-P) its `target_defaults`, as the targetable list says (else `pool_unvalued`).
+/// (#455 B3-P) its `target_defaults`, as the targetable list says (else `pool_unvalued`). #455 SL2
+/// (register §1.547): on a pool that writes `spend_line` the target is the pool's line, which
+/// carries no term: the targetable list requires neither there, so the same check takes it.
 pub(crate) fn check_target(
     page: &GoalPage,
     value: &Value,

@@ -455,16 +455,37 @@ pub struct GoalVariable {
     pub packages: Vec<String>,
 }
 
+/// #455 SL2 (register §1.547; contracts/standard-pack-goals.md, the row of `goal_pool_unvalued`;
+/// contracts/standard-pack-goal-tables.md, the row of `table_pool_unvalued`): what a pool of the
+/// composed schedule offers a goal, as [`GoalReferences::pools`] holds it: the one map the goal check
+/// and the goal tables' check both read, each by its own rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalPool {
+    /// Its `valuation` holds both `scale` and `gap`, or (#455 B3-P) it writes no `valuation` and
+    /// its `target_defaults` holds both `scale` and `importance_milli`: a `resource` entry may
+    /// govern it, and a need may land on it.
+    Valued,
+    /// It writes `spend_line` (#455 SL1) and is not [`Self::Valued`]: a `resource` entry may govern
+    /// it, the goal on it being the pool's line; no need may land on it (`table_pool_unvalued`), as
+    /// a line gives no step and no importance.
+    Line,
+    /// Neither: `goal_pool_unvalued` for a `resource` entry, `table_pool_unvalued` for an item a
+    /// need lands on.
+    Unvalued,
+}
+
 /// What the references of a declaration are held to (`check_standard_pack_goal_references`): what
 /// the game root offers. G-R1 fix round 1: made only by [`GoalReferences::new`], from every
 /// package of the root; there is no default, so a reader cannot leave the packages out by
 /// omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalReferences {
-    /// The pools of the composed schedule by id, each `true` when its `valuation` holds both
-    /// `scale` and `gap`, or (#455 B3-P) when it writes no `valuation` and its `target_defaults`
-    /// holds both `scale` and `importance_milli`; none without `schedule.json`.
-    pub pools: BTreeMap<String, bool>,
+    /// The pools of the composed schedule by id, each with what it offers a goal ([`GoalPool`]):
+    /// [`GoalPool::Valued`] when its `valuation` holds both `scale` and `gap`, or (#455 B3-P) when
+    /// it writes no `valuation` and its `target_defaults` holds both `scale` and
+    /// `importance_milli`; else (#455 SL2) [`GoalPool::Line`] when it writes `spend_line`; else
+    /// [`GoalPool::Unvalued`]. None without `schedule.json`.
+    pub pools: BTreeMap<String, GoalPool>,
     /// The rules of `schedule.json` by id; none without `schedule.json`.
     pub rules: BTreeMap<String, GoalRule>,
     /// Workflow #463 V1: the variables the packages of the root declare, by name; none until a
@@ -704,8 +725,9 @@ pub fn parse_standard_pack_goals(
 ///
 /// - `goal_pool_unknown`: a `resource` entry's pool is not a pool of the composed schedule;
 /// - `goal_pool_unvalued`: its pool gives a goal no step and importance: its `valuation` lacks
-///   `scale` or `gap`, and (#455 B3-P) it writes no `target_defaults` in their place
-///   ([`GoalReferences::pools`]);
+///   `scale` or `gap`, and (#455 B3-P) it writes no `target_defaults` in their place, nor (#455
+///   SL2) `spend_line`, whose goal is the pool's line ([`GoalReferences::pools`],
+///   [`GoalPool::Unvalued`]);
 /// - `goal_package_unknown`: (fix round 1) the package a governed rule runs, or (Workflow #463 V1)
 ///   a package that declares a placed variable, is not a package of `bundle.json`;
 /// - `goal_rule_unknown`: a `tier` entry's rule is not a rule of `schedule.json`;
@@ -739,10 +761,13 @@ pub fn check_standard_pack_goal_references(
             DeclaredGoalKind::Heading | DeclaredGoalKind::Note => {}
             DeclaredGoalKind::Resource { pool, .. } => {
                 let at_pool = at(&governs, "pool");
+                // #455 SL2: a pool that writes `spend_line` takes its line from a resource entry.
                 match references.pools.get(pool) {
                     None => check.issue(StandardPackProblem::GoalPoolUnknown, at_pool),
-                    Some(false) => check.issue(StandardPackProblem::GoalPoolUnvalued, at_pool),
-                    Some(true) => {}
+                    Some(GoalPool::Unvalued) => {
+                        check.issue(StandardPackProblem::GoalPoolUnvalued, at_pool);
+                    }
+                    Some(GoalPool::Valued | GoalPool::Line) => {}
                 }
             }
             DeclaredGoalKind::Tier { rules, .. } => {

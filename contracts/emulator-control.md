@@ -1899,8 +1899,13 @@ actingcommand-actingd discover [--config <file> [--install-root <root>]] [--mumu
   Win32_Process listing>` (`crates/device/src/discovery.rs`), within
   `MUMU_MANAGER_PROCESS_LIST_TIMEOUT` (10 s), as a Stop's process check lists: the listing is the
   third read of `MumuManagerReads`, `BoundedMumuManagerReads` here, and at its bound only the
-  PowerShell process it started is ended and the discovery is refused (below). check-config and a
-  start still list without a bound of their own. Before it starts anything, actingd makes its own
+  PowerShell process it started is ended and the discovery is refused (below). Since 0.12.102
+  (Workflow #503 NOISE-B, register §1.553) check-config, a start, an on-demand discovery and the
+  debug bridge's and the capture's resolvers, which listed without a bound of their own, list the
+  same way within 60 s (`SYSTEM_PROCESS_LISTING_TIMEOUT`, the watchdog's and the installer's
+  bound of the same query): at the bound only the PowerShell process the listing started is
+  ended, the listing fails as a device failure each caller already handles, and no console
+  window opens. Before it starts anything, actingd makes its own
   stdout and stderr not inheritable, as the daemon does at its start (WD-MT; a failure is the
   warning `host_stdio_inheritance_failed` as a developer line on stderr, and the discovery goes
   on), so no descendant of the vendor tool or of PowerShell holds open the pipe a caller reads the
