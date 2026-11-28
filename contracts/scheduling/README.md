@@ -229,6 +229,51 @@ pool writes it names `pool_target_defaults` in `requires`
 ([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
 serializes, hashes and decides exactly as before.
 
+### A pool whose spending a line governs
+
+#455 SL1 (since 0.12.97; register §1.540; the coordinator's rulings of 11-28, after the owner's
+words that such a currency has a line: above it the spending goes on as today, below it the rules
+that spend are pressed, the harder the farther below, the pressing depends on time, and close to
+the date nothing more may be spent). Some pools are what a player saves for a dated event: they
+carry no valuation and cannot carry one (every rule that produces them keeps a fixed value, and a
+fixed value beside a production of a valued pool is refused). In a V2 catalog a pool that writes
+**neither a `valuation`** (a block or the pending marker) **nor `target_defaults`** may write
+`spend_line`, which declares that a line a person may set governs its spending:
+
+```json
+"spend_line": { "price_milli": 33333, "scale": 6000, "income_floor_milli_per_day": 71429 }
+```
+
+| Field | Bound | What it will be read for | Diagnostic |
+| --- | --- | --- | --- |
+| `price_milli` | required, 1..=9,007,199,254,740,991, the bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line | `limit_exceeded` at it; missing: `missing_required_field` |
+| `scale` | required, 1..=9,007,199,254,740,991, the bound of a valuation's `scale` | the amount the price is of, and the shortfall below the line at which the pressing reaches the full price | as `price_milli` |
+| `income_floor_milli_per_day` | required, 0..=9,007,199,254,740,991 | the thousandths of a unit the pool gains each day at the least, with nothing spent; 0 says nothing is sure; read for a line with a date | as `price_milli` |
+
+In this build the three numbers are validated, serialized, hashed and shown in the compiled
+catalog; **nothing computes with them**, so the resource side can write them now. Refused, each at
+its pointer: beside a `valuation` block, the pending marker or `target_defaults`, `type_mismatch` at
+`/pools/<i>/spend_line` (the diagnostic `target_defaults` gets beside a valuation: one reading per
+pool of a goal on it; on such a pool a goal will be the line, never a weight on its producers); in a
+V1 document, `unknown_field` there; another member, `unknown_field`.
+
+What it changes is the net benefit of a judged task that **consumes** the pool ("Net benefit within
+a tier", "A declared 0"): it is no longer unknown for lack of a valuation, and the consumption costs
+nothing while no line is set. Nothing else reads the member. A task that **produces** the pool is
+judged as with any pool without a valuation. Every other reader of a consumption reads the pool as
+it reads any pool without a valuation: the reserve gate holds a consumer whose reading is short
+("Task Reserves"), the forward projection applies the consumption, a run handed a `run_cap` leaves
+the pools its task consumes unread until they are read after it ("Pool lines"), a reserve on the
+pool gives its spend values; the pool's lines and the capped spending order act on valued pools
+only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). The goal page and
+the stored goals are untouched: the pool is not offered as one a goal can be set on by
+`{at_least}`, a goal by its pool id is refused `pool_unvalued`, and the Lab's root check refuses a
+`resource` entry on it (`goal_pool_unvalued`). The line itself, its date, the pressing, the hold
+and the statement of a shortfall are later slices. A `schedule.json` whose pool writes the member
+names `pool_spend_line` in `requires`
+([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
+serializes, hashes and decides exactly as before.
+
 ## Expected quantities (v2)
 
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory
@@ -1164,7 +1209,8 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   entry (SCHED-C1a, since 0.12.52: and no fixed value, "Fixed values written in the pack" below,
   which reads of its `produces` only its goal terms, so a pool it produces never makes its `B`
   unknown), an entry whose `amount` is the pending marker, a pool it touches whose `valuation` is the
-  pending marker or absent (for the instance), or a regenerating pool it consumes whose reading is
+  pending marker or absent (for the instance; #455 SL1: but for a pool that writes `spend_line` and
+  that it consumes, "A declared 0" below), or a regenerating pool it consumes whose reading is
   unknown or expired (still read, as before, though its cost no longer depends on it) has an
   unknown `B`: the known part is never added up. It is not dispatched:
   deferred with `benefit_unknown` (info; `benefit_gap` `no_effects`, `entry_pending`,
@@ -1172,6 +1218,24 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   `unknown_reason` for an unknown reading of a fact), no wake of its own. An unknown reading also
   asks the fact refresh for it ("Fact Refresh"), as a predicate on it would; that candidate's
   decision then ends with the refresh's reason.
+- **A declared 0** (#455 SL1, since 0.12.97; register §1.540; "A pool whose spending a line
+  governs"). A pool that writes `spend_line` (it writes no valuation) and that a judged task
+  consumes makes no `B` unknown, with or without a fixed value on the task. While no line is set,
+  its consumption adds **no term** to `B` and **no share** to `ε`, whatever its amount, and the
+  judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) carry
+  `<pool>:-0` at its place in the consumption's declaration order, so a reader of the decision sees
+  the consumption was read and cost nothing. This 0 is a declared one, not an unknown read as 0:
+  the pool says its spending is governed by a line, and no line is set. Its reading is not read for
+  the cost, and the pool takes no part in the pools' lines (below). An entry on it whose `amount`
+  is the pending marker stays `entry_pending`; a task that produces it is judged as with any pool
+  without a valuation (without a fixed value `valuation_missing`). A task without a fixed value
+  whose only effect is such a consumption has `S = ε = 0`, a sum without a rounding bound, which is
+  exact: its known `B = 0` is `policy_benefit_nonpositive`, not within tolerance ("Within
+  tolerance", *Three ways*). No reason code is new. For example, a rule of `V` 500 that consumes
+  120 of such a pool was `benefit_unknown` `valuation_missing` and never ran; it is now `B = 500`,
+  as it was before the consumption was written; a rule of `V` 50 000 that consumes the same 120 and
+  30 of a pool valued 1000 milli a unit is `B = 50 000 − 30 000 = 20 000`, the cost and the `ε` of
+  the valued pool alone.
 - **Not positive.** A judged candidate whose known `B ≤ 0` is not dispatched: deferred with
   `policy_benefit_nonpositive` (info; `benefit_milli`, `expected_duration_ms`); a regenerating
   pool it consumes wakes the evaluation at its next step, as before (SS-2h: its cost no longer
@@ -1246,7 +1310,10 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
     `benefit_within_tolerance` (info; `benefit_milli` ⌊S⌋, `tolerance_milli` ⌈ε⌉, `zero_tier`; the
     developer text gives `S` and `ε` as exact fractions). Outside the band the gate is as above:
     `B = ⌊S⌋ > 0` is positive and ranks by `B ÷ E`, any other known `B` is not positive (so a `B` of
-    0 above `ε` is still not dispatched, as before).
+    0 above `ε` is still not dispatched, as before). #455 SL1 (since 0.12.97): a sum whose `ε` is 0
+    has no rounding and is not in the band; only a task without a fixed value whose only effect is
+    a consumption of a pool that writes `spend_line` has one ("A declared 0" above), `S = 0`, not
+    positive.
   - *The zero tier.* A candidate within tolerance whose task carries `benefit_realization: true`
     ([v2/README.md](v2/README.md); the model's verdict that the task is a realization or
     conversion with a real downstream use, one more run wasting nothing), whose `B` is known, that
@@ -1314,8 +1381,9 @@ task that writes it enters the score stage); the benefit gate never reads it.
   pool must be valued for the instance, as before: `W` comes from a valuation the model writes, or
   from a constant valuation the pack declares ("A valuation written in the pack" above); without
   one the candidate stays `benefit_unknown` `valuation_missing` (`valuation_pending` for the
-  marker), and a regenerating pool's unknown reading stays `reading_unknown`. `ε` holds the
-  consumption's terms only. A pool the pack values takes part in the lines and the capped order as
+  marker), and a regenerating pool's unknown reading stays `reading_unknown`; #455 SL1 (since
+  0.12.97): but a pool that writes `spend_line` costs nothing while no line is set ("A declared 0"
+  above), so `B = V` less the other pools' cost. `ε` holds the consumption's terms only. A pool the pack values takes part in the lines and the capped order as
   any valued pool.
 - **Its `produces`** entries are not read by `B` but for its goal terms (#455 B1, the next item);
   they keep their other readers (forward projection, resource targets). A produced pool that is

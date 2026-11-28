@@ -772,3 +772,28 @@ fn rb1_fr1_two_answers_naming_different_active_generations_are_both_read() {
         "{refused:?}"
     );
 }
+
+// #455 SL1 (0.12.97; register §1.540; its work order's test 6): a rollback to a build below this
+// one, whose check-config does not name `pool_spend_line`, is refused while the game root in use
+// requires it, the game, its file and the name listed, with no change to the plan.
+#[test]
+fn sl1_a_rollback_below_this_build_is_refused_while_a_root_requires_pool_spend_line() {
+    let temp = TempDir::new().expect("tempdir");
+    let host = FakeHost::new(&temp.path().join("work"));
+    let root = updated(temp.path(), &host, "sl1");
+    let packs = temp.path().join("sl1-packs");
+    configure(&root, &packs);
+    let path = root_requires(&packs, &["pool_lines", "pool_spend_line"]);
+    answers_names(&host, "live", &["pool_lines", "pool_spend_line"]);
+    answers_names(&host, C1, &["pool_lines", "pool_target_defaults"]);
+
+    let refused = plan_rollback(&host, &root);
+    assert_refused(&refused, "install_rollback_plan", "interface_edge");
+    assert_eq!(failed_edges(&refused), requires_row(), "{refused:?}");
+    assert_eq!(
+        requires_missing(&refused),
+        &json!([{"game": GAME, "source": "root", "path": super::files::plain(&path),
+            "missing": ["pool_spend_line"]}]),
+        "{refused:?}"
+    );
+}

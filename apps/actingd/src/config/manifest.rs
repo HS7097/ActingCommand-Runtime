@@ -233,6 +233,16 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #455 SL1 (register §1.540): this build reads a pool's `spend_line`, which says a line
+        // governs the pool's spending, and judges a task that consumes such a pool with that
+        // consumption costing nothing while no line is set; a `schedule.json` whose pool writes
+        // it requires it, so an older Runtime refuses the file instead of leaving every rule that
+        // spends the pool waiting for a valuation.
+        subsystem(
+            actingcommand_policy::POOL_SPEND_LINE_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #477 CV-2 (register §1.508): this build's composer takes a game root's business
         // part from its version 2 `pack-catalog.json`; a `schedule.json` that names it writes none
         // of its rules' business members, so an older Runtime refuses the file instead of

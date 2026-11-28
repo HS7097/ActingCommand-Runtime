@@ -144,6 +144,10 @@
         "target_defaults": {
           "description": "#455 B3-P (since 0.12.82): the gap step and the importance a resource target on the pool takes when it carries none of its own, read at each evaluation from the catalog in force; written only on a pool that writes no valuation (beside a valuation block or the pending marker it is type_mismatch at the member). It makes nothing else of the pool valued. A schedule.json whose pool writes it names pool_target_defaults in requires.",
           "$ref": "#/$defs/targetDefaults"
+        },
+        "spend_line": {
+          "description": "#455 SL1 (since 0.12.97): a line a person may set governs the pool's spending; written only on a pool that writes neither a valuation nor target_defaults (beside either it is type_mismatch at the member). While no line is set, a judged task's consumption of the pool costs nothing; nothing computes with the three numbers yet. A schedule.json whose pool writes it names pool_spend_line in requires.",
+          "$ref": "#/$defs/spendLine"
         }
       },
       "dependentRequired": {
@@ -152,7 +156,19 @@
         "trigger_line": ["stop_line", "hard_line"]
       },
       "dependentSchemas": {
-        "target_defaults": { "not": { "required": ["valuation"] } }
+        "target_defaults": { "not": { "required": ["valuation"] } },
+        "spend_line": { "not": { "anyOf": [{ "required": ["valuation"] }, { "required": ["target_defaults"] }] } }
+      },
+      "additionalProperties": false
+    },
+    "spendLine": {
+      "description": "#455 SL1: all three members required, each within the bound of a task's fixed value and of a valuation's scale. price_milli: the milli of value of scale units of the pool, the full price of the pressing below a line; scale: the amount the price is of, and the shortfall at which the pressing reaches the full price; income_floor_milli_per_day: the thousandths of a unit the pool gains each day at the least, 0 when nothing is sure.",
+      "type": "object",
+      "required": ["price_milli", "scale", "income_floor_milli_per_day"],
+      "properties": {
+        "price_milli": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "scale": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "income_floor_milli_per_day": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
       },
       "additionalProperties": false
     },

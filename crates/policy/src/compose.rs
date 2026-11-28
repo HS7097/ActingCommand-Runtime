@@ -19,7 +19,8 @@
 //!    `on_unknown` (SS-5) and `pool_lines` when a pool writes `stop_line` or `hard_line` (SS-2h),
 //!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `pool_list_rows` when a
 //!    pool's `observation` is of the kind `list_rows` (#455 P1), `pool_target_defaults` when a pool
-//!    writes `target_defaults` (#455 B3-P), `queue_wait` when a rule
+//!    writes `target_defaults` (#455 B3-P), `pool_spend_line` when a pool writes `spend_line` (#455
+//!    SL1), `queue_wait` when a rule
 //!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -266,6 +267,11 @@ pub const POOL_TRIGGER_LINE_MEMBER: &str = "trigger_line";
 /// a valuation takes ([`crate::PoolTargetDefaults`]), which the composer copies as written and which
 /// requires [`crate::POOL_TARGET_DEFAULTS_SUBSYSTEM`].
 pub const POOL_TARGET_DEFAULTS_MEMBER: &str = "target_defaults";
+
+/// #455 SL1 (register §1.540): the pool member that declares a line governs the pool's spending
+/// ([`crate::PoolSpendLine`]), which the composer copies as written and which requires
+/// [`crate::POOL_SPEND_LINE_SUBSYSTEM`].
+pub const POOL_SPEND_LINE_MEMBER: &str = "spend_line";
 
 /// Workflow #437 ORD-1a (register §1.352): the V2 task member of a task's longest queue wait,
 /// which a rule writes as any V2 member and the composer passes through, and which requires
@@ -1674,6 +1680,29 @@ fn read_game(
             format!(
                 "a pool's {POOL_TARGET_DEFAULTS_MEMBER} needs requires to name {}",
                 crate::POOL_TARGET_DEFAULTS_SUBSYSTEM
+            ),
+        ));
+    }
+    // #455 SL1 (register §1.540): likewise a pool that writes `spend_line`, at the first such
+    // pool's member. No Runtime of 0.12.96 names the subsystem, so every such Runtime refuses the
+    // file at `requires` instead of judging the pool's consumers as consumers of an unvalued pool.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::POOL_SPEND_LINE_SUBSYSTEM)
+        && let Some(index) = schedule
+            .pools
+            .iter()
+            .position(|pool| pool.body.contains_key(POOL_SPEND_LINE_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/pools/{index}/{POOL_SPEND_LINE_MEMBER}"),
+            ),
+            format!(
+                "a pool's {POOL_SPEND_LINE_MEMBER} needs requires to name {}",
+                crate::POOL_SPEND_LINE_SUBSYSTEM
             ),
         ));
     }

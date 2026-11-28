@@ -51544,6 +51544,141 @@ tests stand unchanged.
 
 **At deploy.** Nothing to configure. In the release notes' language: 新增：规则表的读数列读到“有／没有”（列表的 `passed` 列）时按 1／0 读，所以一条梯的位置可以用卡上有没有某个标记来定（比如两种徽标各一列）。
 
+### 1.540 Slice #455 SL1 (0.12.97): a pool that declares no valuation may declare that a line governs its spending (`spend_line`); a judged task that consumes such a pool is judged, and without a line the consumption costs nothing (board #455; the owner's words of 11-28 that such a currency has a line, the rulings 1 to 8 the coordinator's of the same day; coordinator work order `rd-1123/brief-455-sl1.md` after the read-only study `rd-1123/study-spend-line.md`; on main `b11a2461`, v0.12.96)
+
+This section takes 1.540. It ships in 0.12.97. [scheduling/README.md](scheduling/README.md) (the new
+"A pool whose spending a line governs"; "Net benefit within a tier": "Unknown is never 0", the new
+"A declared 0", "Within tolerance", *Three ways*; "Fixed values written in the pack", "With a
+consumption"), [scheduling/v2/README.md](scheduling/v2/README.md) and the V2
+`pools.schema.json`, [standard-pack-schedule.md](standard-pack-schedule.md) (the file's members;
+"`requires`"; the consumer of a fixed-value rule; the new "A currency a line governs"; "Composition",
+step 2) and [actingd-check-config.md](actingd-check-config.md) (the row `pool_spend_line`) are the
+contract. No `package` revision moves, no declared interface range, no configuration key, no code
+or word; one catalog member and one `requires` name are new.
+
+**The problem.** Some pools are a game's premium currency, what a player saves for a dated event.
+They carry no valuation and cannot carry one: every rule that produces them keeps a fixed value,
+and a fixed value beside a production of a valued pool is refused. So a rule judged by benefit
+that declared a consumption of such a pool was never dispatched (`benefit_unknown`,
+`valuation_missing`), and the rules that do spend it declared no consumption at all: the Runtime
+did not know they spend. The owner's words of 11-28 (board #455) are that such a currency has a
+line: above it the spending goes on as today; below it the rules that spend are pressed, the harder
+the farther below; the pressing depends on time, and close to the date nothing more may be spent.
+The design is four slices; this one is the declaration and the judgement without a line, so the
+resource side can declare the pool and write the consumptions truthfully, and nothing else changes.
+
+**The rulings, as built.**
+- *The member* (ruling 1). `PoolSpec::spend_line`, `{"price_milli": P, "scale": S,
+  "income_floor_milli_per_day": F}` (`PoolSpendLine`), all three required, V2 only: `P` and `S`
+  within `1..=2^53 − 1`, the bounds of a task's fixed value and of a valuation's `scale`, and `F`
+  within `0..=2^53 − 1`, each the constant `MAX_CANONICAL_INTEGER`, `limit_exceeded` at the number;
+  missing, the reader's `missing_required_field`; another member its `unknown_field`; in a V1
+  document `unknown_field` at the member. `P` is the milli of value of `S` units of the pool in the
+  unit the instance's valuations weigh in, the full price of the pressing; `S` the amount the price
+  is of and the shortfall at which the pressing reaches the full price; `F` the least the pool gains
+  a day with nothing spent, 0 when nothing is sure, for a dated line. They are validated,
+  serialized, hashed and shown; nothing computes with them.
+- *Only on a pool without a valuation or `target_defaults`* (ruling 2). Beside a `valuation` block,
+  the pending marker or `target_defaults` the pool is refused `type_mismatch` at
+  `/pools/<i>/spend_line`, the diagnostic §1.522 uses for `target_defaults` beside a valuation: one
+  reading per pool of a goal on it.
+- *The judgement* (ruling 3; `crates/policy/src/evaluator/benefit.rs`). In `judge`, two places took
+  "judged" to mean "every pool it consumes is valued": the check of every entry and pool before the
+  sums, and the consumption's loop, which failed with "a judged pool lost its valuation". In both a
+  pool of the instance that writes `spend_line` and that the task consumes
+  (`spend_line_pool`) is now no gap: its consumption adds no term to `S`, no share to `ε` and no
+  consumed term for the capped order, and the items carry `<pool>:-0` at its place in the
+  `consumes` order. Its reading is not read for the cost (nothing depends on it), so neither a
+  regenerating such pool's unknown reading nor its next step enters the judgement. A pending amount
+  on it is still `entry_pending` (the check of pending entries comes first); a production of it is
+  checked as any pool without a valuation (`valuation_missing` without a fixed value; with one its
+  `produces` are read for goal terms only). A third place follows from it: the gate's band. A task
+  without a fixed value whose only effect is such a consumption has `S = ε = 0`, which the band's
+  `|S| ≤ ε` took for "within tolerance"; a sum without a rounding bound is exact, so the gate now
+  reads the band only where `ε > 0`, and such a task is `policy_benefit_nonpositive` with
+  `benefit_milli` 0, as ruling 3 asks. No known judgement of before had `ε = 0` with `S ≤ 0` (every
+  counted production and consumption brings a positive bound, a fixed value is at least 1), so no
+  decision of before moves. The capped order (`capped.rs`) reads only the consumed terms of valued
+  pools and the lines of valued pools, so it needed no change. No reason code is new.
+- *Every other reader of a consumption is unchanged* (ruling 4): the reserve gate holds a consumer
+  whose reading is short (`resource_reserve_insufficient`); the forward projection applies the
+  consumption; the pool's lines and the capped order act on valued pools only and the pool stays
+  outside them (`pool_lines_unvalued` if it writes lines); LF-1's handed runs leave the pool unread
+  after a run that carried a `run_cap`, as every pool its task consumes; the dispatch parameters give
+  a spend allowance and a `run_cap` only for a reserved pool, as for any pool.
+- *The goal page and stored goals are untouched* (ruling 5): the targetable list gives the pool no
+  step and no importance and requires both, so no goal by `{at_least}` is offered on it and one by
+  pool id is `pool_unvalued`; the Lab's root check still answers `goal_pool_unvalued` for a
+  `resource` entry on it.
+- *`requires`* (ruling 6). A `schedule.json` whose pool writes the member names `pool_spend_line`
+  (`POOL_SPEND_LINE_SUBSYSTEM`; the composer refuses one that does not, `schedule_invalid` at the
+  first such pool's member), by §1.522's pattern; this build's configuration manifest names it,
+  always on; a Runtime of 0.12.96 refuses such a file `schedule_requires_missing`, and the
+  installer's plan (§1.514) refuses a rollback below this build while an installed or kept schedule
+  requires it (no new code: the plan reads the target's own manifest).
+- *A catalogue without the member is unchanged* (ruling 7): the member is skipped when absent, so
+  bytes, hashes, decisions, records and the goal page's answers stay; written, it is serialized and
+  hashed. *The schema* (ruling 8): the V2 pools schema lists `spendLine` and not beside `valuation`
+  or `target_defaults`.
+
+**A worked example** (neutral names). A pool `pool.currency` writes `spend_line` `{33 333, 6000,
+71 429}` and no valuation, read at 500. A rule of `V` 500 consumes 120 of it a run. Before this
+slice, with that `consumes` written: `benefit_unknown`, `valuation_missing`, `pool_id`
+`pool.currency`, never dispatched (so the resource side wrote no `consumes`, and the rule was
+`B = 500`). After: `B = 500`, dispatched, `benefit_fixed_value` `benefit_milli` 500; written beside
+it, 30 of a pool valued 1000 milli a unit (`Q` 1) makes `B = 500 − 30 000`, or with `V` 50 000
+`B = 20 000`, and with `V` 30 010 `S = 10` within that pool's `ε` 15, the reason's items
+`pool.currency:-0,pool.neutral:-30000`. The three numbers change nothing yet: a later slice reads
+them when a line is set.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The member | `crates/policy/src/schema.rs` (`PoolSpec::spend_line`, `PoolSpendLine`, `POOL_SPEND_LINE_SUBSYSTEM`) |
+| The bounds | `crates/policy/src/validation.rs` (`validate_spend_line`) |
+| The judgement | `crates/policy/src/evaluator/benefit.rs` (`spend_line_pool`; `judge`'s check and consumption loop; the band in `gate`; `ExactSum::is_zero`) |
+| `requires` | `crates/policy/src/compose.rs` (`POOL_SPEND_LINE_MEMBER`, `read_game`); `apps/actingd/src/config/manifest.rs` (the row) |
+
+`PoolSpec` has no struct literal in the workspace (every pool is read from JSON), so no literal was
+touched.
+
+**Tests** (incident `#455 SL1`: `crates/policy/src/tests/gate_455_sl1.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_455_sl1.rs`, host gate map;
+`apps/actingd/src/config/gate_455_sl1.rs` and one test appended to
+`crates/lab-rescue/src/install/gate_429_rb1.rs`, apps gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `sl1_t1_the_reader_takes_the_three_numbers_and_refuses_each_fault_at_its_pointer` (1) | On the neutral example's pool: the three numbers compile, round-trip and recompile to the same identity, the largest and the least bounds taken; V1 `unknown_field`; each number missing `missing_required_field` naming it; a price or a scale of 0 or 2^53 and an income floor of 2^53 `limit_exceeded` at the number; another member `unknown_field`; beside a valuation block, the pending marker or `target_defaults` `type_mismatch` at the member |
+| `sl1_t1_the_composer_requires_pool_spend_line_and_an_older_runtime_refuses_the_file` (1) | With `pool_spend_line` in `requires` the member is composed and compiled; without, `schedule_invalid` at `/pools/0/spend_line`; on a Runtime that does not name it, `schedule_requires_missing` at `/requires/0` |
+| `sl1_t1_the_v2_pools_schema_lists_the_member_with_the_compiler_s_bounds` (ruling 8) | The V2 pools schema's `spendLine` (three required, the compiler's bounds) and its `dependentSchemas` (not beside `valuation` or `target_defaults`); the V1 schema lists no member |
+| `sl1_t2_a_fixed_value_consumer_is_judged_at_its_value_and_without_the_member_as_today` (2) | `V` 500 consuming 120: `B` 500, dispatched, `rank_breakdown` naming B and V; the same catalogue without the member: `benefit_unknown` `valuation_missing` on the pool |
+| `sl1_t2_beside_a_valued_pool_only_the_valued_one_costs_and_bounds` (2) | With 30 of a pool valued 1000: `V` 50 000 is `B` 20 000, dispatched; `V` 30 010 is `benefit_within_tolerance` `sum=10/1 tolerance=15/1 items=pool.currency:-0,pool.neutral:-30000` |
+| `sl1_t2_without_a_fixed_value_the_benefit_is_the_production_term` (2) | A production of 2 of the valued pool beside the consumption: `B` 2000, dispatched, no `benefit_fixed_value` |
+| `sl1_t2_a_pending_amount_a_producer_and_a_lone_consumer_are_judged_as_ruled` (2) | A pending amount on the pool `entry_pending`; a producer of it without a fixed value `valuation_missing`; a lone consumer without a fixed value `policy_benefit_nonpositive`, `benefit_milli` 0, items `pool.currency:-0`, not within tolerance |
+| `sl1_t3_the_reserve_gate_holds_a_consumer_whose_reading_is_short_as_for_any_pool` (3) | Reserving 10, read at 100: `B` 500 and held `resource_reserve_insufficient`, `amount_after` −20; read at 200 dispatched |
+| `sl1_t4_a_catalogue_without_the_member_keeps_its_golden_identity` (4) | The neutral example catalog's V1 and V2 golden identities; the member changes the V2 one |
+| `sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least` (5) | The targetable list: the pool with no step and no importance, both required; `{at_least: 40}` on its entry and by its pool id `pool_unvalued` with the pool; the valued pool's entry `SetTarget` |
+| `sl1_a_rollback_below_this_build_is_refused_while_a_root_requires_pool_spend_line` (6) | A rollback to a build that names `pool_target_defaults` and not `pool_spend_line`: `interface_edge`, `requires` `next_names_required`, `requires_missing` naming the game, its file and the name |
+| `sl1_this_runtime_names_pool_spend_line_and_composes_a_file_that_requires_it` (1, actingd) | The assembled manifest names `pool_spend_line`, enabled; given those subsystems the composer composes a file whose pool writes the member, the compiled pool holding the three numbers |
+
+Test 7: every existing test passes as it is; none is changed, renamed or retired, and no golden is
+re-recorded.
+
+**What is not built** (the later slices): the line itself and its storage, its date, the pressing
+of the spenders below it, the hold close to the date, and the statement "short by N". **What is not
+changed**: every reader of a consumption but the judgement; the pool's production; the goal page,
+the stored goals and the Lab's goal check; every record, request and ledger member; every declared
+interface range. No game, package, pool or alias is named in code.
+
+**At deploy.** Nothing to configure. No installed root writes the member, so nothing changes until
+a resource repository declares a pool with `spend_line` (and `pool_spend_line` in its
+`schedule.json`'s `requires`); a root that does needs this build, and a rollback below it is
+refused by the installer's plan while that root, or a generation composed from it, is installed or
+kept. In the release notes' language:
+没有估值的池子现在可以在 `schedule.json` 里写 `spend_line`（`price_milli`、`scale`、`income_floor_milli_per_day` 三个数），声明“这个池子的花费由一条线管”；写了它的文件要在 `requires` 里写 `pool_spend_line`。按收益判定的规则消耗这种池子时不再因为没有估值而不派：还没设线时这份消耗记 0（理由的明细里写 `<池>:-0`），只花这种池子、带定值 `V` 的规则仍是 `B = V`。这三个数这一版只校验和记入目录，什么也不算；线、日期、压低和拦住在后面几版。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
