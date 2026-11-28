@@ -793,7 +793,9 @@ fn start(root_dir: &TempDir) -> RuntimeHost {
     host
 }
 
-fn now() -> EvaluationTime {
+// The fixture's time. Named `t0`, not `now`: the gate maps' determinism guard takes a call named
+// `now` for a read of the wall clock (the first build failed on it).
+fn t0() -> EvaluationTime {
     EvaluationTime {
         unix_ms: POLICY_NOW_UNIX_MS,
         monotonic_ms: POLICY_NOW_UNIX_MS,
@@ -808,7 +810,7 @@ fn evaluate(host: &RuntimeHost) -> PolicyEvaluation {
     host.evaluate_policy_cycle_with_test_inputs(
         &policy_facts(),
         &resources,
-        now(),
+        t0(),
         7,
         PolicyTrigger::Recovery,
     )
@@ -907,13 +909,13 @@ fn rr3_h1_the_host_computes_the_needs_and_the_producer_of_the_pool_is_pushed() {
     let host = start(&root_dir);
     evaluate(&host);
     assert!(
-        host.record_needs_for_test(now())
+        host.record_needs_for_test(t0())
             .expect("the needs")
             .is_empty(),
         "no records, no needs"
     );
     publish_inputs(&host);
-    let needs = host.record_needs_for_test(now()).expect("the needs");
+    let needs = host.record_needs_for_test(t0()).expect("the needs");
     let computed = needs
         .get(ALIAS)
         .unwrap_or_else(|| panic!("the instance's needs: {needs:?}"));
@@ -970,7 +972,7 @@ fn rr3_h2_an_intent_is_stale_once_a_progress_list_the_records_or_the_tables_chan
         let evaluation = evaluate(&host);
         let (intent, reasons) = intent_and_chain(&evaluation);
         record_policy_approval(&host, &intent);
-        let before = host.record_needs_for_test(now()).expect("the needs");
+        let before = host.record_needs_for_test(t0()).expect("the needs");
         let changed = match change {
             Change::List => host
                 .publish_list_reading_for_test(roster_at(1, "snapshot:rr3-roster-b"))
@@ -984,7 +986,7 @@ fn rr3_h2_an_intent_is_stale_once_a_progress_list_the_records_or_the_tables_chan
             }
         };
         changed.unwrap_or_else(|error| panic!("{change:?}: {error:?}"));
-        let after = host.record_needs_for_test(now()).expect("the needs");
+        let after = host.record_needs_for_test(t0()).expect("the needs");
         assert_ne!(
             after.get(ALIAS).map(InstanceRecordNeeds::identity),
             before.get(ALIAS).map(InstanceRecordNeeds::identity),
