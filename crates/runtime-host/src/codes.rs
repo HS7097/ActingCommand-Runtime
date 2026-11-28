@@ -171,6 +171,24 @@ actingcommand_contract::outcome_codes! {
         /// with the failure pair under the claim and the claim releases its key (Workflow #369
         /// S6c, P3; keys `alias`, `elapsed_ms`). Also its report line.
         EmulatorAutostartNetworkUnready => "emulator_autostart_network_unready": error / environment_fault,
+        // #503 MEM begin: the start gate of the automatic emulator starts (register §1.556).
+        /// Warning (#503 MEM). Automatic emulator starts are held: the host's available commit is
+        /// below `emulator_control.start_commit_reserve_bytes`. Once per short episode, host-wide,
+        /// for the instance first in line (keys `alias`, `commit_available_bytes`,
+        /// `commit_limit_bytes`, `commit_reserve_bytes`, `idle_action` for an idle wake). A
+        /// `runtime.failed` record under the instance's links and its report line.
+        EmulatorAutostartCommitShort => "emulator_autostart_commit_short": warning / none,
+        /// Info (#503 MEM). The host's available commit is back at or above the reserve and the
+        /// held automatic start goes on (keys `alias`, `elapsed_ms` since the episode began,
+        /// `commit_available_bytes`, `commit_limit_bytes`, `commit_reserve_bytes`). A
+        /// `runtime.failed` record under the instance's links and its report line.
+        EmulatorAutostartCommitReady => "emulator_autostart_commit_ready": info / none,
+        /// Warning (#503 MEM). The host's commit could not be read; the automatic start goes on
+        /// without the headroom check. Once per failing streak (keys `alias`, `failure_code` the
+        /// read's code, `commit_reserve_bytes`). A `runtime.failed` record under the instance's
+        /// links and its report line.
+        EmulatorAutostartCommitUnknown => "emulator_autostart_commit_unknown": warning / none,
+        // #503 MEM end
         /// Info. A configured start was performed and the connection preparation after it passed
         /// (Workflow #369 S6c; keys `alias`). A report line.
         EmulatorAutostartStarted => "emulator_autostart_started": info / none,
@@ -305,11 +323,12 @@ actingcommand_contract::outcome_codes! {
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
         /// Warning (Workflow #490 ENTRY-A). One of an entry-blocked instance's own recoveries ended
         /// without recovering (`entry_recovery_end`: its ladder exhausted, the game's update
-        /// dialog ended a rung's run, its worker panicked; `trigger_rule` the trigger item it was
-        /// admitted under): the instance stays blocked, once per block; after an exhausted climb
-        /// the block climbs again by itself (`next_occurrence_unix_ms` its earliest time), after
-        /// the update dialog no climb again in the stretch, after a panicked worker none in the
-        /// block (keys as above).
+        /// dialog ended a rung's run, its worker panicked, its worker's payload ended with an
+        /// error the worker contained; `trigger_rule` the trigger item it was admitted under): the
+        /// instance stays blocked, once per block; after an exhausted climb the block climbs again
+        /// by itself (`next_occurrence_unix_ms` its earliest time), after the update dialog no
+        /// climb again in the stretch, after a panicked or failed worker none in the block (keys
+        /// as above).
         InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
         /// Info (Workflow #490 ENTRY-A fix round 4, ruling 2). The candidate's task failed at its
         /// entry on its instance `count` times in a row in its activity window, the latest
@@ -346,6 +365,35 @@ actingcommand_contract::outcome_codes! {
         /// outcome, `skipped`; the climb's plan lists the rung pending, as a plan drill's does).
         RecoveryRungSkippedEmulatorRestartedInStretch => "recovery_rung_skipped_emulator_restarted_in_stretch": info / none,
         // Workflow #490 ENTRY-A end
+        // #503 PACE begin: a pair whose scheduled runs keep failing waits between its dispatches.
+        /// Info (#503 PACE). The candidate's task failed on its instance `count` times in a row
+        /// in its activity window (failures with no condition that left it unpaused), the latest
+        /// (`decision_id`, `failure_code`, settled at `observed_at_unix_ms`) less than
+        /// `scheduling.unavailable_probe`'s interval for `count` − 1 before now: it is not
+        /// dispatched there before `next_eligible_unix_ms` (never after the window's end), when it
+        /// wakes; the fact refresh names it as its gate (keys `instance_id`, `task_id` as well).
+        /// The settlement of each failure that sets such a wait writes it once too, as a
+        /// `runtime.failed` record under the instance with the same keys; no evaluation does.
+        InstanceTaskFailureWaiting => "instance_task_failure_waiting": info / none,
+        /// Info (#503 PACE). The candidate's task is set aside on its instance until its activity
+        /// window ends (`window_end_unix_ms`), when it wakes: in that window `count` of its
+        /// failures in a row, each setting `scheduling.unavailable_probe`'s longest interval as
+        /// its wait (fix round 2), came although another scheduled run had succeeded on the
+        /// instance since its previous one, reaching its rule's `escalation_threshold`
+        /// (`limit_count`); its latest `decision_id`, `failure_code`, `observed_at_unix_ms` (keys
+        /// `instance_id`, `task_id` as well). The fact refresh names it as its gate.
+        InstanceTaskFailureSetAside => "instance_task_failure_set_aside": info / none,
+        /// Warning (#503 PACE). A person is told, once per task, instance and window (and again
+        /// when it is set aside again after a catalogue's activation, a changed package, a store
+        /// update task's success on the instance or a Runtime start cleared the counts), that a
+        /// task is set aside on its instance until its activity window ends
+        /// (`window_end_unix_ms`): `count` of its failures in a row in that window, each setting
+        /// the longest interval as its wait (fix round 2), came although another scheduled run had
+        /// succeeded on the instance since its previous one, which reached its rule's
+        /// `escalation_threshold` (`limit_count`); keys `instance_id`, `task_id`, `decision_id`,
+        /// `failure_code`, `observed_at_unix_ms` of the failure that reached it.
+        InstanceTaskFailureSetAsideReported => "instance_task_failure_set_aside_reported": warning / none,
+        // #503 PACE end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
         /// rung's `recovery_rung_finished` outcome; M387 §4.1).
@@ -2324,6 +2372,9 @@ actingcommand_contract::outcome_locations! {
         // ended without success; the lease sweep takes up a recovery its cool-down held back.
         InstanceEntryBlock => "instance_entry_block",
         TakeUpEntryRecoveries => "take_up_entry_recoveries",
+        // #503 PACE: the pairs whose scheduled runs keep failing, their waits, their being set
+        // aside and the warning that tells a person of it.
+        InstanceTaskFailurePacing => "instance_task_failure_pacing",
         ReadActiveContainedRun => "read_active_contained_run",
         ReadActiveContainedRuns => "read_active_contained_runs",
         ReadActiveInstances => "read_active_instances",
@@ -3064,6 +3115,8 @@ pub(crate) mod test_spellings {
             // Workflow #490 ENTRY-A fix round 3: a test lets a scheduled run in on an instance, as
             // its settlement tells the entry blocks.
             LetRunInForTest => "let_run_in_for_test",
+            // #503 PACE: a test reads and seeds a pair whose scheduled runs keep failing.
+            FailurePairForTest => "failure_pair_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.
@@ -3893,6 +3946,10 @@ actingcommand_contract::outcome_vocabulary! {
         UpdateDialog => "update_dialog",
         /// The worker that climbed the ladder panicked; the ladder ended there.
         WorkerPanicked => "worker_panicked",
+        /// #503 ISO-A fix round 1 (since 0.12.102): the payload that climbed the ladder ended with
+        /// an error its worker contained (the error's own record says which); the ladder ended
+        /// there. Its effect on the block is `WorkerPanicked`'s.
+        WorkerFailed => "worker_failed",
     }
 }
 // ---- Workflow #490 ENTRY-A fix round 1: end ----

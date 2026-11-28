@@ -3,19 +3,23 @@
 // #455 SL1, the host's half (0.12.97; register §1.540; the coordinator's ruling 5 of 11-28, no
 // words of the owner's behind it; coordinator work order `rd-1123/brief-455-sl1.md`;
 // contracts/scheduling/README.md, "A pool whose spending a line governs"): the goal page and the
-// host's goal code are untouched, so a pool that writes `spend_line` is offered as no pool a goal
-// can be set on by `{at_least}`, and a goal on it, by its `resource` entry or by its pool id, is
-// refused `pool_unvalued` as on any pool without a valuation. Tested on what `EditGoal` runs: the
-// page's pure check (`crate::goals::check_edit`) over the targetable pools the policy crate's own
-// list gives for an active catalogue (`targetable_resources`). The catalogue: one task of the game
-// producing the pool that writes `spend_line` and a pool whose valuation gives a step and a gap
-// weight. Every name is made up; no clock is read.
+// host's goal code are untouched. Tested on what `EditGoal` runs: the page's pure check
+// (`crate::goals::check_edit`) over the targetable pools the policy crate's own list gives for an
+// active catalogue (`targetable_resources`). The catalogue: one task of the game producing the
+// pool that writes `spend_line` and a pool whose valuation gives a step and a gap weight. Every
+// name is made up; no clock is read.
+//
+// #455 SL2 (0.12.101; register §1.547, ruling 2) moves what this test pinned, on purpose: until
+// then the list gave such a pool no step and no importance and required both, so a goal on it by
+// `{at_least}` was refused `pool_unvalued`; since then the goal on it is the pool's line, the list
+// gives its `spend_line`'s numbers and requires neither, and the same values are taken. The test
+// asserts that under a name that says so (its former name is retired in `ci/retired-gates.toml`).
 
 use std::collections::BTreeMap;
 
 use crate::goals::{EditRequest, GoalPage, check_edit};
 use actingcommand_contract::{
-    GoalProblem, RuntimeChannel, StandardPackGoals, TargetableResource, parse_standard_pack_goals,
+    RuntimeChannel, StandardPackGoals, TargetableResource, parse_standard_pack_goals,
 };
 use actingcommand_policy::{
     CatalogDocumentSource, CatalogSources, EvaluationFacts, EvaluationTime, GoalRecordEdit,
@@ -33,13 +37,13 @@ const CURRENCY: &str = "pool.neutral.currency";
 /// A pool whose valuation gives the step 5 and the gap weight 700.
 const POINTS: &str = "pool.neutral.points";
 
-// The brief's test 5. The targetable list gives the pool that writes `spend_line` no step and no
-// importance and requires both, as for any pool without a valuation, while the valued pool has its
-// valuation's; so the page offers no goal on it by `{at_least}`. That value on its `resource` entry
-// is refused `pool_unvalued` with its pool, and so is a target by its pool id; the same value on
-// the valued pool's entry is taken, as today.
+// The brief's test 5, as #455 SL2 moves it. The targetable list gives the pool that writes
+// `spend_line` its `spend_line`'s 6000 and 33 333 and requires neither, while the valued pool has
+// its valuation's; so the page offers the pool's line by `{at_least}`. That value on its `resource`
+// entry is taken (`SetTarget`), and so is a target by its pool id; the same value on the valued
+// pool's entry is taken, as before.
 #[test]
-fn sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least() {
+fn sl1_host_a_pool_whose_spending_a_line_governs_takes_its_line_by_at_least() {
     let offered = targetable();
     let terms = |pool: &str| {
         let row = offered
@@ -53,20 +57,28 @@ fn sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least() {
             row.importance_required,
         )
     };
-    assert_eq!(terms(CURRENCY), (None, None, true, true));
+    assert_eq!(terms(CURRENCY), (Some(6000), Some(33_333), false, false));
     assert_eq!(terms(POINTS), (Some(5), Some(700), false, false));
     let goals = goal_page(offered);
 
-    let refusal = set(&goals, "currency", "{\"at_least\":40}").expect_err("its resource entry");
+    let taken = set(&goals, "currency", "{\"at_least\":40}").expect("its resource entry");
     assert_eq!(
-        (refusal.problem, refusal.pool_id.as_deref()),
-        (GoalProblem::PoolUnvalued, Some(CURRENCY))
+        taken,
+        GoalRecordEdit::SetTarget {
+            id: "currency".to_owned(),
+            resource: CURRENCY.to_owned(),
+            at_least: 40,
+        }
     );
     let by_pool_value = format!("{{\"resource\":\"{CURRENCY}\",\"at_least\":40}}");
-    let refusal = set(&goals, "by_pool", &by_pool_value).expect_err("its pool id");
+    let taken = set(&goals, "by_pool", &by_pool_value).expect("its pool id");
     assert_eq!(
-        (refusal.problem, refusal.pool_id.as_deref()),
-        (GoalProblem::PoolUnvalued, Some(CURRENCY))
+        taken,
+        GoalRecordEdit::SetTarget {
+            id: "by_pool".to_owned(),
+            resource: CURRENCY.to_owned(),
+            at_least: 40,
+        }
     );
 
     let taken = set(&goals, "points", "{\"at_least\":40}").expect("the valued pool's entry");

@@ -15,37 +15,37 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1774 locations are not in it, and 11 of the header's 41 owners have no fragment file and so no file
+1775 locations are not in it, and 11 of the header's 41 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3985 |
-| retired | 90 |
-| all | 4075 |
+| active | 3991 |
+| retired | 91 |
+| all | 4082 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 124 |
-| info | 235 |
-| warning | 195 |
-| error | 3416 |
+| info | 239 |
+| warning | 198 |
+| error | 3415 |
 | fatal | 15 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 832 |
+| `common_causes` and `handling` both written | 839 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3149 |
+| neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
-| `pending` | 3831 |
-| all active codes | 3985 |
+| `pending` | 3837 |
+| all active codes | 3991 |
 
 ## By owner
 
@@ -69,16 +69,16 @@ here.
 | [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
-| [policy](policy.md) | 131 | 128 | 67 | 0 |
+| [policy](policy.md) | 132 | 129 | 68 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 115 | 114 | 38 | 0 |
+| [resource-tooling](resource-tooling.md) | 115 | 113 | 37 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1199 | 1152 | 231 | 6 |
+| [runtime-host](runtime-host.md) | 1205 | 1158 | 238 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4075 | 3985 | 832 | 154 |
+| all | 4082 | 3991 | 839 | 154 |

@@ -203,7 +203,7 @@ const RUN_MS: u64 = 75_000;
 /// default policy cadence (gate_489_avail1's).
 const NEXT_DISPATCH_UNIX_MS: u64 = POLICY_NOW_UNIX_MS + 3_600_000 + 1_000;
 /// The ladder's cool-down window left when the replayed run fails (T3).
-const COOLDOWN_LEFT_MS: u64 = 600_000;
+pub(super) const COOLDOWN_LEFT_MS: u64 = 600_000;
 /// The second task of the same rule on the policy instance, of a lower priority.
 const OTHER: &str = "fixture.other";
 /// The catalog fixture's `on_failure.retry_backoff_ms`: a first failure's backoff.
@@ -214,7 +214,7 @@ const RETURN_HOME_UNMATCHED: &str = "contained_task_return_home_entry_unmatched"
 /// F1 (b): the scheduled run's bound recovery package, not the game's return-home package.
 const BOUND: &str = "neutral.test.bound_return_home";
 /// F2: the shipped `scheduling.unavailable_probe.attention_after_ms`.
-const ATTENTION_AFTER_MS: u64 = 3_600_000;
+pub(super) const ATTENTION_AFTER_MS: u64 = 3_600_000;
 /// F3: the store update task, its procedure and the ordinary task's procedure (gate_upd1's).
 const STORE_TASK: &str = "t_store_update";
 const STORE_PROCEDURE: &str = "procedure.store_update";
@@ -2239,7 +2239,7 @@ fn entry_q1_b_after_an_outage_a_healthy_pair_runs_once_each_broken_pair_ahead_fa
 
 const LEAD_STEPS: &[(&str, &str, &str)] = &[("go", "shop", "menu")];
 const NOWHERE_STEPS: &[(&str, &str, &str)] = &[("leave", "shop", "done")];
-const BACK_STEPS: &[(&str, &str, &str)] = &[("back", "away", "menu")];
+pub(super) const BACK_STEPS: &[(&str, &str, &str)] = &[("back", "away", "menu")];
 const MANUAL: &str = "neutral.test.manual";
 
 /// `lead`, a page graph from `shop` to `menu` that declares nothing: the main package's
@@ -2265,9 +2265,11 @@ fn quick_startup() -> Pack<'static> {
 /// fake device shows `away` until its first input and `menu` after it. The catalog fixture's run is
 /// admitted. `clock`: on a manual Runtime clock at the fixture's instant (each capture moves it a
 /// millisecond), else on the system clock.
-struct Replay {
+///
+/// #503 ISO-A fix round 1: `gate_503_iso_a` replays a recovery whose worker's payload fails on it.
+pub(super) struct Replay {
     root: TempDir,
-    host: RuntimeHost,
+    pub(super) host: RuntimeHost,
     clock: Option<Arc<ManualRuntimeClock>>,
     context: Box<PolicyRunContext>,
     request: ContainedTaskRequest,
@@ -2289,7 +2291,7 @@ struct Setup<'a> {
     emulator: bool,
 }
 
-fn replay(return_home: &Pack<'_>, manual_clock: bool) -> Replay {
+pub(super) fn replay(return_home: &Pack<'_>, manual_clock: bool) -> Replay {
     replay_configured(return_home, manual_clock, Setup::default())
 }
 
@@ -2466,7 +2468,7 @@ impl Replay {
     }
 
     /// The ladders started for the run, with their trigger item.
-    fn ladders(&self) -> Vec<Option<String>> {
+    pub(super) fn ladders(&self) -> Vec<Option<String>> {
         self.ladder_triggers()
             .into_iter()
             .map(|trigger| trigger.rule)
@@ -2491,7 +2493,7 @@ impl Replay {
 
     /// The instance's entry block, which must be set: its gate, whether a person was told and when
     /// its held recovery is due.
-    fn block(&self) -> (crate::entry_block::EntryBlockGate, bool, Option<u64>) {
+    pub(super) fn block(&self) -> (crate::entry_block::EntryBlockGate, bool, Option<u64>) {
         self.host
             .entry_block_for_test(POLICY_INSTANCE_ALIAS)
             .expect("the instance's block")
@@ -2499,7 +2501,7 @@ impl Replay {
     }
 
     /// Whether the instance is entry-blocked.
-    fn blocked(&self) -> bool {
+    pub(super) fn blocked(&self) -> bool {
         self.host
             .entry_block_for_test(POLICY_INSTANCE_ALIAS)
             .expect("the instance's block")
@@ -2515,7 +2517,7 @@ impl Replay {
 
     /// Fix round 2 (manual clock): the clock moved to `at`, business capacity sampled there (so an
     /// admission reads a fresh sample), and one tick of the entry blocks.
-    fn tick_at(&self, at: u64) {
+    pub(super) fn tick_at(&self, at: u64) {
         advance_manual_clock_to(self.manual_clock(), at);
         self.host
             .capacity_sampler_for_test()
@@ -2549,7 +2551,7 @@ impl Replay {
     /// Fix round 1, F2 (manual clock): the ladder's cool-down window has `window_ms` left when the
     /// run fails at its entry, so the block holds the run's recovery until the window's end, which
     /// it returns.
-    fn hold_a_recovery(&self, window_ms: u64) -> u64 {
+    pub(super) fn hold_a_recovery(&self, window_ms: u64) -> u64 {
         self.manual_clock().advance(1);
         let until_unix_ms = self.now_unix_ms() + window_ms;
         self.host
@@ -2624,7 +2626,7 @@ impl Replay {
             .unix_ms
     }
 
-    fn close(self) {
+    pub(super) fn close(self) {
         assert!(self.host.fatal_error().expect("runtime health").is_none());
         self.host.close().expect("close the host");
         drop(self.root);

@@ -134,6 +134,11 @@ mod gate_455_sl1;
 #[cfg(test)]
 mod gate_455_rr3b;
 
+// Test-only: #503 FIXV, this build names `fixed_value_any`, so it composes a `schedule.json` whose
+// rule writes a negative fixed value beside a production of a priced pool.
+#[cfg(test)]
+mod gate_503_fixv;
+
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 120_000;

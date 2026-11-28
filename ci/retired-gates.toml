@@ -1719,3 +1719,11 @@ test = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknow
 ruling = "#486 ASLEEP-3 (0.12.79; register §1.512; the coordinator's rulings 1 and 4 of fix rounds 1 and 2: a reading alone wakes no instance at a start, and the ordinary check of a restored instance leaves its readings out)"
 reason = "Renamed: its name said the start wakes the instance for a reading alone, which the rulings withdraw; the test now asserts that the start stops the running emulator and wakes nothing."
 covered_by = "actingcommand-runtime-host::lib::tests::gate_idle1p::idle1p_n1_an_unknown_start_stops_a_running_instance_whose_work_waits_for_an_expired_reading, in the same host.toml row."
+
+# host.toml, the row of #455 SL1 (the host's half), whose one test #455 SL2 adapts and renames.
+[[retired]]
+fragment = "host"
+test = "actingcommand-runtime-host::lib::tests::gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least"
+ruling = "#455 SL2 (0.12.101; register §1.547; the coordinator's work order rd-1123/brief-455-sl2.md, ruling 2: a stored target on a pool that writes spend_line is that pool's line, which the goal page's set takes by at_least alone)"
+reason = "Its requirement changed on purpose: it pinned that the targetable list required both terms on such a pool and that {at_least} on it was pool_unvalued; from SL2 on the list requires neither and the same values are SetTarget, so the test asserts that under a name that says so."
+covered_by = "actingcommand-runtime-host::lib::tests::gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_its_line_by_at_least, in the same host.toml row; the whole set, its row and the page's entry in gate_455_sl2::sl2_host_a_line_is_set_by_at_least_alone_and_shown_as_a_goal_is (host.toml, row #455 SL2), and what an older page answers in gate_455_sl2::sl2_host_an_older_page_refuses_to_set_a_line_and_clears_a_stored_one."

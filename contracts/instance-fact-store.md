@@ -314,7 +314,8 @@ It reads the instance's active record of scope `instance { instance_id:
   `<generation>` its session generation), or `unchecked` when no recorded open
   caused it (startup before the preparation phase, an invalidation, a failed
   preparation step); `resource_bundle_hash` is the seed digest of the value
-  `false`, and the observation time is the host clock.
+  `false`, and the observation time is the host clock, or later ("The
+  observation time" below).
 - A passing self-check, when the active record is such a `backend_selfcheck:`
   record, republishes the configured seed — the seed's own record (detector,
   snapshot id and digest of the configured value) as a new observation at the
@@ -359,13 +360,32 @@ that fails (its lease was refused, the session close failed) withdraws
 availability with `backend_selfcheck:unchecked`; the next recorded self-check
 decides again.
 
+**The observation time** (#503 ISO-A, Runtime 0.12.102). Every one of the
+Runtime's own `session.instance.available` records (the self-check gate's
+withdrawals and restores, a fence's withdrawal, and the device link's, device
+state's and device system's) is stamped the later of the host clock and one
+millisecond after the latest observation the store holds for the key (its
+active record's, else the key's latest, which an invalidation keeps), read and
+written in one hold of `fact_write_gate`, which every writer of a fact takes, so
+no other write of the key comes between. So two writes in one millisecond (a
+withdrawal and its restore inside one preparation), and a write after a
+wall-clock step back, are taken, one millisecond apart, and never refused
+`fact_observation_not_newer`. Such a record is judged at its own observation,
+which can be ahead of the clock: by a millisecond in one millisecond's writes,
+by what the clock stepped back otherwise; an evaluation sampled before it is
+skipped once (`observed_after_evaluation`) and tried again, as an evaluation
+after a step back already is. A record of the active record's own source
+snapshot is not raised: the store replays or refuses it as before. The store's
+rules and every fact a client publishes (`PublishFact`, `PublishFacts`) are
+unchanged: a client's record at or before the stored one is refused
+`fact_observation_not_newer`, one after the clock `fact_observation_in_future`.
+
 The evaluator is unchanged; it excludes an instance projected
 `available = false`, so the policy does not dispatch to it until the seed value
-returns. A refusal of the publication (for example
-`fact_observation_not_newer` after a wall-clock step back) is returned to the
-open's observation consumer, whose existing failure path poisons the Runtime
-(at startup it fails the start); a fatal refusal marks the Runtime fatal as
-every `publish_fact` does, and an instance the registry does not hold fails
+returns. A refusal of the publication is returned to the open's observation
+consumer, whose existing failure path poisons the Runtime (at startup it fails
+the start); a fatal refusal marks the Runtime fatal as every `publish_fact`
+does, and an instance the registry does not hold fails
 `backend_selfcheck_instance_unregistered` (fatal).
 
 ## Projection into the evaluation

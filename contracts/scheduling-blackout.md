@@ -341,7 +341,21 @@ settlement until a block ends), and one set aside for its window waits
 `instance_entry_task_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the window's
 end; each wakes at its end and neither holds past the window's end; a fact refresh names the code
 as its `gate_code`. Only that task waits: the instance's other candidates are not held, and no rule
-that orders tasks changes;
+that orders tasks changes. Right after it (#503 PACE, since 0.12.100, register §1.545;
+[policy-suspension.md](policy-suspension.md), "A pair whose runs keep failing"), on an instance
+not blocked, a candidate ENTRY-A's pair gate does not hold whose pair (instance, catalog task) has
+failed n times in a row in its window, n of 2 or more (failures no condition settled that left it
+unpaused), waits `instance_task_failure_waiting` (`instance_id`, `task_id`, `decision_id`,
+`failure_code`, `observed_at_unix_ms`, `count`, `next_eligible_unix_ms`) until
+`scheduling.unavailable_probe`'s interval for n − 1 has passed since that failure's settlement, and
+one set aside for its window (its failures whose wait is the longest interval that came although
+another scheduled run succeeded on the instance reached its rule's `escalation_threshold`) waits
+`instance_task_failure_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the
+window's end; each wakes at its end,
+neither holds past the window's end, and a fact refresh names the code as its `gate_code`. Every
+candidate of the pair waits, whatever makes it one; only that pair; a store update task never has
+such a pair. Admission does not judge it again, and a wait writes no record at an evaluation (the
+settlement that sets it writes its one record);
 
 5. the task package is not loaded (`pack_registry_not_loaded`, Workflow #389), then the pack
    schedule closes it (`pack_schedule_closed`, `instance-fact-store.md`, "Pack schedule facts";
@@ -438,7 +452,10 @@ look ahead reads, after 4a, a pair's wait and its being set aside, on an instanc
 for a store update task that passes the block, with its end as the release (#486 ASLEEP-1 fix
 round 2: otherwise a plan made while the idle action's own claim held the key counted the waiting
 task due, and the instance, its emulator just stopped, was woken at once for a task that could
-not be dispatched until the wait's end); not the block itself, whose candidate counts due. A
+not be dispatched until the wait's end); not the block itself, whose candidate counts due. Right
+after them it reads #503 PACE's pairs the same way (since 0.12.100, register §1.545): a pair's wait
+after its failures in a row and its being set aside for its window, with the wait's end and the
+window's end as the release. A
 candidate that the evaluation blocks
 before this order because its instance is unavailable (`instance_unavailable`: a start withholds
 the availability until its self-check, and a pause a start restored keeps it withheld until the

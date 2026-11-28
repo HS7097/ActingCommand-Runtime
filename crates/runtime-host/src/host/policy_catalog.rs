@@ -394,6 +394,13 @@ impl HostShared {
                 self.fatal.mark(error.clone())?;
                 return Err(error);
             }
+            // #503 PACE (register §1.545, ruling 5): so does every pair whose scheduled runs keep
+            // failing, at the same event and for the same reason.
+            if let Err(error) = self.clear_failure_pairs() {
+                let error = error.into_fatal();
+                self.fatal.mark(error.clone())?;
+                return Err(error);
+            }
             self.policy_wakes.raise(outcome.event_type());
             let post = self
                 .synchronize_fact_store()

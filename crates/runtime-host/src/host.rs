@@ -289,6 +289,8 @@ mod saved_artifact_ocr;
 mod unavailable_probe;
 // Workflow #490 ENTRY-A: the instances a scheduled run's failure at its entry blocked.
 mod entry_blocks;
+// #503 PACE: the pairs whose scheduled runs keep failing.
+mod failure_pairs;
 use material_read::MaterialReadContext;
 #[cfg(test)]
 pub(crate) use unavailable_probe::UnavailableForTest;
@@ -639,6 +641,11 @@ pub struct RuntimeHostConfig {
     /// the operating system's.
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #503 MEM, test only: the commit an automatic start's gate reads instead of the operating
+    /// system's; without it a test build consults no gate (see
+    /// [`RuntimeHostConfig::with_commit_sample_for_test`]).
+    #[cfg(test)]
+    commit_sample_for_test: Option<CommitSampleForTest>,
     /// EMU-BIND fix 1 (0.12.28), test only: a Start's ADB baseline wait in place of its 30 s.
     #[cfg(test)]
     adb_baseline_wait_for_test: Option<Duration>,
@@ -714,6 +721,15 @@ pub struct RuntimeHostConfig {
 pub(crate) type NetworkConnectivityForTest =
     Arc<dyn Fn() -> actingcommand_host_metrics::NetworkConnectivity + Send + Sync>;
 
+/// #503 MEM, test only: one read of the host's commit, as `sample_commit` answers it.
+#[cfg(test)]
+pub(crate) type CommitReadForTest =
+    Result<actingcommand_host_metrics::CommitSample, actingcommand_contract::outcome::Code>;
+
+/// #503 MEM, test only: a scripted commit read.
+#[cfg(test)]
+pub(crate) type CommitSampleForTest = Arc<dyn Fn() -> CommitReadForTest + Send + Sync>;
+
 impl RuntimeHostConfig {
     pub fn new(state_root: impl Into<PathBuf>, secret_fingerprint_salt: impl AsRef<[u8]>) -> Self {
         Self {
@@ -762,6 +778,8 @@ impl RuntimeHostConfig {
             settlement_refusal_for_test: None,
             #[cfg(test)]
             network_connectivity_for_test: None,
+            #[cfg(test)]
+            commit_sample_for_test: None,
             #[cfg(test)]
             adb_baseline_wait_for_test: None,
             #[cfg(test)]
@@ -946,6 +964,16 @@ impl RuntimeHostConfig {
         read: NetworkConnectivityForTest,
     ) -> Self {
         self.network_connectivity_for_test = Some(read);
+        self
+    }
+
+    /// #503 MEM, test only: an automatic start's gate reads `read` instead of the host's commit,
+    /// and the gate (the commit reserve and the spacing) is consulted at all. A test build without
+    /// it consults no gate and stamps no Start, so every test written before the gate starts its
+    /// emulators as it did and reads nothing of the host's memory (register §1.556).
+    #[cfg(test)]
+    pub(crate) fn with_commit_sample_for_test(mut self, read: CommitSampleForTest) -> Self {
+        self.commit_sample_for_test = Some(read);
         self
     }
 
@@ -2330,6 +2358,8 @@ impl RuntimeHost {
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             #[cfg(test)]
+            commit_sample_for_test: config.commit_sample_for_test.clone(),
+            #[cfg(test)]
             adb_baseline_wait_for_test: config.adb_baseline_wait_for_test,
             #[cfg(test)]
             scheduling_pause_deadlines_for_test: config.scheduling_pause_deadlines_for_test,
@@ -2437,6 +2467,7 @@ impl RuntimeHost {
             resource_fences: Mutex::new(BTreeMap::new()),
             unavailable_instances: Mutex::new(BTreeMap::new()),
             entry_blocks: Mutex::new(entry_blocks::EntryBlocks::default()),
+            failure_pairs: Mutex::new(crate::failure_pacing::FailurePairs::default()),
             session_deaths: Mutex::new(BTreeSet::new()),
             device_links: Mutex::new(device_link::DeviceLinks::default()),
             device_states: Mutex::new(device_state::DeviceStates::default()),
@@ -2638,6 +2669,16 @@ impl RuntimeHost {
             let discovered_at_unix_ms = shared.clock.sample()?.unix_ms;
             let registered_instances =
                 initial_registered_instances(provider.as_ref(), discovered_at_unix_ms)?;
+            // #503 NOISE-A (register §1.552): from here on the process sampler counts the
+            // processes the registered instances run as owned. No rebinding changes an
+            // instance's installation, so a start hands them over once.
+            let resolved = provider
+                .instance_aliases()
+                .iter()
+                .filter_map(|alias| provider.resolve(alias))
+                .collect::<Vec<_>>();
+            lock(&shared.performance, HostLocation::StartRuntimeHost)?
+                .hand_over_owned_images(crate::performance::owned_process_images(&resolved));
             drop(provider);
             stages.end(StartStage::Provider);
             let startup_packages = startup_package::resolve_startup_packages(
@@ -4900,6 +4941,15 @@ impl RuntimeHost {
         Ok(())
     }
 
+    /// #503 MEM, test builds: when the latest emulator Start of any kind returned, on the Runtime's
+    /// monotonic clock, as the automatic starts' spacing counts from it; `None` before the first
+    /// (and always on a host started without the commit seam, which stamps nothing).
+    #[cfg(test)]
+    pub(crate) fn emulator_start_returned_for_test(&self) -> RuntimeHostResult<Option<u64>> {
+        self.shared_ref(HostLocation::RunEmulatorAutostart)?
+            .emulator_start_returned_ms()
+    }
+
     /// #480 PG-1 fix round 2, test builds: runs `hook` once, on the claim's worker, when the next
     /// autostart claim (the daemon start's, the watch's, an idle wake's) has been granted and
     /// holds its key, before its first check.
@@ -5502,6 +5552,44 @@ impl RuntimeHost {
             .map_err(|failure| *failure.error)?
             .instance_id();
         shared.seed_entry_pair_for_test(instance_id, task_id, seeded)
+    }
+
+    /// #503 PACE: the pair of `task_id` on `instance_alias`, if its latest scheduled runs failed:
+    /// its failures in a row, those against it, the time before which it is not dispatched there
+    /// and whether it is set aside.
+    #[cfg(test)]
+    pub(crate) fn failure_pair_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+    ) -> RuntimeHostResult<Option<failure_pairs::FailurePairForTest>> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::FailurePairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.failure_pair_for_test(instance_id, task_id)
+    }
+
+    /// #503 PACE: the pair of `task_id` on `instance_alias` seeded as `in_a_row` failures in a row
+    /// in the window ending at `window_end`, the latest settled at `latest_unix_ms`, waiting until
+    /// `until_unix_ms`, and with `set_aside` set aside
+    /// (`(in_a_row, latest_unix_ms, until_unix_ms, window_end, set_aside)`).
+    #[cfg(test)]
+    pub(crate) fn seed_failure_pair_for_test(
+        &self,
+        instance_alias: &str,
+        task_id: &str,
+        seeded: (u32, u64, u64, u64, bool),
+    ) -> RuntimeHostResult<()> {
+        let shared =
+            self.shared_ref(crate::codes::test_spellings::TestLocation::FailurePairForTest)?;
+        let instance_id = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        shared.seed_failure_pair_for_test(instance_id, task_id, seeded)
     }
 
     /// Workflow #490 ENTRY-A fix round 8 (ruling 1): `instance_alias`'s entry block counts
@@ -7397,6 +7485,9 @@ struct HostShared {
     idle_action_finished_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #503 MEM, test only: see [`RuntimeHostConfig::with_commit_sample_for_test`].
+    #[cfg(test)]
+    commit_sample_for_test: Option<CommitSampleForTest>,
     /// EMU-BIND fix 1 (0.12.28), test only: see
     /// [`RuntimeHostConfig::with_adb_baseline_wait_for_test`].
     #[cfg(test)]
@@ -7619,6 +7710,10 @@ struct HostShared {
     // a recovery the ladder's cool-down held back for them and the marks a run's settlement
     // compares (memory only; a restart starts with no block). A leaf lock.
     entry_blocks: Mutex<entry_blocks::EntryBlocks>,
+    // #503 PACE: the pairs (instance, catalog task) whose scheduled runs keep failing, with the
+    // scheduled runs that succeeded on each instance (memory only; a restart starts with none). A
+    // leaf lock.
+    failure_pairs: Mutex<crate::failure_pacing::FailurePairs>,
     // ISO-2b (#419 R1): the instances whose device session died at a capture and has not
     // finished a capture since (memory only; `HostShared::session_died_again`). A leaf lock.
     session_deaths: Mutex<BTreeSet<InstanceId>>,

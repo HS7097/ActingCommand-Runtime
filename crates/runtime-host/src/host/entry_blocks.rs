@@ -61,9 +61,10 @@
 //!   cool-down window ends, whatever ended the previous climb (`recovered` or `environment_ready`
 //!   with nothing let in, `exhausted`, a holding interruption). A person's pause holds every climb
 //!   and its lifting ends the block; after the game's update dialog ended a rung's run (ruling 4)
-//!   nothing climbs again in the stretch; after a panicked worker nothing climbs again in the block.
-//!   Fix round 4 (ruling 4): once a ladder of the stretch's blocks ran the rung that restarts the
-//!   emulator, every later climb of the stretch skips that rung
+//!   nothing climbs again in the stretch; after a panicked worker, or one whose payload ended with
+//!   a contained error (#503 ISO-A fix round 1, `worker_failed`), nothing climbs again in the
+//!   block. Fix round 4 (ruling 4): once a ladder of the stretch's blocks ran the rung that
+//!   restarts the emulator, every later climb of the stretch skips that rung
 //!   (`recovery_rung_skipped_emulator_restarted_in_stretch`), so it ends after the application's
 //!   restart.
 //! - **Its way out.** A held recovery is taken up by the lease sweep (`take_up_entry_recoveries`,
@@ -247,7 +248,9 @@ struct EntryBlock {
     /// Set while no run was let in on the instance since its previous block ended: the block's
     /// recoveries climb from the application restart.
     restarts: bool,
-    /// A worker climbing one of its recoveries panicked: no further climb in the block.
+    /// A worker climbing one of its recoveries panicked, or (#503 ISO-A fix round 1) its payload
+    /// ended with an error the worker contained: no further climb in the block. It holds for both
+    /// ends, `worker_panicked` and `worker_failed`.
     panicked: bool,
     /// The queue's refusals of its recovery's claims, and the cause of the latest one recorded.
     refusals: u32,
@@ -549,9 +552,9 @@ impl EntryBlocks {
     /// says at `ended_at_unix_ms`, its climb counted already. `exhausted`: the next climb is held
     /// from the application restart until the stretch's paced time (`config`; fix round 3, ruling
     /// 3), unless a recovery is held already; the update dialog (ruling 4): nothing climbs again in
-    /// the stretch, a held recovery is let go; a panicked worker: nothing climbs again in the
-    /// block, a held recovery is let go. Returns when the next climb is due, if one is, and the
-    /// recovery let go.
+    /// the stretch, a held recovery is let go; a panicked worker, or one whose payload ended with a
+    /// contained error (#503 ISO-A fix round 1): nothing climbs again in the block, a held recovery
+    /// is let go. Returns when the next climb is due, if one is, and the recovery let go.
     fn recovery_ended(
         &mut self,
         instance_id: InstanceId,
@@ -595,12 +598,24 @@ impl EntryBlocks {
                 (Some(paced), replaced)
             }
             EntryRecoveryEnd::UpdateDialog => (None, block.held.take()),
-            EntryRecoveryEnd::WorkerPanicked => {
+            // #503 ISO-A fix round 1: a worker whose payload ended with a contained error ends the
+            // block's climbs as a panicked one does.
+            EntryRecoveryEnd::WorkerPanicked | EntryRecoveryEnd::WorkerFailed => {
                 block.panicked = true;
                 (None, block.held.take())
             }
         }
     }
+}
+
+/// #503 ISO-A fix round 1: whether `end` is a worker's that ended the climb, panicked
+/// (`worker_panicked`) or with its payload's contained error (`worker_failed`): both decide the
+/// same, the climb not counted in the stretch and nothing climbing again in the block.
+const fn worker_ended(end: EntryRecoveryEnd) -> bool {
+    matches!(
+        end,
+        EntryRecoveryEnd::WorkerPanicked | EntryRecoveryEnd::WorkerFailed
+    )
 }
 
 /// Fix round 5 (ruling 3 (i)): a pair's wait after its `in_a_row`-th failure at the entry in a
@@ -808,8 +823,9 @@ impl HostShared {
 
     /// The instance a settled execution record `data` ran on: its run's lease's when the
     /// settlement had the run (`context`), else the instance its alias names now; `None` for an
-    /// alias no instance has (nothing to count on it).
-    fn settled_instance(
+    /// alias no instance has (nothing to count on it). #503 PACE: its pair's pacing reads it too
+    /// (`failure_pairs.rs`).
+    pub(super) fn settled_instance(
         &self,
         data: &PolicyExecutionEventData,
         context: Option<&PolicyRunContext>,
@@ -888,9 +904,7 @@ impl HostShared {
             let uncounted = cooled.as_ref().and_then(|held| held.climbed).or_else(|| {
                 failed
                     .as_ref()
-                    .filter(|failed| {
-                        !failed.counted && !matches!(failed.end, EntryRecoveryEnd::WorkerPanicked)
-                    })
+                    .filter(|failed| !failed.counted && !worker_ended(failed.end))
                     .map(|failed| failed.ended_at_unix_ms)
             });
             if let Some(at) = uncounted {
@@ -1102,15 +1116,16 @@ impl HostShared {
     }
 
     /// A recovery `ladder` ended without recovering, as `end` says (its ladder `exhausted`, the
-    /// game's update dialog ended a rung's run, its worker panicked). Fix round 3 (ruling 3): an
-    /// exhausted climb or one the update dialog ended counts in its instance's stretch. When it is
-    /// one of its blocked instance's own recoveries, the instance stays blocked and
-    /// `instance_entry_blocked_recovery_failed` tells a person, once per block; after an exhausted
-    /// climb the block holds its next one, paced (`EntryBlocks::recovery_ended`); after the update
-    /// dialog nothing climbs again in the stretch (ruling 4); after a panicked worker nothing
-    /// climbs again in the block. A scheduled run's own recovery that ended so before the run's
-    /// settlement does the same with the block that settlement sets. Any other ladder's end tells
-    /// a block nothing.
+    /// game's update dialog ended a rung's run, its worker panicked, or, #503 ISO-A fix round 1,
+    /// its worker's payload ended with a contained error, which decides as a panic does). Fix
+    /// round 3 (ruling 3): an exhausted climb or one the update dialog ended counts in its
+    /// instance's stretch. When it is one of its blocked instance's own recoveries, the instance
+    /// stays blocked and `instance_entry_blocked_recovery_failed` tells a person, once per block;
+    /// after an exhausted climb the block holds its next one, paced
+    /// (`EntryBlocks::recovery_ended`); after the update dialog nothing climbs again in the stretch
+    /// (ruling 4); after a panicked or failed worker nothing climbs again in the block. A scheduled
+    /// run's own recovery that ended so before the run's settlement does the same with the block
+    /// that settlement sets. Any other ladder's end tells a block nothing.
     pub(super) fn note_entry_recovery_failed(
         &self,
         ladder: &PendingRecoveryLadder,
@@ -1123,8 +1138,7 @@ impl HostShared {
         let (told, dropped) = {
             let mut guard = lock(&self.entry_blocks, HostLocation::InstanceEntryBlock)?;
             let blocks = &mut *guard;
-            let counted = !matches!(end, EntryRecoveryEnd::WorkerPanicked)
-                && blocks.counts_climb(instance_id, ladder);
+            let counted = !worker_ended(end) && blocks.counts_climb(instance_id, ladder);
             if counted {
                 blocks.climb_ended(instance_id, ended_at_unix_ms);
             }
@@ -1589,7 +1603,7 @@ impl HostShared {
     /// `instance_entry_blocked_recovery_failed` of `instance_id`, blocked by `gate`, one of whose
     /// own recoveries ended without recovering as `end` says, admitted under the trigger item
     /// `rule`; `next` when the block's next climb is due at the earliest (none after the update
-    /// dialog or a panicked worker, which end the climbs).
+    /// dialog or a panicked or failed worker, which end the climbs).
     fn record_entry_recovery_failed(
         &self,
         instance_id: InstanceId,

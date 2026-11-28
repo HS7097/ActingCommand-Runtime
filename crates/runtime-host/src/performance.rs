@@ -20,9 +20,14 @@ use actingcommand_contract::{
     PerformanceProcessOwnership, PerformanceProcessSummary, PerformanceStutterEventData,
     PerformanceSummaryEventData, RecognitionId, RuntimeErrorCode,
 };
+use actingcommand_device::{mumu_installation_root, mumu_instance_images};
+use actingcommand_execution_kernel::{
+    ExecutionBackendProvenance, ResolvedExecutionInstance, ResolvedInstanceEndpoint,
+};
 use actingcommand_host_metrics::{
-    GpuAggregate, HostMetric, HostSample, HostSampler, ProcessLoadThresholds,
-    ProcessOwnership as HostProcessOwnership, ProcessSample as HostProcessSample,
+    GpuAggregate, HostMetric, HostSample, HostSampler, OwnedImageSet, OwnedImages,
+    ProcessLoadThresholds, ProcessOwnership as HostProcessOwnership,
+    ProcessSample as HostProcessSample,
 };
 use actingcommand_ledger::{
     GlobalLedger, GlobalLedgerCommitObservation, GlobalLedgerCommitSnapshot,
@@ -41,6 +46,10 @@ pub(crate) use pacing::{
     EffectivePacing, PacingBackendRole, PacingSample, PacingSampleSource, PacingShadow,
     action_gap_drawn, action_gap_fell_back, apply_settled_path, floor_pressure,
 };
+// #503 NOISE-A (0.12.102; register §1.552): the monitor under owned processes, the images the
+// host hands over, and an application step's completion.
+#[cfg(test)]
+mod gate_503_noise_a;
 
 const BASIS_POINTS_MAX: u16 = 10_000;
 const DEFAULT_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -521,8 +530,67 @@ pub(crate) struct RawSystemSample {
     pub(crate) unavailable_metrics: Vec<PerformanceMetric>,
 }
 
-pub(crate) fn system_performance_sampler(gpu: GpuAggregate) -> Result<Box<dyn HostSampler>, Code> {
-    actingcommand_host_metrics::system_sampler(gpu)
+/// The operating system's sampler; #503 NOISE-A: it reads `owned_images` at each sample.
+pub(crate) fn system_performance_sampler(
+    gpu: GpuAggregate,
+    owned_images: OwnedImages,
+) -> Result<Box<dyn HostSampler>, Code> {
+    actingcommand_host_metrics::system_sampler(gpu, owned_images)
+}
+
+/// #503 NOISE-A (register §1.552): the images of the processes the registered `instances` run
+/// beside the Runtime, which the process sampler counts as owned. Of each instance of a device
+/// (no fixture simulation): the debug-bridge executables of its input and its capture. Of each
+/// emulator instance (no handset) whose installation root is known (configured, or the root its
+/// vendor tool, a debug bridge or its capture library lies under, as the device layer reads it
+/// from the path): the images the device layer names for that root. Reads nothing from the disk.
+pub(crate) fn owned_process_images(instances: &[ResolvedExecutionInstance]) -> OwnedImageSet {
+    let mut images = OwnedImageSet::default();
+    for instance in instances {
+        if instance.provenance() != ExecutionBackendProvenance::PhysicalDevice {
+            continue;
+        }
+        let configuration = instance.configuration();
+        let mut tools = Vec::new();
+        if let Some(configuration) = configuration {
+            for adb in [&configuration.input_adb, &configuration.capture_adb] {
+                images = images.with_path(adb);
+                tools.push(std::path::PathBuf::from(adb));
+            }
+            tools.extend(configuration.configured_capture_dll.iter().cloned());
+        }
+        let endpoint = instance.adb_endpoint();
+        if endpoint
+            .and_then(ResolvedInstanceEndpoint::bound)
+            .is_some_and(|bound| bound.handset().is_some())
+        {
+            continue;
+        }
+        if let Some(discovered) = endpoint.and_then(|endpoint| endpoint.discovered_binding()) {
+            tools.push(discovered.mumu_manager_path().to_path_buf());
+        }
+        let mut roots = configuration
+            .and_then(|configuration| configuration.configured_mumu_root.clone())
+            .into_iter()
+            .collect::<Vec<_>>();
+        for tool in &tools {
+            roots.extend(mumu_installation_root(tool));
+        }
+        for root in roots {
+            let named = mumu_instance_images(&root);
+            for path in &named.paths {
+                images = images.with_path(&path.to_string_lossy());
+            }
+            for (directory, rest) in &named.open_level_paths {
+                images = images
+                    .with_open_level_path(&directory.to_string_lossy(), &rest.to_string_lossy());
+            }
+            for name in named.names {
+                images = images.with_name(name);
+            }
+        }
+    }
+    images
 }
 
 #[derive(Debug, Clone)]
@@ -689,6 +757,9 @@ pub(crate) struct PerformanceMonitor {
     /// Workflow #385 P-m: the shadow measurement; it evaluates only while the counters are
     /// enabled and acts on nothing.
     pacing: PacingShadow,
+    /// #503 NOISE-A: the handle the system sampler reads its owned images from; the host fills
+    /// it once its provider is installed (`hand_over_owned_images`).
+    owned_images: OwnedImages,
 }
 
 impl PerformanceMonitor {
@@ -722,6 +793,7 @@ impl PerformanceMonitor {
             last_control_sample_unix_ms: None,
             previous_ledger_sample: None,
             pacing: PacingShadow::default(),
+            owned_images: OwnedImages::default(),
         }
     }
 
@@ -762,7 +834,15 @@ impl PerformanceMonitor {
             last_control_sample_unix_ms: None,
             previous_ledger_sample: None,
             pacing: PacingShadow::default(),
+            owned_images: OwnedImages::default(),
         })
+    }
+
+    /// #503 NOISE-A (register §1.552): hands the system sampler the images of the processes the
+    /// provider's instances run (`owned_process_images`), which it counts as owned from its next
+    /// sample on. Kept in memory only; a monitor without counters has no sampler to read them.
+    pub(crate) fn hand_over_owned_images(&self, images: OwnedImageSet) {
+        self.owned_images.replace(images);
     }
 
     pub(crate) fn sample_interval(&self) -> Option<Duration> {
@@ -1053,7 +1133,13 @@ impl PerformanceMonitor {
             }
             EventType::TaskEffectCompleted => {
                 let action_id = required_action_id(&observation)?;
-                let pending = take_pending(&mut self.action_starts, &action_id)?;
+                // #503 NOISE-A (register §1.552): a completion whose action has no pending intent
+                // is an effect without an input, the application step's of
+                // `contracts/application-lifecycle.md`, which records no `task.effect_intent`. It
+                // is not measured and is no pairing failure.
+                let Some(pending) = self.action_starts.remove(&action_id) else {
+                    return Ok(Vec::new());
+                };
                 validate_pending_instance(&pending, &observation.instance_id)?;
                 let action_effect_latency_ms =
                     elapsed_ms(pending.started_at_unix_ms, observation.observed_at_unix_ms)?;

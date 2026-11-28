@@ -1101,9 +1101,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.77",
-      "description": "One of an entry-blocked instance's own recoveries ended without recovering (Workflow #490 ENTRY-A): entry_recovery_end says how (its recovery ladder ended exhausted, the game's update dialog ended a rung's run, or the worker that climbed it panicked) and trigger_rule names the recovery_ladder trigger item it was admitted under (absent for a ladder no item admitted). The block's own recoveries are the ladders of the runs whose failures at the entry blocked the instance and the recoveries the block held, took over or admitted; another trigger's ladder raises nothing here, and a climb a holding interruption ended (a pause, business capacity, a drain or a shutdown) is no such end: it is held again. The instance stays blocked and its candidates stay deferred with instance_entry_blocked. After exhausted the block climbs again by itself, from the first rung that restarts the application, once the wait scheduling.unavailable_probe gives the n-th climb of the instance's stretch of blocks (first_interval_ms, times factor, at most max_interval_ms) has passed from that climb's end and the instance's cool-down window has ended: next_occurrence_unix_ms is that climb's earliest time; after update_dialog nothing climbs again in the stretch (the store update task passes the block, and its success ends it), and after worker_panicked nothing climbs again in that block, next_occurrence_unix_ms absent for both. task_id, decision_id, failure_code and observed_at_unix_ms as on instance_entry_blocked. Recorded once per block as a runtime.failed record under the instance's links and handed to the daemon's log; a run's own recovery that ended so before the run's settlement raises it with the block that settlement sets. A block may also raise instance_entry_blocked_awaiting_person, before or after this one.",
-      "common_causes": "The game is on a screen neither the return-home package nor a restart of the application or the emulator brings back from (a dialog of an outage that has not ended, an update the game asks for), or the instance's ladder cannot run its rungs (no recovery package, no startup package, no emulator control), or the ladder's worker panicked.",
-      "handling": "Look at the instance. After exhausted the Runtime tries again by itself on a growing interval; after update_dialog the game's client must be updated (the store update task does it where the catalogue has one); after worker_panicked it has stopped trying, and the worker's panic_caught record names the panic. Bring the game to a known screen, then run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance. A run that succeeds, a recovery that succeeds, a resume or a restart ends the block."
+      "description": "One of an entry-blocked instance's own recoveries ended without recovering (Workflow #490 ENTRY-A): entry_recovery_end says how (its recovery ladder ended exhausted, the game's update dialog ended a rung's run, the worker that climbed it panicked, or, since 0.12.102, the work that climbed it ended with an error its worker contained) and trigger_rule names the recovery_ladder trigger item it was admitted under (absent for a ladder no item admitted). The block's own recoveries are the ladders of the runs whose failures at the entry blocked the instance and the recoveries the block held, took over or admitted; another trigger's ladder raises nothing here, and a climb a holding interruption ended (a pause, business capacity, a drain or a shutdown) is no such end: it is held again. The instance stays blocked and its candidates stay deferred with instance_entry_blocked. After exhausted the block climbs again by itself, from the first rung that restarts the application, once the wait scheduling.unavailable_probe gives the n-th climb of the instance's stretch of blocks (first_interval_ms, times factor, at most max_interval_ms) has passed from that climb's end and the instance's cool-down window has ended: next_occurrence_unix_ms is that climb's earliest time; after update_dialog nothing climbs again in the stretch (the store update task passes the block, and its success ends it), and after worker_panicked or worker_failed nothing climbs again in that block, next_occurrence_unix_ms absent for these. task_id, decision_id, failure_code and observed_at_unix_ms as on instance_entry_blocked. Recorded once per block as a runtime.failed record under the instance's links and handed to the daemon's log; a run's own recovery that ended so before the run's settlement raises it with the block that settlement sets. A block may also raise instance_entry_blocked_awaiting_person, before or after this one.",
+      "common_causes": "The game is on a screen neither the return-home package nor a restart of the application or the emulator brings back from (a dialog of an outage that has not ended, an update the game asks for), or the instance's ladder cannot run its rungs (no recovery package, no startup package, no emulator control), or the ladder's worker panicked or its work ended with an error the worker contained.",
+      "handling": "Look at the instance. After exhausted the Runtime tries again by itself on a growing interval; after update_dialog the game's client must be updated (the store update task does it where the catalogue has one); after worker_panicked it has stopped trying, and the worker's panic_caught record names the panic; after worker_failed likewise, and the error's own record under the same links names it. Bring the game to a known screen, then run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance. A run that succeeds, a recovery that succeeds, a resume or a restart ends the block."
     },
     "instance_entry_task_waiting": {
       "category": "info",
@@ -1207,6 +1207,89 @@
       "description": "Workflow #490 ENTRY-A fix round 4, ruling 4 (contracts/policy-suspension.md, Where a block's recovery starts and when): an entry-blocked instance's ladder did not run its emulator_restart rung, because a ladder of the instance's stretch of entry blocks (blocks with no run let in between them) ran that rung already: the emulator is restarted at most once in a stretch, and the climb ends after the application's restart (exhausted when the startup package does not reach its page). The rung's recovery_rung_finished outcome, rung_result skipped; the climb's recovery_ladder_started plan lists the rung pending, as a plan drill's does (no skip reason word is added to the ledger). A new stretch, after a run was let in, may restart the emulator once again.",
       "common_causes": "The instance's game stays on a screen no package knows through a stretch of entry blocks; the stretch's first climb that reached the emulator's rung restarted it already.",
       "handling": "None: the climb goes on as configured otherwise. When the stretch lasts, a person is told by instance_entry_blocked_awaiting_person."
+    },
+    "instance_task_failure_waiting": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "decision_id": "required",
+        "observed_at_unix_ms": "required",
+        "count": "required",
+        "next_eligible_unix_ms": "required",
+        "failure_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.100",
+      "description": "The task task_id failed count times in a row on the instance instance_id: the Runtime does not dispatch it there before next_eligible_unix_ms. #503 PACE (contracts/policy-suspension.md, A pair whose runs keep failing; contracts/scheduling-blackout.md, Order of the deferrals, position 4b). The result: the scheduled runs of the task task_id on the instance instance_id (the instance alias) failed count times in a row in the activity window their admissions were committed in; the latest failure is failure_code, of the dispatch decision_id, observed at observed_at_unix_ms. The operation that follows: the Runtime does not dispatch the task on that instance before next_eligible_unix_ms, then tries it again; a success clears the count. next_eligible_unix_ms is scheduling.unavailable_probe's interval for count - 1 after that failure (first_interval_ms, times factor for each further one, at most max_interval_ms; shipped: one minute after the second failure, two after the third, then four, eight, sixteen and thirty), never past the window's end. Each failure counted is the live settlement of a scheduled run whose record is a failure with no condition that left the pair unpaused (retry_scheduled or continue); after the first nothing waits (its immediate rerun is as before). The code is two things: the reason of every candidate of the pair while it waits (its trigger, an immediate rerun, an owed rerun, a chain's successor, a remedy request; the fact refresh names it as its gate_code), and one runtime.failed record under the instance, written at the settlement of each failure that sets the wait, with the same values (never at an evaluation; the Runtime keeps the count in memory, and a replay rebuilds nothing from the record). A failure settled at or after the end of the window it was admitted in (a run that overran that end) writes no such record: nothing follows from it. The instance's other tasks are not held. The count also starts again when a settlement pauses the pair, when the window ends, when a catalogue becomes active or the scheduler workbench's check finds a package of a game in use changed, when a store update task's run succeeds on the instance, and at a restart; a stop and a failure a condition settled leave it as it is. A store update task's runs never wait here. Fix round 2: a wait shorter than the longest interval never leads to a set-aside; only the failures whose wait is the longest interval (max_interval_ms: the seventh in a row and every later one with the shipped values; from the second when the first interval is the longest) count against the pair, so a set-aside means it kept failing through the longest waits while other scheduled runs succeeded on the instance.",
+      "common_causes": "A failure that does not accumulate (a device or backend error, the task timeout, a recognition error, a failure in the restart segment, an interrupt of the environment) repeated run after run: its failure identity is unique, so its count of the same error stays 1 and nothing but the day's counts bounded its reruns.",
+      "handling": "Nothing is required: the Runtime tries the task again at next_eligible_unix_ms. Only these free the pair before that time: a success of the task's scheduled run on the instance, a settlement that pauses the task (paused_task), the end of the activity window, a catalogue that becomes active, the scheduler workbench's check finding a changed package of a game in use among the files it compares (bundle.json, the game root's pages.json, interrupts.json and navigation.json, and each package's control.json and resources/operations/resources.json; composer mode only; a placement of a package writes its two), a store update task's success on the instance, and a Runtime restart. A file the check does not compare, mended in place, frees nothing until one of those. When the task keeps failing through its longest waits while other scheduled runs succeed on the instance, it is set aside for the window (instance_task_failure_set_aside) and a person is told (instance_task_failure_set_aside_reported)."
+    },
+    "instance_task_failure_set_aside": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "decision_id": "required",
+        "observed_at_unix_ms": "required",
+        "count": "required",
+        "limit_count": "required",
+        "window_end_unix_ms": "required",
+        "failure_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.100",
+      "description": "The task task_id kept failing on the instance instance_id through its longest waits while other runs succeeded: it is set aside until window_end_unix_ms. #503 PACE (contracts/policy-suspension.md, A pair whose runs keep failing). The result: the scheduled runs of the task task_id on the instance instance_id (the instance alias) kept failing in the activity window their admissions were committed in while other scheduled runs succeeded on the instance: count of its failures in a row each set scheduling.unavailable_probe's longest interval as the wait after it (fix round 2: max_interval_ms, so the seventh failure in a row and every later one with the shipped values, the seventh about half an hour after the first; from the second when the first interval is the longest) and came although another scheduled run (any task's, a fact refresh's included; not a store update task's, not a client's or the Lab's run) had succeeded there since the task's previous failure, their records not performance_tax_exempt, settled before the window's end, and count reached its rule's on_failure.escalation_threshold in the dispatch's catalog generation, limit_count; the latest failure is failure_code, of decision_id, observed at observed_at_unix_ms. A set-aside so means the task kept failing through every wait up to the longest while other runs succeeded: a fault of a few minutes sets nothing aside. The operation that follows: the Runtime does not dispatch the task on that instance again before window_end_unix_ms, the window's end, when the candidate wakes; nothing else: the rule is not paused, its streak is not touched, the next window starts from nothing, and the instance's other tasks are not held. A pair whose window the policy does not know is never set aside. The fact refresh names this code as its gate_code. A catalogue that becomes active, the scheduler workbench's check that finds a package of a game in use changed, a store update task's success on the instance and a Runtime restart end it at once. A person was told once by instance_task_failure_set_aside_reported.",
+      "common_causes": "The task itself is broken (its package or its rule no longer fits the application), while the instance's other tasks succeed.",
+      "handling": "Look at the task's package and the records of its failures. Only these free the pair before window_end_unix_ms, the window's end: a catalogue that becomes active, the scheduler workbench's check finding a changed package of a game in use among the files it compares (bundle.json, the game root's pages.json, interrupts.json and navigation.json, and each package's control.json and resources/operations/resources.json; composer mode only; a placement of a package writes its two), a store update task's success on the instance, and a Runtime restart; a success or a pausing settlement of the task would too, but it is not dispatched meanwhile. A file the check does not compare, mended in place, frees nothing before the window's end. Otherwise nothing is needed: the Runtime tries the task again after window_end_unix_ms."
+    },
+    "instance_task_failure_set_aside_reported": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "task_id": "required",
+        "decision_id": "required",
+        "observed_at_unix_ms": "required",
+        "count": "required",
+        "limit_count": "required",
+        "window_end_unix_ms": "required",
+        "failure_code": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.100",
+      "description": "A person is told the task task_id is set aside on instance_id until window_end_unix_ms: it kept failing through its longest waits while other runs succeeded. #503 PACE (contracts/policy-suspension.md, A pair whose runs keep failing). The result: the scheduled runs of the task task_id on the instance instance_id (the instance alias) failed in a row in the activity window while other scheduled runs succeeded on the instance, and count of those failures, each of which set scheduling.unavailable_probe's longest interval as the wait after it (fix round 2: max_interval_ms, the seventh failure in a row and every later one with the shipped values; from the second when the first interval is the longest) and came after such a success, reached its rule's on_failure.escalation_threshold, limit_count; decision_id, failure_code and observed_at_unix_ms name the failure that reached it. A set-aside so means the task kept failing through every wait up to the longest while other runs succeeded: a fault of a few minutes is not reported. The operation that follows: the Runtime does not dispatch the task on that instance again before window_end_unix_ms; its candidates there wait with instance_task_failure_set_aside until then. Recorded as a runtime.failed record under the instance's links and handed to the daemon's log, at the settlement of that failure, in place of the record of a wait (instance_task_failure_waiting); none for a failure settled at or after the window's end, which sets nothing aside. Once per task, instance and window while the Runtime keeps the pair's counts: a catalogue that becomes active, a changed package the scheduler workbench's check finds, a store update task's success on the instance or a Runtime start clears them, so a pair set aside again after one is told again. Nothing else follows: no pause of the rule, no change to its streak, nothing that outlives the window.",
+      "common_causes": "The task itself is broken (its package or its rule no longer fits the application), while the instance's other tasks succeed.",
+      "handling": "Look at the task's package and the records of the failures named. Only these free the pair before window_end_unix_ms: a catalogue that becomes active, the scheduler workbench's check finding a changed package of a game in use among the files it compares (bundle.json, the game root's pages.json, interrupts.json and navigation.json, and each package's control.json and resources/operations/resources.json; composer mode only; a placement of a package writes its two), a store update task's success on the instance, and a Runtime restart. A file the check does not compare, mended in place, frees nothing before the window's end. Otherwise nothing is needed: the Runtime tries the task again after window_end_unix_ms."
     },
     "action_id_issue_failed": {
       "category": "error",
@@ -8693,9 +8776,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). Its poison is cleared, the work that met it fails, and the boundary of that work fences the instance; every other instance keeps dispatching and executing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A worker of this instance panicked while it held one of the instance's own locks, its device's admission guard or its queue-order lock, and left it poisoned (ISO-M #419, R8; written since 0.12.102, #503 ISO-A). The locks guard no data: the worker cleared the poison, without waiting, and fenced the instance with this code as the cause of its instance_resources_fenced record, after the panic's own panic_caught record. The other instances keep dispatching and executing, and the Runtime does not stop.",
+      "common_causes": "A defect in the Runtime's code that panicked in the middle of a device step of the instance (its preparation, a probe, a ladder's rung, an emulator control, an idle action) or of a step of its queue. What the device was doing when the panic came is not known, which is why the instance is fenced.",
+      "handling": "Nothing is needed for the other instances. The instance stays fenced until its fence is lifted as any fence is: by the recovery ladder when the instance's stuck recovery is on, else by a person (status shows the fence awaiting a person): bring the device back to a known state and run actingctl selfcheck or actingctl resume for the instance; a passing self-check lifts the fence. Report the panic_caught record (its raw_text, thread and boundary) with the build as a Runtime defect."
     },
     "instance_not_running": {
       "category": "error",
@@ -22981,6 +23064,79 @@
       "common_causes": "The host had no network, or only local access, while actingd started.",
       "handling": "Start the instance with emulator control once the network is up."
     },
+    "emulator_autostart_commit_short": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "commit_available_bytes": "required",
+        "commit_limit_bytes": "required",
+        "commit_reserve_bytes": "required",
+        "idle_action": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.102",
+      "description": "Automatic emulator starts are being held (#503 MEM): the host's available commit (commit_available_bytes, of the commit limit commit_limit_bytes) is below the reserve an automatic start requires (commit_reserve_bytes, emulator_control.start_commit_reserve_bytes). alias is the instance first in line: its claim (the daemon start's configured start, the emulator watch's restart, or with idle_action stop_emulator an idle wake) holds the start turn and its key and waits; the automatic starts behind it wait for the turn. Written once per short episode for the whole host, from the first short read until an automatic start passes the gate again, as a runtime.failed record under the instance's links and its report line. The claim reads the commit at once and every 5 s and has no deadline; a drain, a shutdown, a pause, an emulator control waiting on the instance and start_emulator turned off end the wait as they end any hold of the claim. A person's, an agent's or the Lab's emulator control, any stop and the recovery ladder's restart rung are never held.",
+      "common_causes": "Several emulators already run and other programs hold the rest of the commit, for example at a day change when several instances are due within the same minutes.",
+      "handling": "Nothing is needed: the Runtime starts the instance as soon as the headroom is back, which happens when another emulator stops (an idle action stops one) or another program frees memory. A person may start an emulator by hand at any time; that start is not held. The reserve is the configuration key emulator_control.start_commit_reserve_bytes (0 turns the check off)."
+    },
+    "emulator_autostart_commit_ready": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "elapsed_ms": "required",
+        "commit_available_bytes": "required",
+        "commit_limit_bytes": "required",
+        "commit_reserve_bytes": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.102",
+      "description": "The host's available commit is back at or above the reserve and a held automatic emulator start goes on (#503 MEM): the short episode emulator_autostart_commit_short began ends here. alias is the instance whose start now goes on, elapsed_ms how long the episode lasted, commit_available_bytes and commit_limit_bytes the read that passed, commit_reserve_bytes the reserve in effect. A runtime.failed record under the instance's links and its report line; the start's own records follow under its claim.",
+      "common_causes": "Another emulator stopped, or another program freed memory.",
+      "handling": "Nothing to do."
+    },
+    "emulator_autostart_commit_unknown": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "failure_code": "required",
+        "commit_reserve_bytes": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.102",
+      "description": "The host's commit could not be read for an automatic emulator start's gate (#503 MEM): failure_code is the read's code. The start goes on without the headroom check (a guard that cannot see does not stop the starts); the spacing still applies. Written once per failing streak for the whole host, from the first failed read until a read succeeds again, as a runtime.failed record under the instance's links and its report line. alias is the instance whose claim read; commit_reserve_bytes the reserve in effect.",
+      "common_causes": "The operating system's memory status query failed, or the platform has none.",
+      "handling": "Nothing is needed for the start itself. While the reads fail the Runtime cannot hold starts for memory; watch the host's memory, or set emulator_control.start_commit_reserve_bytes to 0 to stop the reads."
+    },
     "emulator_autostart_started": {
       "category": "info",
       "ladder_class": "none",
@@ -26669,6 +26825,14 @@
       "status": "active",
       "since": "0.12.77",
       "description": "A Runtime host operation or stage: an instance's entry block, set by a scheduled run that failed at its entry, ended by a recovery or a run that succeeded, a resume, a blackout that covers the instance or a fence, and the attention of a person once one of its recoveries ended without recovering or its stretch of blocks lasted attention_after_ms (Workflow #490 ENTRY-A)."
+    },
+    "instance_task_failure_pacing": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.100",
+      "description": "A Runtime host operation or stage: the pairs (instance, catalog task) whose scheduled runs keep failing, their waits from their second failure in a row on, their being set aside for their activity window and the warning that tells a person of it (#503 PACE)."
     },
     "instantiate_template": {
       "owner": "runtime-host",
