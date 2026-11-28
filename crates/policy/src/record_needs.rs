@@ -36,7 +36,8 @@ use crate::evaluator::{
     project_time_validity, survives_resets, timeline_resets, unknown_token,
 };
 use crate::resource_targets::{
-    TargetObservation, bounded_list, observe_target, pending_name, resolve_target_pool,
+    TargetObservation, bounded_list, observe_target, pending_name, pool_makers,
+    resolve_target_pool, target_pool,
 };
 use crate::{
     CompiledCatalog, DecisionReason, EvaluationFacts, EvaluationTime, GivenPoolReadings,
@@ -774,6 +775,26 @@ impl<'a> NeedsProjection<'a> {
             },
             TargetObservation::Pending { reason } => NeedHolding::Unknown(Some(reason)),
         }
+    }
+
+    /// #455 MAKE fix round 1 (register §1.558): whether the instance `instance_id` has a maker of
+    /// the pool the root's files write `resource`, the pool of an item whose recipe's `from` items
+    /// are held in the pools `from` (as the root's files write them): the pool a target of that id
+    /// names on the instance ([`target_pool`]) and the one function that says who makes it
+    /// ([`pool_makers`]), which the evaluation asks too, on the same catalog and the same projected
+    /// instance. `false` for an instance or a pool the projection does not hold: without a maker
+    /// the host computes no made part.
+    pub fn has_maker(&self, instance_id: &str, resource: &str, from: &[String]) -> bool {
+        let Some(instance) = self
+            .projected
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_id)
+        else {
+            return false;
+        };
+        target_pool(self.catalog, resource, instance)
+            .is_some_and(|pool| !pool_makers(self.catalog, instance, pool, from).is_empty())
     }
 
     /// Whether the instance `instance_id`'s list `fact_key`, observed at `observed_at_unix_ms`

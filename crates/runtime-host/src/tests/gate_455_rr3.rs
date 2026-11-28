@@ -89,6 +89,11 @@ impl NeedsSources for Sources {
             .copied()
             .unwrap_or(NeedHolding::Unknown(None))
     }
+
+    // #455 MAKE: no maker, so nothing is made.
+    fn has_maker(&self, _pool_id: &str, _from: &[String]) -> bool {
+        false
+    }
 }
 
 fn own_scope() -> FactScope {

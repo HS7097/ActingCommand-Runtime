@@ -9,14 +9,17 @@
 // - without a stored goal the computed goal covers the pool's makers alone: the maker is lifted
 //   and told the made part, the rule that buys the item and the one that farms it decide byte for
 //   byte as with the holding's part alone (`Covered`) (t1);
-// - an instance with no maker decides byte for byte as with `Covered`: no item, no need, no lapse
-//   (t2);
-// - a stored goal on such a pool asks `stock + need` and keeps its own coverage (t3), and today's
-//   stored goal on a `Covered` pool, whose need tier is 0, is pinned (t4);
+// - an instance with no maker decides byte for byte as with `Covered`: no item, no need, no lapse,
+//   the goal passed over and not resolved covering nobody (t2);
+// - fix round 1: a stored goal on such a pool stacks the part the holding covers alone, so it is
+//   exactly today's, maker or not (t3, t9), and today's stored goal on a `Covered` pool, whose
+//   need tier is 0, is pinned (t4);
 // - RR3c's and RR3d's unread rule reads the made part as any goal's gap (t5);
 // - a maker of a fixed value of 0 is held without the made part and dispatched with it, its turns
 //   bounded by the made part (t6);
-// - the pools' hard line still holds a maker whose input reads below one run's consumption (t7).
+// - the pools' hard line still holds a maker whose input reads below one run's consumption (t7);
+// - fix round 1: the host asks the evaluation's own function who makes the item: a rule out of the
+//   instance's scope or disabled on it is none (t8); no computed goal lands on a line's pool (t10).
 //
 // The fixture: one instance `instance-a`; `pool.top`, the item's pool, without a valuation, writing
 // `target_defaults` (`S` 1, `I` 1000) and `goal_tiers` (`I_n` 1000, `C` 40), read at 4; `pool.low`,
@@ -66,6 +69,8 @@ const MAKER: &str = "task_make";
 const BUYER: &str = "task_buy";
 /// The rule that farms the item: it produces the item's pool and consumes nothing.
 const FARM: &str = "task_farm";
+/// A rule that produces the `cost` item's pool alone, no producer of the item.
+const OTHER: &str = "task_other";
 /// The sha256 the fixture's needs name as their tables'.
 const SHA: &str = "fixture-tables-make";
 /// The declared duration of every task, `E` without a snapshot.
@@ -116,78 +121,91 @@ fn make_t1_the_computed_goal_covers_the_maker_alone_and_tells_it_the_made_part()
     }
 }
 
-// Test 2, no maker on the instance (ruling 1). A catalogue of the buyer and the farm alone, neither
-// of which consumes the `from` item's pool: with `Making { made: 2 }` of 6 every decision is byte
-// for byte the one with `Covered` 4 but for the set's own identity, which the dispatched decision's
-// record names in its policy's (`goal-records:<identity>`), and the same task is dispatched; no
-// candidate carries a `resource_targets` item, a `goal_records_need` or
-// `resource_target_tasks_unevaluable`.
+// Test 2, no maker on the instance (ruling 1; fix round 1, the host makes nothing there, so this is
+// the evaluation's second guard). A catalogue of the buyer and the farm alone, neither of which
+// consumes the `from` item's pool, and one of a rule that produces only the `cost` item's pool, so
+// no task produces the item at all: the evaluation's own function finds no maker, and with
+// `Making { made: 2 }` of 6 every decision is byte for byte the one with `Covered` 4 but for the
+// set's own identity, which the dispatched decision's record names in its policy's
+// (`goal-records:<identity>`), and the same tasks are dispatched; no candidate carries a
+// `resource_targets` item, a `goal_records_need` or `resource_target_tasks_unevaluable`. The goal is
+// passed over, not resolved covering nobody: with no producer such a goal would lapse
+// `no_producing_task` on every candidate.
 #[test]
 fn make_t2_an_instance_without_a_maker_decides_as_with_the_holdings_part_alone() {
-    let compiled = catalog(top_pool(), vec![buyer(3_000), farm(2_000)]);
-    let made_set = needs(&[(TOP, 6, PoolNeedKind::Making { made: 2 })], Vec::new());
-    let covered_set = needs(&[(TOP, 4, PoolNeedKind::Covered)], Vec::new());
-    let identity_of = |given: &RecordNeeds| {
-        given
-            .get(A)
-            .map(|set| set.identity().to_owned())
-            .unwrap_or_else(|| panic!("the needs of {A}"))
-    };
-    let (made_identity, covered_identity) = (identity_of(&made_set), identity_of(&covered_set));
-    assert_ne!(made_identity, covered_identity);
-    let mut making = World::new(compiled.clone(), 8).with_needs(made_set);
-    let mut covered = World::new(compiled, 8).with_needs(covered_set);
-    let with_made = making.evaluate();
-    let without = covered.evaluate();
-    assert_eq!(
-        said(&with_made, &made_identity),
-        said(&without, &covered_identity)
+    let other = judged(
+        rule(OTHER, json!([]), json!([effect(COIN, "produce", 1)])),
+        1_000,
     );
-    assert_eq!(dispatched(&with_made), dispatched(&without));
-    assert_eq!(dispatched(&with_made), [(BUYER, A)], "{with_made:#?}");
-    for entry in &with_made.decisions {
-        for code in [
-            PolicyCode::ResourceTargets,
-            PolicyCode::GoalRecordsNeed,
-            PolicyCode::ResourceTargetTasksUnevaluable,
-        ] {
-            assert!(!has(entry, code), "{}: {entry:#?}", code.as_str());
+    for (case, tasks, sent) in [
+        (
+            "a buyer and a farm",
+            vec![buyer(3_000), farm(2_000)],
+            Some(BUYER),
+        ),
+        ("no producer of the item", vec![other], None),
+    ] {
+        let compiled = catalog(top_pool(), tasks);
+        let world = || World::new(compiled.clone(), 8);
+        assert!(!world().has_maker(TOP, &[LOW]), "{case}");
+        let made_set = needs(&[(TOP, 6, PoolNeedKind::Making { made: 2 })], Vec::new());
+        let covered_set = needs(&[(TOP, 4, PoolNeedKind::Covered)], Vec::new());
+        assert_ne!(
+            set_identity(&made_set),
+            set_identity(&covered_set),
+            "{case}"
+        );
+        let with_made = alike(world, made_set, covered_set, case);
+        if let Some(task_id) = sent {
+            assert_eq!(dispatched(&with_made), [(task_id, A)], "{with_made:#?}");
+        }
+        for entry in &with_made.decisions {
+            for code in [
+                PolicyCode::ResourceTargets,
+                PolicyCode::GoalRecordsNeed,
+                PolicyCode::ResourceTargetTasksUnevaluable,
+            ] {
+                assert!(!has(entry, code), "{case} {}: {entry:#?}", code.as_str());
+            }
         }
     }
 }
 
-// Test 3, a stored goal of 50 on the item's pool (ruling 1). It asks `stock + need` = 56, the gap
-// is 52, its need tier the made part 2 and its stock tier 50 (`Γ` 2000 + 40), and it keeps its own
-// coverage: the maker (`B` 8040) and the buyer (`B` 4740) both carry it. The maker is told 2, the
-// need tier while it is open; `goal_records_need` says the stock and `made=2`.
+// Test 3, a stored goal of 50 on the item's pool with a maker (fix round 1, ruling 2, which
+// replaces the first ruling's sentence on it; the first build asked 56, the gap 52, the need tier
+// 2, `B` 8040 and 4740, told 2, `made=2`). The stored goal stacks the part the holding covers
+// alone, so it is today's (t4's) whole: every decision equal to the one with `Covered` 4. It asks
+// 54, the gap is 50, its need tier 0 and its stock tier 50 (`Γ` 40), the maker (`B` 6040) and the
+// buyer (`B` 2740) both carry it, the maker is told 50, and `goal_records_need` names no made part.
 #[test]
 fn make_t3_a_stored_goal_on_the_pool_asks_its_stock_and_the_need_and_keeps_its_coverage() {
     let compiled = catalog(top_pool(), vec![maker(10_000), buyer(3_000), farm(2_000)]);
     let stored = goal_record(&compiled, vec![goal_target("goal-top", TOP, 50)]);
-    let mut world = World::new(compiled, 8).with_goal(&stored).with_needs(needs(
-        &[(TOP, 6, PoolNeedKind::Making { made: 2 })],
-        Vec::new(),
-    ));
-    let evaluation = world.evaluate();
+    let evaluation = alike(
+        || World::new(compiled.clone(), 8).with_goal(&stored),
+        needs(&[(TOP, 6, PoolNeedKind::Making { made: 2 })], Vec::new()),
+        needs(&[(TOP, 4, PoolNeedKind::Covered)], Vec::new()),
+        "a stored goal and a maker",
+    );
     assert_eq!(dispatched(&evaluation), [(MAKER, A)], "{evaluation:#?}");
-    for (task_id, benefit, value) in [(MAKER, 8_040, 10_000), (BUYER, 4_740, 3_000)] {
+    for (task_id, benefit, value) in [(MAKER, 6_040, 10_000), (BUYER, 2_740, 3_000)] {
         let entry = decision(&evaluation, task_id);
         fixed_first(entry, benefit, value);
         let item = &reason(entry, PolicyCode::ResourceTargets).detail;
         assert!(
-            item.starts_with("goal-top@pool.top:applied current=4 at_least=56 gap=52 "),
+            item.starts_with("goal-top@pool.top:applied current=4 at_least=54 gap=50 "),
             "{task_id}: {item}"
         );
-        assert!(item.contains(" need_gap=2 "), "{task_id}: {item}");
+        assert!(item.contains(" need_gap=0 "), "{task_id}: {item}");
         assert!(item.contains(" stock_gap=50 "), "{task_id}: {item}");
         assert!(!item.contains("goal_records@"), "{task_id}: {item}");
         assert_eq!(
             reason(entry, PolicyCode::GoalRecordsNeed).detail,
-            format!("needed=6 stock=50 held=4 to_characters=4 gap=52 tables={SHA} made=2"),
+            format!("needed=4 stock=50 held=4 to_characters=4 gap=50 tables={SHA}"),
             "{task_id}"
         );
     }
-    told_gap(&evaluation, MAKER, 2);
+    told_gap(&evaluation, MAKER, 50);
 }
 
 // Test 4, today's stored goal on the pool of an item with a recipe, pinned (the study's t4). With
@@ -359,6 +377,119 @@ fn make_t7_a_maker_whose_input_reads_below_one_run_is_held_by_the_hard_line() {
     }
 }
 
+// Test 8, who is a maker (fix round 1, rulings 1 and 7). The host asks the evaluation's own function
+// (`NeedsProjection::has_maker`): the maker that consumes `low` and produces `top` is one for the
+// `from` pools `low` alone and `coin` and `low` (the second of two names it), not for `coin` alone,
+// whose consumer is the buyer; the buyer and the farm are none; nor is the maker scoped to another
+// instance, nor the maker an instance override disables on `instance-a`, so the host makes nothing
+// there. Given a made part anyway, the evaluation passes it over on those two catalogues: every
+// decision as with `Covered` 4.
+#[test]
+fn make_t8_a_rule_out_of_the_instance_s_scope_or_disabled_on_it_is_no_maker() {
+    let all = World::new(
+        catalog(top_pool(), vec![maker(10_000), buyer(3_000), farm(2_000)]),
+        8,
+    );
+    assert!(all.has_maker(TOP, &[LOW]));
+    assert!(all.has_maker(TOP, &[COIN, LOW]));
+    assert!(!all.has_maker(TOP, &[COIN]));
+    let others = World::new(catalog(top_pool(), vec![buyer(3_000), farm(2_000)]), 8);
+    assert!(!others.has_maker(TOP, &[LOW]));
+    for (case, unmade) in [
+        (
+            "out of the instance's scope",
+            scoped(maker(10_000), "instance-b"),
+        ),
+        ("disabled on the instance", disabled_on_a(maker(10_000))),
+    ] {
+        let compiled = catalog(top_pool(), vec![unmade, buyer(3_000), farm(2_000)]);
+        let world = || World::new(compiled.clone(), 8);
+        assert!(!world().has_maker(TOP, &[LOW]), "{case}");
+        let with_made = alike(
+            world,
+            needs(&[(TOP, 6, PoolNeedKind::Making { made: 2 })], Vec::new()),
+            needs(&[(TOP, 4, PoolNeedKind::Covered)], Vec::new()),
+            case,
+        );
+        for entry in &with_made.decisions {
+            assert!(
+                !has(entry, PolicyCode::GoalRecordsNeed),
+                "{case}: {entry:#?}"
+            );
+        }
+    }
+}
+
+// Test 9, the review's F1 sequence: a stored goal on the item's pool and no maker (fix round 1,
+// rulings 1 and 2). A catalogue of the buyer and the farm alone, a stored goal of 50 on `top`
+// (`goal_tiers` `I_n` 1000, `C` 40; `target_defaults` `S` 1, `I` 1000), the records needing 10 with
+// 4 held, and 8 `low` and 1000 `coin` in hand. The host finds no maker and gives `Covered` 4 (the
+// host's m8), and the numbers are a build's without the slice: `at_least` 54, the gap 50, the need
+// tier 0 and the stock tier 50 (`Γ` 40), the buyer `B` 2740 dispatched and told 50, the farm `B`
+// 2040, `goal_records_need` without a made part. The first build's made part, given anyway, decides
+// the same as a whole.
+#[test]
+fn make_t9_a_stored_goal_without_a_maker_is_as_before_the_slice() {
+    let compiled = catalog(top_pool(), vec![buyer(3_000), farm(2_000)]);
+    let stored = goal_record(&compiled, vec![goal_target("goal-top", TOP, 50)]);
+    let world = || World::new(compiled.clone(), 8).with_goal(&stored);
+    assert!(!world().has_maker(TOP, &[LOW]));
+    let evaluation = alike(
+        world,
+        needs(&[(TOP, 6, PoolNeedKind::Making { made: 2 })], Vec::new()),
+        needs(&[(TOP, 4, PoolNeedKind::Covered)], Vec::new()),
+        "a stored goal and no maker",
+    );
+    assert_eq!(dispatched(&evaluation), [(BUYER, A)], "{evaluation:#?}");
+    for (task_id, benefit, value) in [(BUYER, 2_740, 3_000), (FARM, 2_040, 2_000)] {
+        let entry = decision(&evaluation, task_id);
+        fixed_first(entry, benefit, value);
+        let item = &reason(entry, PolicyCode::ResourceTargets).detail;
+        assert!(
+            item.starts_with("goal-top@pool.top:applied current=4 at_least=54 gap=50 "),
+            "{task_id}: {item}"
+        );
+        assert!(item.contains(" need_gap=0 "), "{task_id}: {item}");
+        assert!(item.contains(" stock_gap=50 "), "{task_id}: {item}");
+        assert_eq!(
+            reason(entry, PolicyCode::GoalRecordsNeed).detail,
+            format!("needed=4 stock=50 held=4 to_characters=4 gap=50 tables={SHA}"),
+            "{task_id}"
+        );
+    }
+    told_gap(&evaluation, BUYER, 50);
+}
+
+// Test 10, a line's pool (fix round 1, ruling 4; the review's F4). `top` writes `spend_line`
+// instead of `target_defaults` and `goal_tiers`; the instance has a maker of it, so the host gives a
+// made part, but no need lands on a line's pool: the computed goal is passed over, no candidate
+// carries a `resource_targets` item, a `goal_records_need` or `resource_target_tasks_unevaluable`,
+// and every decision is as with `Covered` 4.
+#[test]
+fn make_t10_no_computed_goal_lands_on_a_line_s_pool() {
+    let compiled = catalog(
+        line_top_pool(),
+        vec![maker(10_000), buyer(3_000), farm(2_000)],
+    );
+    let world = || World::new(compiled.clone(), 8);
+    assert!(world().has_maker(TOP, &[LOW]));
+    let with_made = alike(
+        world,
+        needs(&[(TOP, 6, PoolNeedKind::Making { made: 2 })], Vec::new()),
+        needs(&[(TOP, 4, PoolNeedKind::Covered)], Vec::new()),
+        "a line's pool",
+    );
+    for entry in &with_made.decisions {
+        for code in [
+            PolicyCode::ResourceTargets,
+            PolicyCode::GoalRecordsNeed,
+            PolicyCode::ResourceTargetTasksUnevaluable,
+        ] {
+            assert!(!has(entry, code), "{}: {entry:#?}", code.as_str());
+        }
+    }
+}
+
 // ---- The world a test drives ----
 
 /// The catalog, the Runtime's memory of the capped episodes, the readings, the goal record of
@@ -483,6 +614,53 @@ impl World {
         .unwrap_or_else(|error| panic!("the needs' projection: {error}"))
         .holding(A, pool)
     }
+
+    /// Whether the needs computed now would find a maker on `instance-a` of `pool`, the pool of an
+    /// item whose recipe's `from` items are held in the pools `from`.
+    fn has_maker(&self, pool: &str, from: &[&str]) -> bool {
+        let from_pools = from
+            .iter()
+            .map(|from_pool| (*from_pool).to_owned())
+            .collect::<Vec<_>>();
+        NeedsProjection::new(
+            &self.catalog,
+            &self.facts(),
+            &GivenPoolReadings::default(),
+            time(self.now),
+            &self.handed,
+        )
+        .unwrap_or_else(|error| panic!("the needs' projection: {error}"))
+        .has_maker(A, pool, &from_pools)
+    }
+}
+
+/// The identity of `instance-a`'s set in `given`.
+fn set_identity(given: &RecordNeeds) -> String {
+    given
+        .get(A)
+        .map(|set| set.identity().to_owned())
+        .unwrap_or_else(|| panic!("the needs of {A}"))
+}
+
+/// Two rounds of `world()`, one given `made` and one given `covered`: every decision the same but
+/// for the set's own identity, which a policy of the needs alone names in its word
+/// (`goal-records:<identity>`), and the same dispatches. The round given `made`.
+fn alike(
+    world: impl Fn() -> World,
+    made: RecordNeeds,
+    covered: RecordNeeds,
+    case: &str,
+) -> PolicyEvaluation {
+    let (made_identity, covered_identity) = (set_identity(&made), set_identity(&covered));
+    let with_made = world().with_needs(made).evaluate();
+    let without = world().with_needs(covered).evaluate();
+    assert_eq!(
+        said(&with_made, &made_identity),
+        said(&without, &covered_identity),
+        "{case}"
+    );
+    assert_eq!(dispatched(&with_made), dispatched(&without), "{case}");
+    with_made
 }
 
 /// The needs of `instance-a` as the host gives them: each of `pools` with its need and kind, and
@@ -843,6 +1021,24 @@ fn farm(value: i64) -> Value {
     judged(rule(FARM, json!([]), produces_top()), value)
 }
 
+/// `task` scoped to the instance `instance_id` alone.
+fn scoped(mut task: Value, instance_id: &str) -> Value {
+    task["scope"] = json!({"kind": "instance", "instance_id": instance_id});
+    task
+}
+
+/// `task` with an instance override that disables it on `instance-a`.
+fn disabled_on_a(mut task: Value) -> Value {
+    task["instance_overrides"] = json!([{
+        "instance_id": A,
+        "enabled": false,
+        "priority": null,
+        "strategic_weight_milli": null,
+        "load_profile": null
+    }]);
+    task
+}
+
 /// A pool of `instance-a` that does not regenerate, of capacity 1 000 000, read from
 /// `resource.<the id without "pool.">`.
 fn declared_pool(id: &str) -> Value {
@@ -862,6 +1058,14 @@ fn top_pool() -> Value {
     let mut pool = declared_pool(TOP);
     pool["target_defaults"] = json!({"scale": 1, "importance_milli": 1000});
     pool["goal_tiers"] = json!({"need_importance_milli": 1000, "stock_cap_milli": 40});
+    pool
+}
+
+/// `top` a line's pool: no valuation, no `target_defaults`, no `goal_tiers`, its `spend_line` the
+/// price 1000 milli at the step 1 and no income floor.
+fn line_top_pool() -> Value {
+    let mut pool = declared_pool(TOP);
+    pool["spend_line"] = json!({"price_milli": 1000, "scale": 1, "income_floor_milli_per_day": 0});
     pool
 }
 

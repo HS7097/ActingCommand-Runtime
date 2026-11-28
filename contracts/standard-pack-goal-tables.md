@@ -86,9 +86,13 @@ two optional members:
   apart, once"). **What a resource author writes for that:** the rule that makes the item declares
   the item's pool among its `produces` and the pools of the recipe's `from` items among its
   `consumes` ([standard-pack-schedule.md](standard-pack-schedule.md), "A rule that makes an item
-  with a recipe"); a rule that declares no `from` item's pool there is not seen as a maker, and
-  the made part is asked of no one on an instance without a maker. Nothing in this file changes for
-  it: the recipe is the one written above.
+  with a recipe"); a rule that declares no `from` item's pool there is not seen as a maker. On an
+  instance without a maker nothing is made and nothing differs from a build without it; nor does
+  anything differ where a goal is stored on the item's pool. **For the made part to push
+  anything**, the item's pool writes a step and an importance: a valuation with its `gap`, or
+  `target_defaults` (a goal there carries no numbers of its own); without them its goal weighs
+  nothing. A maker judged without a fixed value needs a valuation on every pool it touches, as
+  every such rule does. Nothing in this file changes for it: the recipe is the one written above.
 
 An item carries no tier and no mark of how it is obtained: the order of taking apart is the recipes'
 own, and where a need lands is the item without a recipe.
@@ -521,15 +525,19 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   an item without a recipe and without a pool is shown (`goal_records_item_unweighed`) and weighs
   nothing.
 - **The made part** (#455 MAKE, since 0.12.104; [v012-register.md](v012-register.md) §1.558). On
-  an item with a recipe whose holding `h` is known and below its need `n`, the taking apart reads
-  the holdings of its recipe's items too, each as an item's own: `k`, the makings they pay for now,
-  is the least over the `from` and `cost` items of ⌊that item's holding ÷ what one making takes of
-  it⌋, at most the makings the need asks (⌈(n − h) ÷ `makes`⌉); an item whose holding is not known,
-  or unread, or that names no pool, pays for none. The made part is `min(n − h, k·makes)`. Above 0,
-  the item's pool asks `h + made` (the computed goal there covers only the rules that make the
-  item: [resource-targets.md](resource-targets.md), "Needs computed from the records"); at 0 it
-  asks `h`, as before. Either way the items of the recipe keep the needs the taking apart gives
-  them: what cannot be made yet is exactly what their gaps ask. Why the made part and not all of
+  an item with a recipe whose holding `h` is known and below its need `n`, on an instance that has
+  a rule making the item (the evaluation's own test of a maker, [resource-targets.md](resource-targets.md),
+  "Needs computed from the records"), the taking apart reads the holdings of its recipe's items
+  too, each as an item's own: `k`, the makings they pay for now, is the least over the `from` and
+  `cost` items of ⌊that item's holding ÷ what one making takes of it⌋ (an item named in both, the
+  sum of its two amounts), at most the makings the need asks (⌈(n − h) ÷ `makes`⌉); an item whose
+  holding is not known, or unread, or that names no pool, pays for none. The made part is
+  `min(n − h, k·makes)`. Without a maker it is 0 and no holding of the recipe's items is read for
+  it, so the set is as before. Above 0, the item's pool asks `h + made` (the computed goal there
+  covers only the rules that make the item; a goal stored on the pool stacks `h` alone, as
+  before); at 0 it asks `h`, as before. Either way the items of the recipe keep the needs the
+  taking apart gives them: what cannot be made yet is exactly what their gaps ask. Why the made
+  part and not all of
   `n − h`: the part not covered on the item's pool would ask the same units of the rules that make
   the item and of the rules that bring its items at once; it would tell a maker more makings than
   its items in hand pay for, so that it is sent again and again on one reading; and it would lift
@@ -555,8 +563,9 @@ and 2 `ore_4` held, 1 `core_5` is covered and 2 are made (2 `ore_4`, 4 `gel_3` a
 more), so `ore_4` is needed 10 times, 2 covered and 8 made (32 `ore_3` and 2400 `gold`): the needs
 landing are 3 `badge_a`, 6 `gel_3`, 32 `ore_3` and 123200 `gold`. With those holdings alone (the
 others not known) nothing is made now. #455 MAKE: with 20 `ore_3` and 3000 `gold` in hand as well,
-`ore_4` makes min(8, ⌊20/4⌋, ⌊3000/300⌋) = 5 of its 8 now, so its pool asks 2 + 5, while the needs
-landing stay those above.
+on an instance with a rule that makes `ore_4`, `ore_4` makes min(8, ⌊20/4⌋, ⌊3000/300⌋) = 5 of its
+8 now, so its pool asks 2 + 5, while the needs landing stay those above; without such a rule it
+asks 2, as before.
 
 ## Interface
 

@@ -833,18 +833,33 @@ from the records"). A rule is such a maker when it declares **the item's pool am
 `produces` and the pool of at least one of the recipe's `from` items among its `consumes`**: write
 both, with the amounts of one run. A rule that declares none of the `from` items' pools is not seen
 as a maker and is asked nothing; a rule that buys the item with a currency, or farms it
-ready-made, is not a maker either and stays as it is. Nothing is to be configured, and a root
-without such a rule decides as before. One run may make one batch or as many as it is told; that
-is the package's choice:
+ready-made, is not a maker either and stays as it is. Nothing is to be configured; an instance
+without such a rule (its scope covering the instance, no instance override disabling it) decides
+as before, and so does an instance whose person stored a goal on the item's pool (that goal asks
+what it asked before; the makers are asked the made part only where no goal is stored there).
+**For the made part to push anything** the item's pool writes a step and an importance, a
+valuation with its `gap` or `target_defaults`; without them the makers' goal weighs nothing and
+says `unresolved`. A maker judged without a fixed value needs a valuation on every pool it
+touches, produced and consumed, as every such rule does (else `benefit_unknown`). A pool that
+writes `spend_line` takes no made part: no need lands on a line's pool. One run may make one batch
+or as many as it is told; that is the package's choice:
 
 - **One batch a run**: the rule's `produces` on the item's pool is what one making turns out (the
   recipe's `makes`). The gap the maker is told closes over its dispatches (the production told
   under the gap adds up since the pool's reading, "Pool lines") or within one run when the rule is
   handed a `run_cap` (a consumed pool with written lines, or a reserve).
-- **As many as told**: the package reads `session.dispatch.schedule.run_cap`, or the told gap
-  `gap_remaining.<j>` of its production entry `j` ([remedies.md](remedies.md), section 4). Without
-  a `run_cap` (no consumed pool's lines and no reserve take part) a package that caps its repeats by
-  it ends at its entry, as every such package does.
+- **As many as told**: the package reads the gap it is told for that entry, `gap_remaining.<j>` of
+  its production entry `j` ([remedies.md](remedies.md), section 4), and makes the lesser of it and
+  the turns `session.dispatch.schedule.run_cap` allows: a `run_cap` may count more turns than the
+  items in hand pay for (its spend term reads only the pools whose lines take part), and the told
+  gap is what they pay for. Without a `run_cap` (no consumed pool's lines and no reserve take part)
+  a package that caps its repeats by it ends at its entry, as every such package does.
+
+After a making run whose told production reaches the made part, the item's pool is not read again
+by the needs until a reading observed after the run's end, and until then nothing below the item is
+asked ([scheduling/README.md](scheduling/README.md), "Pool lines" and "Needs computed from the
+records"): the package that makes the item, or a reading rule of its pool, reads the item again
+after a making run.
 
 ## Composition
 

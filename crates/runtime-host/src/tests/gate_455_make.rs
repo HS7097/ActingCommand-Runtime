@@ -13,10 +13,16 @@
 //   (m2); so does an input whose holding is not known or unread (m3), or that names no pool (m5);
 // - the made part is bounded by the part not covered and by what the inputs pay for (m4);
 // - two levels of recipes, each taken with the holdings in hand (m6);
-// - the identity hashes the kind and the made part, and not the pools of the `from` items (m7).
+// - the identity hashes the kind and the made part, and not the pools of the `from` items (m7);
+// - fix round 1: without a maker of the item's pool on the instance nothing is made and no holding
+//   of its items is read, the set byte for byte as before (m8); a recipe of two `from` items asks
+//   for a maker with both their pools and the set carries both (m9); an item named in both `from`
+//   and `cost` takes the sum of its amounts for one making (m10).
 //
 // The tables, keys, items and pools are made up; times are fixed Unix milliseconds, and nothing
 // sleeps.
+
+use std::cell::RefCell;
 
 use super::*;
 use crate::goal_needs::{NeedsSources, RecordsRoot, instance_needs};
@@ -45,10 +51,15 @@ const TABLES_GAME: &str = "neutral";
 const SHA: &str = "fixture-tables-make";
 
 /// What the computation reads besides the records and the root: lists by key (fresh until their
-/// expiry at the fixture's time) and holdings by pool (none: not known).
+/// expiry at the fixture's time), holdings by pool (none: not known) and whether the instance has a
+/// maker of a pool (`maker`, every pool alike); it notes each pool whose holding it is asked for
+/// (`read`) and each pool whose maker it is asked about, with the pools it is given (`asked`).
 struct Sources {
     lists: BTreeMap<String, FactRecord>,
     holdings: BTreeMap<String, NeedHolding>,
+    maker: bool,
+    read: RefCell<Vec<String>>,
+    asked: RefCell<Vec<(String, Vec<String>)>>,
 }
 
 impl NeedsSources for Sources {
@@ -70,10 +81,18 @@ impl NeedsSources for Sources {
     }
 
     fn holding(&self, pool_id: &str) -> NeedHolding {
+        self.read.borrow_mut().push(pool_id.to_owned());
         self.holdings
             .get(pool_id)
             .copied()
             .unwrap_or(NeedHolding::Unknown(None))
+    }
+
+    fn has_maker(&self, pool_id: &str, from: &[String]) -> bool {
+        self.asked
+            .borrow_mut()
+            .push((pool_id.to_owned(), from.to_vec()));
+        self.maker
     }
 }
 
@@ -169,21 +188,35 @@ fn recipe_tables(makes: u64, need: u64) -> Value {
     )
 }
 
-/// The needs of the stored record over `document`, reading the roster and `holdings`.
-fn needs_of(document: &Value, holdings: &[(&str, NeedHolding)]) -> InstanceRecordNeeds {
-    let sources = Sources {
+/// The sources of the roster and `holdings`, with a maker of every pool when `maker`, nothing
+/// noted yet.
+fn sources_of(holdings: &[(&str, NeedHolding)], maker: bool) -> Sources {
+    Sources {
         lists: BTreeMap::from([(ROSTER.to_owned(), roster())]),
         holdings: holdings
             .iter()
             .map(|(pool, holding)| ((*pool).to_owned(), *holding))
             .collect(),
-    };
+        maker,
+        read: RefCell::new(Vec::new()),
+        asked: RefCell::new(Vec::new()),
+    }
+}
+
+/// The needs of the stored record over `document`, reading `sources`.
+fn needs_from(document: &Value, sources: &Sources) -> InstanceRecordNeeds {
     let root = RecordsRoot {
         entries: BTreeMap::from([(ENTRY.to_owned(), TABLE.to_owned())]),
         tables: Some((Arc::new(tables(document)), SHA.to_owned())),
     };
-    instance_needs(&stored(), NOW, Some(&root), &sources)
+    instance_needs(&stored(), NOW, Some(&root), sources)
         .expect("an instance with records has needs")
+}
+
+/// The needs of the stored record over `document`, reading the roster and `holdings`, the instance
+/// a maker of every pool.
+fn needs_of(document: &Value, holdings: &[(&str, NeedHolding)]) -> InstanceRecordNeeds {
+    needs_from(document, &sources_of(holdings, true))
 }
 
 /// A holding of `held`, fresh until `fresh_until_unix_ms`.
@@ -484,4 +517,106 @@ fn make_m7_the_identity_hashes_the_kind_and_the_made_part() {
     assert_eq!(named.identity(), plain.identity());
     assert_ne!(named, plain);
     assert_eq!(named.making_from("pool.top"), ["pool.low"]);
+}
+
+// m8, no maker on the instance (fix round 1, ruling 1; the review's F1 and F2). m1's holdings, 8
+// `low` and 1000 `coin` that pay for 2 makings and end before the roster, but the instance has no
+// maker of `top`'s pool: it is asked once, with the pool of the `from` item, nothing is made, no
+// holding but `top`'s is read, and the set is RR3's byte for byte, its identity and its freshness
+// included.
+#[test]
+fn make_m8_without_a_maker_nothing_is_made_and_no_item_s_holding_is_read() {
+    let given = sources_of(
+        &[
+            ("pool.top", known(4, None)),
+            ("pool.low", known(8, Some(READ_AT + 20_000))),
+            ("pool.coin", known(1_000, Some(READ_AT + 20_000))),
+        ],
+        false,
+    );
+    let needs = needs_from(&recipe_tables(1, 10), &given);
+    let before = rr3_set();
+    assert_eq!(needs, before);
+    assert_eq!(needs.identity(), before.identity());
+    assert_eq!(needs.fresh_until_unix_ms(), Some(READ_AT + FRESH_MS));
+    assert!(needs.making_from("pool.top").is_empty());
+    assert_eq!(
+        given.asked.borrow().as_slice(),
+        [("pool.top".to_owned(), vec!["pool.low".to_owned()])]
+    );
+    assert_eq!(given.read.borrow().as_slice(), ["pool.top"]);
+}
+
+// m9, a recipe of two `from` items (fix round 1; the review's F8). `top` made 1 from 4 `low` and 2
+// `mid`, at the cost of 300 `coin`, needed 10, held 4: 6 makings. 8 `low`, 6 `mid` and 1000 `coin`
+// in hand pay for min(6, 2, 3, 3) = 2: the maker is asked with both pools in the recipe's order,
+// `top`'s pool asks 4 + 2 (`Making { made: 2 }`) made from both, and `low`, `mid` and `coin` keep
+// the 24, 12 and 1800 the taking apart gives them.
+#[test]
+fn make_m9_a_recipe_of_two_from_items_names_both_their_pools() {
+    let document = table_of(
+        json!({
+            "top": {"pool": "pool.top", "recipe": {"makes": 1, "from": {"low": 4, "mid": 2}, "cost": {"coin": 300}}},
+            "low": {"pool": "pool.low"},
+            "mid": {"pool": "pool.mid"},
+            "coin": {"pool": "pool.coin"}
+        }),
+        json!({"top": 10}),
+    );
+    let given = sources_of(
+        &[
+            ("pool.top", known(4, None)),
+            ("pool.low", known(8, None)),
+            ("pool.mid", known(6, None)),
+            ("pool.coin", known(1_000, None)),
+        ],
+        true,
+    );
+    let needs = needs_from(&document, &given);
+    assert_eq!(
+        needs.pools(),
+        &pools(&[
+            ("pool.coin", 1_800, PoolNeedKind::Lands),
+            ("pool.low", 24, PoolNeedKind::Lands),
+            ("pool.mid", 12, PoolNeedKind::Lands),
+            ("pool.top", 6, PoolNeedKind::Making { made: 2 }),
+        ])
+    );
+    assert_eq!(needs.making_from("pool.top"), ["pool.low", "pool.mid"]);
+    assert_eq!(
+        given.asked.borrow().as_slice(),
+        [(
+            "pool.top".to_owned(),
+            vec!["pool.low".to_owned(), "pool.mid".to_owned()]
+        )]
+    );
+}
+
+// m10, an item named in both `from` and `cost` of one recipe (fix round 1, ruling 3; the review's
+// F5). `top` made 1 from 4 `low` at the cost of 2 more `low`, needed 10, held 4: 6 makings, and
+// `low` needs 6·4 + 6·2 = 36. One making takes 6 `low`: 8 in hand pay for ⌊8/6⌋ = 1, not ⌊8/4⌋ =
+// 2, so `top`'s pool asks 4 + 1; 12 pay for 2, and it asks 4 + 2.
+#[test]
+fn make_m10_an_item_in_from_and_cost_takes_the_sum_for_one_making() {
+    let document = table_of(
+        json!({
+            "top": {"pool": "pool.top", "recipe": {"makes": 1, "from": {"low": 4}, "cost": {"low": 2}}},
+            "low": {"pool": "pool.low"}
+        }),
+        json!({"top": 10}),
+    );
+    for (low, made) in [(8, 1), (12, 2)] {
+        let needs = needs_of(
+            &document,
+            &[("pool.top", known(4, None)), ("pool.low", known(low, None))],
+        );
+        assert_eq!(
+            needs.pools(),
+            &pools(&[
+                ("pool.low", 36, PoolNeedKind::Lands),
+                ("pool.top", 4 + made, PoolNeedKind::Making { made }),
+            ]),
+            "low {low}"
+        );
+    }
 }

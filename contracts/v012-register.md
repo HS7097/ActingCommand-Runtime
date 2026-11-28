@@ -54119,22 +54119,29 @@ cost item, 8 and 1000 of those in hand):
   such a pool hashes as before and the identity's version word does not move. The pools of the
   recipe's `from` items are given by a builder after `new` (`with_making_from`, `new` keeping its
   five arguments) and read by `making_from`; they follow from the tables, whose sha256 the identity
-  holds, and are not hashed again. The two readers of the kind are the identity writer and
-  `landing_targets`; there is no other.
-- *3, stacking* (`crates/policy/src/resource_targets.rs`, `landing_targets`; `stack_record_needs`
-  unchanged). A `Making` pool without a stored goal gains the computed goal `goal_records` of its
-  need, with the pool's own step and importance, as a `Lands` pool does. A stored goal on it asks
-  `stock + need` as on every kind: its gap is `T + made`, its need tier `made`, its stock tier `T`.
-  `Covered` and `Unsplit` gain none, as before.
+  holds, and are not hashed again. Before the slice the kind had two readers, the identity writer
+  and `landing_targets`; the slice adds its own: `need_reason`, `StackedNeeds::making_from` and
+  (fix round 1) `stored_part`.
+- *3, stacking* (`crates/policy/src/resource_targets.rs`, `landing_targets`; fix round 1:
+  `stack_record_needs` stacks `stored_part`). A `Making` pool without a stored goal gains the
+  computed goal `goal_records` of its need, with the pool's own step and importance, as a `Lands`
+  pool does. Fix round 1 (its ruling 2, which replaces the first build's sentence here): a stored
+  goal on it stacks the part the holding covers alone, `stock + h`, as on a `Covered` pool, and its
+  tiers and `goal_records_need` read that part (`StackedNeeds::stacked_need`): its gap is `T`, its
+  need tier 0, its stock tier `T`, exactly as before the slice. `Covered` and `Unsplit` gain none,
+  as before.
 - *4, who the made part is asked of* (`resolve_v2`, `StackedNeeds::making_from`, the new
   `pool_makers`). The computed goal of a `Making` pool covers only the pool's makers: the catalogue's
-  tasks whose scope covers the instance, that produce the pool (one run's production at least 1)
-  and whose `consumes` names a pool one of the set's `from` pools resolves to on the instance
-  (`target_pool`). The tasks' declarations and scopes decide it, never an enablement, an override or
-  a run state (SS-1's one-way guard). With no maker the goal is passed over before anything is
-  resolved: no `resource_targets` item, no `goal_records_need`, no
-  `resource_target_tasks_unevaluable` lapse, no gap; the instance is judged as with `Covered`. A
-  stored goal keeps its own coverage, the person's.
+  tasks that can run on the instance (fix round 1: its scope covers it and no instance override
+  disables it, `task_on_instance`, as the lapse of a target without `tasks` reads its producers),
+  that produce the pool (one run's production at least 1) and whose `consumes` names a pool one of
+  the set's `from` pools resolves to on the instance (`target_pool`). The tasks' declarations,
+  scopes and overrides decide it, never a run state; a task an override disables has no candidate,
+  so which makers are disabled moves no pool weight and no other task's term (SS-1's one-way
+  guard). Fix round 1: with no maker the host makes nothing (below); the evaluation still passes
+  such a goal over before anything is resolved, a second guard: no `resource_targets` item, no
+  `goal_records_need`, no `resource_target_tasks_unevaluable` lapse, no gap. Nor does it land on a
+  pool that writes `spend_line` (`line_pool`). A stored goal keeps its own coverage, the person's.
 - *5, what a maker is told*: the members that tell any goal's gap (`spend_values_with`,
   `goal_runs`), unchanged: `gaps_remaining` on its entry for the pool is the made part, the need
   tier on a pool that writes `goal_tiers`, and the goal term of `run_cap` divides it. §1.543's and
@@ -54169,8 +54176,12 @@ the bullet `recipe`). A making rule declares the item's pool among its `produces
 the recipe's `from` items among its `consumes`; one that declares no such item is not seen as a
 maker. Whether one run makes one batch (its `produces` the recipe's `makes`; the told gap closes
 over the dispatches by §1.548's sum, or within one run under a `run_cap`) or as many as it is told
-(it reads `run_cap` or `gap_remaining.<j>`; without a `run_cap` a package that caps its repeats by
-it ends at its entry) is the package's choice (the study's F2).
+(fix round 1: it reads the gap it is told for that entry, `gap_remaining.<j>`, and makes the lesser
+of it and the turns `run_cap` allows; without a `run_cap` a package that caps its repeats by it
+ends at its entry) is the package's choice (the study's F2). Fix round 1: for the made part to push
+anything the item's pool writes a step and an importance (a valuation with its `gap`, or
+`target_defaults`), and a maker judged without a fixed value needs a valuation on every pool it
+touches; after a making run the resource side reads the item again.
 
 **Not this slice** (ruling 5): the whole part not covered on the item's pool; a push on buyers or
 direct farms of the item; sharing an item's holding among the items that use it; leaving a
@@ -54186,17 +54197,20 @@ covers the maker alone: with no stored goal, the need tier 2 (`Γ` 2000 at the s
 importance 1000), a maker of the value 10 000 consuming 4 of the lower item (1000 a unit) is `B`
 8000 where it was 6000, told the gap 2; the buyer and the direct farm decide byte for byte as with
 `Covered` 4. With 3 of the lower item in hand `k = 0`, and the set is byte for byte §1.538's. Made 3
-at a time with 6 held: `min(4, 2·3) = 4`. A stored goal of 50 on the pool asks 56, the gap 52 (need
-tier 2, stock tier 50), and keeps its own coverage; on `Covered` 4 it asks 54, the gap 50, the need
-tier 0 (today's pump, pinned).
+at a time with 6 held: `min(4, 2·3) = 4`. Fix round 1: a stored goal of 50 on the pool asks 54, the
+gap 50, the need tier 0 and the stock tier 50, with a maker or without and with `Making` 6 or
+`Covered` 4 alike (today's pump, pinned), and keeps its own coverage; the first build asked 56, the
+gap 52 and the need tier 2 there. Without a maker on the instance the item's pool is `Covered` 4
+whatever is in hand.
 
 **Where it is built.**
 
 | Part | Where |
 |---|---|
-| The made part | `crates/runtime-host/src/goal_needs.rs` (`take_apart`, `makings_in_hand`, `TakenApart`; `instance_needs` calls `with_making_from`; the module doc's "Taking apart") |
+| The made part | `crates/runtime-host/src/goal_needs.rs` (`take_apart`, `makings_in_hand`, `TakenApart`; `instance_needs` calls `with_making_from`; the module doc's "Taking apart"; fix round 1: `NeedsSources::has_maker`) |
+| Whether the instance has a maker (fix round 1) | `crates/policy/src/record_needs.rs` (`NeedsProjection::has_maker`); `crates/runtime-host/src/host/record_needs.rs` (`HostSources` forwards it) |
 | The kind, the identity, the set's `from` pools, the view's ` made=` | `crates/policy/src/record_needs.rs` (`PoolNeedKind::Making`, `InstanceRecordNeeds::new`'s identity, `with_making_from`, `making_from`, `need_reason`) |
-| The computed goal and its coverage | `crates/policy/src/resource_targets.rs` (`landing_targets`, `StackedNeeds::making_from`, `resolve_v2`, `pool_makers`) |
+| The computed goal and its coverage | `crates/policy/src/resource_targets.rs` (`landing_targets`, `StackedNeeds::making_from`, `resolve_v2`, `pool_makers`; fix round 1: `stored_part`, `StackedNeeds::stacked_need`, `stack_record_needs`) |
 | The catalogue text | the policy fragment's description of `goal_records_need` |
 
 **Decided here.** The computed goal of a `Making` pool is known by its id (`goal_records`), its
@@ -54222,15 +54236,23 @@ in a recipe cannot be read (the tables' reader refuses it), and is taken as 1 th
 | `…::make_m5_an_input_without_a_pool_makes_nothing` (m5) | an input item of no pool: `Covered` 4 and its `goal_records_item_unweighed` as before |
 | `…::make_m6_each_level_makes_what_its_items_in_hand_pay_for` (m6) | two levels: without the middle item in hand the top `Covered` and the middle `Making { made: 3 }`; with it both `Making { made: 2 }` |
 | `…::make_m7_the_identity_hashes_the_kind_and_the_made_part` (m7) | a `Making` set hashes apart from §1.538's; `Making` 2, `Making` 3, `Covered` and `Lands` four identities; the `from` pools not hashed |
+| `…::make_m8_without_a_maker_nothing_is_made_and_no_item_s_holding_is_read` (fix round 1) | m1's holdings, no maker: asked once with the lower item's pool, no holding but the item's read, the set §1.538's, identity and freshness included |
+| `…::make_m9_a_recipe_of_two_from_items_names_both_their_pools` (fix round 1) | two `from` items: the maker asked with both pools in the recipe's order, `Making { made: 2 }` made from both |
+| `…::make_m10_an_item_in_from_and_cost_takes_the_sum_for_one_making` (fix round 1) | an item in `from` (4) and `cost` (2): 8 in hand make 1, 12 make 2 |
 | `actingcommand-policy` `gate_455_make::make_t1_the_computed_goal_covers_the_maker_alone_and_tells_it_the_made_part` (t1) | the maker carries `goal_records@pool.top:applied current=4 at_least=6 gap=2 …` and `goal_records_need … made=2`, `B` 8000 (6000 with `Covered`), told 2; the buyer and the farm byte for byte as with `Covered` |
-| `…::make_t2_an_instance_without_a_maker_decides_as_with_the_holdings_part_alone` (t2) | no maker: every decision equal to `Covered`'s but for the set's own identity in the dispatched decision's record, the same dispatch; no item, no need, no lapse |
-| `…::make_t3_a_stored_goal_on_the_pool_asks_its_stock_and_the_need_and_keeps_its_coverage` (t3) | a stored 50: `at_least` 56, gap 52, `need_gap` 2, `stock_gap` 50, on the maker and the buyer; told 2 |
+| `…::make_t2_an_instance_without_a_maker_decides_as_with_the_holdings_part_alone` (t2) | no maker: every decision equal to `Covered`'s but for the set's own identity in the dispatched decision's record, the same dispatch; no item, no need, no lapse; fix round 1: also with no producer of the item, so the goal is passed over and not resolved covering nobody |
+| `…::make_t3_a_stored_goal_on_the_pool_asks_its_stock_and_the_need_and_keeps_its_coverage` (t3) | fix round 1: a stored 50 with a maker and `Making` 6: every decision equal to t4's, `at_least` 54, gap 50, `need_gap` 0, `stock_gap` 50, told 50, no ` made=` (the first build: 56, 52, 2, told 2) |
 | `…::make_t4_today_s_stored_goal_on_a_covered_pool_lifts_by_its_stock_alone` (t4, today's pump pinned) | `Covered` 4 and a stored 50: `at_least` 54, gap 50, `need_gap` 0, `Γ` 40, told 50, no computed goal, no ` made=` |
 | `…::make_t5_the_made_part_is_read_by_the_unread_rule_as_any_goal_s_gap` (t5) | a maker not judged, one making a run, no `run_cap`: read after one dispatch told 2, unread after the second; the goal pending; `Unsplit` then gives no goal |
 | `…::make_t6_a_maker_worth_nothing_by_itself_is_sent_by_the_made_part_alone` (t6, §1.550 on this tree) | a maker of the value 0 and a priced item: `policy_benefit_nonpositive` −4000 with `Covered`, dispatched with `B` 2000 with `Making`, told 2 and `run_cap` 2 |
 | `…::make_t7_a_maker_whose_input_reads_below_one_run_is_held_by_the_hard_line` (t7) | the lower item read 3, below one run's 4: held `pool_line_held` `would_cross_hard_line` without needs, with `Covered`, and with a made part the host would not give |
+| `…::make_t8_a_rule_out_of_the_instance_s_scope_or_disabled_on_it_is_no_maker` (fix round 1) | `NeedsProjection::has_maker`: the maker with the lower item's pool alone or second of two, not the cost's; not the buyer or the farm; not a maker scoped to another instance or disabled on this one, where a made part given anyway decides as `Covered` |
+| `…::make_t9_a_stored_goal_without_a_maker_is_as_before_the_slice` (fix round 1, the review's F1 sequence) | the buyer and the farm and a stored 50: `at_least` 54, gap 50, `need_gap` 0, the buyer `B` 2740 dispatched and told 50, the farm `B` 2040, no ` made=`; a made part given anyway decides the same |
+| `…::make_t10_no_computed_goal_lands_on_a_line_s_pool` (fix round 1) | the item's pool writes `spend_line`, a maker present: the goal passed over, every decision as with `Covered` |
 
-Every existing gate passes as it is, none edited, renamed or retired, no golden re-recorded: the
+Every existing gate passes as it is, none renamed or retired, no golden re-recorded (fix round 1:
+the test sources of `gate_455_rr3`, `gate_455_rr3c` and `gate_455_rr4a` gain the new trait method,
+each answering no maker, their assertions unchanged): the
 host's `rr3_p1` to `rr3_p4`, `rr3_p3_b`, `rr3a_p1`, `rr3_h1`, `rr3_h2`, `rr3c_p1`, `rr3c_h1`,
 `rr4a_p1` and §1.548's host gates give no recipe item a holding of its items that pays for one
 making (their inputs' holdings are not known, or every holding is 4 against a cost of 300), so
@@ -54243,24 +54265,57 @@ of the highest `B`, is the one dispatched and the others wait behind it with the
 both rounds; that in t5 the maker not judged is due again a minute later on the same reading; and
 the exact `B` of t6 and t7, read from the benefit's sum and the lines' allowance.
 
-**What is not changed.** Every instance whose needs hold no made part: its set, identity and
-evaluation byte for byte (an item whose items in hand pay for no making, or whose holdings are not
-known, `Covered` as before); every instance without stored records; `Unsplit` and `Lands`; buyers,
-direct farms and every rule that is no maker; a stored goal's coverage; the members a run is told
-and the unread rules; every record, request, ledger member and declared interface range. On an
-instance with a made part and no maker no candidate is covered by the computed goal, so no task is
-chosen, held or told otherwise; the set's identity and its freshness (lowered by the expiries of
-the items' holdings it read, as every holding it reads lowers it) still enter the decision
-identity, the dispatched decision's record, the stacked policy's lifetime and, for a candidate
-another computed goal of the instance lifts, its freshness and wake.
+**What is not changed** (fix round 1). Every instance without a maker of the item's pool (no task
+that can run on it, produces the pool and consumes the pool of one of the recipe's `from` items):
+nothing is made and no holding of the recipe's items is read for it, so its set, the set's
+identity and freshness, every decision and its identity, every wake and every recorded word are
+what a build without the slice gives. Every goal a person stored on the item's pool, maker or not:
+it stacks the holding's part alone, so its `at_least`, gap, tiers, told gap, coverage and
+`goal_records_need` are as before. Every instance whose needs hold no made part (an item whose
+items in hand pay for no making, or whose holdings are not known, `Covered` as before); every
+instance without stored records; `Unsplit` and `Lands`; buyers, direct farms and every rule that is
+no maker; the members a run is told and the unread rules; every record, request, ledger member
+and declared interface range. What differs is only where a maker can run and no goal is stored on
+the pool: the set holds the made part (its identity and freshness with it, the freshness lowered by
+the expiries of the items' holdings it read), and the makers alone are lifted and told it.
 
 **At deploy.** Nothing to configure and nothing to migrate: the made part lives one evaluation.
 Nothing happens until a root's catalogue has a rule that declares itself a maker (the item's pool
-among its `produces`, a `from` item's pool among its `consumes`) and its tables a recipe whose
-items are in hand; then the maker's decision carries `goal_records@<pool>` and `goal_records_need`
-ending ` made=<n>`. **Rollback.** Nothing is stored; an older build takes the needs apart as
-§1.538 does and stops asking makers. In the release notes' language:
-有配方的物品，手里的原料现在就能合成的那一部分，会作为目标交给“合成它的规则”（产出这个物品的池子、并且消耗配方里某样原料的池子的规则）：只抬它、只告诉它这么多；买成品、直接刷成品的规则照旧不被需求抬起，实例上没有合成规则时一切照旧。原料还缺的部分仍由原料自己的缺口去推。没有要配置的东西。
+among its `produces`, a `from` item's pool among its `consumes`) and can run on the instance, its
+tables a recipe whose items are in hand, and no goal is stored on the item's pool; then the maker's
+decision carries `goal_records@<pool>` and `goal_records_need` ending ` made=<n>`. Before that no
+decision, identity, wake or word of any instance changes. **Rollback.** Nothing is stored; an older
+build takes the needs apart as §1.538 does and stops asking makers. In the release notes' language:
+有配方的物品，手里的原料现在就能合成的那一部分，会作为目标交给“合成它的规则”（产出这个物品的池子、并且消耗配方里某样原料的池子的规则）：只抬它、只告诉它这么多；买成品、直接刷成品的规则照旧不被需求抬起。实例上没有合成规则时一切照旧；物品的池子上存着目标时，那个目标也照旧，不叠合成的部分。原料还缺的部分仍由原料自己的缺口去推。没有要配置的东西。
+
+**Fix round 1** (the independent review of the pull request; the coordinator's rulings on its
+findings). F1 and F2, by code: `take_apart` takes the pools of the recipe's `from` items first and
+asks `NeedsSources::has_maker`; the host's sources answer it with `NeedsProjection::has_maker`,
+which finds the instance in the projection and the pool by `target_pool` and asks `pool_makers`,
+the function `resolve_v2` asks too, on the same compiled catalogue and the same projected instance,
+under the gates the evaluation's inputs are projected under (the admission's recomputation asks it
+the same way). Without a maker `made` is 0 and `makings_in_hand` is not called. The trait method
+has no default: every source says it. `pool_makers` now takes a task an instance override disables
+for no maker (`task_on_instance`), so an instance whose only maker is disabled is as without one.
+Ruling 2 (it replaces the first build's sentence on a stored goal): a stored goal on a `Making` pool
+stacks `need − made` (`stored_part`), and its tiers and `goal_records_need` read that part, so t3
+now pins t4's numbers; the made part is asked only by the makers' goal where no goal is stored (a
+known limit: a person who wants the makers asked removes the stored goal). F5,
+by code: an item in both `from` and `cost` takes the sum of its amounts for one making. F4 (i), by
+code: `resolve_v2` passes the makers' goal over on a pool that writes `spend_line` (`line_pool`).
+F4 (ii), written down: a maker that pays a `cost` in a currency a line governs is lifted like any
+maker; what holds that spending below the line is the line's pressing, a slice of its own. F3 and
+F7, in the authors' paragraphs: the item's pool writes a step and an importance for the made part
+to push anything, a judged maker without a fixed value needs a valuation on every pool it touches,
+and a package that makes as many as it is told makes the lesser of the gap told for that entry and
+the turns. F6, written down as a known limit: after a maker's told production reaches the made
+part, the item's pool is unread until it is read again after the run's end, and until then nothing
+below the item is asked; the resource side reads the item again after a making run. F8: m8 to m10
+and t8 to t10 are new, t2 tells "passed over" from "covers nobody", t3 is re-derived. Left: the
+wake of a set with a made part in the evaluator, composed copies of a maker, and a `Making` goal
+that resolves `unresolved` stay unpinned. What reading could not settle: that t9's farm is `B` 2040
+(read from the benefit's sum), that the out-of-scope and disabled makers' catalogues compile as
+written, and that t10's line pool beside the makers' fixed values judges them as written.
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
