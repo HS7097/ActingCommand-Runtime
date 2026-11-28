@@ -2734,6 +2734,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         instance_lines,
         amounts: &amounts,
         left_out,
+        asleep: &asleep,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -4718,6 +4719,11 @@ struct PlacementContext<'a> {
     /// #428 S168-LB1a: the keys the Runtime's projection left out for each instance; they raise
     /// no fact refresh demand ([`LeftOutFacts`]). None outside the Runtime's cycle.
     left_out: &'a LeftOutFacts,
+    /// #503 WAKE (register §1.549): the instances the Runtime names asleep that the evaluation
+    /// judges as available ([`InstanceHolds::judge_asleep_as_available`]), which the pools' lines and
+    /// the benefit gate read for a consumer below a regenerating pool's trigger line. None outside
+    /// the Runtime's cycle.
+    asleep: &'a BTreeSet<String>,
 }
 
 impl PlacementContext<'_> {
@@ -9197,6 +9203,36 @@ fn asleep_reason(instance_id: &str) -> DecisionReason {
         format!(
             "instance_id={instance_id}: the instance is asleep, and this task is what it is woken \
              for"
+        ),
+    )
+}
+
+/// #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "Below a pool's trigger line"):
+/// the reason of a consumer the asleep instance `instance_id` holds below a regenerating pool's
+/// trigger line until `release`: `instance_asleep_below_trigger_line`, with the pool whose line
+/// comes first (`trigger`), its reading and its trigger line as read now, and where its lines come
+/// from.
+fn asleep_below_trigger_reason(
+    instance_id: &str,
+    trigger: &capped::TriggerAt,
+    release: u64,
+) -> DecisionReason {
+    reason_with(
+        Outcome::new(PolicyCode::InstanceAsleepBelowTriggerLine)
+            .instance_id(instance_id)
+            .pool_id(trigger.pool_id.as_str())
+            .pool_reading(trigger.reading)
+            .trigger_line(trigger.trigger)
+            .next_eligible_unix_ms(release)
+            .lines_source(trigger.source),
+        format!(
+            "instance_id={instance_id} pool_id={} pool_reading={} trigger_line={} \
+             next_eligible_unix_ms={release} lines_source={}: the instance is asleep and the pool \
+             reads below its trigger line, so this task is no reason to wake it before then",
+            trigger.pool_id,
+            trigger.reading,
+            trigger.trigger,
+            trigger.source.as_str()
         ),
     )
 }

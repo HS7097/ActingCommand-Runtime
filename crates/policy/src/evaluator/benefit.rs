@@ -91,18 +91,19 @@
 //!   such a pool the gate reads the sums with every term and says nothing of it.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_selection_policy::UnknownReason;
 
-use super::capped::{self, CappedMemory, Disposition};
+use super::capped::{self, CappedMemory, Disposition, TriggerAt};
 use super::fact_refresh::{self, AffectedCandidate};
 use super::{
     DecisionReason, DetectionSuggestion, EvaluationFacts, InstanceSnapshot, PlacementCandidate,
     PlacementContext, PolicyEvaluationError, PolicyEvaluationResult, SchedulingDecisionState,
-    TaskWork, UnknownReasonToken, min_wake, next_pool_projection_change, offset_rank,
-    project_pool_value, reason_with, resource_suggestion, scope_matches_instance, unknown_token,
+    TaskWork, UnknownReasonToken, activity_window_at, asleep_below_trigger_reason, min_wake,
+    next_pool_projection_change, offset_rank, project_pool_value, reason_with, resource_suggestion,
+    scope_matches_instance, unknown_token,
 };
 use crate::codes::{BenefitGap, PolicyCode, ZeroTier};
 use crate::resource_targets::PoolWeight;
@@ -910,7 +911,7 @@ pub(super) fn gate(
                 };
                 // SS-2h: a capped pool's order decides before the sign of `B`. SCHED-C1a: a `B`
                 // computed from a fixed value says so first, whatever the gate then decides.
-                let (hold, below_trigger) = match disposition {
+                let (hold, below_trigger, trigger_at) = match disposition {
                     Disposition::Held(reason) => {
                         note_fixed_value(task_work, task, saturating_milli(sum.floor()), expected);
                         defer(task_work, reason);
@@ -933,7 +934,8 @@ pub(super) fn gate(
                     Disposition::Normal {
                         hold,
                         below_trigger,
-                    } => (hold, below_trigger),
+                        trigger_at,
+                    } => (hold, below_trigger, trigger_at),
                 };
                 let benefit_milli = saturating_milli(sum.floor());
                 // #455 B1 ruling 9 (register §1.518): below the trigger line of a regenerating pool
@@ -1016,6 +1018,25 @@ pub(super) fn gate(
                         defer(task_work, hold);
                         continue;
                     }
+                    // #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "Below a
+                    // pool's trigger line"): on an asleep instance, below the trigger line of a
+                    // regenerating pool it consumes whose lines read, it is no reason to wake the
+                    // instance before its release; it waits, kept by no later gate, and the round
+                    // goes on to the instance's next candidate. With no release after now it
+                    // passes as on an awake instance.
+                    if let Some(trigger) = &trigger_at
+                        && let Some(release) =
+                            asleep_release(context, &candidate, task_work, trigger, expected)?
+                    {
+                        task_work.state = SchedulingDecisionState::Deferred;
+                        task_work.reasons.push(asleep_below_trigger_reason(
+                            &candidate.instance_id,
+                            trigger,
+                            release,
+                        ));
+                        task_work.next_wake_unix_ms = Some(release);
+                        continue;
+                    }
                     let known = KnownBenefit {
                         benefit_milli,
                         expected_duration_ms: expected,
@@ -1067,6 +1088,63 @@ pub(super) fn gate(
         }
     }
     Ok(kept)
+}
+
+/// #503 WAKE (register §1.549, the coordinator's ruling 1; `contracts/scheduling/README.md`,
+/// "Below a pool's trigger line"): when a consumer that would pass on an asleep instance below a
+/// regenerating pool's trigger line is let through: the earlier of the time the pool reaches the
+/// line (`trigger`, the earliest of such pools it consumes) and the end of its chance less its
+/// expected duration `expected`. Its chance ends at the earlier of its decision's own wake as it
+/// stands (its trigger's and its feedback stop's next time), unless that wake is a regenerating
+/// pool's next projection step (the evaluation's next reading of the pool, no end of anything), and
+/// the end of the activity window open now. `None` when that release is not after the evaluation:
+/// the consumer passes as on an awake instance.
+fn asleep_release(
+    context: &PlacementContext<'_>,
+    candidate: &PlacementCandidate,
+    task_work: &TaskWork,
+    trigger: &TriggerAt,
+    expected: u64,
+) -> PolicyEvaluationResult<Option<u64>> {
+    let now = context.time.unix_ms;
+    let own = match task_work.next_wake_unix_ms {
+        Some(wake) if pool_steps(context)?.contains(&wake) => None,
+        own => own,
+    };
+    let window_end = context
+        .profiles
+        .iter()
+        .find(|profile| profile.id == candidate.activity_profile_id)
+        .map(|profile| activity_window_at(profile, now))
+        .transpose()?
+        .flatten()
+        .map(|window| window.until_unix_ms);
+    let release = match min_wake(own, window_end) {
+        Some(end) => trigger.unix_ms.min(end.saturating_sub(expected)),
+        None => trigger.unix_ms,
+    };
+    Ok((release > now).then_some(release))
+}
+
+/// #503 WAKE: the next projection step of each regenerating pool the evaluation reads, as
+/// [`super::pool_projection_steps`] finds them for the idle plan, from the evaluation's own pool
+/// values.
+fn pool_steps(context: &PlacementContext<'_>) -> PolicyEvaluationResult<BTreeSet<u64>> {
+    let mut steps = BTreeSet::new();
+    for (pool_id, reading) in context.pool_values.iter() {
+        let Some(spec) = context.pool_specs.get(pool_id) else {
+            continue;
+        };
+        if let Some(step) = next_pool_projection_change(
+            spec,
+            reading.bound,
+            reading.snapshot,
+            context.time.unix_ms,
+        )? {
+            steps.insert(step);
+        }
+    }
+    Ok(steps)
 }
 
 /// `B` or `ε` in milli as a record value, saturated at the `i64` range.

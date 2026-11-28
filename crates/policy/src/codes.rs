@@ -368,6 +368,18 @@ actingcommand_contract::outcome_codes! {
         /// evaluation's time (key `instance_id` the candidate's alias).
         InstanceAsleepWakeDue => "instance_asleep_wake_due": info / none,
         // ---- #486 ASLEEP-1: end ----
+        // ---- #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "An asleep instance",
+        // "Below a pool's trigger line"): begin ----
+        /// Info. A judged consumer that would pass on an asleep instance while a regenerating pool
+        /// it consumes reads below its trigger line, with no capped episode under way: it is no
+        /// reason to wake the instance before `next_eligible_unix_ms` (the earlier of the time the
+        /// pool's projection reaches the line and the end of the task's chance less its expected
+        /// duration). It is not selected and has no dispatch; it is judged again then, or as soon
+        /// as the instance is awake for anything else (keys `instance_id`, `pool_id` the pool whose
+        /// line comes first, `pool_reading`, `trigger_line`, `next_eligible_unix_ms`,
+        /// `lines_source`).
+        InstanceAsleepBelowTriggerLine => "instance_asleep_below_trigger_line": info / none,
+        // ---- #503 WAKE: end ----
         // ---- Workflow #455 RR3 (register §1.538; `contracts/resource-targets.md`, "Needs
         // computed from the records"): begin ----
         /// Info. A pool has a need computed from the instance's stored records, and its stacked

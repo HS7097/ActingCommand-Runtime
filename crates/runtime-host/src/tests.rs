@@ -319,6 +319,10 @@ mod gate_455_sl1;
 // pool it produced unread, the needs' holding of it included, until a reading after its end; a
 // start rebuilds the same from the ledger.
 mod gate_455_rr3c;
+// #503 WAKE (0.12.101; register §1.549): an asleep instance is not woken for a consumer below its
+// pool's trigger line before the line; the idle plan keeps that release, and three answers only a
+// change lets through are held.
+mod gate_503_wake;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

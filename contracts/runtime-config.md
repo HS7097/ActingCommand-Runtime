@@ -1498,6 +1498,37 @@ clock or timeline time of the trigger, a cooldown's end, a budget's release, an 
 opening, a deadline, a reading's expiry. An instance whose idle action is `none`, and the plan the
 evaluation's own rows show, are as before.
 
+A consumer below its pool's trigger line wakes an asleep instance only when the pool reaches the
+line (#503 WAKE, since 0.12.101, [v012-register.md](v012-register.md) §1.549; the owner's direction
+of 11-28: an asleep instance waits until the pool has reached its trigger line and is then woken to
+spend it; an awake one counts goals and spends as before). Before 0.12.101 a judged consumer of a
+regenerating pool below its trigger line, with no capped episode under way, became the task an
+asleep instance is woken for as soon as one run fit above the hard line: the instance was started
+for one run and stopped again each time one run's cost had regenerated. Now the evaluation defers
+such a consumer on an asleep instance with `instance_asleep_below_trigger_line` until its release,
+the earlier of the time the pool's projection reaches the trigger line and the end of the task's
+chance less its expected duration ([scheduling/README.md](scheduling/README.md), "An asleep
+instance", "Below a pool's trigger line"). The idle plan does not count that decision due, and its
+release is its wake on every instance, also on one whose idle action can put it to sleep when the
+release is a regenerating pool's next projection step: the instance is woken at the release less
+the wake lead (`planned_time_reached`), and awake, the consumer is judged and dispatched as on any
+awake instance. Another task of the instance that is due still wakes it at once, as before.
+
+Three more answers wake nothing (#503 WAKE, ruling 3). A decision whose last reason is
+`fact_refresh_unbound` (a realistic key no reader can read), `selection_input_unknown` (a selection
+input no reading supplies) or `resource_reserve_insufficient` carrying `amount_after` (a known
+amount below the reserve) counts as held by a gate without a time, as the benefit gate's holds do:
+it is never due, and on an instance whose idle action can put it to sleep it names no wake. Only a
+change of the facts, the catalog or the configuration lets such a candidate through, and each such
+change wakes the policy driver. Before 0.12.101 each counted due: an awake instance whose only
+candidates were of these kinds never took its idle action, and an asleep one was woken for nothing,
+again at growing intervals (#486 ASLEEP-3's hold). The list is closed; due as before: a reserve hold
+without `amount_after` (its amount unknown: a reading may be what is missing), the shared run limits'
+waits (`heavy_scene_budget_deferred`, `policy_concurrent_runs_deferred`), `instance_already_selected`,
+`device_group_waiting` and `policy_chain_handover_waiting` (each ends with another run within
+minutes), and the fact refresh's waits for a reading (IDLE-1: a task waiting for a reading wakes the
+instance for it).
+
 A Runtime start keeps an asleep instance asleep (#486 ASLEEP-1 fix round 1, ruling 5). The start
 restores the instance stopped with its wake (IDLE-1P above), withdraws its availability as for every
 device self-checked instance (`backend_selfcheck:unchecked`), and does not prepare it: its emulator

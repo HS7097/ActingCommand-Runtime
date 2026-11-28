@@ -216,6 +216,12 @@ struct InstanceRows {
 /// application (`close_app`, and `auto` at any tier, its startup package in effect: the same
 /// set), whose closed application the time would start for nothing. On every other instance (its
 /// idle action `none`, or none it can take) the plan is as before.
+///
+/// #503 WAKE (0.12.101; register §1.549; `contracts/runtime-config.md`, "What wakes an idle
+/// instance"): a consumer an asleep instance holds below its pool's trigger line is not due, and
+/// its release is its wake on every instance (ruling 2); a realistic key no reader can read, a
+/// selection input no reading supplies and a reserve a known amount leaves unmet join the gates
+/// without a time above (ruling 3).
 #[derive(Debug, Default)]
 struct IdleDraft {
     task_due: bool,
@@ -276,16 +282,40 @@ impl IdleDraft {
         // SS-2h (register §1.289): and a judged candidate a pool's lines hold (its hard line, or
         // a capped pool's order that another consumer heads); SCHED-C1c (register §1.299): or
         // whose pool its lines cannot spend.
+        // #503 WAKE (register §1.549, the coordinator's ruling 3): and three answers that only a
+        // change of the facts, the catalog or the configuration lets through, each of which wakes
+        // the policy driver by itself: a realistic key no reader can read
+        // (`fact_refresh_unbound`), a selection input no reading supplies
+        // (`selection_input_unknown`), and a reserve that the pool's known amount would leave unmet
+        // (`resource_reserve_insufficient` with its `amount_after`; without it the amount is not
+        // known, a reading may be what is missing, and the candidate stays due as before). The
+        // set stays a closed list: the run-slot, device-group and chain waits end with another run
+        // and stay due, and so do the fact refresh's waits for a reading (IDLE-1).
         let benefit_held = decision.reasons.last().is_some_and(|reason| {
             reason.outcome.is(PolicyCode::BenefitUnknown)
                 || reason.outcome.is(PolicyCode::PolicyBenefitNonpositive)
                 || reason.outcome.is(PolicyCode::PolicyNoProgress)
                 || reason.outcome.is(PolicyCode::PoolLineHeld)
                 || reason.outcome.is(PolicyCode::PoolLinesUnspendable)
+                || reason.outcome.is(PolicyCode::FactRefreshUnbound)
+                || reason.outcome.is(PolicyCode::SelectionInputUnknown)
+                || (reason.outcome.is(PolicyCode::ResourceReserveInsufficient)
+                    && reason.outcome.value("amount_after").is_some())
+        });
+        // #503 WAKE (register §1.549, ruling 2): a consumer an asleep instance holds below its
+        // pool's trigger line (`instance_asleep_below_trigger_line`) is not due, and its wake is
+        // its release on every instance: on one whose idle action can put it to sleep too, even
+        // when the release is a regenerating pool's next projection step (ruling 7 drops such a
+        // step as the evaluation's next reading; this one is the time the task is due).
+        let waits_for_line = decision.reasons.last().is_some_and(|reason| {
+            reason
+                .outcome
+                .is(PolicyCode::InstanceAsleepBelowTriggerLine)
         });
         let due = decision.state == SchedulingDecisionState::Selected
             || (eligible
                 && !benefit_held
+                && !waits_for_line
                 && decision
                     .next_wake_unix_ms
                     .is_none_or(|wake| wake <= evaluated_at_unix_ms));
@@ -337,9 +367,10 @@ impl IdleDraft {
             // instance for it.
             let wakes_nothing = sleeper.is_some_and(|pool_steps| {
                 benefit_held
-                    || decision
-                        .next_wake_unix_ms
-                        .is_some_and(|wake| pool_steps.contains(&wake))
+                    || (!waits_for_line
+                        && decision
+                            .next_wake_unix_ms
+                            .is_some_and(|wake| pool_steps.contains(&wake)))
             });
             if !wakes_nothing {
                 self.task_wake = earliest(self.task_wake, decision.next_wake_unix_ms);

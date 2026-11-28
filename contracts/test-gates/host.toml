@@ -5011,3 +5011,14 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr3c::rr3c_h1_a_run_told_enough_to_close_its_gap_leaves_its_pool_unread_across_a_start",
 ]
 incident = ["#455 RR3c"]
+
+# #503 WAKE (0.12.101; register §1.549; brief rd-1123/brief-503-wake.md; contracts/runtime-config.md, "What wakes an idle instance"; contracts/scheduling/README.md, "Below a pool's trigger line"), the host's half, no clock read. Two real replays on gate_486_asleep's fixture instance, close_app and stop_emulator, a judged consumer of 10 of catalog-a's regenerating pool given capacity 1000, a valuation and the lines 426, 440 and 450: at 06:30 the hard line holds it, no wake, and the host's own check takes the action; at 06:37, 06:43, 07:01 and 07:31 (436 to 445) it waits instance_asleep_below_trigger_line until 08:00, the plan's wake 08:00, no wake recorded; at 07:55 one wake planned_time_reached (with stop_emulator the emulator's start); awake at 07:58 it is dispatched, and at 08:05 the action is taken again (h1). The idle plan keeps that release on an instance that can sleep when it equals a pool's step, and on any other; another code's pool step names none there; the code is never due (h2). fact_refresh_unbound, selection_input_unknown and resource_reserve_insufficient with amount_after are not due: an awake instance takes close_app, a closed one is not woken; the reserve without amount_after and heavy_scene_budget_deferred stay due: kept open, a closed one woken (h3). Ruling 6, pinned as built: a reading of 120 valid twenty minutes, the consumer waiting until 09:29; past the expiry its benefit is unknown (reading_unknown), its last reason fact_refresh_unbound (no reader bound), not due and no wake, nothing woken; the wake planned at 09:24 stays and comes then (h4).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_wake::wake_h1_an_asleep_instance_sleeps_below_the_trigger_line_and_is_woken_once_at_it",
+    "actingcommand-runtime-host::lib::tests::gate_503_wake::wake_h2_the_release_stays_the_plans_wake_also_when_it_is_a_pool_step",
+    "actingcommand-runtime-host::lib::tests::gate_503_wake::wake_h3_three_answers_only_a_change_lets_through_are_held_and_the_others_stay_due",
+    "actingcommand-runtime-host::lib::tests::gate_503_wake::wake_h4_a_reading_that_expires_before_the_release_wakes_nothing_and_the_planned_wake_stays",
+]
+incident = ["#503 WAKE"]
