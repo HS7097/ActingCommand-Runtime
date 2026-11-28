@@ -84,7 +84,11 @@
 //!   may spend is judged by `S` and `ε` without its goal terms, as before them; the order it takes
 //!   once it passes reads them with the terms. At or above the line, and for a pool that does not
 //!   regenerate, the terms count everywhere. Ruling 11: a reason judged without them lists no goal
-//!   term, says so once in its detail, and `benefit_fixed_value` gives the `B` judged.
+//!   term, says so once in its detail, and `benefit_fixed_value` gives the `B` judged. #455 RR3b
+//!   ruling A1 (register §1.542): the goal term of a pool that writes `goal_tiers`, whose gap weight
+//!   is bounded, is counted below the line too; ruling 9 leaves out only the goal terms of pools
+//!   without the member, and a reason judged so lists the counted ones. When every goal term is of
+//!   such a pool the gate reads the sums with every term and says nothing of it.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -192,7 +196,9 @@ enum Judgement {
         consumed: Vec<ConsumedTerm>,
         /// #455 B1 ruling 9 (register §1.518): for a task with a fixed value and at least one
         /// goal term, its judgement without them, which the gate reads below the trigger line of
-        /// a regenerating pool it consumes; `None` otherwise.
+        /// a regenerating pool it consumes; `None` otherwise. #455 RR3b ruling A1 (register
+        /// §1.542): without those of pools that do not write `goal_tiers`; `None` too when every
+        /// goal term is of a pool that writes it.
         without_goals: Option<WithoutGoals>,
     },
     Unknown {
@@ -202,14 +208,16 @@ enum Judgement {
     },
 }
 
-/// #455 B1 ruling 9 (register §1.518): a fixed value's judgement without its goal terms.
+/// #455 B1 ruling 9 (register §1.518): a fixed value's judgement without its goal terms; #455 RR3b
+/// ruling A1 (register §1.542): without the goal terms of pools that do not write `goal_tiers`,
+/// those of pools that write it counted.
 struct WithoutGoals {
-    /// `S` without the goal terms.
+    /// `S` without the goal terms left out.
     sum: ExactSum,
     /// `ε` without their bounds.
     tolerance: ExactSum,
-    /// Ruling 11: how many of the judgement's items, at their head, are goal terms.
-    goal_items: usize,
+    /// Ruling 11: the judgement's items without the goal terms left out, in their order.
+    items: Vec<String>,
 }
 
 /// #455 B1 ruling 11 (register §1.518): what the detail of a judged candidate's reason says once
@@ -448,6 +456,20 @@ fn spend_line_pool(
     })
 }
 
+/// #455 RR3b ruling A1 (register §1.542; `contracts/scheduling/README.md`, "Fixed values written in
+/// the pack"): whether `pool_id` is a pool of the instance that writes `goal_tiers`. A fixed value's
+/// goal term on it is counted below the trigger line of a regenerating pool the task consumes too;
+/// ruling 9 leaves out only the goal terms of the other pools.
+fn goal_tiers_pool(
+    pool_id: &str,
+    instance: &InstanceSnapshot,
+    context: &PlacementContext<'_>,
+) -> bool {
+    context.pool_specs.get(pool_id).is_some_and(|pool| {
+        pool.goal_tiers.is_some() && scope_matches_instance(&pool.scope, instance)
+    })
+}
+
 /// The candidate's net benefit (module doc). `weight` is the resource layer's effective weight
 /// `W(k,p)` of a pool the task produces, with its step, when its term holds one; otherwise the
 /// pool's base weight is `W`.
@@ -516,6 +538,11 @@ fn judge(
     let mut goal_sum = ExactSum::new();
     let mut goal_bound = ExactSum::new();
     let mut goal_items = 0_usize;
+    // #455 RR3b ruling A1 (register §1.542): of those, the terms of pools that write `goal_tiers`,
+    // which ruling 9's gate counts too, and the places in `items` of the others, which it leaves out.
+    let mut counted_sum = ExactSum::new();
+    let mut counted_bound = ExactSum::new();
+    let mut left_out = Vec::<usize>::new();
     let mut downstream = false;
     let mut items = Vec::new();
     let mut seen = Vec::<&str>::new();
@@ -574,6 +601,18 @@ fn judge(
         bounds
             .add(bound_numerator, bound_denominator, false)
             .ok_or_else(overflow)?;
+        if fixed_value.is_some() {
+            if goal_tiers_pool(&effect.pool_id, instance, context) {
+                counted_sum
+                    .add(numerator, denominator, false)
+                    .ok_or_else(overflow)?;
+                counted_bound
+                    .add(bound_numerator, bound_denominator, false)
+                    .ok_or_else(overflow)?;
+            } else {
+                left_out.push(items.len());
+            }
+        }
         items.push(format!(
             "{}:+{}",
             effect.pool_id,
@@ -705,18 +744,39 @@ fn judge(
             without_goals: None,
         });
     }
+    let full_sum = sum.joined(&goal_sum).ok_or_else(overflow)?;
+    let full_tolerance = tolerance.joined(&goal_bound).ok_or_else(overflow)?;
+    // #455 RR3b ruling A1 (register §1.542): ruling 9's gate leaves out only the goal terms of pools
+    // that do not write `goal_tiers`. With none left out it reads the sums with every term, as at
+    // the line; with none counted (every goal term of such a pool) the sums of before.
+    let without_goals = if left_out.is_empty() {
+        None
+    } else if left_out.len() == goal_items {
+        Some(WithoutGoals {
+            sum,
+            tolerance,
+            items: items[goal_items..].to_vec(),
+        })
+    } else {
+        Some(WithoutGoals {
+            sum: sum.joined(&counted_sum).ok_or_else(overflow)?,
+            tolerance: tolerance.joined(&counted_bound).ok_or_else(overflow)?,
+            items: items
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !left_out.contains(index))
+                .map(|(_, item)| item.clone())
+                .collect(),
+        })
+    };
     Ok(Judgement::Known {
-        sum: sum.joined(&goal_sum).ok_or_else(overflow)?,
-        tolerance: tolerance.joined(&goal_bound).ok_or_else(overflow)?,
+        sum: full_sum,
+        tolerance: full_tolerance,
         items,
         wake_unix_ms,
         downstream,
         consumed,
-        without_goals: Some(WithoutGoals {
-            sum,
-            tolerance,
-            goal_items,
-        }),
+        without_goals,
     })
 }
 
@@ -879,12 +939,14 @@ pub(super) fn gate(
                 // #455 B1 ruling 9 (register §1.518): below the trigger line of a regenerating pool
                 // it consumes, whether a task with a fixed value may spend is judged without its
                 // goal terms, as before them; once it passes, its order reads `B` with them. Ruling
-                // 11: a reason judged without them lists no goal term and says so once.
+                // 11: a reason judged without them lists no goal term and says so once. #455 RR3b
+                // ruling A1 (register §1.542): only the goal terms of pools that do not write
+                // `goal_tiers` are left out; the others are counted and listed.
                 let (gated_sum, gated_tolerance, gated_items, uncounted) = match &without_goals {
                     Some(plain) if below_trigger => (
                         &plain.sum,
                         &plain.tolerance,
-                        &items[plain.goal_items..],
+                        plain.items.as_slice(),
                         GOAL_TERMS_UNCOUNTED,
                     ),
                     _ => (&sum, &tolerance, items.as_slice(), ""),

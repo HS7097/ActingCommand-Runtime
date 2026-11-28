@@ -232,6 +232,11 @@ mod tests {
     // set.
     mod gate_455_sl1;
 
+    // #455 RR3b (0.12.98; register §1.542): a pool may write `goal_tiers`, and a goal's gap on it
+    // is weighed in two parts over one step: the recorded characters' need by its own importance,
+    // a stored goal's stock beyond it capped.
+    mod gate_455_rr3b;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

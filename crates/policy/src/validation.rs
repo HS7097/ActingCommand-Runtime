@@ -2583,6 +2583,64 @@ fn validate_pools(
         validate_target_defaults(pool, &path, map, descriptor, diagnostics);
         // #455 SL1 (register §1.540): so is the declaration that a line governs its spending.
         validate_spend_line(pool, &path, map, descriptor, diagnostics);
+        // #455 RR3b (register §1.542): so are the two parts a goal's gap on it is weighed in.
+        validate_goal_tiers(pool, &path, map, descriptor, diagnostics);
+    }
+}
+
+/// #455 RR3b (register §1.542; `contracts/scheduling/README.md`, "A goal's gap in two parts"): a
+/// pool's `goal_tiers` at `<path>/goal_tiers`. It is a V2 member: a V1 document is refused as
+/// `unknown_field` at it, and nothing else is checked. Then, each at its pointer:
+/// - beside `spend_line`, `type_mismatch` at the member, the diagnostic `spend_line` gets beside
+///   `target_defaults` (on such a pool a goal is a line, it weighs no producer);
+/// - its `need_importance_milli` outside `1..=1 000 000` (a target's own `importance_milli`'s
+///   bound) and its `stock_cap_milli` outside `0..=1 000 000` (the bound of a gap weight), both
+///   [`crate::MAX_RESOURCE_TARGET_MILLI`], `limit_exceeded` at each.
+///
+/// It may stand beside a valuation, beside `target_defaults` or alone. A missing member is the
+/// reader's `missing_required_field`, an unknown one its `unknown_field`.
+fn validate_goal_tiers(
+    pool: &PoolSpec,
+    path: &str,
+    map: &SourceMap,
+    descriptor: Option<(&str, u64)>,
+    diagnostics: &mut Vec<CatalogDiagnostic>,
+) {
+    let Some(tiers) = &pool.goal_tiers else {
+        return;
+    };
+    let member = format!("{path}/goal_tiers");
+    if map.schema_version.as_deref() != Some(SCHEDULING_SCHEMA_VERSION_V2) {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::UnknownField,
+            member,
+            "a pool's goal_tiers requires actingcommand.scheduling.v2",
+            descriptor,
+        ));
+        return;
+    }
+    if pool.spend_line.is_some() {
+        diagnostics.push(map.diagnostic(
+            CatalogDiagnosticCode::TypeMismatch,
+            member.clone(),
+            "a pool writes goal_tiers only without spend_line: on such a pool a goal is a line, it \
+             weighs no producer",
+            descriptor,
+        ));
+    }
+    let bound = crate::MAX_RESOURCE_TARGET_MILLI;
+    for (field, value, least) in [
+        ("need_importance_milli", tiers.need_importance_milli, 1),
+        ("stock_cap_milli", tiers.stock_cap_milli, 0),
+    ] {
+        if !(least..=bound).contains(&value) {
+            diagnostics.push(map.diagnostic(
+                CatalogDiagnosticCode::LimitExceeded,
+                format!("{member}/{field}"),
+                format!("a pool's goal_tiers {field} must be within {least}..={bound}"),
+                descriptor,
+            ));
+        }
     }
 }
 

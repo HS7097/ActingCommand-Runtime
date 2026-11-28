@@ -129,6 +129,11 @@ mod gate_477_ck1;
 #[cfg(test)]
 mod gate_455_sl1;
 
+// Test-only: #455 RR3b, this build names `pool_goal_tiers`, so it composes a `schedule.json` whose
+// pool writes `goal_tiers`.
+#[cfg(test)]
+mod gate_455_rr3b;
+
 const CONFIG_SCHEMA_VERSION: &str = "actingcommand.actingd.config.v1";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 120_000;

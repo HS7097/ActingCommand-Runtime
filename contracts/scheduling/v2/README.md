@@ -466,3 +466,17 @@ member; a number out of its range `limit_exceeded` at it; a missing member
 `type_mismatch` (the reader). A `schedule.json` whose pool writes it names `pool_spend_line` in
 `requires`, which a Runtime names from 0.12.97 on. A pool without it serializes, hashes and decides
 exactly as before.
+
+#455 RR3b (since 0.12.98; register §1.542; `../README.md`, "A goal's gap in two parts"), V2 only: a
+pool may write `goal_tiers`, `{"need_importance_milli": I_n, "stock_cap_milli": C}`, both required,
+`I_n` in `1..=1000000` and `C` in `0..=1000000`: a goal's gap on the pool is weighed in two parts
+over the goal's one step `S`, what the recorded characters need (`g_n`, the holding going to them
+first) by `I_n` and what a stored goal asks beyond that (`g_s`) by the goal's importance `I`, at most
+`C`: `Γ = min(min(⌊I_n·g_n/S⌋, 1000000) + min(⌊I·g_s/S⌋, C), 1000000)`; a run is told `g_n` while
+it is open, else `g_s`. It may stand beside a valuation, beside `target_defaults` or alone. Refused,
+each at its pointer: in a V1 document `unknown_field` at the member; beside `spend_line`
+`type_mismatch` at the member; a number out of its range `limit_exceeded` at it; a missing member
+`missing_required_field`, any other member `unknown_field`, a member of another type
+`type_mismatch` (the reader). A `schedule.json` whose pool writes it names `pool_goal_tiers` in
+`requires`, which a Runtime names from 0.12.98 on. A pool without it serializes, hashes and decides
+exactly as before.

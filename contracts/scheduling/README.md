@@ -274,6 +274,46 @@ names `pool_spend_line` in `requires`
 ([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
 serializes, hashes and decides exactly as before.
 
+### A goal's gap in two parts
+
+#455 RR3b (since 0.12.98; register §1.542; the owner's ruling of 11-28 that what the characters in
+training lack is pushed hard and what a standing stock lacks gently, the rulings the
+coordinator's). In a V2 catalog a pool may write `goal_tiers`, which weighs the two parts of a
+goal's gap on it with two strengths:
+
+```json
+"goal_tiers": { "need_importance_milli": 100000, "stock_cap_milli": 40 }
+```
+
+| Field | Bound | Meaning | Diagnostic |
+| --- | --- | --- | --- |
+| `need_importance_milli` (`I_n`) | required, 1..=1,000,000, a target's own `importance_milli`'s bound | the importance of the part of a gap that the recorded characters need | `limit_exceeded` at it; missing: `missing_required_field` |
+| `stock_cap_milli` (`C`) | required, 0..=1,000,000, the bound of a gap weight | the most the part a stored goal asks beyond the characters' need may weigh; 0: it weighs nothing | as `need_importance_milli` |
+
+For a target on such a pool with a known holding `c`, `N` the need the records stack on the pool
+at the evaluation ("Needs computed from the records"; 0 without) and `T` what the stored target
+itself asks (its own `at_least`; 0 for the goal the needs alone give the pool): `g_n = max(0,
+N − c)`, `g_s = max(0, T − max(0, c − N))` (the holding goes to the characters first), and over the
+target's one step `S` and its importance `I`, resolved as for any target
+([../resource-targets.md](../resource-targets.md), "Who gives a goal its step and importance"),
+`Γ = min(min(⌊I_n·g_n/S⌋, 1 000 000) + min(⌊I·g_s/S⌋, C), 1 000 000)`. `g_n + g_s` is the gap of
+before, and satisfied, pending and unresolved are judged as before. Every reader of the weight reads
+this one `Γ` over `S`: the production term, a fixed value's goal term, the capped spending order and
+the score stage. A run a goal sends is told the need's part while it is open, else the stock's:
+`gap_remaining` and the goal term of `run_cap` read `g_n` while `g_n > 0`, then `g_s`
+([../remedies.md](../remedies.md), section 4). Below the trigger line of a regenerating pool a task
+with a fixed value consumes, its goal terms on such pools count ("Fixed values written in the
+pack", ruling 9 as A1 reads it). The member may stand beside a `valuation`, beside
+`target_defaults` or alone (a target may carry its own step and importance). Refused, each at its
+pointer: beside `spend_line`, `type_mismatch` at `/pools/<i>/goal_tiers` (on such a pool a goal is
+a line, it weighs no producer); in a V1 document, `unknown_field` there; another member,
+`unknown_field`. The numbers are read from the catalog in force at every evaluation, so a later
+catalog's numbers weigh a stored goal at the next evaluation with nothing set again. A
+`schedule.json` whose pool writes the member names `pool_goal_tiers` in `requires`
+([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
+weighs the whole gap by one importance, `Γ = min(⌊I·g/S⌋, 1 000 000)`, and serializes, hashes and
+decides exactly as before.
+
 ## Expected quantities (v2)
 
 Each effect has exactly one quantity. `amount` is a positive integer in real inventory
@@ -336,7 +376,9 @@ thousandths over its `consumes` entries for the pool (a pending `amount` adds no
   (0.12.82) a goal-driven production declared by expectation gave none either; since ruling 10 a
   goal never takes `run_cap` away: such a production bounds it by ⌈gap·1000 ÷ the expected yield
   per run in thousandths⌉, at least 1 ([../resource-targets.md](../resource-targets.md), "A goal
-  on what a task with a fixed value produces").
+  on what a task with a fixed value produces"). #455 RR3b (since 0.12.98): on a pool that writes
+  `goal_tiers` that gap is the need's part while it is open, else the stock's ("A goal's gap in
+  two parts").
 - **Forward projection** stops before applying it with `effect_evidence_insufficient`, as for an
   expected production.
 
@@ -1417,7 +1459,9 @@ task that writes it enters the score stage); the benefit gate never reads it.
   (`gap_remaining` and its part in `run_cap`, [../remedies.md](../remedies.md), section 4) are as
   before, but that a goal never takes `run_cap` away (ruling 10): an expected yield bounds it by
   ⌈gap·1000 ÷ the yield in thousandths⌉ runs, at least 1, where before it removed it ("Expected
-  quantities (v2)", SS-6). Without such a goal every value, record, decision and identity is as before; what a
+  quantities (v2)", SS-6); #455 RR3b (since 0.12.98): on a pool that writes `goal_tiers` the gap a
+  run is bounded by and handed is the need's part while it is open, else the stock's, and the goal
+  term is that pool's `Γ` of two parts ("A goal's gap in two parts"). Without such a goal every value, record, decision and identity is as before; what a
   catalog accepts or refuses, its hash and the `requires` names are unchanged, and an older
   Runtime ignores these productions as before.
 - **A goal chooses which task spends a pool, the pool's lines choose when** (#455 B1 ruling 9,
@@ -1451,6 +1495,23 @@ task that writes it enters the score stage); the benefit gate never reads it.
   handed `run_cap` min(⌈(160 − 140) ÷ 10⌉, ⌊(160 − 104) ÷ 10⌋, ⌈30 ÷ 2⌉) = 2: one dispatch, two
   runs, to 140; the pool is read again after that run (LF-1), and the next sweep comes when it is
   back at 160, two hours later. Without ruling 9 it would have run once each hour from 114 on.
+  #455 RR3b ruling A1 (since 0.12.98; register §1.542; the coordinator's): ruling 9 was made when a
+  goal term had no bound, so any large gap made any rule positive and drained the pool at once;
+  `goal_tiers` is that bound ("A goal's gap in two parts"). A goal term of a pool that writes
+  `goal_tiers` is counted wherever goal terms are counted, **below the trigger line too**: ruling 9
+  leaves out only the goal terms of pools that do not write the member. The judgement keeps,
+  beside the sums with every goal term, the sums the gate reads below the line, those without the
+  goal terms of pools without the member. So a character's need makes its producer positive there,
+  and a stock's capped part lifts a rule that lacks less than the cap gives; such a task then
+  spends as any task positive there does (its hard line, the reserve gate and every other gate
+  still hold it), and the order reads its `B` with all its terms. When every goal term of the task
+  is of a pool with the member, the gate's reason is the ordinary one, without the note; when some
+  are left out, its items name the counted goal terms and its detail ends with the note as above.
+  For example, a rule of `V` 998 consuming 1 a run of a regenerating pool valued 1000 milli a unit
+  is −2 of its own; with a stock's capped term of 4 (`C` 40 at the step 10, one unit a run) it is
+  `B = 2` below the line and spends there; a rule of `V` 900 (−100 of its own) is −96 with the
+  stock's term and waits, and with a need of 2 units (`I_n` 100 000: a term of 2000) it spends. A
+  pool without the member is ruled as above, byte for byte.
 - **One scale** (the coordinator's point 3). Static and dynamic candidates of one instance are
   ordered by the keys the business tier already has, with no second stage: `promoted`, the tier,
   SS-2f's turns across instances, then `B ÷ E` compared exactly (`B·E' > B'·E`), then `affinity`

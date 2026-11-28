@@ -20,7 +20,7 @@
 //!    `pool_trigger_line` when a pool writes `trigger_line` (SCHED-C1c), `pool_list_rows` when a
 //!    pool's `observation` is of the kind `list_rows` (#455 P1), `pool_target_defaults` when a pool
 //!    writes `target_defaults` (#455 B3-P), `pool_spend_line` when a pool writes `spend_line` (#455
-//!    SL1), `queue_wait` when a rule
+//!    SL1), `pool_goal_tiers` when a pool writes `goal_tiers` (#455 RR3b), `queue_wait` when a rule
 //!    writes `max_queue_wait_ms` (Workflow #437 ORD-1a), no timeline event
 //!    invalidating the Runtime's application update fact
 //!    (UPD-1 fix round 5), and against the subsystems given (when given), its packages checked
@@ -272,6 +272,11 @@ pub const POOL_TARGET_DEFAULTS_MEMBER: &str = "target_defaults";
 /// ([`crate::PoolSpendLine`]), which the composer copies as written and which requires
 /// [`crate::POOL_SPEND_LINE_SUBSYSTEM`].
 pub const POOL_SPEND_LINE_MEMBER: &str = "spend_line";
+
+/// #455 RR3b (register §1.542): the pool member that splits a goal's gap on the pool into two
+/// parts ([`crate::PoolGoalTiers`]), which the composer copies as written and which requires
+/// [`crate::POOL_GOAL_TIERS_SUBSYSTEM`].
+pub const POOL_GOAL_TIERS_MEMBER: &str = "goal_tiers";
 
 /// Workflow #437 ORD-1a (register §1.352): the V2 task member of a task's longest queue wait,
 /// which a rule writes as any V2 member and the composer passes through, and which requires
@@ -1703,6 +1708,29 @@ fn read_game(
             format!(
                 "a pool's {POOL_SPEND_LINE_MEMBER} needs requires to name {}",
                 crate::POOL_SPEND_LINE_SUBSYSTEM
+            ),
+        ));
+    }
+    // #455 RR3b (register §1.542): likewise a pool that writes `goal_tiers`, at the first such
+    // pool's member. No Runtime of 0.12.97 names the subsystem, so every such Runtime refuses the
+    // file at `requires` instead of weighing a goal's whole gap on the pool by one importance.
+    if !schedule
+        .requires
+        .iter()
+        .any(|name| name == crate::POOL_GOAL_TIERS_SUBSYSTEM)
+        && let Some(index) = schedule
+            .pools
+            .iter()
+            .position(|pool| pool.body.contains_key(POOL_GOAL_TIERS_MEMBER))
+    {
+        return Err(refused(
+            schedule_issue(
+                StandardPackProblem::ScheduleInvalid,
+                format!("/pools/{index}/{POOL_GOAL_TIERS_MEMBER}"),
+            ),
+            format!(
+                "a pool's {POOL_GOAL_TIERS_MEMBER} needs requires to name {}",
+                crate::POOL_GOAL_TIERS_SUBSYSTEM
             ),
         ));
     }

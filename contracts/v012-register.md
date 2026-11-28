@@ -51679,6 +51679,170 @@ refused by the installer's plan while that root, or a generation composed from i
 kept. In the release notes' language:
 没有估值的池子现在可以在 `schedule.json` 里写 `spend_line`（`price_milli`、`scale`、`income_floor_milli_per_day` 三个数），声明“这个池子的花费由一条线管”；写了它的文件要在 `requires` 里写 `pool_spend_line`。按收益判定的规则消耗这种池子时不再因为没有估值而不派：还没设线时这份消耗记 0（理由的明细里写 `<池>:-0`），只花这种池子、带定值 `V` 的规则仍是 `B = V`。这三个数这一版只校验和记入目录，什么也不算；线、日期、压低和拦住在后面几版。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
 
+### 1.542 Slice #455 RR3b (0.12.98): one gap, two strengths: what the recorded characters lack is weighed by its own importance, and what a stored goal asks beyond that is capped (`goal_tiers`) (board #455; the owner's ruling of 11-28, the rulings 1 to 8 and A1 the coordinator's of the same day; coordinator work order `rd-1123/brief-455-rr3b.md` with its addendum 1; on #455 SL1's branch `b4fcf5e3`, which merges before this one)
+
+This section takes 1.542. It ships in 0.12.98. [resource-targets.md](resource-targets.md) ("Resource
+weights (v2)": the formula and the new "Two parts of one gap", the `resource_targets` row, "A goal on
+what a task with a fixed value produces", the new "The gap a run is told"; "Needs computed from the
+records", "The gap"; "Who gives a goal its step and importance", the new "The need's importance and
+the stock's cap"; "Choosing scale and importance", the new "A pool with `goal_tiers`"),
+[scheduling/README.md](scheduling/README.md) (the new "A goal's gap in two parts"; "Expected
+quantities (v2)", SS-6; "Fixed values written in the pack", "A goal on what it produces" and ruling
+9's paragraph), [scheduling/v2/README.md](scheduling/v2/README.md) and the V2 `pools.schema.json`,
+[remedies.md](remedies.md) (section 4, `gap_remaining`),
+[standard-pack-schedule.md](standard-pack-schedule.md) (the file's members; "`requires`"; the new
+"A goal's gap in two parts"; "Composition", step 2) and
+[actingd-check-config.md](actingd-check-config.md) (the row `pool_goal_tiers`) are the contract. No
+`package` revision moves, no declared interface range, no configuration key, no code or word; one
+catalog member and one `requires` name are new.
+
+**The problem.** Since §1.538 the gap on a pool is `max(0, need + stock − held)`, and the whole gap
+was weighed by one step and one importance, `Γ = min(⌊I·g/S⌋, 1 000 000)`. A stock of 200 with 50
+held is a gap of 150, and at an importance that makes one missing unit count, 150 of them give the
+largest term on the instance to whatever rule produces that pool, however poor the rule; that rule
+then heads the capped rounds of the pool it spends and takes the turns from better rules and from a
+character's need of two units elsewhere. The owner's ruling of 11-28 is that the two parts are
+pushed with two strengths: what the characters in training lack hard, enough to send a rule of a
+negative value of its own that produces it; what a standing stock lacks gently, enough to prefer
+among rules about worth running anyway, never enough to send a clearly negative rule or to outrank a
+character's need. With one importance this cannot be had.
+
+**The rulings, as built.**
+- *1, the member* (`crates/policy/src/schema.rs`, `PoolSpec::goal_tiers`, `PoolGoalTiers`). A V2
+  pool may write `{"need_importance_milli": I_n, "stock_cap_milli": C}`, both required: `I_n` in
+  `1..=1 000 000` and `C` in `0..=1 000 000`, both the constant `MAX_RESOURCE_TARGET_MILLI` (the
+  bound of a target's own `importance_milli` and of a gap weight), `limit_exceeded` at the number
+  (`crates/policy/src/validation.rs`, `validate_goal_tiers`); missing, the reader's
+  `missing_required_field`; another member its `unknown_field`; in a V1 document `unknown_field` at
+  the member. It may stand beside a valuation, beside `target_defaults` or alone; beside
+  `spend_line` it is `type_mismatch` at `/pools/<i>/goal_tiers`, the diagnostic §1.540 gives
+  `spend_line` beside `target_defaults` (on such a pool a goal is a line, it weighs no producer).
+- *2 and 3, the two parts and the weight* (`crates/policy/src/resource_targets.rs`, `gap_weight`,
+  called by `resolve_v2` for every applied v2 target). With the holding `c`, `N` the need the
+  records stack on the target's pool at this evaluation (from the `StackedNeeds` the policy carries
+  beside its stored record, §1.538 ruling 5; 0 without records, without a need of this pool, or on a
+  v1 policy, on which nothing is stacked) and `T = at_least − N` what the stored target itself asks
+  (the stacking added `N` to it; 0 for the goal the needs alone give the pool): `g_n = max(0, N −
+  c)`, `g_s = max(0, T − max(0, c − N))`, so `g_n + g_s` is the gap of before; `Γ_n = min(⌊I_n·g_n/S⌋,
+  1 000 000)`, `Γ_s = min(⌊I·g_s/S⌋, C)`, `Γ = min(Γ_n + Γ_s, 1 000 000)`, ` capped` when `Γ_n` or
+  the sum met the bound. `S` and `I` resolve as before (the target's own, else the valuation's, else
+  `target_defaults`'); one step for both parts. Satisfied, pending and unresolved are judged as
+  before. A pool without the member is weighed by the same call as before, one floor over the whole
+  gap. The readers of `Γ` are four and all read the one weight over the one step: the score stage's
+  `R` and the production term of a judged task (`weigh_production`, `pool_weights`), a fixed
+  value's goal term (`evaluator/benefit.rs`, `judge`, through `PoolWeight`) and the capped order
+  (`evaluator/capped.rs`, which reads `judge`'s sums). None computes a weight of its own from the
+  gap; the v1 policy's task scores (`target_effects`) are a v1 path, on which nothing is stacked,
+  and are unchanged.
+- *4, the runs* (`TargetGap`, `GapTiers::run_gap`). On a pool with the member the gap a dispatch
+  reads is `g_n` while `g_n > 0`, else `g_s`; `InstanceTargets::goal_gap` gives it, and both
+  `gap_remaining` and the goal term of `run_cap` (`spend_values_with`, `goal_runs`) read that one
+  answer, so the shape of the dispatch parameters is unchanged.
+- *5, what a reader sees*. The `resource_targets` item of an applied target on a pool with the
+  member, and only there, gains ` need_gap=… need_importance=… need_weight=… stock_gap=…
+  stock_weight=… stock_cap=…` after main's text; `gap` and `gap_weight` stay the totals.
+  `goal_records_need`, the goal page, `ResourceTargetView` and every stored record are unchanged:
+  no interface revision.
+- *6, `requires`*. A `schedule.json` whose pool writes the member names `pool_goal_tiers`
+  (`POOL_GOAL_TIERS_SUBSYSTEM`; `crates/policy/src/compose.rs`, `POOL_GOAL_TIERS_MEMBER`, the
+  composer refuses one that does not, `schedule_invalid` at the first such pool's member), by
+  §1.540's pattern; this build's configuration manifest names it, always on; a Runtime of 0.12.97
+  refuses such a file `schedule_requires_missing`, and the installer's plan refuses a rollback below
+  this build while an installed or kept schedule requires it.
+- *7, a catalogue without the member is unchanged*: the member is skipped when absent, so bytes,
+  hashes, decisions, records and reasons stay; written, it is serialized and hashed. Its numbers are
+  read from the catalogue in force at each evaluation: a later catalogue's numbers weigh a stored
+  goal at the next evaluation, nothing set again.
+- *8*: no game, package, pool or character is named in code or contracts.
+- *A1, ruling 9 counts a bounded goal term* (`evaluator/benefit.rs`, `judge` and `gate`). §1.518's
+  ruling 9 leaves a fixed value's goal terms out of the gate while a regenerating pool the task
+  consumes is below its trigger line. Read on production: one rule of a positive value of its own
+  spends such a pool below its line as fast as it regenerates, so the line is never reached, no
+  capped round comes and no goal chooses anything; two rules a little below zero of their own never
+  run whatever their goals ask. Ruling 9 was made when a goal term had no bound: any large gap made
+  any rule positive and drained the pool at once. `goal_tiers` is that bound, so a goal term of a
+  pool that writes the member counts there too, and ruling 9 leaves out only the goal terms of pools
+  without it. `judge` tells each goal term's pool from the task's `produces` entry it comes from
+  (`goal_tiers_pool`): it adds every goal term to the sums with all terms, and those of pools with
+  the member also to the sums the gate reads below the line; the places of the others among the
+  items are kept, and `WithoutGoals` holds the gated sums and the items without them. With none
+  left out there is no second pair, and the gate's reason is the ordinary one; with all left out
+  it is §1.518's pair, byte for byte; otherwise the reason's items name the counted goal terms and
+  its detail ends ` goal_terms=not_counted_below_trigger_line` as before.
+
+**A worked example** (the tests' numbers, neutral names). `S` 10 and `I` 1000 from the pools'
+`target_defaults`, `I_n` 100 000 and `C` 40, a need of 30 and a stock of 200. Held 50: `g_n` 0,
+`g_s` 180, `Γ = min(18 000, 40) = 40`. Held 10: `g_n` 20, `g_s` 200, `Γ = 200 000 + 40 = 200 040`.
+Held 230: satisfied. Without records, held 50: `Γ` 40; the need alone, held 10: `Γ` 200 000; `I_n`
+1 000 000 and a need gap of 30: `Γ` 1 000 000 ` capped`. The member taken off: 22 000 held 10 and
+18 000 held 50, main's numbers and text. Two rules of `V` 10 000 consuming one unit valued 1000:
+one produces a pool on which the records need 2 (term 2000, `B` 11 000), the other a pool with a
+stock gap of 150 (term 4, `B` 9 004); the first goes first and heads the capped round; without the
+member the second does (10 500 against 9 020). A need gap of 5 and a stock gap of 150, one unit a
+run: the run is told 5 (`gap_remaining` 5, `run_cap` 5); with the need met 150; without the member
+155. A rule of −100 of its own: `B` 19 904 by the need's part, −96 by the stock's alone. Ruling A1,
+below a regenerating pool's trigger line: a rule of −2 of its own with the stock's term 4 is `B` 2
+and spends; without the member it waits −2 with the note; a rule of −100 waits −96 with the stock
+alone and spends at 1904 with a need gap of 2; with a goal term of a pool with the member and one
+without, the gate reads the first (`items=pool.tiered:+4,pool.regen:-1000` and the note).
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The member | `crates/policy/src/schema.rs` (`PoolSpec::goal_tiers`, `PoolGoalTiers`, `POOL_GOAL_TIERS_SUBSYSTEM`) |
+| The bounds | `crates/policy/src/validation.rs` (`validate_goal_tiers`) |
+| The two parts, the weight, the runs, the item | `crates/policy/src/resource_targets.rs` (`GapTiers`, `gap_weight`, `resolve_v2`, `TargetStatus::Applied::tiers`, `ResolvedTargetV2::item`, `TargetGap`) |
+| Ruling A1 | `crates/policy/src/evaluator/benefit.rs` (`goal_tiers_pool`, `judge`, `WithoutGoals::items`, `gate`) |
+| `requires` | `crates/policy/src/compose.rs` (`POOL_GOAL_TIERS_MEMBER`, `read_game`); `apps/actingd/src/config/manifest.rs` (the row) |
+
+`PoolSpec` has no struct literal in the workspace, and `TargetStatus::Applied` is built in one place,
+so no other literal was touched.
+
+**Tests** (incident `#455 RR3b`: `crates/policy/src/tests/gate_455_rr3b.rs`, policy gate map;
+`apps/actingd/src/config/gate_455_rr3b.rs` and one test appended to
+`crates/lab-rescue/src/install/gate_429_rb1.rs`, apps gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `rr3b_t1_the_reader_takes_both_numbers_and_refuses_each_fault_at_its_pointer` (1) | both numbers compile, round-trip, recompile to the same identity; the largest, the least (a cap of 0), beside a valuation and beside `target_defaults` taken; V1 `unknown_field`; each missing `missing_required_field`; an importance of 0 or 1 000 001 and a cap of 1 000 001 `limit_exceeded`; another member `unknown_field`; beside `spend_line` `type_mismatch` at the member |
+| `rr3b_t1_the_composer_requires_pool_goal_tiers_and_an_older_runtime_refuses_the_file` (1) | with `pool_goal_tiers` composed; without, `schedule_invalid` at `/pools/0/goal_tiers`; on a Runtime that does not name it, `schedule_requires_missing` at `/requires/0` |
+| `rr3b_t1_the_v2_pools_schema_lists_the_member_with_the_compiler_s_bounds` (1) | the V2 schema's `goalTiers` with the compiler's bounds, not beside `spend_line`; the V1 schema lists no member |
+| `rr3b_t2_the_need_and_the_stock_are_weighed_apart_over_one_step` (2) | the six cases of the worked example, each item's text, and the producer's term 100 000 at the bound |
+| `rr3b_t3_without_the_member_the_whole_gap_is_weighed_as_on_main` (3) | 22 000 and 18 000, main's item text |
+| `rr3b_t4_a_need_of_two_outranks_a_stock_of_150_and_heads_the_capped_round` (4) | the need's producer first (`B` 11 000 against 9 004, terms 2000 and 4) and the stock's without the member (10 500 against 9 020); the same at the head of a capped round |
+| `rr3b_t5_a_run_is_told_the_need_s_part_while_it_is_open_then_the_stock_s` (5) | `gap_remaining` and `run_cap` 5, 150, and 155 without the member |
+| `rr3b_t6_a_need_makes_a_negative_rule_positive_and_a_stock_does_not` (6) | `B` 19 904 dispatched; −96 `policy_benefit_nonpositive` with the items `pool.tiered:+4,pool.neutral:-1000` |
+| `rr3b_t7_a_goal_set_once_weighs_by_the_numbers_of_the_catalogue_in_force` (7) | one stored goal, 200 040 and then 100 020 under a catalogue of 50 000 and 20 |
+| `rr3b_t8_the_item_names_the_two_parts_only_on_a_pool_with_the_member` (8) | one candidate, two items: the suffix on the pool with the member, main's text on the other |
+| `rr3b_a_rollback_below_this_build_is_refused_while_a_root_requires_pool_goal_tiers` (9) | a rollback to a build that names `pool_spend_line` and not `pool_goal_tiers`: `interface_edge`, `requires_missing` naming the game, its file and the name |
+| `rr3b_t10_a_catalogue_without_the_member_keeps_its_golden_identity` (10) | the neutral example's V1 and V2 golden identities; the member changes the V2 one |
+| `rr3b_a1_a_below_the_trigger_line_a_stock_s_capped_term_counts` (A1 a) | −2 of its own and the term 4: `B` 2, dispatched; without the member −2 with the note |
+| `rr3b_a1_b_below_the_trigger_line_a_need_lifts_a_rule_a_stock_does_not` (A1 b) | −96 without the note; with a need gap of 2, `B` 1904, dispatched |
+| `rr3b_a1_c_only_the_goal_terms_of_pools_without_the_member_are_left_out` (A1 c) | −96, the items `pool.tiered:+4,pool.regen:-1000` and the note |
+| `rr3b_this_runtime_names_pool_goal_tiers_and_composes_a_file_that_requires_it` (1, actingd) | the assembled manifest names `pool_goal_tiers`, enabled; the composer composes a file whose pool writes the member |
+
+Test 10: every existing test passes as it is; none is changed, renamed or retired, and no golden is
+re-recorded. No test of another slice pins a text this slice changes: the items of pools without
+the member keep main's text, and no test pins the manifest's list of subsystems whole.
+
+**What is not changed.** Every pool without the member, byte for byte: its weight, its runs, its
+item, ruling 9. The goal page, `ResourceTargetView`, `goal_records_need`, every stored record,
+every request and ledger member, every declared interface range. The host and the Lab are
+untouched.
+
+**What is left** (a following slice). After a run that a need sent, the produced pool's reading is
+as old as before, so until it is read again the need looks open and the rule is sent again. A
+following slice makes a run that was told its turns leave unread the pools it produces under a
+goal, as LF-1 does for the pools it consumes. Nothing of it is built here.
+
+**At deploy.** Nothing to configure. No installed root writes the member, so nothing changes until
+a resource repository declares a pool with `goal_tiers` (and `pool_goal_tiers` in its
+`schedule.json`'s `requires`); a root that does needs this build, and a rollback below it is
+refused by the installer's plan while that root, or a generation composed from it, is installed or
+kept. In the release notes' language:
+池子现在可以在 `schedule.json` 里写 `goal_tiers`（`need_importance_milli`、`stock_cap_milli` 两个数）：这个池子上目标的缺口分两段算权重，记录里角色还缺的那段按 `need_importance_milli` 推得重（库存先给角色），目标在此之外要囤的那段按目标自己的重要度算、最多 `stock_cap_milli`；被缺口派出去的一趟只按角色缺的那段告诉趟数，缺的补齐后才按囤货那段。在可再生池子的触发线以下，这种池子的目标项也算进是否值得花。写了它的文件要在 `requires` 里写 `pool_goal_tiers`；没写这个成员的池子一切照旧。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

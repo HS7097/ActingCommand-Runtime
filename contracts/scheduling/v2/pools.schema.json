@@ -148,6 +148,10 @@
         "spend_line": {
           "description": "#455 SL1 (since 0.12.97): a line a person may set governs the pool's spending; written only on a pool that writes neither a valuation nor target_defaults (beside either it is type_mismatch at the member). While no line is set, a judged task's consumption of the pool costs nothing; nothing computes with the three numbers yet. A schedule.json whose pool writes it names pool_spend_line in requires.",
           "$ref": "#/$defs/spendLine"
+        },
+        "goal_tiers": {
+          "description": "#455 RR3b (since 0.12.98): a goal's gap on the pool is weighed in two parts over the goal's one step: what the recorded characters need, with the holding going to them first, by need_importance_milli, and what a stored goal asks beyond that by the goal's importance, at most stock_cap_milli. Written beside a valuation, beside target_defaults or alone; beside spend_line it is type_mismatch at the member. A pool without it weighs the whole gap by one importance as before. A schedule.json whose pool writes it names pool_goal_tiers in requires.",
+          "$ref": "#/$defs/goalTiers"
         }
       },
       "dependentRequired": {
@@ -157,7 +161,18 @@
       },
       "dependentSchemas": {
         "target_defaults": { "not": { "required": ["valuation"] } },
-        "spend_line": { "not": { "anyOf": [{ "required": ["valuation"] }, { "required": ["target_defaults"] }] } }
+        "spend_line": { "not": { "anyOf": [{ "required": ["valuation"] }, { "required": ["target_defaults"] }] } },
+        "goal_tiers": { "not": { "required": ["spend_line"] } }
+      },
+      "additionalProperties": false
+    },
+    "goalTiers": {
+      "description": "#455 RR3b: both members required. need_importance_milli: the importance of the part of a gap the recorded characters need, within a target's own importance_milli's bound; stock_cap_milli: the most the part a stored goal asks beyond that may weigh, within the bound of a gap weight, 0 when it weighs nothing.",
+      "type": "object",
+      "required": ["need_importance_milli", "stock_cap_milli"],
+      "properties": {
+        "need_importance_milli": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "stock_cap_milli": { "type": "integer", "minimum": 0, "maximum": 1000000 }
       },
       "additionalProperties": false
     },
