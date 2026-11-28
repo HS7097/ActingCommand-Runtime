@@ -5322,6 +5322,10 @@ impl LeftOutWhy {
 /// SS-2h (register §1.289): the benefit gate reads and updates the capped episodes `memory`;
 /// SCHED-C1d (register §1.299): an episode is kept by its pool's consumers, not by the catalog
 /// generation.
+///
+/// #455 RR3e (register §1.560): the gate is given, for each judged candidate, the pools on which
+/// a goal that covers it waits for a reading the production told under the goal's gap left
+/// unread, and a candidate it holds as not positive asks the fact refresh for them.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
@@ -5377,6 +5381,7 @@ fn apply_priority_selection(
             facts,
             candidates,
             work,
+            &BTreeMap::new(),
             &BTreeMap::new(),
             refreshing,
             &mut affected,
@@ -5931,6 +5936,25 @@ fn apply_priority_selection(
             ScoreDisposition::Neutral => ranked.push(candidate),
         }
     }
+    // #455 RR3e ruling 1 (register §1.560): by work index, the pools on which a goal that covers a
+    // judged candidate waits for a reading because the production told under its gap left the pool
+    // unread ([`produced_unread`]); the gate asks for their readings for a candidate it holds as not
+    // positive. Empty while no pool is so unread.
+    let unread_produced = context.pool_values.produced();
+    let unread_goals = if unread_produced.is_empty() {
+        BTreeMap::new()
+    } else {
+        ranked
+            .iter()
+            .filter(|candidate| candidate.judged)
+            .filter_map(|candidate| {
+                let (_, task) = context.tasks.get(candidate.task_id.as_str())?;
+                let pools = targets_for(candidate.work_index, candidate.instance_id.as_str())?
+                    .unread_goal_pools(task, unread_produced, context.pool_specs);
+                (!pools.is_empty()).then_some((candidate.work_index, pools))
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
     // SS-2b (register §1.225): a judged candidate whose net benefit is unknown or not positive
     // takes no part in the allocation, so it holds no reserve room from another candidate.
     let mut ranked = benefit::gate(
@@ -5939,6 +5963,7 @@ fn apply_priority_selection(
         ranked,
         work,
         &weights,
+        &unread_goals,
         refreshing,
         &mut affected,
         memory,

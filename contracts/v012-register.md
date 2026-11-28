@@ -53456,6 +53456,148 @@ there was one each time a run's cost regenerated.
 consumer due again and wakes the instance at once, as before. Nothing it reads was written in a new
 form.
 
+### 1.560 Slice #455 RR3e (0.12.104): a producer held as not positive while its goal waits on a pool a run left unread asks the fact refresh for the pool's reading; the owed reading of a list's reader is not built (board #455; the rulings are the coordinator's of 11-29, taken from the study's R3, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr3e.md` after the read-only study `rd-1123/study-rr3c-gaps-1128.md`; on main `b5e9102e`, v0.12.101; §1.552 to §1.559 are slices of the same days under review)
+
+This section takes 1.560. It ships in 0.12.104. [scheduling/README.md](scheduling/README.md) ("Fact
+Refresh", the bullet "Demand"; "Net benefit within a tier", the bullet "Not positive"; "A pool read
+from rows of a list", the bullet "No refresh is asked for it"; "Pool lines", the bullet "At each
+evaluation", RR3c's paragraph) and [resource-targets.md](resource-targets.md) ("A pool a run was
+told enough to close the gap on", a new paragraph "Who asks for the reading") are the contract.
+[resource-readings.md](resource-readings.md) ("Staleness") is unchanged: nothing refreshes a list on
+demand yet. No `package`, `ledger`, `runtime-client` or `actingd-config` revision moves, no declared
+interface range, no configuration key, no code or word (the code the work order's ruling 2 adds is
+not added, below), no record, event, wire member or catalog member; the index is untouched.
+
+**The problem** (the study's claim 3, confirmed by reading `b5e9102e`). A run that was told enough
+turns to close a goal's gap leaves the pool it produced unread (§1.543, summed since the reading by
+§1.548), and a run told turns leaves the pools it consumed unread (§1.509), until a reading observed
+after the run's end. Until then the goal on the pool is pending (`Γ` 0) and every judged consumer of
+it is held. Nothing asked for that reading: a pool read from one fact was read again only when a
+trigger or the cost term of a regenerating pool a candidate consumes happened to ask the fact
+refresh for its key (§1.543 ruling 6), and a pool read from rows of a list only when a run published
+the list again, by the list's own rule, hours later at worst. A rule of a negative value of its own
+that a need lifted (§1.542) was held `policy_benefit_nonpositive` on the stale reading, and the
+instance waited on a reading nobody requested.
+
+**The rulings, as built.**
+- *1, the pending goal asks* (`crates/policy/src/evaluator/benefit.rs`, `gate`;
+  `crates/policy/src/resource_targets.rs`, `InstanceTargets::unread_goal_pools`;
+  `crates/policy/src/evaluator.rs`, `apply_priority_selection`). Before the benefit gate, for each
+  judged candidate, the score stage gives the gate the pools of the produced side's unread rule
+  (`produced_unread`, the set the evaluation's pool values keep) on which a goal in force that covers
+  the candidate is: under a v2 policy (the stored record with the needs computed from the records
+  stacked on it) each target that covers the task as its shortfall weight does, which is how
+  `goal_gap` reads it; under a v1 policy the target that names the task, on the pool its pending
+  inventory is observed under. A candidate the gate holds as not positive (`policy_benefit_nonpositive`)
+  carries, for each such pool, the suggestion a `resource_projection` on the pool carries (the pool's
+  key, the reason the pool values give it: `fact_stale` for a current reading) to the fact refresh,
+  through the path a candidate whose only gap is an unknown reading takes: `predicate_keys`, then
+  `fact_refresh::plan` with the instance's recognition maintenance package, its marks, its gates and
+  its codes (`fact_refresh_requested` on the reader's decision; `fact_refresh_pending`,
+  `fact_refresh_exhausted`, `fact_refresh_unresolved` or `fact_refresh_unbound` on the producer's).
+  A candidate that passes asks nothing and is not deferred; one within its rounding bound or held by
+  a pool's lines asks nothing for it. For a pool read from rows of a list the suggestion names the
+  list's key, which `give_pool_readings` left out for the pool's instance, so `predicate_keys` drops
+  it and the fact refresh is untouched (§1.505 ruling 8; `p2_t2` holds).
+- *2, a list-row pool asks for its list: not built.* Stopped by the work order's first condition (the
+  binding cannot be had from what the host keeps), below. The new info code it would have added is
+  not added.
+- *3, the bounds* (for ruling 1). A pool is asked for only while a candidate is actually held by it:
+  judged, held not positive, and covered by a goal on a pool the produced side's rule holds unread,
+  at that evaluation. The reading itself is bounded by the fact refresh's own gates as for every
+  other key: its minimum interval and failure backoff, its daily limit, its rest after failures in a
+  row, placement, the instance's holds and IDLE-1P's rule. The candidate lends the reader its catalog
+  rank with its manual offset, as an affected candidate does.
+- *4, known limits, changed by nothing here.* A pool read from rows of a list waits for a run that
+  publishes the list, as before; a producer that reads its own list at its end publishes a reading
+  observed before its own settlement, which does not release the pool (the span's rule); a pool
+  whose scope is not one instance raises no refresh demand (`predicate_keys` reads exactly the
+  instance's scope), so it waits too; the study's R4 (the gap a run is told while the need's part is
+  open) stays as it is.
+
+**Why no gate is passed.** Ruling 1 adds a demand, not a dispatch: the reading is the recognition
+maintenance package's run, admitted, placed, budgeted and held exactly as one a trigger's
+suggestion asks for, and the producer stays deferred with its own reason first.
+
+**What stops ruling 2** (the work order's first stop condition; the study's section 6, second
+point, verified in code). The list record the host's store holds and `pool_list_rows_readings`
+reads (`FactRecord`) names the run that published it: `source_snapshot_id` is
+`run:<run>/frame:<frame>/<operation>` (`list_reading_snapshot_id`, written at the run's end by
+`list_reading_fact_record`), and `parse_resource_reading_snapshot_id` reads the run back. The host's
+dispatch journal does not map that run to its catalogue task for every run: a `SeenDispatch` keeps
+its run's identity (`CompletedPolicyRunIdentity`, with `run_id` and `catalog_task_id`) only in
+`completed_run`, which the completion (`complete_dispatch`) and the start's recovery set only when
+the dispatch's own catalogue references an outcome key of its task (`referenced_outcome_keys`, a
+predicate somewhere reading `outcome.<task>.<key>`); for any other task it is `None`. A task that
+reads a list is ordinarily of the second kind. The record's `source_detector`
+(`list_reading:<entry task>/<operation>`) names the package's own entry task and the reading's
+operation, neither of them a catalogue task id. So the binding needs either a journal that keeps
+every completed dispatch's run id (a change of what the journal keeps, not this slice's) or a
+declared member naming the list's reader (a `requires` word, which the work order rules out). Ruling
+1 is built alone, as the work order says for this case.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The goals waiting on unread pools | `crates/policy/src/resource_targets.rs` (`InstanceTargets::unread_goal_pools`, beside `goal_gap`) |
+| Handing them to the gate | `crates/policy/src/evaluator.rs` (`apply_priority_selection`, before `benefit::gate`; the early call with no goal hands none) |
+| The ask | `crates/policy/src/evaluator/benefit.rs` (`gate`: the parameter `unread_goals`; the closure `ask`, which the not-positive branch and the unknown branch call, the second as before) |
+
+**Decided here.** The pools are found from the resolved goals of the candidate's own instance (as
+the gate's weights are), not from the needs' notes, so a stored goal and a computed need ask alike.
+The reason a suggestion carries is the pool values' own (`resource_suggestion`), so a pool whose
+reading has also expired asks with `fact_expired`, as a trigger on it would. The v1 policy is read as
+`goal_gap` reads it, by its pending effect's key.
+
+**Tests** (incident `#455 RR3e`: `crates/policy/src/tests/gate_455_rr3e.rs`, policy gate map; RR3c's
+fixture; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `rr3e_t1_a_producer_held_not_positive_asks_for_the_pool_its_pending_goal_is_on` (1, the study's first R3a test) | a producer of `V` 900 sent with `B` 1900 and told 2 at `run_cap` 2; on the old reading `B` −100, `policy_benefit_nonpositive`, its goal pending: the reader requested for the pool's key with `fact_stale` and dispatched, the producer `fact_refresh_pending` with the key, the reason and the package; with a reading after the run's end showing the need met, not positive and nothing asked |
+| `rr3e_t2_a_producer_that_passes_on_its_own_value_asks_for_nothing` (1, the second) | a producer of `V` 10 000, the same rounds: `B` 9000 with its goal pending, dispatched, no `fact_refresh_*` reason, no decision of the reader |
+| `rr3e_t3_a_pool_read_from_rows_of_a_list_is_not_asked_of_the_fact_refresh` (1, the third) | the first test's rounds on a pool read from rows of a list: held not positive with its goal pending, no `fact_refresh_*` reason, no decision of the reader, nothing dispatched |
+
+The study's R3b tests and the work order's two added for ruling 2 are not built with it. The gates
+that pin today's behaviour pass as read, none edited: `rr3c_t1` to `rr3c_t8`; of them `rr3c_t3`
+pins no reason list of a held candidate (its producer passes), and `rr3c_t4` pins its held
+producer's first reason, `policy_benefit_nonpositive` among its reasons and the watcher's
+suggestion, not the whole list, so the `fact_refresh_unbound` (`reader_problem` `disabled`) its held
+producer now carries after its own reasons changes no expectation; `rr3c_t6`'s producer is held by
+a pool's lines and asks nothing, so the hold stays its last reason. `lf1_t1` to `lf1_t14` and
+`lf1_h1` hand no `gaps_remaining`, so no pool is unread on the produced side; `p2_t2`, ENTRY-A's
+gates and `rr3b_t5` give no handed run; RR3d's gates (`gate_455_rr3d`, both crates) read the list
+alone or, through the host, a pool read from rows of a list, whose key stays left out; `rr3c_h1`
+the same. What reading could not settle (no compiler, no test run here): that the new fixture's
+pool read from rows of a list compiles beside `target_defaults` and `goal_tiers` and resolves its
+needs' goal as RR3c's fact pool does; that in t1 the reader's own gates let it through on the
+fixture's whole-day window and its candidate wins the instance (as `gate_390_pool1` shows for a
+trigger's demand); that in t3 the list's reading is current at the second round, so the reason is
+`fact_stale` (the test does not depend on it).
+
+**What is not changed.** Every evaluation in which no pool is unread by the produced side's rule
+gives the gate no pool, and the gate's two branches decide as before, byte for byte (the unknown
+branch's ask is the same code moved into one closure); on an instance where no pool is so unread no
+candidate is given one, as a goal resolves only on pools of the instance's scope. Where a reader is
+asked, its run takes its instance and the round's shared run limits as any reading does, so another
+instance's candidate may then wait for a shared slot as it waits behind any dispatch. LF-1's rule,
+RR3c's and RR3d's judgement, the turns a run is told, the triggers' and the regenerating pools'
+demand, every record, every interface range.
+
+**At deploy.** Nothing to configure and nothing to migrate: the demand is computed in each
+evaluation from the memory it already reads. On production, a need-lifted rule held
+`policy_benefit_nonpositive` after a run that closed its gap on a pool read from a fact shows a
+`fact_refresh_*` reason after it, and the recognition maintenance package's decision carries
+`fact_refresh_requested` for the pool's key with `fact_stale`. What a resource author checks: that
+the instance's recognition maintenance package marks that key (else `fact_refresh_unbound` with
+`key_not_marked`). A pool read from rows of a list still waits for its list's own rule.
+
+**Rollback.** Nothing is stored: an older build asks nothing for a pending goal, and the pool is
+read again only as a trigger, a cost term or the list's own rule brings it. In the release notes'
+language:
+目标缺口派出去的一趟把产出的池子读数用旧之后，那个目标挂起期间，被它推的任务如果自己的净收益不为正被压住，就去向识别维护包要这个池子的新读数（池子的键，`fact_stale`），走现有的读数刷新、它自己的间隔和上限；自己净收益为正、照常派出的任务什么也不要。按列表行读的池子照旧不向读数刷新要，等列表自己的规则；列表读取任务的"欠一次读取"这次没做：派发记录里只有被别处读结果的任务才留着运行号，列表没法对回读它的那个任务。没有要配置的东西。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

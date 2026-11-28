@@ -3977,6 +3977,58 @@ impl InstanceTargets {
         }
     }
 
+    /// #455 RR3e ruling 1 (register §1.560; `contracts/resource-targets.md`, "A pool a run was told
+    /// enough to close the gap on"): the pools of `unread`, those the production told under a
+    /// goal's gap since their reading left unread ([`crate::evaluator::produced_unread`]), on which
+    /// a goal in force covers `task` on this instance, in the order of the goals and each once.
+    /// Under a v2 policy a goal covers the task as [`Self::goal_gap`] reads it; under a v1 policy
+    /// the one target that names the task does, on the pool its pending inventory is observed under
+    /// (`pools`, the catalog's pools by id). Empty without a goal in force. The benefit gate asks
+    /// the fact refresh for these pools' readings for a candidate it holds as not positive.
+    pub(crate) fn unread_goal_pools(
+        &self,
+        task: &TaskSpec,
+        unread: &BTreeSet<String>,
+        pools: &BTreeMap<&str, &PoolSpec>,
+    ) -> Vec<String> {
+        let mut covered = Vec::<String>::new();
+        match &self.policy {
+            ResolvedPolicy::ActiveV2(resolved) => {
+                for target in &resolved.gaps {
+                    if unread.contains(&target.pool)
+                        && target.covers(&task.id, per_run_production(task, &target.pool))
+                        && !covered.contains(&target.pool)
+                    {
+                        covered.push(target.pool.clone());
+                    }
+                }
+            }
+            ResolvedPolicy::Active { effects, .. } => {
+                if let Some(TargetEffect::Pending { fact_key, .. }) = effects.get(&task.id) {
+                    for effect in &task.produces {
+                        let observed_under = pools.get(effect.pool_id.as_str()).is_some_and(|pool| {
+                            matches!(
+                                &pool.observation,
+                                ObservationRef::Fact { fact_key: key }
+                                | ObservationRef::ListRows { fact_key: key, .. } if key == fact_key
+                            )
+                        });
+                        if observed_under
+                            && unread.contains(&effect.pool_id)
+                            && !covered.contains(&effect.pool_id)
+                        {
+                            covered.push(effect.pool_id.clone());
+                        }
+                    }
+                }
+            }
+            ResolvedPolicy::None
+            | ResolvedPolicy::Unreadable(_)
+            | ResolvedPolicy::Expired { .. } => {}
+        }
+        covered
+    }
+
     /// The effect `task_id`'s candidate meets on this instance.
     pub(crate) fn effect(&self, task_id: &str) -> TargetEffect {
         match &self.policy {

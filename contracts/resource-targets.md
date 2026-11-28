@@ -1120,6 +1120,21 @@ unread, at the cost of a reading); a pool whose scope covers several instances i
 them, as before ([scheduling/README.md](scheduling/README.md), "Pool lines", "At each
 evaluation").
 
+#455 RR3e (since 0.12.104; register §1.560; the coordinator's ruling of 11-29). **Who asks for the
+reading.** While the goal is pending so, a judged producer it covers that the net-benefit gate holds
+as not positive (`policy_benefit_nonpositive`) asks the fact refresh for the pool's reading: the
+pool's key, with the reason the evaluation's pool values give it (`fact_stale` for a current
+reading), as a trigger that reads the pool asks for it. From there it is the existing fact refresh
+([scheduling/README.md](scheduling/README.md), "Fact Refresh"): the instance's recognition
+maintenance package for the keys its marks write, its own gates, and its codes on the producer's
+decision (`fact_refresh_pending`, `fact_refresh_exhausted`, `fact_refresh_unresolved`, or
+`fact_refresh_unbound` with its `reader_problem`). A producer that passes on its own value asks
+nothing and is not deferred; a candidate within its rounding bound or held by a pool's lines asks
+nothing for it. A pool read from rows of a list is not asked of the fact refresh, whose reader never
+reads a list: it waits for a run that publishes the list, as before ("A pool read from rows of a
+list" there). Before 0.12.104 the pending goal asked for nothing, and a pool read from a fact was
+read again only when a trigger or a regenerating pool's cost term happened to ask for its key.
+
 ## Needs computed from the records
 
 Workflow #455 RR3 (since 0.12.95; register §1.538; the coordinator's rulings of 11-28, on the

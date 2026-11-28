@@ -923,6 +923,15 @@ read it, and the candidate waits.
   `on_unknown: probe` raises none for its key, which the task's own package
   reads ("Self-read fact probe"); every other unknown key of the same trigger
   raises demand as before.
+  #455 RR3e (since 0.12.104; register §1.560; the coordinator's ruling of
+  11-29): a judged candidate the net-benefit gate holds as not positive
+  (`policy_benefit_nonpositive`, "Net benefit within a tier") raises demand for
+  the key of each pool on which a goal that covers it waits for a reading
+  because the production told under the goal's gap left the pool unread ("Pool
+  lines", "At each evaluation"), with the reason the pool values give it
+  (`fact_stale` for a current reading), as a `resource_projection` on the pool
+  would; one that passes raises none and is not deferred. A pool read from
+  rows of a list raises none ("A pool read from rows of a list").
   Workflow #411 6438574534 follow-up 2 (since 0.12.26): a task's own placement
   never holds back the demand its undecided trigger or feedback stop raises.
   Whether the reading can be placed is R_I's own gates' to decide (below): an
@@ -1296,7 +1305,12 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
 - **Not positive.** A judged candidate whose known `B ≤ 0` is not dispatched: deferred with
   `policy_benefit_nonpositive` (info; `benefit_milli`, `expected_duration_ms`); a regenerating
   pool it consumes wakes the evaluation at its next step, as before (SS-2h: its cost no longer
-  falls as it fills, but at its cap the capped spending order takes it).
+  falls as it fills, but at its cap the capped spending order takes it). #455 RR3e (since
+  0.12.104; register §1.560): while a goal that covers it waits on a pool the production told
+  under the goal's gap left unread ("Pool lines", "At each evaluation"), it also asks the fact
+  refresh for that pool's reading ("Fact Refresh"), as a candidate whose only gap is an unknown
+  reading does; its decision then ends with the refresh's reason. A candidate within its rounding
+  bound or held by a pool's lines asks nothing for it.
 - **The pools' lines** (SS-2h, since 0.12.46, register §1.289; "Pool lines", "Capped spending
   order"). After the judgement and before the decision, the lines of every valued pool a judged
   candidate consumes decide. In a capped pool's round the candidates its order tries pass with
@@ -2795,7 +2809,12 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
   (no `fact_refresh_*` reason). Nor (fix round 1) is a probe planned for it: a suggestion of a key
   the left-out set covers for its instance writes no `planning_fact_unknown` and takes no
   detection allowance. The package that reads the list is scheduled by its own rule; refresh on
-  demand is a later slice.
+  demand is a later slice. #455 RR3e (since 0.12.104; register §1.560): so a producer held as not
+  positive while its goal on such a pool waits for a reading ("Net benefit within a tier", "Not
+  positive") asks nothing either. Asking the package whose scheduled run published the list for a
+  run is not built: the list's record names the run that published it, but the host's dispatch
+  journal keeps a settled run's identity only for a task some catalog predicate reads an outcome
+  of, so the run cannot be mapped to its task for every list.
 - **Wakes.** The reading's expiry wakes the evaluation a millisecond after it, as a fact reading's
   does; a list's publication wakes it as every fact publication does.
 - **In 0.12.78** (P1) no host computed the reading: every reader met the pool as a `ledger_fact`
@@ -2972,8 +2991,11 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   above, for the same span: a pool read from a fact or from rows of a list is unknown to the whole
   evaluation, `fact_stale` under its own key, for every reader of the pool values (the triggers,
   which ask the fact refresh for it, the net benefit, the lines, the reserve gate, the spend
-  values), until a reading observed at or after the end of every run of the sum that reached the
-  gap (a reading observed at a run's end or after counts only the dispatches after it); and, for
+  values; #455 RR3e, since 0.12.104, register §1.560: and a judged producer held as not positive
+  whose covering goal waits on the pool asks for it too, "Fact Refresh"; for a pool read from rows
+  of a list nothing asks, "A pool read from rows of a list"), until a reading observed at or after
+  the end of every run of the sum that reached the gap (a reading observed at a run's end or after
+  counts only the dispatches after it); and, for
   this pool alone, also for the two readers that do not read the pool values: a resource target's
   observation of it (pending, `Γ` 0, no goal term of `run_cap` and no `gap_remaining` from it;
   [../resource-targets.md](../resource-targets.md), "Resource weights (v2)") and the holdings of the

@@ -246,6 +246,11 @@ mod tests {
     // the dispatches since the pool's reading, a later dispatch of the pair erasing nothing.
     mod gate_455_rr3d;
 
+    // #455 RR3e (0.12.104; register §1.560): a producer held as not positive while a goal that
+    // covers it waits on a pool the production told under its gap left unread asks the fact
+    // refresh for that pool's reading.
+    mod gate_455_rr3e;
+
     // #455 SL2 (0.12.101; register §1.547): a stored target on a pool that writes `spend_line` is
     // that pool's line: `at_least` alone, no producer asked, and it never weighs.
     mod gate_455_sl2;
