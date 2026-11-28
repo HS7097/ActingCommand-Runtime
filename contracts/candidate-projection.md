@@ -120,7 +120,7 @@ is truncated.
 | Features per layout | 8 | `CANDIDATE_PROJECTION_MAX_FEATURES` | same (`features`) |
 | Layouts per page | 4 | `CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PAGE` | same |
 | Layouts per package | 64 | `CANDIDATE_PROJECTION_MAX_LAYOUTS_PER_PACKAGE` | same |
-| OCR and NN feature evaluations per projection; for a `repeated_anchor` layout, one instance's evaluations times its actionable instances. Workflow #396 REC-8: a layout's shared OCR read is one evaluation for each frame it serves, and the targets it serves count none ([selection-graph.md](selection-graph.md), section Shared OCR read); Workflow #463 SEL-2L (since 0.12.74): a `repeated_anchor` layout's shared read too, once for each frame whatever its actionable instances, beside the product of its instances' own evaluations | 16 | `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS` | same (`provider_evaluations`) |
+| OCR and NN feature evaluations per projection; for a `repeated_anchor` layout, one instance's evaluations times its actionable instances. Workflow #396 REC-8: a layout's shared OCR read is one evaluation for each frame it serves, and the targets it serves count none ([selection-graph.md](selection-graph.md), section Shared OCR read); Workflow #463 SEL-2L (since 0.12.74): a `repeated_anchor` layout's shared read too, once for each frame whatever its actionable instances, beside the product of its instances' own evaluations. Workflow #503 LIST-D (since 0.12.99, `package` revision 31): a layout of either kind may declare a larger budget for its own projections, its member `provider_evaluations`, 17 to 64 ([selection-graph.md](selection-graph.md), section Rules); the limit is then the layout's number, and a layout that declares none keeps 16 | 16, or the layout's `provider_evaluations` (at most 64) | `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS`; the declared bound `CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS` | same (`provider_evaluations`; `limit_count` the layout's limit) |
 | Compact JSON of one core projection | 32 KiB | `CANDIDATE_PROJECTION_MAX_BYTES` | same (`projection_bytes`) |
 | Compact JSON of every public candidate set of one observation | 32 KiB | `CANDIDATE_SETS_MAX_BYTES` | `candidate_sets_budget_exceeded` (`candidate_sets_bytes`), raised when the observation is built, not when an artifact is written |
 
@@ -129,6 +129,15 @@ The layout counts per page and per package are checked when the recognition pack
 candidate, feature and provider-evaluation budgets again before it evaluates any feature. A
 `repeated_anchor` layout's candidate and provider-evaluation counts depend on the frame, so the
 producer checks them after it has enumerated the anchor matches.
+
+Workflow #503 LIST-D (since 0.12.99): the evaluations' limit is not raised for everyone. Every
+package admitted before was written and bounded against 16, and the limit enters a layout's
+admission bound ([selection-graph.md](selection-graph.md), section Rules), so only a layout that declares
+`provider_evaluations` is held to its own number, at its admission, before anything is read and
+after its anchor matches are enumerated, and is bounded by it. Every layout without the member,
+and so every package without it, is admitted, projected, recorded and bounded as before, byte for
+byte. The other budgets of a projection do not move: candidates 64, features 8, 32 KiB of one core
+projection.
 
 The observation total keeps a Lab terminal record within its 256 KiB artifact: the before
 observation holds a 32 KiB page projection, 64 KiB of facts and 32 KiB of candidate sets,
@@ -181,7 +190,9 @@ scene and the admitted pack, nothing else; the layouts it reads are declared as 
    with `invalid_candidate_projection` (`frame`).
 2. Before anything is evaluated, the slots, the features and the OCR and NN evaluations the
    layout needs are within their budgets, or it fails with
-   `candidate_projection_budget_exceeded` (`candidates`, `features`, `provider_evaluations`).
+   `candidate_projection_budget_exceeded` (`candidates`, `features`, `provider_evaluations`; the
+   evaluations' limit is the layout's own `provider_evaluations` where it declares one, Workflow
+   #503 LIST-D).
    The OCR and NN evaluations are one per distinct OCR or NN target the slots read and one per
    OCR or NN member of each distinct composite they read; a target that a feature reads at an
    offset counts once per slot, or once per instance.

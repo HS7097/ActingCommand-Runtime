@@ -52137,6 +52137,132 @@ nothing kept on disk (the list is memory only) and only stops the re-reading. In
 language:
 目标缺口派出去的一趟，如果被告知的趟数够补上缺口，它产出的那个池子在这趟结束后被重新读到之前都算没读过（`fact_stale`）：这个池子上的目标先挂起，既不加推力，也不告诉缺口；按配方拆算时这个持有量也算不知道。补不上缺口的一趟（比如囤货差 150、只跑 3 趟）照旧。没有要配置的东西。
 
+### 1.544 Slice #503 LIST-D (0.12.99): a candidate layout may declare its own budget of OCR and NN evaluations for one projection (`provider_evaluations`), so a screen of sixteen cards whose two fields are each read on the card is read whole (board #503; the rulings 1 to 6 are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-503-list-d.md`; on main `a1275345`, v0.12.98)
+
+It ships in 0.12.99 and takes `package` 31, written over row 30 of §1.541.
+[candidate-projection.md](candidate-projection.md) ("Budgets": the evaluations' row and a new
+paragraph; "Generation": step 2), [selection-graph.md](selection-graph.md) ("Source declaration":
+the fields' row, a new row and the order of a derived layout; "Pack schema `0.7`": a new bullet;
+"A `repeated_anchor` layout's shared read": the count; "Rules": the evaluations' row and a new
+row; "Select step": the provider need), [resource-readings.md](resource-readings.md) ("List
+readings", "Declaration": the `layout_id` row), [component-interfaces.md](component-interfaces.md)
+(the `package` row 31) and [resource-verify.md](resource-verify.md) (row 31) are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). One projection, one layout on
+one frame, may perform at most 16 OCR and NN evaluations; for a `repeated_anchor` layout that is
+one instance's evaluations times its actionable instances. The resource side has a list whose
+screen holds sixteen cards, each with two fields that must be read from the card, a name and a
+number. Measured on every saved frame: the layout's shared read over the whole screen misses the
+small text (a single digit is not detected on most cards, short names are cut into several boxes),
+and no way of joining lines removes that; read card by card, both fields are right on every card.
+Sixteen cards times two are 32 evaluations: `candidate_projection_budget_exceeded` (`count` 32,
+`limit_count` 16). Half a screen cannot be read instead: the list's last screen does not scroll far
+enough for the other half ever to be reached.
+
+**Why the number is not raised for everyone.** The 16 bounds what one frame may cost, and every
+package in use was written and admitted against it; it also enters a layout's admission bound
+(`CandidateLayout::maximum_provider_and_wait_ms`: a `repeated_anchor` layout counts as many
+instances as the budget lets one projection evaluate). Raising it would change the bound of every
+such layout in every package. So a layout that needs more says so, and only it pays for it.
+
+**What it rests on** (read at `a1275345`; none of the stop conditions holds).
+- *Where the budget is read.* Four places, all in `crates/recognition-pack/src/candidate_layout.rs`
+  and each with its layout at hand: the producer's check of one instance's evaluations before
+  anything is read (`SceneEvaluation::project_reading`), its check of the actionable instances'
+  evaluations after the anchor matches are enumerated (the same function), the admission bound
+  (`CandidateLayout::maximum_provider_and_wait_ms`) and the pack's rules
+  (`validate_candidate_layouts`). No other reader of `CANDIDATE_PROJECTION_MAX_PROVIDER_EVALUATIONS`
+  exists in the workspace; the Lab, the kernel's scan and the dry runs reach the budget only
+  through these. No interface other than `package` moves.
+- *Who reads a layout's members.* The recognition pack's reader (`validate_candidate_layouts_wire`,
+  then `CandidateLayout`, which denies unknown fields) and the source declaration gate
+  (`Declaration::candidate_layouts`), both of which refuse a member they do not know; no reader
+  ignores one. So an older build refuses the member, it does not misread it.
+- *One layout's number touches no other.* The budget is read from the layout being projected or
+  bounded; the bound and the provider need are per layout and per step.
+
+**The rulings, as built.**
+- *1, the member* (`crates/recognition-pack/src/candidate_layout.rs`, `CandidateLayout::
+  provider_evaluations`; `crates/pack-containment/src/source/declarations.rs`,
+  `LAYOUT_PROVIDER_EVALUATIONS`; the bound 64, `CANDIDATE_PROJECTION_MAX_DECLARED_PROVIDER_EVALUATIONS`
+  in the contract crate beside the 16, written once for both readers). A layout of either kind may
+  write `"provider_evaluations": n`, an unsigned integer of 17 to 64. The precedent followed is
+  `max_instances`: an optional member of the layout, its bounds a range at its own pointer, by the
+  declaration gate `InvalidValue` (16 and less, above 64) and `InvalidType` (another type, `null`
+  included), by the pack's rules the diagnostic `max_instances` has, `/candidate_layouts/<i>/provider_evaluations must be 17..=64`;
+  a value that is no unsigned integer is refused on the pack's wire, `InvalidType` at the member.
+  Absent, the budget is 16.
+- *2, every reader reads the layout's* (`CandidateLayout::provider_evaluation_budget`, the one rule:
+  the declared number, else 16). The four places above call it; the errors keep their form,
+  `limit_count` (and the number in the texts) the layout's limit.
+- *3, the admission bound grows with it.* A `repeated_anchor` layout counts as many instances as
+  its own limit lets one projection evaluate, after its shared read, at most `max_instances`: a
+  layout of 32 is bounded as 32 evaluations, and its step must declare the time; nothing is waived.
+  A `fixed_slots` layout's bound counts all its calls, as before.
+- *4, nothing else of a projection's budgets moves*: 64 candidates, 8 features, 32 KiB of one core
+  projection. Sixteen cards of two features are far inside it (the recognition pack's gate projects
+  them). Whether 64 evaluations fit depends on how they are spent; estimated by reading the core
+  form, not measured: 64 cards of one `passed` feature (about 14 KB) and 32 cards of a name and a
+  number with their recognition evidence (about 21 to 30 KB) fit, 64 cards of one identity read
+  from text with its evidence (about 39 KB) do not, and such a projection fails
+  `candidate_projection_budget_exceeded` (`projection_bytes`), an error, never a truncation. The
+  byte budget is not raised.
+- *5, `package` 31* (`apps/actinglab/src/resource_verify/revision.rs`, the row `provider_evaluations`
+  under `candidate_layouts`, `LAYOUT_EVALUATIONS_REVISION`, by LIST-C's pattern for a member under
+  a known parent). A package that does not write the member is admitted, projected, recorded and
+  bounded byte for byte as before.
+- *6, neutral; nothing new on the wire.* No record, event or wire member, no outcome code, word or
+  setting; the outcome index does not change. No game, package or list is named.
+
+**Decided here.** The member is a layout's of either kind (the work order says a candidate layout;
+a `fixed_slots` layout's one projection counts all its slots, the same budget); it is written last
+in a derived layout, as declared; `null` is refused, not read as absent, as the precedent of
+§1.541 refuses it; on a value out of range the pack's rules also measure the layout against that
+value, so a refused declaration may carry a second message.
+
+**The `package` revision.** A Runtime before this one (0.12.98, read at `a1275345`) refuses the
+member where it reads a layout: the package's loading runs the recognition pack's reader on its
+pack, and admission the declaration gate on its task, each `resource_declaration_invalid`,
+`UnknownField` at `/candidate_layouts/<i>/provider_evaluations`; its installer, whose range ends
+at 30, refuses a bundle that declares 31. This build declares [3, 31]; `standard-pack build` counts
+the member as 31.
+
+**Tests** (exec gate map row "#503 LIST-D"; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `candidate_layout::gate_503_list_d::list_d_the_pack_takes_provider_evaluations_of_17_to_64_only` (1) | the pack's reader: 17, 32, 64 admitted; 16, 0, 65 refused, `…/provider_evaluations must be 17..=64`; `"32"`, 32.5, -1 and `null` `InvalidType` at the member; another member `UnknownField` at it, what an older reader says of this one |
+| `…::list_d_sixteen_cards_of_two_fields_project_with_a_budget_of_32_and_only_with_it` (2) | sixteen synthetic cards of a name and a number: without the member `count` 32, `limit_count` 16, nothing read; with 31 `count` 32, `limit_count` 31; with 32 thirty-two reads and sixteen candidates, each with its identity and its integer |
+| `…::list_d_the_admission_bound_counts_the_cards_the_layouts_budget_lets_one_projection_read` (3) | 1000 + 500 ms a card: 12 000 ms (eight cards) without the member, as before; 24 000 (sixteen) with 32; 22 500 (fifteen) with 31 |
+| `…::list_d_one_instance_above_the_declared_budget_is_refused_at_validation_and_before_any_read` (4) | eighteen slots of one label, 18 evaluations: with 17 the rules' `…/slots: 18 OCR and NN evaluations exceed the 17-evaluation projection budget`; with 18 admitted (a `fixed_slots` layout takes the member), and its budget lowered to 17 inside the evaluator, the producer's `layout 'layout/slots' needs 18 OCR and NN evaluations above the 17-evaluation budget` before any read |
+| `…::list_d_a_shared_read_counts_once_and_the_cards_get_what_is_left_of_the_layouts_budget` (5) | a shared read of the names and the numbers read on their own, 16 + 1: with 17 one detection and sixteen reads, every card whole, bound 5000 + 16 × 500 ms; without `count` 17, `limit_count` 16, bound 5000 + 15 × 500 |
+| `…::list_d_a_layout_without_the_member_beside_one_with_it_is_bounded_and_projected_as_before` (6) | a names layout without the member beside the layout of 32: its bound (16 000 ms), its reads and its projection, as JSON, equal to those of a pack that holds it alone; the other projects whole |
+| `source::gate_503_list_d::list_d_the_declaration_gate_takes_provider_evaluations_of_17_to_64_on_either_kind` (1) | the declaration gate, on a `repeated_anchor` and a `fixed_slots` layout: 17, 32, 64 admitted; 16, 0, 65 `InvalidValue`, `"32"`, 32.5, -1, `null` `InvalidType` at `/candidate_layouts/0/provider_evaluations`; another member `UnknownField` |
+| `…::list_d_the_derived_layout_writes_the_member_last_and_one_without_it_as_before` (1, 5) | the derived layout with `"provider_evaluations":32` last; without it the JSON the source tests pin |
+| `contained_task::gate_503_list_d::list_d_a_list_reading_reads_the_sixteen_rows_of_a_viewport_with_a_budget_of_32` (7) | LIST-A's step plan, sixteen cards of a name and a number on one viewport, admitted by the whole admission: sixteen rows with their numbers, at 990, nothing unread or passed over |
+| `…::list_d_an_unknown_layout_member_is_refused_as_an_older_runtime_refuses_the_budget` (1) | the whole admission: the package of 32 admitted; a layout member no reader knows `resource_declaration_invalid`, `UnknownField` at `/candidate_layouts/0/<member>` |
+| `apps/actinglab` `gate_503_list_d::list_d_a_layouts_own_evaluation_budget_needs_revision_31_and_nothing_else_does` (1, 5) | 31 for the member, whatever it holds, on either kind and in either mode; 3 without it, and for the name under a feature or a slot |
+
+Adapted, the requirement moving the shipped `package` range to [3, 31]: `gate_463_kp1`
+(`KEY_REVISION + 14`), `gate_463_sel2l` (`SHARED_READ_REVISION + 11`), the Lab's
+`gate_463_sel2l_rows`, actinglab-architecture's `component_interfaces`, the rescue module's
+`gate_463_v1`, `gate_477_cv1`, `gate_455_tk1` and `gate_455_rr1`; the revision table's `ROWS`
+holds 57 rows. No golden re-recorded; no test leaves the gate maps.
+
+**What is not changed.** A layout without the member: its declaration, derivation, admission,
+projection, records, bound and every message (the existing tests that pin the 16, `gate_463_sel2l`
+test 4, the pack's `repeated_anchor` tests in `lib.rs` and `shared_read_tests.rs`, are unchanged;
+`gate_463_sel2l` changes only its pin of the range); the
+other budgets of a projection; the recorder, which writes no such member; the ledger,
+`runtime-client`, `actingd-config`, `runtime-outcomes`; every code and setting.
+
+**At deploy.** Nothing to configure, and nothing changes until a package writes the member: no
+installed package does. A package that writes it needs this build (its bundle declares `package`
+31); a rollback below 0.12.99 meets it as an older Runtime does (its installer refuses the bundle at
+the `package` edge, a placed one is refused at every admission), so the rollback stays open while
+no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
+`"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

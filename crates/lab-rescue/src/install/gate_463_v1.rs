@@ -98,9 +98,10 @@ fn v1_the_build_declares_package_through_revision_14() {
     // (register §1.507, 0.12.79) to 24, Workflow #477 LR-1 (register §1.513, 0.12.79) to 25,
     // Workflow #455 TK-1 (register §1.532, 0.12.89) to 26, Workflow #503 LIST-A (register §1.533,
     // 0.12.90) to 27, Workflow #455 RR1 (register §1.535, 0.12.92) to 28, Workflow #503 LIST-B
-    // (register §1.536, 0.12.93) to 29 and Workflow #503 LIST-C (register §1.541, 0.12.97) to 30;
-    // the revision this test is about, 14, stays read.
-    assert_eq!(speaks.get("package"), Some(&[3, 30]));
+    // (register §1.536, 0.12.93) to 29, Workflow #503 LIST-C (register §1.541, 0.12.97) to 30 and
+    // Workflow #503 LIST-D (register §1.544, 0.12.99) to 31; the revision this test is about, 14,
+    // stays read.
+    assert_eq!(speaks.get("package"), Some(&[3, 31]));
     assert!(
         speaks
             .get("package")
