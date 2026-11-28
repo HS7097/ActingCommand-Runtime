@@ -19,6 +19,9 @@ use std::path::PathBuf;
 // The pointer of the member in the task's one layout.
 const MEMBER_POINTER: &str = "/candidate_layouts/0/provider_evaluations";
 
+/// A layout of one kind, with or without the member written.
+type LayoutOf = fn(Option<Value>) -> Value;
+
 // A task schema `0.6` task whose one candidate layout is `layout`.
 fn task(layout: Value) -> Bundle {
     Bundle {
@@ -97,8 +100,7 @@ fn assert_refused(case: &str, layout: Value, pointer: &str, reason: ResourceDecl
 // before this slice gives the member itself, whose list of a layout's members does not hold it.
 #[test]
 fn list_d_the_declaration_gate_takes_provider_evaluations_of_17_to_64_on_either_kind() {
-    let kinds: [(&str, fn(Option<Value>) -> Value); 2] =
-        [("repeated_anchor", anchored), ("fixed_slots", slotted)];
+    let kinds: [(&str, LayoutOf); 2] = [("repeated_anchor", anchored), ("fixed_slots", slotted)];
     for (kind, layout) in kinds {
         for evaluations in [17, 32, 64] {
             declaration_file_requests(&[task(layout(Some(json!(evaluations))))])
