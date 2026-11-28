@@ -51069,6 +51069,32 @@ account's progress or its prerequisites, or applied (the computing slice: a reco
 longer declares will apply nothing, and say why); the page lists no records entry (the view of
 `runtime-client` 15); the Lab's `goals get` reads no records (they are read with `facts`).
 
+**Fix round 1 (the independent review and the first build; the coordinator's).** The review found
+nothing that must change before the merge, and three things worth settling.
+(1) *A state nothing ended.* A stored record the reader does not read, which only a fault of the
+Runtime writes, could not be removed: it holds no name, so a clear answered `value_not_set`, a set
+`record_unreadable`, and a publication of the key is refused. Now, when the stored record is
+unreadable, the clear of a records entry the page declares, applied or not, is a change of the goal
+records record, and the composer writes the header alone for it; a set over an unreadable record
+is refused as before. What the record held is lost; it was no record a reader read.
+`check_goal_edit` and `compose` carry it, [runtime-interface.md](runtime-interface.md) ("Goal
+request kinds") and [instance-fact-store.md](instance-fact-store.md) say it, the word's text names
+the way out, and `rr2_p2_a_clear_rewrites_a_record_the_reader_does_not_read_as_the_header_alone`
+pins it (pure: the set refused; the clear of an applied and of an unapplied entry composed to the
+header alone, which reads back as a record that holds nothing; a clear of a name the page does not
+declare judged as before). The word `record_unreadable` keeps its one cause for both records (the
+stored record the edit would rewrite is not one its reader reads); the remedy differs by the
+record, and the request's own entry tells which.
+(2) *An empty set where nothing is stored* writes the header alone, and a clear after it answers
+`value_not_set`: harmless, and now said in the contract.
+(3) The read-back's check of a `to` (the text of a JSON object within the bound) is not the whole
+of the fact validation's check; no value reaches the difference, since a `to` is the composer's own
+canonical text, and it is left as it is.
+The first build's lint refused the pure test's list of cases (`clippy::type_complexity`, a tuple
+type inside a `Vec`); it has a named type now. Left without a test, as before:
+`goal_records_key_reserved`; and that decisions do not change while records are stored is shown
+only by evaluations that complete.
+
 **At deploy.** Nothing to configure, and nothing changes for an instance until a records entry is
 set on it. In the release notes' language: 新增：`goals.json` 里的 records 条目可以存值了。`goals set <实例> <条目名> '[{"key": …, "to": {…}}]'` 把“练谁、练到哪”存进实例事实 `session.goal_records`（只有目标编辑能写，用 `facts` 读回）；目标页的版本号取两份记录的较大者。这一版不据此计算任何需求，调度不变。
 

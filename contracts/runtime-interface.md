@@ -764,9 +764,15 @@ the table has among them) or a position its ladder does not hold `out_of_range` 
 or the sub), a `to` whose canonical text passes 1024 bytes `value_too_large` (at the `to`, 0 to
 1024), then, against the stored record, more than 128 records over the application
 `record_out_of_limits` (0 to 128) and an unreadable record `record_unreadable`. The array replaces
-the entry's records as a whole, where they stood; an empty one removes them. A `clear` of a name
+the entry's records as a whole, where they stood; an empty one removes them (where the
+application holds no record of the key at all, an empty array writes the header alone, the empty
+record: it holds nothing, and a `clear` after it answers `value_not_set`). A `clear` of a name
 under which records are stored removes them, whether or not the root declares an entry of that
-name (the rule of a value left under a name, above); else the name is judged as before. A
+name (the rule of a value left under a name, above); else the name is judged as before. Fix round
+1 (the review): an unreadable stored record names nothing a `clear` could reach, so the `clear`
+of a records entry the page declares, applied or not, rewrites the record as the header alone,
+and a `set` then stores as on any application: the one state of this record that nothing else
+ends has an end a person can reach. What it held is lost; it was no record a reader read. A
 position against the account's progress and the prerequisites are not checked, on purpose: the
 computing slice's. The rows name who set them as the other record's rows do; the record is read back by its
 reader before it is published (a composed record that does not read back is Denied

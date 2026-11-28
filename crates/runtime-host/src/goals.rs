@@ -319,6 +319,11 @@ pub(crate) fn check_goal_edit(
         .as_ref()
         .and_then(|declaration| declaration.entry(name))
         .map(|declared| &declared.kind);
+    // Fix round 1 (the review): a stored record the reader does not read names nothing a clear
+    // could reach, so the clear of a records entry the page declares, applied or not, rewrites it
+    // as the header alone ([`compose`]): the state has an end a person can reach.
+    let rewrites_unread = matches!(records, StoredGoalRecords::Unreadable)
+        && matches!(declared, Some(DeclaredGoalKind::Records { .. }));
     // Workflow #455 RR2 (ruling 4): the table and the bound of a records entry the root in force
     // applies; a records entry it does not apply (its table no table of an accepted tables file)
     // is no entry here.
@@ -339,9 +344,11 @@ pub(crate) fn check_goal_edit(
             check_set(page, name, declared, value, set_by).map(GoalChange::Record)
         }
         // Ruling 6: the records stored under the name, declared or not.
-        (None, _) if records.holds(name) => Ok(GoalChange::Records(RecordsChange::Clear {
-            entry: name.to_owned(),
-        })),
+        (None, _) if records.holds(name) || rewrites_unread => {
+            Ok(GoalChange::Records(RecordsChange::Clear {
+                entry: name.to_owned(),
+            }))
+        }
         (None, _) => check_clear(page, stored, name, declared).map(GoalChange::Record),
     }
 }
