@@ -26,15 +26,16 @@
 use crate::codes::{RecognitionPackCode, RecognitionPackLocation};
 use crate::{
     CandidateConsensus, CandidateIdentityDeclaration, CandidateIdentityRecognition,
-    CandidateIdentityTemplate, CandidateNameMark, CandidateNameReading, CandidateSampleVariant,
-    OcrEvaluation, OcrLocateBlocks, OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence,
-    OcrProviderBlocks, OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect,
-    PackRegion, RecognitionEvaluator, RecognitionPack, RecognitionPackError,
-    RecognitionPackErrorCode, RecognitionPackResult, RecognitionTarget, SCHEMA_0_7,
-    SceneEvaluation, TargetEvaluation, TargetKind, TemplateEvaluation,
-    UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict, primitive_error, provider_error,
-    provider_region, rect_is_within, reject_unknown_fields, target_region, template_message,
-    validate_ocr_result, validate_rect_shape, validate_region_within_coordinate_space,
+    CandidateIdentityTemplate, CandidateNameMark, CandidateNameReading, CandidatePictureReading,
+    CandidatePoolScore, CandidatePoolTemplate, CandidateSampleVariant, OcrEvaluation,
+    OcrLocateBlocks, OcrLocateLineMerge, OcrPreprocess, OcrPreprocessEvidence, OcrProviderBlocks,
+    OcrSharedReadEvidence, OcrTarget, PackCoordinateSpace, PackPoint, PackRect, PackRegion,
+    RecognitionEvaluator, RecognitionPack, RecognitionPackError, RecognitionPackErrorCode,
+    RecognitionPackResult, RecognitionTarget, SCHEMA_0_7, SceneEvaluation, TargetEvaluation,
+    TargetKind, TemplateEvaluation, UnsupportedRecognitionTarget, ValueTestPart, ocr_verdict,
+    primitive_error, provider_error, provider_region, rect_is_within, reject_unknown_fields,
+    target_region, template_message, validate_ocr_result, validate_rect_shape,
+    validate_region_within_coordinate_space,
 };
 use actingcommand_contract::ResourceDeclarationReason;
 use actingcommand_contract::candidate_projection::{
@@ -86,6 +87,8 @@ const LAYOUT_FIELDS: &[&str] = &[
     "unknown_identity",
     "sample_interval_ms",
     "shared_ocr",
+    // Workflow #503 LIST-B.
+    "identity_templates",
 ];
 const FIXED_SLOTS_FIELDS: &[&str] = &[
     "id",
@@ -113,6 +116,8 @@ const REPEATED_ANCHOR_FIELDS: &[&str] = &[
     "sample_interval_ms",
     // Workflow #463 SEL-2L.
     "shared_ocr",
+    // Workflow #503 LIST-B: the pools of its picture identity features.
+    "identity_templates",
 ];
 const FEATURE_FIELDS: &[&str] = &[
     "name",
@@ -122,7 +127,11 @@ const FEATURE_FIELDS: &[&str] = &[
     "integer",
     "target",
     "offset",
+    // Workflow #503 LIST-B: where a picture identity of a `repeated_anchor` layout is scored.
+    "region",
 ];
+/// Workflow #503 LIST-B: the members of an entry of a layout's pool.
+const POOL_ENTRY_FIELDS: &[&str] = &["id", "variant", "other", "target_id"];
 /// Workflow #396 REC-8: the members of a layout's `shared_ocr`.
 const SHARED_OCR_FIELDS: &[&str] = &[
     "region",
@@ -191,6 +200,12 @@ pub struct CandidateLayout {
     /// detection read the OCR targets of the slots and features share.
     #[serde(default)]
     pub shared_ocr: Option<CandidateSharedOcr>,
+    /// Workflow #503 LIST-B (`package` revision 29; `contracts/selection-graph.md`, "Rules";
+    /// `contracts/business-identity-consensus.md`, "A layout's pool"): `repeated_anchor` only:
+    /// the pool of each picture identity feature, by the feature's name, one for every instance
+    /// (not by slot), 1..=[`crate::MAX_LAYOUT_IDENTITY_TEMPLATES`] entries.
+    #[serde(default)]
+    pub identity_templates: BTreeMap<String, Vec<CandidatePoolTemplate>>,
 }
 
 /// Workflow #396 REC-8: one OCR detection read of a `fixed_slots` layout. Every OCR target its
@@ -524,6 +539,13 @@ pub struct CandidateFeatureDeclaration {
     pub target: Option<String>,
     #[serde(default)]
     pub offset: Option<PackPoint>,
+    /// Workflow #503 LIST-B (`package` revision 29): a picture identity feature of a
+    /// `repeated_anchor` layout only: the rectangle, relative to its instance's origin, in which
+    /// each picture of the layout's pool for the feature is scored. Its corner moves with the
+    /// instance as an `offset` does (scaled by the factor the anchor matched at), its size is
+    /// kept, and a sample's jitter shifts it.
+    #[serde(default)]
+    pub region: Option<PackRect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -810,7 +832,43 @@ impl SceneEvaluation<'_> {
             Instant,
         ) -> Result<(), CandidateProjectionFailure>,
     ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
-        self.project_reading(layout_id, scenes, record, None)
+        self.project_candidates_judged_with_samples(layout_id, scenes, record)
+            .map(|(projection, origins, _)| (projection, origins))
+    }
+
+    /// Workflow #503 LIST-B (`contracts/candidate-projection.md`, "Generation"; `contracts/
+    /// business-identity-consensus.md`, "A layout's pool"): [`Self::project_candidates_placed_with_
+    /// samples`], and beside the projection what the identity mapping judged of each read of a
+    /// `repeated_anchor` layout's picture pool, with the pool's evaluations in aggregate
+    /// ([`CandidatePoolJudgements`]). The projection is the same one; the judgements enter no hash
+    /// and no record. Every other projection of this layout drops them.
+    pub fn project_candidates_judged_with_samples(
+        &self,
+        layout_id: &str,
+        scenes: &[&crate::Scene],
+        record: &mut impl FnMut(
+            &str,
+            &RecognitionPackResult<TargetEvaluation>,
+            Instant,
+            Instant,
+        ) -> Result<(), CandidateProjectionFailure>,
+    ) -> Result<JudgedProjection, CandidateProjectionFailure> {
+        let mut judged = CandidatePoolJudgements::default();
+        let (projection, origins) =
+            self.project_reading(layout_id, scenes, record, None, &mut judged)?;
+        Ok((projection, origins, judged))
+    }
+
+    /// Workflow #503 LIST-B: [`Self::project_candidates_placed`] with what the identity mapping
+    /// judged of each read of a layout's picture pool ([`Self::project_candidates_judged_with_
+    /// samples`] on this context's scene, recording nothing).
+    pub fn project_candidates_judged(
+        &self,
+        layout_id: &str,
+    ) -> Result<JudgedProjection, CandidateProjectionFailure> {
+        self.project_candidates_judged_with_samples(layout_id, &[self.scene], &mut |_, _, _, _| {
+            Ok(())
+        })
     }
 
     /// Workflow #463 SEL-GRID G2 (`contracts/lab-recording.md`, the refusal `select_name_unread`):
@@ -828,6 +886,7 @@ impl SceneEvaluation<'_> {
             &[self.scene],
             &mut |_, _, _, _| Ok(()),
             Some(&mut reads),
+            &mut CandidatePoolJudgements::default(),
         )?;
         Ok((projection, reads))
     }
@@ -835,7 +894,8 @@ impl SceneEvaluation<'_> {
     /// [`Self::project_candidates_placed_with_samples`], and (Workflow #463 SEL-GRID G2) into
     /// `reads`, when given, what the OCR read of each actionable instance's identity feature saw.
     /// Only the Lab's dry run gives it ([`Self::project_candidates_read`]); every other projection
-    /// passes `None` and makes no name read, maps no cause and copies nothing.
+    /// passes `None` and makes no name read, maps no cause and copies nothing. Workflow #503
+    /// LIST-B: into `judged`, what the mapping judged of each read of a layout's picture pool.
     fn project_reading(
         &self,
         layout_id: &str,
@@ -847,6 +907,7 @@ impl SceneEvaluation<'_> {
             Instant,
         ) -> Result<(), CandidateProjectionFailure>,
         mut reads: Option<&mut Vec<CandidateNameRead>>,
+        judged: &mut CandidatePoolJudgements,
     ) -> Result<(CandidateProjection, Vec<PackPoint>), CandidateProjectionFailure> {
         let evaluator = self.evaluator;
         let layout = evaluator.candidate_layout(layout_id).ok_or_else(|| {
@@ -1029,6 +1090,10 @@ impl SceneEvaluation<'_> {
                 let samples = layout.feature_samples(feature);
                 let placement =
                     layout.feature_placement(feature, instance.origin, instance.scale_milli)?;
+                // Workflow #503 LIST-B: a picture identity read from the layout's pool, judged
+                // beside the projection (`judged`); its scores go nowhere else.
+                let pooled = layout.layout_pool(feature);
+                let mut pictures = Vec::new();
                 let mut observed = Vec::with_capacity(samples.len());
                 for sample in &samples {
                     let mut evaluate = |target_id: &str,
@@ -1105,37 +1170,14 @@ impl SceneEvaluation<'_> {
                         };
                         let ended = Instant::now();
                         if let Some(hashes) = &frame_hashes {
-                            let sample_data =
-                                actingcommand_contract::TaskDiagnosticSampleData {
-                                    frame_index: sample.frame,
-                                    frame_rgb8_sha256: hashes[usize::from(sample.frame)]
-                                        .clone(),
-                                    dx: sample.dx,
-                                    dy: sample.dy,
-                                    template_metric: matches!(
-                                        evaluator.target(target_id),
-                                        Ok(RecognitionTarget::Template(_))
-                                    )
-                                    .then(|| {
-                                        match sample
-                                            .template_metric
-                                            .unwrap_or(evaluator.pack.defaults.match_metric)
-                                        {
-                                            crate::RecognitionMatchMetric::CcorrNormed => {
-                                                "ccorr_normed"
-                                            }
-                                            crate::RecognitionMatchMetric::CcoeffNormed => {
-                                                "ccoeff_normed"
-                                            }
-                                        }
-                                        .to_owned()
-                                    }),
-                                    elapsed_us: u64::try_from(
-                                        ended.duration_since(started).as_micros(),
-                                    )
-                                    .unwrap_or(u64::MAX),
-                                    passed: result.as_ref().ok().map(|value| value.passed),
-                                };
+                            let sample_data = diagnostic_sample(
+                                evaluator,
+                                *sample,
+                                hashes,
+                                target_id,
+                                (started, ended),
+                                result.as_ref().ok().map(|value| value.passed),
+                            );
                             match &mut result {
                                 Ok(value) => value.sampling = Some(actingcommand_contract::TaskDiagnosticSamplingData::Sample { sample: sample_data }),
                                 Err(error) => error.sample = Some(Box::new(sample_data)),
@@ -1168,6 +1210,66 @@ impl SceneEvaluation<'_> {
                         (
                             Some(value.clone()),
                             CandidateRecognitionInput::Scalar { value: Some(value) },
+                        )
+                    } else if let Some((identity, pool)) = pooled {
+                        // Workflow #503 LIST-B: every picture of the layout's pool scored in the
+                        // feature's region at this instance, then judged once by the mapping. A
+                        // successful evaluation writes no row of its own (the pool's evaluations
+                        // count in aggregate, `judged`'s timing); a failed one is recorded as any
+                        // failed evaluation is, and fails the projection.
+                        let frame_index = usize::from(sample.frame);
+                        let in_frame = std::ptr::eq(scenes[frame_index], self.scene);
+                        let region = layout.pool_region(
+                            feature,
+                            instance.origin,
+                            instance.scale_milli,
+                            *sample,
+                        )?;
+                        let mut scores = Vec::with_capacity(pool.len());
+                        for entry in pool {
+                            let started = Instant::now();
+                            let result = if in_frame {
+                                self.evaluate_pool_entry(&entry.target_id, region, *sample)
+                            } else {
+                                contexts[frame_index].evaluate_pool_entry(
+                                    &entry.target_id,
+                                    region,
+                                    *sample,
+                                )
+                            };
+                            let ended = Instant::now();
+                            let evaluation = match result {
+                                Ok(evaluation) => evaluation,
+                                Err(mut error) => {
+                                    if let Some(hashes) = &frame_hashes {
+                                        error.sample = Some(Box::new(diagnostic_sample(
+                                            evaluator,
+                                            *sample,
+                                            hashes,
+                                            &entry.target_id,
+                                            (started, ended),
+                                            None,
+                                        )));
+                                    }
+                                    record(&entry.target_id, &Err(error.clone()), started, ended)?;
+                                    return Err(CandidateProjectionFailure::feature(
+                                        &entry.target_id,
+                                        error,
+                                    ));
+                                }
+                            };
+                            let timing = judged.timing(&feature.name, pool.len(), started);
+                            timing.evaluations = timing.evaluations.saturating_add(1);
+                            timing.elapsed = timing
+                                .elapsed
+                                .saturating_add(ended.saturating_duration_since(started));
+                            scores.push(pool_score(evaluator, &entry.target_id, &evaluation)?);
+                        }
+                        let (value, reading) = identity.read_pool(pool, &scores);
+                        pictures.push(reading);
+                        (
+                            Some(value),
+                            CandidateRecognitionInput::Scalar { value: None },
                         )
                     } else if let Some(identity) = &feature.identity
                         && matches!(
@@ -1289,7 +1391,16 @@ impl SceneEvaluation<'_> {
                             .map(CandidateIdentityDeclaration::source);
                     }
                     features.insert(feature.name.clone(), value);
-                    if feature.consensus.is_some()
+                    // Workflow #503 LIST-B: a feature of a layout's pool carries no evidence in
+                    // the projection (its scores stay beside it, judged once); every other
+                    // feature carries what it carried.
+                    if pooled.is_some() {
+                        judged.read(
+                            candidate_id(&layout.id, instance_index)?,
+                            &feature.name,
+                            pictures,
+                        );
+                    } else if feature.consensus.is_some()
                         || feature.identity.is_some()
                         || feature.integer.is_some()
                     {
@@ -1574,57 +1685,7 @@ impl SceneEvaluation<'_> {
                         "template target '{target_id}' read at an offset has no rectangle region"
                     )));
                 };
-                let overridden;
-                let evaluator = match sample.template_metric {
-                    Some(metric) if metric != evaluator.pack.defaults.match_metric => {
-                        let mut copy = evaluator.clone();
-                        copy.pack.defaults.match_metric = metric;
-                        overridden = copy;
-                        &overridden
-                    }
-                    _ => evaluator,
-                };
-                let row = evaluator
-                    .evaluate_template_regions(self.scene, target_id, &[*region])?
-                    .rows
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        RecognitionPackError::fatal(format!(
-                            "template target '{target_id}' region evaluation returned no row"
-                        ))
-                    })?;
-                let template_ok = row.normalized_score >= row.threshold;
-                let color_ok = row
-                    .color
-                    .is_none_or(|color| color.distance <= color.max_distance);
-                Ok(TargetEvaluation {
-                    id: target_id.to_owned(),
-                    kind: TargetKind::Template,
-                    passed: row.passed,
-                    template: Some(TemplateEvaluation {
-                        x: row.matched_rect.x,
-                        y: row.matched_rect.y,
-                        width: row.matched_rect.width,
-                        height: row.matched_rect.height,
-                        raw_score: row.raw_score,
-                        score: row.normalized_score,
-                        threshold: row.threshold,
-                        scale_milli: None,
-                        luma: None,
-                    }),
-                    color: row.color,
-                    ocr: None,
-                    nn: None,
-                    color_digest: None,
-                    composite: None,
-                    value_test: None,
-                    failure: None,
-                    uniqueness: None,
-                    message: template_message(template_ok, color_ok),
-                    sampling: None,
-                    sample_evaluations: Vec::new(),
-                })
+                self.evaluate_template_in(target_id, *region, sample.template_metric)
             }
             RecognitionTarget::Ocr(moved) => evaluator.evaluate_ocr(self, moved),
             RecognitionTarget::Color(moved) => evaluator.evaluate_color(self.scene, moved),
@@ -1635,6 +1696,95 @@ impl SceneEvaluation<'_> {
                 "target '{target_id}' cannot be read at an offset"
             ))),
         }
+    }
+
+    /// The template target `target_id` matched in `region` of this context's scene through
+    /// [`RecognitionEvaluator::evaluate_template_regions`], with the sample's template metric
+    /// `metric` when it declares one: the target's image and, when it declares one, its
+    /// `template_relative` colour check at the match. Workflow #503 LIST-B: the one evaluation of
+    /// a target read at an offset ([`Self::evaluate_placed`]) and of a layout pool's entry
+    /// ([`Self::evaluate_pool_entry`]).
+    fn evaluate_template_in(
+        &self,
+        target_id: &str,
+        region: PackRect,
+        metric: Option<crate::RecognitionMatchMetric>,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        let evaluator = self.evaluator;
+        let overridden;
+        let evaluator = match metric {
+            Some(metric) if metric != evaluator.pack.defaults.match_metric => {
+                let mut copy = evaluator.clone();
+                copy.pack.defaults.match_metric = metric;
+                overridden = copy;
+                &overridden
+            }
+            _ => evaluator,
+        };
+        let row = evaluator
+            .evaluate_template_regions(self.scene, target_id, &[region])?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                RecognitionPackError::fatal(format!(
+                    "template target '{target_id}' region evaluation returned no row"
+                ))
+            })?;
+        let template_ok = row.normalized_score >= row.threshold;
+        let color_ok = row
+            .color
+            .is_none_or(|color| color.distance <= color.max_distance);
+        Ok(TargetEvaluation {
+            id: target_id.to_owned(),
+            kind: TargetKind::Template,
+            passed: row.passed,
+            template: Some(TemplateEvaluation {
+                x: row.matched_rect.x,
+                y: row.matched_rect.y,
+                width: row.matched_rect.width,
+                height: row.matched_rect.height,
+                raw_score: row.raw_score,
+                score: row.normalized_score,
+                threshold: row.threshold,
+                scale_milli: None,
+                luma: None,
+            }),
+            color: row.color,
+            ocr: None,
+            nn: None,
+            color_digest: None,
+            composite: None,
+            value_test: None,
+            failure: None,
+            uniqueness: None,
+            message: template_message(template_ok, color_ok),
+            sampling: None,
+            sample_evaluations: Vec::new(),
+        })
+    }
+
+    /// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool"): one
+    /// entry of a layout's pool, the template target `target_id`, scored in `region` (the
+    /// feature's region placed at an instance and shifted by the sample's jitter) with the
+    /// sample's template metric. Of the target its image is used and its colour check, which must
+    /// be `template_relative`; its own region, the search region it declares, is not. Refused
+    /// past the sample's deadline, as every evaluation of a projection is.
+    fn evaluate_pool_entry(
+        &self,
+        target_id: &str,
+        region: PackRect,
+        sample: CandidateSampleVariant,
+    ) -> RecognitionPackResult<TargetEvaluation> {
+        if self
+            .sample_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(RecognitionPackError::fatal(
+                "recognition sample deadline exceeded before target evaluation",
+            ));
+        }
+        self.evaluate_template_in(target_id, region, sample.template_metric)
     }
 
     /// Workflow #396 REC-8: `layout_shared_text` of a `fixed_slots` layout's read, sent no name
@@ -2143,6 +2293,184 @@ fn name_read(
     }
 }
 
+/// Workflow #503 LIST-B: a projection with each candidate's origin and what the identity mapping
+/// judged beside it ([`SceneEvaluation::project_candidates_judged_with_samples`]).
+pub type JudgedProjection = (CandidateProjection, Vec<PackPoint>, CandidatePoolJudgements);
+
+/// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool";
+/// `contracts/resource-readings.md`, "List readings"): what the identity mapping judged, beside one
+/// projection, of each read of a `repeated_anchor` layout's picture pool (one reading per sample of
+/// each actionable instance's feature, [`crate::CandidateIdentityDeclaration::read_pool`]), and the
+/// pool's evaluations in aggregate. Not part of the projection: no hash, no record. A reader takes
+/// a position's mark from [`CandidateLayout::name_mark`], never from these readings' scores.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CandidatePoolJudgements {
+    reads: Vec<CandidatePoolRead>,
+    timings: Vec<CandidatePoolTiming>,
+}
+
+/// The judged reads of one pool feature of one candidate, one per sample.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CandidatePoolRead {
+    candidate_id: String,
+    feature: String,
+    samples: Vec<CandidatePictureReading>,
+}
+
+/// Workflow #503 LIST-B: the evaluations of one pool feature's templates on one projection, in
+/// aggregate: the pool's entries, the instances it was read on, the template evaluations made,
+/// when the first began and the time they took together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidatePoolTiming {
+    pub feature: String,
+    pub templates: usize,
+    pub instances: usize,
+    pub evaluations: usize,
+    pub started: Instant,
+    pub elapsed: Duration,
+}
+
+impl CandidatePoolJudgements {
+    /// The judged reads of the pool feature `feature` of the candidate `candidate_id`, one per
+    /// sample, in the order the projection read them; none for any other feature or candidate.
+    pub fn samples(&self, candidate_id: &str, feature: &str) -> &[CandidatePictureReading] {
+        self.reads
+            .iter()
+            .find(|read| read.candidate_id == candidate_id && read.feature == feature)
+            .map_or(&[], |read| read.samples.as_slice())
+    }
+
+    /// Each pool feature's evaluations on the projection, in the order the projection first read
+    /// it; none for a projection that read no pool.
+    pub fn timings(&self) -> &[CandidatePoolTiming] {
+        &self.timings
+    }
+
+    /// The aggregate of the pool feature `feature` of `templates` entries, begun at `started`
+    /// when this is its first evaluation.
+    fn timing(
+        &mut self,
+        feature: &str,
+        templates: usize,
+        started: Instant,
+    ) -> &mut CandidatePoolTiming {
+        let index = match self
+            .timings
+            .iter()
+            .position(|timing| timing.feature == feature)
+        {
+            Some(index) => index,
+            None => {
+                self.timings.push(CandidatePoolTiming {
+                    feature: feature.to_owned(),
+                    templates,
+                    instances: 0,
+                    evaluations: 0,
+                    started,
+                    elapsed: Duration::ZERO,
+                });
+                self.timings.len() - 1
+            }
+        };
+        &mut self.timings[index]
+    }
+
+    /// The judged reads `samples` of the pool feature `feature` of the candidate `candidate_id`,
+    /// one more instance of the feature's aggregate.
+    fn read(&mut self, candidate_id: String, feature: &str, samples: Vec<CandidatePictureReading>) {
+        if let Some(timing) = self
+            .timings
+            .iter_mut()
+            .find(|timing| timing.feature == feature)
+        {
+            timing.instances = timing.instances.saturating_add(1);
+        }
+        self.reads.push(CandidatePoolRead {
+            candidate_id,
+            feature: feature.to_owned(),
+            samples,
+        });
+    }
+}
+
+/// The sampling data of one evaluation of `target_id` on the frame of `sample`, whose frames hash
+/// to `hashes`, from `started` to `ended`, for its diagnostic row.
+fn diagnostic_sample(
+    evaluator: &RecognitionEvaluator,
+    sample: CandidateSampleVariant,
+    hashes: &[String],
+    target_id: &str,
+    (started, ended): (Instant, Instant),
+    passed: Option<bool>,
+) -> actingcommand_contract::TaskDiagnosticSampleData {
+    actingcommand_contract::TaskDiagnosticSampleData {
+        frame_index: sample.frame,
+        frame_rgb8_sha256: hashes[usize::from(sample.frame)].clone(),
+        dx: sample.dx,
+        dy: sample.dy,
+        template_metric: matches!(
+            evaluator.target(target_id),
+            Ok(RecognitionTarget::Template(_))
+        )
+        .then(|| {
+            match sample
+                .template_metric
+                .unwrap_or(evaluator.pack.defaults.match_metric)
+            {
+                crate::RecognitionMatchMetric::CcorrNormed => "ccorr_normed",
+                crate::RecognitionMatchMetric::CcoeffNormed => "ccoeff_normed",
+            }
+            .to_owned()
+        }),
+        elapsed_us: u64::try_from(ended.duration_since(started).as_micros()).unwrap_or(u64::MAX),
+        passed,
+    }
+}
+
+/// Workflow #503 LIST-B: what the mapping takes of one evaluation of the pool entry `target_id`:
+/// its template score in normalized integer milli, and, for a target that declares a colour check,
+/// whether the check held where the template matched (the colour evaluation's own verdict). Fix
+/// round 1 (the review): a colour is measured only where the template reaches its target's own
+/// threshold, so an entry whose score stays below it was due no verdict (`None`, as a target
+/// without a check has) and competes on its score; counting it as a failed check took it out of
+/// the comparison, and a key just under its threshold no longer held an `other` picture to the
+/// margin. Where the template did reach its threshold a verdict was due: the colour held, or it
+/// did not (a colour that could not be read there did not hold). Admission keeps that threshold at
+/// or below the identity's ([`validate_layout_pool`]), so a score that could win has had its colour
+/// judged.
+fn pool_score(
+    evaluator: &RecognitionEvaluator,
+    target_id: &str,
+    evaluation: &TargetEvaluation,
+) -> Result<CandidatePoolScore, CandidateProjectionFailure> {
+    let score_milli = u16::try_from(template_score_milli(evaluation)?)
+        .ok()
+        .filter(|score| *score <= 1000)
+        .ok_or_else(|| {
+            CandidateProjectionFailure::unmeasurable(
+                evaluation,
+                "has an invalid normalized template score",
+            )
+        })?;
+    let checked = matches!(
+        evaluator.target(target_id),
+        Ok(RecognitionTarget::Template(template)) if template.color_check.is_some()
+    );
+    let reached = evaluation
+        .template
+        .as_ref()
+        .is_some_and(|template| template.score >= template.threshold);
+    Ok(CandidatePoolScore {
+        score_milli,
+        colour_held: (checked && reached).then(|| {
+            evaluation
+                .color
+                .as_ref()
+                .is_some_and(|colour| colour.distance <= colour.max_distance)
+        }),
+    })
+}
+
 #[cfg(test)]
 impl SceneEvaluation<'_> {
     /// The clock the anchor search reads its time limit from, for tests.
@@ -2256,18 +2584,30 @@ impl CandidateLayout {
     /// the confidence the projection's evidence keeps of that read); [`CandidateNameMark::Unread`]
     /// otherwise (no such feature or sample, an icon identity, or a sample it marks otherwise).
     /// The mapping judges; this only hands it the reads it already mapped.
+    ///
+    /// Workflow #503 LIST-B (`contracts/resource-readings.md`, "A list of the wanted keys only"):
+    /// the one function that gives every reader a position's mark, for a text identity and a
+    /// picture identity alike. A feature read from the layout's pool ([`Self::layout_pool`]) is
+    /// [`CandidateNameMark::Known`] when it names an identity, [`CandidateNameMark::NoneOfTheKeys`]
+    /// when the mapping judged every sample of it so beside the projection (`judged`, whose
+    /// readings this takes as they are: nothing here compares a score), and
+    /// [`CandidateNameMark::Unread`] otherwise; a text identity is judged again from the
+    /// projection's evidence, as before, and `judged` plays no part in it.
     pub fn name_mark(
         &self,
         projection: &CandidateProjection,
+        judged: &CandidatePoolJudgements,
         candidate_id: &str,
         feature: &str,
     ) -> CandidateNameMark {
-        let Some(identity) = self
+        let Some(declared) = self
             .features
             .iter()
             .find(|declared| declared.name == feature)
-            .and_then(|declared| declared.identity.as_ref())
         else {
+            return CandidateNameMark::Unread;
+        };
+        let Some(identity) = declared.identity.as_ref() else {
             return CandidateNameMark::Unread;
         };
         let read = projection
@@ -2275,6 +2615,18 @@ impl CandidateLayout {
             .and_then(|candidate| candidate.features.get(feature));
         if matches!(read, Some(CandidateFeature::Identity { .. })) {
             return CandidateNameMark::Known;
+        }
+        if self.layout_pool(declared).is_some() {
+            let samples = judged.samples(candidate_id, feature);
+            return if !samples.is_empty()
+                && samples
+                    .iter()
+                    .all(|sample| sample.mark == CandidateNameMark::NoneOfTheKeys)
+            {
+                CandidateNameMark::NoneOfTheKeys
+            } else {
+                CandidateNameMark::Unread
+            };
         }
         let Some(evidence) = projection
             .recognition_evidence()
@@ -2375,10 +2727,94 @@ impl CandidateLayout {
                     )
                 })
                 .collect(),
+            // Workflow #503 LIST-B: and the templates of the layout's pools, which every
+            // instance reads.
             CandidateLayoutKind::RepeatedAnchor => {
-                vec![strictest_privacy(metadata, placed); candidates]
+                let pooled = self
+                    .identity_templates
+                    .values()
+                    .flatten()
+                    .map(|template| template.target_id.as_str());
+                vec![strictest_privacy(metadata, placed.chain(pooled)); candidates]
             }
         }
+    }
+
+    /// Workflow #503 LIST-B: the identity and the layout's pool of `feature` when it is a picture
+    /// identity of a `repeated_anchor` layout that declares one; `None` for every other feature
+    /// (a slot's pool is the slot's).
+    pub fn layout_pool<'l>(
+        &'l self,
+        feature: &'l CandidateFeatureDeclaration,
+    ) -> Option<(
+        &'l CandidateIdentityDeclaration,
+        &'l [CandidatePoolTemplate],
+    )> {
+        let identity = feature.identity.as_ref().filter(|identity| {
+            matches!(
+                identity.recognition,
+                CandidateIdentityRecognition::IconTemplates { .. }
+            )
+        })?;
+        if self.kind != CandidateLayoutKind::RepeatedAnchor {
+            return None;
+        }
+        self.identity_templates
+            .get(&feature.name)
+            .map(|pool| (identity, pool.as_slice()))
+    }
+
+    /// Workflow #503 LIST-B (`contracts/selection-graph.md`, "Rules"): whether this is a
+    /// `repeated_anchor` layout with a feature whose identity is read from pictures, over which
+    /// no select step and no scan that selects is admitted in this release.
+    pub fn reads_pictures(&self) -> bool {
+        self.kind == CandidateLayoutKind::RepeatedAnchor
+            && self.features.iter().any(|feature| {
+                feature.identity.as_ref().is_some_and(|identity| {
+                    matches!(
+                        identity.recognition,
+                        CandidateIdentityRecognition::IconTemplates { .. }
+                    )
+                })
+            })
+    }
+
+    /// Workflow #503 LIST-B: where the pictures of `feature`'s pool are scored for an instance at
+    /// `origin` whose anchor matched at `scale_milli`, on the sample `sample`: the feature's
+    /// `region` with its corner at `origin` plus its offset scaled as an `offset` is (Workflow
+    /// #404 FS-1), its size kept, shifted by the sample's jitter.
+    fn pool_region(
+        &self,
+        feature: &CandidateFeatureDeclaration,
+        origin: PackPoint,
+        scale_milli: u32,
+        sample: CandidateSampleVariant,
+    ) -> Result<PackRect, CandidateProjectionFailure> {
+        let placed = feature.region.and_then(|region| {
+            let dx = actingcommand_recognition::resample::scale_signed(region.x, scale_milli)?;
+            let dy = actingcommand_recognition::resample::scale_signed(region.y, scale_milli)?;
+            let x = origin
+                .x
+                .checked_add(dx)?
+                .checked_add(i32::from(sample.dx))?;
+            let y = origin
+                .y
+                .checked_add(dy)?
+                .checked_add(i32::from(sample.dy))?;
+            Some(PackRect {
+                x,
+                y,
+                width: region.width,
+                height: region.height,
+            })
+        });
+        placed.ok_or_else(|| {
+            CandidateProjectionFailure::new(
+                INVALID_CANDIDATE_PROJECTION,
+                "features",
+                format!("layout_id={} feature={} region", self.id, feature.name),
+            )
+        })
     }
 
     /// Where `feature` reads its own target for an instance at `origin`: `origin` plus the
@@ -2923,6 +3359,14 @@ pub(crate) fn validate_candidate_layouts_wire(value: &Value) -> RecognitionPackR
                 if let Some(offset) = feature.get("offset") {
                     wire_object(offset, &["x", "y"], &format!("{feature_pointer}/offset"))?;
                 }
+                // Workflow #503 LIST-B.
+                if let Some(region) = feature.get("region") {
+                    wire_object(
+                        region,
+                        &["x", "y", "width", "height"],
+                        &format!("{feature_pointer}/region"),
+                    )?;
+                }
                 if let Some(value) = feature.get("value")
                     && !matches!(
                         value.as_str(),
@@ -2945,6 +3389,12 @@ pub(crate) fn validate_candidate_layouts_wire(value: &Value) -> RecognitionPackR
                 }
             }
         }
+        // Workflow #503 LIST-B: a `repeated_anchor` layout's pools (a `fixed_slots` layout is
+        // refused the member above): an object of arrays of entries, each of its four members at
+        // most, `other` only `true`.
+        if let Some(pools) = layout.get("identity_templates") {
+            validate_pools_wire(pools, &format!("{pointer}/identity_templates"), true)?;
+        }
         if let Some(slots) = layout.get("slots") {
             let slots_pointer = format!("{pointer}/slots");
             for (slot_index, slot) in wire_array(slots, &slots_pointer)?.iter().enumerate() {
@@ -2954,6 +3404,14 @@ pub(crate) fn validate_candidate_layouts_wire(value: &Value) -> RecognitionPackR
                     &["rect", "click", "targets", "identity_templates"],
                     &slot_pointer,
                 )?;
+                // Workflow #503 LIST-B: a slot's pool takes no `other` entry.
+                if let Some(pools) = slot.get("identity_templates") {
+                    validate_pools_wire(
+                        pools,
+                        &format!("{slot_pointer}/identity_templates"),
+                        false,
+                    )?;
+                }
                 for field in ["rect", "click"] {
                     if let Some(rect) = slot.get(field) {
                         wire_object(
@@ -3124,6 +3582,32 @@ pub(crate) fn validate_candidate_layouts(pack: &RecognitionPack, errors: &mut Ve
                 if feature.target.is_some() || feature.offset.is_some() {
                     errors.push(format!(
                         "{feature_pointer}: an anchor_milli feature reads no target and takes no offset"
+                    ));
+                }
+            }
+            // Workflow #503 LIST-B: `region` is a picture identity's of a `repeated_anchor`
+            // layout, which reads no target at an offset.
+            if let Some(region) = feature.region {
+                let picture = feature.identity.as_ref().is_some_and(|identity| {
+                    matches!(
+                        identity.recognition,
+                        CandidateIdentityRecognition::IconTemplates { .. }
+                    )
+                });
+                if layout.kind != CandidateLayoutKind::RepeatedAnchor || !picture {
+                    errors.push(format!(
+                        "{feature_pointer}/region: only a picture identity feature of a repeated_anchor layout declares a region"
+                    ));
+                }
+                if feature.target.is_some() || feature.offset.is_some() {
+                    errors.push(format!(
+                        "{feature_pointer}/region: a feature scored in a region reads no target at an offset"
+                    ));
+                }
+                if region.width <= 0 || region.height <= 0 {
+                    errors.push(format!(
+                        "{feature_pointer}/region dimensions must be positive: {}x{}",
+                        region.width, region.height
                     ));
                 }
             }
@@ -3643,6 +4127,8 @@ fn validate_fixed_slots_fields(layout: &CandidateLayout, pointer: &str, errors: 
         ("instance_rect", layout.instance_rect.is_some()),
         ("click", layout.click.is_some()),
         ("readable_band", layout.readable_band.is_some()),
+        // Workflow #503 LIST-B.
+        ("identity_templates", !layout.identity_templates.is_empty()),
     ] {
         if declared {
             errors.push(format!(
@@ -3747,8 +4233,27 @@ fn validate_repeated_anchor(
     }
     for (feature_index, feature) in layout.features.iter().enumerate() {
         let feature_pointer = format!("{pointer}/features/{feature_index}");
+        // Workflow #503 LIST-B: a picture identity is scored in its `region` from the layout's
+        // pool, and reads no target at an offset.
+        let picture = feature.identity.as_ref().is_some_and(|identity| {
+            matches!(
+                identity.recognition,
+                CandidateIdentityRecognition::IconTemplates { .. }
+            )
+        });
+        if picture {
+            validate_layout_pool(
+                pack,
+                targets,
+                layout,
+                feature,
+                (pointer, &feature_pointer),
+                errors,
+            );
+        }
         // Workflow #404 FS-2: an `anchor_milli` feature reads its instance's anchor match.
         if feature.value != CandidateFeatureValue::AnchorMilli
+            && !picture
             && (feature.target.is_none() || feature.offset.is_none())
         {
             errors.push(format!(
@@ -3772,6 +4277,168 @@ fn validate_repeated_anchor(
             errors.push(format!(
                 "{feature_pointer}/offset: the feature region lies outside instance_rect"
             ));
+        }
+    }
+    // Workflow #503 LIST-B: every pool names a picture identity feature of the layout.
+    for name in layout.identity_templates.keys() {
+        let declared = layout.features.iter().any(|feature| {
+            feature.name == *name
+                && feature.identity.as_ref().is_some_and(|identity| {
+                    matches!(
+                        identity.recognition,
+                        CandidateIdentityRecognition::IconTemplates { .. }
+                    )
+                })
+        });
+        if !declared {
+            errors.push(format!(
+                "{pointer}/identity_templates/{}: the layout declares no picture identity feature of this name",
+                pointer_token(name)
+            ));
+        }
+    }
+}
+
+/// Workflow #503 LIST-B (`contracts/selection-graph.md`, "Rules"; `contracts/business-identity-
+/// consensus.md`, "A layout's pool"): the picture identity `feature` of the `repeated_anchor`
+/// layout `layout` at `pointer` declares a `region` with a positive size that lies, for each of
+/// its samples, inside `instance_rect`, and the layout declares its pool: 1 to
+/// [`crate::MAX_LAYOUT_IDENTITY_TEMPLATES`] entries, at least one of them a key entry, no target
+/// twice; a key entry `{id, variant?}` names an entry of the feature's identity and declares no
+/// `other`; an `other` entry names no `id` and no `variant`; every entry's target is a raw
+/// `template` target without `mask`, `scales`, `unique` or `luma_floor`, whose `color_check`, when
+/// it declares one, is `template_relative`. Each refusal names its pointer.
+fn validate_layout_pool(
+    pack: &RecognitionPack,
+    targets: &HashMap<&str, &RecognitionTarget>,
+    layout: &CandidateLayout,
+    feature: &CandidateFeatureDeclaration,
+    (pointer, feature_pointer): (&str, &str),
+    errors: &mut Vec<String>,
+) {
+    let Some(identity) = &feature.identity else {
+        return;
+    };
+    match (feature.region, layout.instance_rect) {
+        (None, _) => errors.push(format!(
+            "{feature_pointer}/region: a picture identity of a repeated_anchor layout declares the region its pool is scored in"
+        )),
+        (Some(region), Some(instance_rect)) => {
+            let outside = layout.feature_samples(feature).into_iter().any(|sample| {
+                let shifted = PackRect {
+                    x: region.x.saturating_add(i32::from(sample.dx)),
+                    y: region.y.saturating_add(i32::from(sample.dy)),
+                    ..region
+                };
+                !rect_is_within(shifted, instance_rect)
+            });
+            if outside {
+                errors.push(format!(
+                    "{feature_pointer}/region: the feature region lies outside instance_rect"
+                ));
+            }
+        }
+        (Some(_), None) => {}
+    }
+    let pool_pointer = format!(
+        "{pointer}/identity_templates/{}",
+        pointer_token(&feature.name)
+    );
+    let Some(pool) = layout.identity_templates.get(&feature.name) else {
+        errors.push(format!(
+            "{pool_pointer}: a picture identity of a repeated_anchor layout has no pool"
+        ));
+        return;
+    };
+    if !(1..=crate::MAX_LAYOUT_IDENTITY_TEMPLATES).contains(&pool.len()) {
+        errors.push(format!(
+            "{pool_pointer}: a layout's pool holds 1..={} entries, got {}",
+            crate::MAX_LAYOUT_IDENTITY_TEMPLATES,
+            pool.len()
+        ));
+    }
+    if !pool.iter().any(|entry| entry.keyed().is_some()) {
+        errors.push(format!(
+            "{pool_pointer}: a layout's pool holds at least one key entry"
+        ));
+    }
+    let mut distinct = BTreeSet::new();
+    for (index, entry) in pool.iter().enumerate() {
+        let entry_pointer = format!("{pool_pointer}/{index}");
+        if !distinct.insert(entry.target_id.as_str()) {
+            errors.push(format!(
+                "{entry_pointer}/target_id: target '{}' is named by an earlier entry of the pool",
+                entry.target_id
+            ));
+        }
+        if entry.other {
+            if entry.id.is_some() || entry.variant.is_some() {
+                errors.push(format!(
+                    "{entry_pointer}: an other entry names no id and no variant"
+                ));
+            }
+        } else {
+            let in_domain = entry.id.as_ref().is_some_and(|id| {
+                identity
+                    .entries
+                    .iter()
+                    .any(|known| known.id == *id && known.variant == entry.variant)
+            });
+            if !in_domain {
+                errors.push(format!(
+                    "{entry_pointer}/id: a key entry names an entry of the feature's identity"
+                ));
+            }
+        }
+        let target_pointer = format!("{entry_pointer}/target_id");
+        match targets.get(entry.target_id.as_str()).copied() {
+            Some(RecognitionTarget::Template(template)) => {
+                if template.mask.is_some()
+                    || template.scales.is_some()
+                    || template.unique.is_some()
+                    || template.luma_floor.is_some()
+                {
+                    errors.push(format!(
+                        "{target_pointer}: template '{}' of a layout's pool declares no mask, scales, unique or luma_floor",
+                        entry.target_id
+                    ));
+                }
+                if template
+                    .color_check
+                    .as_ref()
+                    .is_some_and(|check| !matches!(check.region, PackRegion::TemplateRelative(_)))
+                {
+                    errors.push(format!(
+                        "{target_pointer}: template '{}' of a layout's pool may declare only a template_relative color_check",
+                        entry.target_id
+                    ));
+                }
+                // Fix round 1 (the review): a colour is measured only where the template reaches
+                // its own threshold, so that threshold may not pass the identity's: a score that
+                // could win has then had its colour judged.
+                if let CandidateIdentityRecognition::IconTemplates {
+                    minimum_score_milli,
+                    ..
+                } = identity.recognition
+                    && template.color_check.is_some()
+                    && pack.template_threshold(template) > f32::from(minimum_score_milli) / 1000.0
+                {
+                    errors.push(format!(
+                        "{target_pointer}: template '{}' of a layout's pool declares a color_check, so its threshold may not exceed the identity's minimum_score_milli",
+                        entry.target_id
+                    ));
+                }
+                if pack.target_consensus.contains_key(entry.target_id.as_str()) {
+                    errors.push(format!(
+                        "{target_pointer}: candidate feature '{}' requires raw targets throughout its reference closure",
+                        entry.target_id
+                    ));
+                }
+            }
+            _ => errors.push(format!(
+                "{target_pointer}: '{}' is not a template target of the pack",
+                entry.target_id
+            )),
         }
     }
 }
@@ -3865,6 +4532,58 @@ fn validate_shared_ocr_wire(value: &Value, pointer: &str) -> RecognitionPackResu
     Ok(())
 }
 
+/// Workflow #503 LIST-B: the wire shape of the pools at `pointer`. A layout's (`layout`) is an
+/// object of arrays of entries, each an object of [`POOL_ENTRY_FIELDS`] whose `other`, when it
+/// is written, is `true` (`InvalidValue` at it otherwise). A slot's pool takes no `other`
+/// (`UnknownField` at it); nothing else of a slot's pool is checked here, so a slot's pool
+/// without the member is refused, or not, as before.
+fn validate_pools_wire(pools: &Value, pointer: &str, layout: bool) -> RecognitionPackResult<()> {
+    let Some(pools) = pools.as_object() else {
+        return if layout {
+            Err(declaration(
+                pointer.to_owned(),
+                ResourceDeclarationReason::InvalidType,
+                format!("{pointer} must be an object"),
+            ))
+        } else {
+            Ok(())
+        };
+    };
+    for (name, pool) in pools {
+        let pool_pointer = format!("{pointer}/{}", pointer_token(name));
+        let entries = if layout {
+            wire_array(pool, &pool_pointer)?.as_slice()
+        } else {
+            pool.as_array().map_or(&[][..], Vec::as_slice)
+        };
+        for (index, entry) in entries.iter().enumerate() {
+            let entry_pointer = format!("{pool_pointer}/{index}");
+            let other = entry.get("other");
+            if !layout {
+                if other.is_some() {
+                    return Err(declaration(
+                        format!("{entry_pointer}/other"),
+                        ResourceDeclarationReason::UnknownField,
+                        format!(
+                            "{entry_pointer}/other: a slot's pool holds the pictures of keys only; an other entry belongs to a repeated_anchor layout's pool"
+                        ),
+                    ));
+                }
+                continue;
+            }
+            wire_object(entry, POOL_ENTRY_FIELDS, &entry_pointer)?;
+            if other.is_some_and(|other| other.as_bool() != Some(true)) {
+                return Err(declaration(
+                    format!("{entry_pointer}/other"),
+                    ResourceDeclarationReason::InvalidValue,
+                    format!("{entry_pointer}/other is written only as true"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn wire_array<'v>(value: &'v Value, pointer: &str) -> RecognitionPackResult<&'v Vec<Value>> {
     value.as_array().ok_or_else(|| {
         declaration(
@@ -3933,3 +4652,8 @@ mod gate_463_g1;
 #[cfg(test)]
 #[path = "gate_463_g2.rs"]
 mod gate_463_g2;
+
+// Workflow #503 LIST-B: a `repeated_anchor` layout's picture pool, judged beside the projection.
+#[cfg(test)]
+#[path = "gate_503_list_b.rs"]
+mod gate_503_list_b;

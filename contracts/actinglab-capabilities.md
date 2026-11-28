@@ -103,7 +103,10 @@ position the scan read with the reads of its name (the text, its confidence, the
 wanted key and alias, the distance and the limit) and what it gives the list, and the wanted keys a
 card showed and those none showed; without `--json` it prints that as text for a person. A list
 not whole is `package_list_check_not_whole`; every option is given once, and the line refuses a
-flag off its list and any positional.
+flag off its list and any positional. Workflow #503 LIST-B (0.12.93): for a position whose key is
+a picture identity of a layout's pool, each read carries `pictures`, the identity mapping's
+judgement of each sample (the mark, the best key and the best `other` entry with their targets and
+scores, the threshold and the margin), which the check prints and compares nothing of.
 
 Each command has `status`, `available`, `reason_code`, `needs`,
 `availability_scope: offline_declaration` and `dry_run_mode`, with

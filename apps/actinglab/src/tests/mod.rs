@@ -337,6 +337,10 @@ mod gate_503_list_a3;
 // pointer, and the revision table counts both goal files as `package` 28.
 #[path = "gate_455_rr1.rs"]
 mod gate_455_rr1;
+// Workflow #503 LIST-B: the revision table counts a layout's picture pool as `package` 29, and
+// `package list-check` answers the mapping's evidence of each kind of position read from pictures.
+#[path = "gate_503_list_b.rs"]
+mod gate_503_list_b;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{

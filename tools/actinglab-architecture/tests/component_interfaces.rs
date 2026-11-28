@@ -199,7 +199,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   Workflow #455 RR1 (0.12.92, register §1.535) raises it to 28: a root file `goals.json` of
 ///   version 3, which every reader before it takes as `malformed` at `/schema_version`, and the
 ///   root file `goal-tables.json`, which no installer before it places; a bundle with neither
-///   keeps its revision, so [3, 28].
+///   keeps its revision, so [3, 28]. Workflow #503 LIST-B (0.12.93, register §1.536) raises it
+///   to 29: a `repeated_anchor` layout's picture pool (`identity_templates`) and its feature's
+///   `region`, which every Runtime before it refuses at its declaration gate (`UnknownField` at
+///   the member); a pack without them keeps its revision, so [3, 29].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -250,7 +253,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 10]),
-    ("package", [3, 28]),
+    ("package", [3, 29]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
 ];

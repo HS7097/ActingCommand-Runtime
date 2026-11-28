@@ -373,7 +373,10 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
     fn viewport(&mut self) -> Result<ScanReading, ContainedTaskRunError<R::Error>> {
         self.judge_guard()?;
         let observation = self.latest.as_ref().unwrap_or(self.first);
-        let (projection, _) = self.task.project_transaction(
+        // Workflow #503 LIST-B: with what the identity mapping judged of a layout's picture pool
+        // beside the projection, which the mark below takes and which nothing keeps past this
+        // viewport but a dry run's reads.
+        let taken = self.task.project_transaction_judged(
             &mut *self.runtime,
             self.operation,
             observation,
@@ -381,6 +384,7 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
             self.timing,
             self.deadline,
         )?;
+        let (projection, judged) = (taken.projection, taken.judged);
         let start_check = self.check(&observation.scene, &self.scan.start.check)?;
         // Workflow #463 K-c: a scan that declares no end never passes an end check.
         let end_check = match &self.scan.end {
@@ -396,7 +400,7 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
                 // and (Workflow #503 LIST-A3) by a list reading's dry run, which keeps it.
                 let mark = (self.pass_over || self.keep_names).then(|| {
                     self.layout
-                        .name_mark(&projection, &candidate.id, identity_feature)
+                        .name_mark(&projection, &judged, &candidate.id, identity_feature)
                 });
                 ScanReadInstance {
                     rect: candidate.rect,
@@ -411,6 +415,7 @@ impl<R: ContainedTaskRuntime> ScanSource for RuntimeScanSource<'_, R> {
                             &candidate.id,
                             identity_feature,
                         ),
+                        pictures: judged.samples(&candidate.id, identity_feature).to_vec(),
                     }),
                 }
             })

@@ -1108,9 +1108,10 @@ fn sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below(
     // a bundle that carries a version 2 package declaration, Workflow #477 LR-1 (register
     // §1.513) to [3, 25], a linear press step's count, Workflow #455 TK-1 (register §1.532) to
     // [3, 26], a variable only a rule gives, Workflow #503 LIST-A (register §1.533) to [3, 27], a
-    // list reading of the wanted keys only, and Workflow #455 RR1 (register §1.535) to [3, 28], a
-    // `goals.json` of version 3 and a root's `goal-tables.json`; [20, 20] stays within it.
-    assert_eq!(own, [3, 28]);
+    // list reading of the wanted keys only, Workflow #455 RR1 (register §1.535) to [3, 28], a
+    // `goals.json` of version 3 and a root's `goal-tables.json`, and Workflow #503 LIST-B (register
+    // §1.536) to [3, 29], a `repeated_anchor` layout's picture pool; [20, 20] stays within it.
+    assert_eq!(own, [3, 29]);
     assert!(package_edge_holds(own, [20, 20]));
     assert!(!package_edge_holds([3, 19], [20, 20]));
 }

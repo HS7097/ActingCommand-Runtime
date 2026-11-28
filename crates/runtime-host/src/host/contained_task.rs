@@ -2236,6 +2236,15 @@ impl ContainedTaskRuntime for EntryRecoveryRuntime<'_, '_> {
         self.inner.ensure_active()
     }
 
+    /// Workflow #503 LIST-B: as the run's own ([`RuntimeContainedTask`]).
+    fn record_candidate_pool(
+        &mut self,
+        feature: &str,
+        timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.inner.record_candidate_pool(feature, timing)
+    }
+
     /// ACT-4: recorded as for the run's own steps.
     fn record_expected_target(
         &mut self,
@@ -4957,6 +4966,17 @@ impl ContainedTaskRuntime for RuntimeContainedTask<'_> {
             Some(result),
             ContainedTaskGuardEvaluation::of_sample(result),
         )?;
+        self.ensure_active()
+    }
+
+    /// Workflow #503 LIST-B: a layout pool's template evaluations on one projection, one
+    /// evaluation of the run's timing with their time together; no diagnostic row.
+    fn record_candidate_pool(
+        &mut self,
+        _feature: &str,
+        timing: ContainedTaskEvaluationTiming,
+    ) -> Result<(), Self::Error> {
+        self.task_timing.record_evaluation(timing, None, None);
         self.ensure_active()
     }
 

@@ -683,9 +683,10 @@ fn kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_rev
     // CV-1 (register §1.507) 24, a bundle that carries a version 2 package declaration,
     // Workflow #477 LR-1 (register §1.513) 25, a linear press step's count, Workflow #455 TK-1
     // (register §1.532) 26, a variable only a rule gives, Workflow #503 LIST-A (register §1.533)
-    // 27, a list reading of the wanted keys only, and Workflow #455 RR1 (register §1.535) 28, a
-    // `goals.json` of version 3 and a root's `goal-tables.json`.
-    assert_eq!(own, [3, KEY_REVISION + 11]);
+    // 27, a list reading of the wanted keys only, Workflow #455 RR1 (register §1.535) 28, a
+    // `goals.json` of version 3 and a root's `goal-tables.json`, and Workflow #503 LIST-B
+    // (register §1.536) 29, a `repeated_anchor` layout's picture pool.
+    assert_eq!(own, [3, KEY_REVISION + 12]);
     assert!(package_edge_holds(own, with_key));
     assert!(!package_edge_holds(earlier, with_key));
     assert!(package_edge_holds(own, without_key));

@@ -639,14 +639,14 @@ only; the numbers and names are neutral examples, not values:
 | the effect | exactly one of `click`, `application`, `select`, `wait`, `read_list`, (from Workflow #428 S168-5b) `judge` and (Workflow #463 KP-1, a step plan's) `key`; task schema `0.9` only; a page-graph task (`navigable_route`, phased or not) or (Workflow #428 S168-LK, since 0.12.78) a `linear_steps` task, which checks these members first and then the rules of [linear-steps.md](linear-steps.md), "List reading steps"; the task declares `scheduling_outcome`; at most 16 `read_list` operations in a task | an older schema: `UnconsumedField` @ `/operations/<i>/read_list`; another effect, a `key` included (since 0.12.78, in either mode): `InvalidValue` @ `/operations/<i>/read_list`; no outcome: `MissingField` @ `/scheduling_outcome`; a 17th: `InvalidValue` @ `/operations` |
 | `to` | the `from` page: the step stays on its page | `InvalidValue` @ `/operations/<i>/to` |
 | `layout_id` | a `repeated_anchor` layout the task declares on the `from` page, whose `unknown_identity` is `reject` | `InvalidValue` @ `…/read_list/layout_id` |
-| `key_feature` | an `identity` feature of the layout; the scan's `identity_feature` | `…/read_list/key_feature` |
+| `key_feature` | an `identity` feature of the layout; the scan's `identity_feature`. Its identity is read from text (`ocr_aliases`, a target at an offset) or, since 0.12.93 (Workflow #503 LIST-B, `package` revision 29), from pictures: a `repeated_anchor` layout's picture identity scored against the layout's pool (`icon_templates`, section "A list of cards identified by pictures" below) | `…/read_list/key_feature` |
 | `key_column` | a token `^[a-z][a-z0-9_]{0,31}$`: the row member that holds the business ID | `…/read_list/key_column` |
 | `columns` | 0 to 63 entries `{column, feature}`: `column` a token as `key_column`, distinct, never the `key_column`; `feature` a feature of the layout other than `key_feature`, each at most once, of value `passed` (a `boolean` column), `ocr_integer` (an `integer` column) or `identity` (a string column, the business ID it reads) | `…/read_list/columns/<j>/column`, `…/columns/<j>/feature` |
 | `fact_key` | starts with `inventory.list.`, satisfies the instance fact key rule, and is unique among every key the task writes (each mark's `fact_key` and `capacity_fact_key`, each other list, a field list's included) | `…/read_list/fact_key` |
 | `valid_for_ms` | `1..=31_536_000_000` | `…/read_list/valid_for_ms` |
 | `scan` | required: a select step's `scan` ([selection-graph.md](selection-graph.md), "Select step"), with every static check admission runs on it, but no `early_stop`: every position is read; so its `end` is required, which a select step's scan may leave out beside `early_stop` since Workflow #463 K-c (0.12.70); a `null` `end` is a missing one, as in a select step's scan (its fix round 1) | `MissingField` @ `…/read_list/scan`; `early_stop`: `UnknownField` @ `…/scan/early_stop`; no `end`, or a `null` one: `MissingField` @ `…/scan/end`; the static checks as a select step's |
 | `guard` | required, any guard a select step takes; judged on every viewport | `MissingField` @ `/operations/<i>/guard` |
-| `others` | optional (Workflow #503 LIST-A, since 0.12.90, `package` revision 27): the one word `pass_over` of a closed vocabulary, `null` being an absent member; a card the identity mapping marks none of the wanted keys then makes no row and does not make the list unread (section "A list of the wanted keys only" below). Without it every rule of this section is as before, byte for byte | another word: `InvalidValue` @ `…/read_list/others`; another type: `InvalidType` @ `…/read_list/others`; a Runtime before 0.12.90: `UnknownField` @ `…/read_list/others` |
+| `others` | optional (Workflow #503 LIST-A, since 0.12.90, `package` revision 27): the one word `pass_over` of a closed vocabulary, `null` being an absent member; a card the identity mapping marks none of the wanted keys then makes no row and does not make the list unread (section "A list of the wanted keys only" below). Without it every rule of this section is as before, byte for byte | another word: `InvalidValue` @ `…/read_list/others`; another type: `InvalidType` @ `…/read_list/others`; a Runtime before 0.12.90: `UnknownField` @ `…/read_list/others`; Workflow #503 LIST-B: `pass_over` over a picture identity whose pool holds no `other` entry, which could never pass a card over: admission's `read_list/others` |
 | the operation's other members | as the table "Members of a `read_list` step" below says | as that table says |
 | any other member of `read_list` | none | `UnknownField` @ `…/read_list/<member>` |
 
@@ -799,7 +799,10 @@ scan's `spacing.columns`.
   missing or below the floor, a read near a wanted name that does not match it, an ambiguous one,
   and every read of an icon identity, which has no text. The feature, its records and the
   decisions taken on it do not change: a read so marked keeps its Unknown `low_confidence`
-  feature. Readers take the mark; none sorts the feature's reasons itself.
+  feature. Readers take the mark; none sorts the feature's reasons itself. Workflow #503 LIST-B
+  (since 0.12.93): a picture identity read from a `repeated_anchor` layout's pool is marked by its
+  own judgement, through the same function of the layout (`CandidateLayout::name_mark`), section
+  "A list of cards identified by pictures" below.
 - **The position, one judgement across viewports.** A position is *passed over* when the mapping
   marked every read of it none of the wanted keys, on every viewport that read it. A position
   passed over makes no row and does not make the list unread. A position the mapping marked so on
@@ -846,6 +849,79 @@ A list without the member reads every card as before: an unwanted card is
 `list_position_unread`, and the run writes no count. A selection step that reads the same mark,
 the end of a field list on a page outside its capture, and a single reading that takes "no card"
 for zero are not part of Workflow #503 LIST-A.
+
+**A passed-over position is judged on its identity alone** (Workflow #503 LIST-B, ruling 6; it
+held in 0.12.90 already, and is pinned since 0.12.93 for both identity kinds). Whether a position is
+passed over is decided by the marks of its identity's reads before anything else of it: what its
+other features read (a count the column's format refuses, an abbreviated number, a column that
+changed) does not make the list unread. A key's position whose column does not read is unread
+(`feature_unread`), as before.
+
+### A list of cards identified by pictures (Workflow #503 LIST-B, since 0.12.93)
+
+[v012-register.md](v012-register.md) §1.536; the coordinator's rulings and Addendum 1 on board
+#503. On many inventory screens a card carries a picture, a count and a rarity colour, and no
+name; the name shows only in a panel for the one selected card. A list reading may read such a
+grid: its layout is a `repeated_anchor` layout whose key feature is a picture identity, scored in
+a region of each card against one pool of pictures declared on the layout for every card
+([selection-graph.md](selection-graph.md), "Rules";
+[business-identity-consensus.md](business-identity-consensus.md), "A layout's pool"). The pool
+holds the pictures of the keys and the pictures of known cards that are none of the keys (`other`
+entries).
+
+- **The mark, one judgement.** The identity mapping judges a read once, from every score of the
+  pool: a key, none of the keys, or unread. A read is *none of the keys* only when the best `other`
+  entry's score is at least the identity's `minimum_score_milli` and exceeds the best key entry's
+  by at least `minimum_margin_milli`; its feature is Unknown `out_of_domain`, the reason that says
+  the read names something outside the identity's domain (a text read none of the keys keeps
+  `low_confidence`, the reason its mapping gave it before LIST-A). An entry whose colour check
+  failed does not compete; one whose colour was not measured (its template did not reach its
+  target's own threshold on the card) competes on its score and holds the others to the margin
+  (fix round 1). The scan of a run and the dry run ask one function of the layout for a
+  position's mark, for a text identity and a picture identity alike (`CandidateLayout::name_mark`);
+  no reader compares scores.
+- **No rule "far below every key".** A card that no picture of the pool recognises is unread,
+  whatever its scores, and the list is not written (`list_position_unread`). The picture of an
+  item the account has never held cannot be checked on a real card; a rule that passed over
+  whatever scored low would read such an item 0 at every run from the day its card appears, with
+  no record saying so. So the first card of a kind the pool has no picture of stops the list,
+  loudly, until its picture is added.
+- **The list.** LIST-A's rules hold as written: with `others: pass_over` a position is passed over
+  when every read of it on every viewport was marked none of the keys; a position marked so on one
+  viewport and not on another is unread (`partly_passed_over` in the dry run); the list is whole
+  when the scan reached its declared end with no unread position; a key no card showed has no
+  row and counts 0 by the rule that exists. A passed-over position is judged on its identity
+  alone (above).
+- **What the run says.** As LIST-A: the info row `contained_task_resource_reading_passed_over`
+  with the count of positions passed over. No card's identity goes anywhere but into the rows,
+  and the pool's scores go nowhere: the mapping's judgement of a read is kept beside the
+  projection for the viewport it was read on, and only the dry run keeps it longer.
+- **The cost.** Every kind of card the view shows needs a picture in the pool, a key's or an
+  `other`; a card of a kind the pool has no picture of makes the list unread until its picture is
+  added, so the form suits a view whose kinds are closed. A key's picture entered as `other` reads
+  that key 0 at every run and nothing corrects it: the offline check shows it ("Offline" below),
+  and the person who accepts such a package compares frames for every key the account holds.
+  Pictures that differ only in colour (the grades of one item) are told apart only by their
+  targets' colour checks, and there a second wrong zero stands (fix round 1, the review): a card
+  whose own entry fails its colour check by a little (a highlight on the selected card, a badge
+  over the patch the check reads) while an `other` entry of the same drawing passes is passed
+  over with confidence, and its key reads 0; where the entry that passes is a key, the card is
+  read as that key. So the colour checks of entries that share a drawing accept disjoint colours
+  in every state a card can show, and the acceptance of such a package compares frames of each
+  state against the offline check
+  ([business-identity-consensus.md](business-identity-consensus.md), "What a colour check
+  risks"). Nothing of the Runtime is paused, held or lowered on a reading of zero.
+- **The bound.** At most 128 templates, each scored once over each of at most 64 instances on a
+  viewport (8192 evaluations), bounded only by the step's deadline (its scan's `max_ms`, checked
+  before each evaluation); no budget of the projection counts them, and the cost was not measured.
+  A deadline that falls inside a pool fails the run (`candidate_sample_deadline_exceeded`, at the
+  list reading), and no list is published; admission does not count a template's time, so a pool
+  too slow for its step is admitted and then fails at every run, which the first run on a device
+  shows.
+- **Not built.** A selection step or a scan that selects over such a layout is refused in this
+  release ([selection-graph.md](selection-graph.md), "Rules"); it is left open, not closed off.
+  An abbreviated count (ten thousand and more) is not read as a number: a key's card whose count
+  is abbreviated is unread, so such an item is not put in such a list.
 
 ### Rows (S168-LB1a, since 0.12.55)
 
@@ -1039,7 +1115,15 @@ one without:
   true one, not bounded at the margin. It is the identity mapping's
   ([business-identity-consensus.md](business-identity-consensus.md), "Identity and readable
   attributes"); the dry run and the Lab compute none themselves. A near miss is a read whose
-  nearest distance is not above the limit.
+  nearest distance is not above the limit. Workflow #503 LIST-B (since 0.12.93): a read of a
+  picture identity of the layout's pool has no OCR sample; it carries `pictures`, one for each
+  sample, as the identity mapping judged it beside the projection: the mark, why it names no key
+  (`out_of_domain` for none of the keys, `low_confidence`, `ambiguous`), the best key entry (its
+  key, variant, target and score), the best `other` entry (its target and score), the threshold
+  `minimum_score_milli` and the margin `minimum_margin_milli` it was judged by, and how many
+  entries did not compete because their colour check failed. The dry run and the Lab carry them
+  and compare no score; a key's picture entered as `other` shows there as a key passed over with
+  that key's target its best `other`.
 - **What it gives the list**, by the one judgement the rows are built by: its known key; passed
   over; or unread, with its cause, the identity it kept and, when it kept none, why its identity
   read Unknown. The causes are the dry run's own words, which no record carries: `identity_unread`
