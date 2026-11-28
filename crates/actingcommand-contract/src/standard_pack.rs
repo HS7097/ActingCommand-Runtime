@@ -201,9 +201,9 @@ crate::outcome_vocabulary! {
         CatalogGroupTitleDiffers => "catalog_group_title_differs",
         /// Workflow #477 CV-1 (since 0.12.79): a business part of a version 2 `pack-catalog.json`
         /// (or an item of the values file `standard-pack catalog --values` reads) writes a fixed
-        /// value beside a second value of the same run, which the compiler refuses beside a
-        /// rule's: the realization mark, or a production of a pool whose valuation
-        /// `schedule.json` declares or leaves pending (an error).
+        /// value beside the realization mark, which the compiler refuses beside a rule's (an
+        /// error). #503 FIXV (since 0.12.101): not beside a production of a pool whose valuation
+        /// `schedule.json` declares or leaves pending, which a value stands beside.
         CatalogValueConflict => "catalog_value_conflict",
         /// CV-1: a per-rule business part of a version 2 `pack-catalog.json` (or an item of the
         /// values file) names a `rule_id` that is no rule of `schedule.json` running the entry's

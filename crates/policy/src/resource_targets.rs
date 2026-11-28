@@ -2616,15 +2616,23 @@ pub(crate) struct ResourceTerm {
 /// ([`ResourceTerm::pool_weights`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PoolWeight {
-    /// `W = B + Γ`, the pool's effective weight for the candidate.
+    /// `W = B + Γ`, the pool's effective weight for the candidate: a unit consumed costs it, and a
+    /// unit produced is worth it to a task without a fixed value. #503 FIXV (register §1.550): it
+    /// holds the pool's own `B` also for a task with a fixed value, whose term counts `Γ` alone.
     pub(crate) weight_milli: u64,
+    /// #503 FIXV (register §1.550): `Γ`, the part of `W` a goal in force that covers the candidate
+    /// adds (0 without one): all a task with a fixed value reads of a pool it produces, so a priced
+    /// product's base valuation `B` is never added to the fixed value. Equal to `W` for a pool
+    /// without a valuation.
+    pub(crate) gap_weight_milli: u64,
     /// `Q`, the step its term divides by: the pool's `valuation.scale`, else the `scale` of the
     /// goal that covers the candidate (#455 B1, register §1.518: the step of a fixed-value task's
     /// goal term), its own, else (#455 B3-P, register §1.522) the pool's `target_defaults.scale`.
     pub(crate) step: u64,
 }
 
-/// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`.
+/// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`; #503 FIXV (register
+/// §1.550): for a task with a fixed value `B` is 0 here, so `T = ⌊r · Γ / Q⌋`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WeightItem {
     pool: String,
@@ -2633,6 +2641,10 @@ struct WeightItem {
     base_milli: u64,
     gap_weight_milli: u64,
     effective_milli: u64,
+    /// #503 FIXV: `B_p + Γ` with the pool's own base valuation whatever the task declares, the
+    /// weight [`ResourceTerm::pool_weights`] hands the net benefit, which a consumption of the pool
+    /// costs; `effective_milli` for a task without a fixed value.
+    weight_milli: u64,
     term_milli: u128,
 }
 
@@ -2644,7 +2656,8 @@ impl ResourceTerm {
 
     /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, with the step `Q` its
     /// term divides by, by pool id; the net benefit reads the resource layer's own weights and
-    /// writes none.
+    /// writes none. #503 FIXV (register §1.550): with its gap weight `Γ` beside it; `W` holds the
+    /// pool's own `B` also where the term counted it 0 (a task with a fixed value).
     pub(crate) fn pool_weights(&self) -> BTreeMap<String, PoolWeight> {
         self.items
             .iter()
@@ -2652,7 +2665,8 @@ impl ResourceTerm {
                 (
                     item.pool.clone(),
                     PoolWeight {
-                        weight_milli: item.effective_milli,
+                        weight_milli: item.weight_milli,
+                        gap_weight_milli: item.gap_weight_milli,
                         step: item.step,
                     },
                 )
@@ -3303,7 +3317,13 @@ fn base_terms(
         .iter()
         .filter(|task| scope_matches_instance(&task.scope, instance))
     {
-        let weighed = weigh_production(&task.id, &task.produces, &pools, &[])?;
+        let weighed = weigh_production(
+            &task.id,
+            task.benefit_fixed_value_milli.is_some(),
+            &task.produces,
+            &pools,
+            &[],
+        )?;
         if weighed.items.is_empty() {
             continue;
         }
@@ -3355,13 +3375,18 @@ struct Weighed {
 /// covers the task for `p`, the only part a goal adds. `R = min(Σ T + ⌊Σ F⌋, 1_000_000)`. `Q` is
 /// the pool's `valuation.scale`, else the step the covering target resolves to (its own `scale`,
 /// else, #455 B3-P, the pool's `target_defaults.scale`), and a pool with neither is not weighed.
+/// #503 FIXV (register §1.550): with `fixed_value` (the task declares a fixed value) `B_p` counts
+/// 0 in `T`, so `T = ⌊r · Γ / Q⌋`: a priced product adds to `R` only the part a goal gives it, as
+/// to the net benefit. The weight the net benefit charges a consumption of the pool at stays
+/// `B_p + Γ` ([`ResourceTerm::pool_weights`]). For a pool without a valuation `B_p` is 0 anyway.
 ///
-/// One-way guard: the inputs are the task's id (only to ask a target's coverage), its own yield
-/// declaration, the pools and the resolved targets. No task's enablement, instance override,
-/// priority, offset or run state reaches this function, so changing any of them for one task
-/// changes no pool weight and no other task's term.
+/// One-way guard: the inputs are the task's id (only to ask a target's coverage), whether it
+/// declares a fixed value, its own yield declaration, the pools and the resolved targets. No
+/// task's enablement, instance override, priority, offset or run state reaches this function, so
+/// changing any of them for one task changes no pool weight and no other task's term.
 fn weigh_production(
     task_id: &str,
+    fixed_value: bool,
     produces: &[ResourceEffectSpec],
     pools: &[&PoolSpec],
     targets: &[ResolvedTargetV2<'_>],
@@ -3386,8 +3411,11 @@ fn weigh_production(
         else {
             continue;
         };
-        let base_milli = valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
+        let declared_milli =
+            valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
         let gap_weight_milli = covering.map_or(0, ResolvedTargetV2::gap_weight_milli);
+        // #503 FIXV (register §1.550): beside a fixed value the term counts no base valuation.
+        let base_milli = if fixed_value { 0 } else { declared_milli };
         let effective_milli = base_milli + gap_weight_milli;
         let numerator = per_run
             .checked_mul(u128::from(effective_milli))
@@ -3412,6 +3440,7 @@ fn weigh_production(
             base_milli,
             gap_weight_milli,
             effective_milli,
+            weight_milli: declared_milli + gap_weight_milli,
             term_milli,
         });
     }
@@ -3703,7 +3732,13 @@ fn resolve_v2(
                 term.inventory_expiries.push(expiry);
             }
         }
-        let weighed = weigh_production(&task.id, &task.produces, &pools, &resolved)?;
+        let weighed = weigh_production(
+            &task.id,
+            task.benefit_fixed_value_milli.is_some(),
+            &task.produces,
+            &pools,
+            &resolved,
+        )?;
         term.term_milli = weighed.term_milli;
         term.capped = weighed.capped;
         term.items = weighed.items;
@@ -4917,19 +4952,22 @@ fn run_cap(
 /// gap that declares no integer per-run `amount` on every entry (an `expected_amount_milli`
 /// production) needs ⌈gap·1000 / its expected yield per run in thousandths⌉ runs, at least 1; one
 /// that yields nothing per run (its amount pending) adds nothing. Before, such a pool removed
-/// `run_cap` whole.
+/// `run_cap` whole. #503 FIXV (register §1.550): a task with a fixed value makes no base-weight
+/// test: its base value is the fixed value alone, so its goals' runs bound `run_cap` whatever
+/// valuations its produced pools carry.
 fn goal_runs(
     task: &TaskSpec,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
 ) -> Option<u64> {
-    let base_weighted = task.produces.iter().any(|effect| {
-        pools
-            .iter()
-            .find(|pool| pool.id == effect.pool_id)
-            .and_then(|pool| pool.declared_valuation())
-            .is_some_and(|valuation| valuation.base_weight_milli > 0)
-    });
+    let base_weighted = task.benefit_fixed_value_milli.is_none()
+        && task.produces.iter().any(|effect| {
+            pools
+                .iter()
+                .find(|pool| pool.id == effect.pool_id)
+                .and_then(|pool| pool.declared_valuation())
+                .is_some_and(|valuation| valuation.base_weight_milli > 0)
+        });
     if base_weighted {
         return None;
     }

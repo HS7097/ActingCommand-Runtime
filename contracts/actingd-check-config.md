@@ -412,6 +412,17 @@ The members of `report`:
       composed only by a Runtime that names this row, and the installer's plan
       refuses a rollback below 0.12.98 while an installed or kept schedule
       requires it.
+    - `fixed_value_any` (#503 FIXV, since 0.12.101, register §1.550): always on
+      (`config_subsystem_always_on`). The Runtime reads a task's fixed value of
+      either sign, 0 included, and beside a production of a pool whose
+      valuation is a block or the pending marker, the fixed value then the
+      task's base value alone and the productions feeding only its goal terms
+      ([scheduling/README.md](scheduling/README.md), "Fixed values written in
+      the pack"); a `schedule.json` whose rule writes a fixed value of 0 or
+      below, or a fixed value beside such a production, requires it beside
+      `benefit_fixed_value`, so it is composed only by a Runtime that names this
+      row, and the installer's plan refuses a rollback below 0.12.101 while an
+      installed or kept schedule requires it.
     - `catalog_business` (#477 CV-2, since 0.12.80, register §1.508): always
       on (`config_subsystem_always_on`). The composer takes a game root's
       business part (each rule's effects, fixed value and marks) from its

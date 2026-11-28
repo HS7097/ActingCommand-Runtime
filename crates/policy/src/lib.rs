@@ -250,6 +250,11 @@ mod tests {
     // that pool's line: `at_least` alone, no producer asked, and it never weighs.
     mod gate_455_sl2;
 
+    // #503 FIXV (0.12.101; register §1.550): a task's fixed value may be 0 or negative and may
+    // stand beside productions into priced pools; the base value is then the fixed value alone,
+    // and the productions feed only the goal layer.
+    mod gate_503_fixv;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

@@ -53012,6 +53012,229 @@ again, by its own rule, and its line takes the flag again; it reads this build's
 members, `irreversible_acknowledged` `false`), so its adoption review and its status row read them
 as their own.
 
+### 1.550 Slice #503 FIXV (0.12.101): a task's fixed value may be 0 or negative and may stand beside productions into priced pools; with a fixed value the base value is that value alone, and the productions feed only the goal layer (board #503; the owner's direction of 11-28, the rulings the coordinator's of the same day; coordinator work order `rd-1123/brief-503-fixv.md` after its read-only study of the same day; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546, a slice of the same days, before this one)
+
+This section takes 1.550. It ships in 0.12.101. [scheduling/README.md](scheduling/README.md) ("Net
+benefit within a tier"; "Fixed values written in the pack": "The member", "Without a consumption",
+"Its `produces`", "A goal on what it produces", "Refused at compile time", the new "Beside priced
+productions" and "What 0 and below mean", "Capability", "Identity"; "A pool whose spending a line
+governs"; "Bounds"), [scheduling/v2/README.md](scheduling/v2/README.md) and the V2
+`tasks.schema.json`, [standard-pack-schedule.md](standard-pack-schedule.md) ("`requires`"; "The
+fixed value"; "Pools a goal asks for"; "What a resource repository writes", the new "A chain is
+judged once, at its head"; "Composition", step 2), [pack-catalog.md](pack-catalog.md) ("Version 2",
+"What is wrong"), [resource-targets.md](resource-targets.md) ("A goal on what a task with a fixed
+value produces") and [actingd-check-config.md](actingd-check-config.md) (the row `fixed_value_any`)
+are the contract. No interface revision moves, no record member, no configuration key, no code or
+word; one `requires` name is new, and the descriptions of `benefit_fixed_value` and
+`fixed_value_conflict` change (with four texts of the shared catalogue that repeated the conflict:
+the key `fixed_value_milli`, the word `catalog_value_conflict` and the remedies of
+`goal_pool_unvalued` and `pool_unvalued`).
+
+**The rule of 11-11 and what it protected** (§1.299, the coordinator's ruling 4). A fixed value had
+to be 1 or more, and it was refused (`fixed_value_conflict`) beside a production of a pool whose
+valuation is a block or the pending marker, as in `pack-catalog.json` (`catalog_value_conflict`).
+The positive range kept 0 from serving as an off switch or as "unknown": a rule that must not run
+is held or not written, and an unknown is the pending marker. The conflict kept a rule from having
+two values, the fixed one and its priced effects, with neither rule of precedence written: either
+`V` plus the products' base valuations (a double count) or one of them silently ignored. So a pack
+author could not write that a step is worth nothing by itself, nor a value below zero, nor, above
+all, a rule's real drops beside its value when one of them is priced: the drops were left out, and
+then a goal on what the rule really produces could not reach the rule.
+
+**The owner's direction** (11-28, in neutral words): these detours go, because people will edit
+these files and must be able to write what is true. The value may be 0 or negative; it may stand
+beside productions into priced pools; when a fixed value is written the task's base value is the
+fixed value alone, and the productions stay as written and feed everything that is not the base
+value: the goal terms, the turns a run is told under a goal, and the unread-after-run rule.
+
+**The precedence that replaces the refusal.** With a fixed value `V`:
+`S = V + Σ_{g: Γ_g>0} r_g·Γ_g/(1000·Q_g) − Σ_c C_c·W_c/(1000·Q_c)`. `V` is signed and exact (no
+share of `ε`); of a produced pool only its gap weight `Γ_g` is read, at the step its term divides by
+(a priced pool's `valuation.scale`, else the goal's step); its base valuation `B_g` is never added. A
+produced pool's pending amount or pending valuation never makes `B` unknown beside `V`. Nothing is
+counted twice, and the rule says which value wins. Provenance still lists every rule that runs on a
+fixed value, the list a model export that prices a rule's effects replaces; whether that export
+removes the value is the model's decision, not the compiler's. The realization conflict stays: the
+zero tier reads a modelled value's rounding, which a fixed value does not have.
+
+**The rulings, as built.**
+- *1, the range* (`crates/policy/src/validation.rs`, `validate_fixed_value`). The member is an
+  integer in `MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER`, `limit_exceeded` at the member outside
+  it; a non-integer or `null` is `type_mismatch` and V1 `unknown_field`, as before; it still requires
+  `benefit_judged: true`. The canonical writer and the hash needed nothing: they took a signed
+  integer already. The V2 `tasks.schema.json` bounds the member to the same range.
+- *1, the conflict*. `fixed_value_conflict` is given only beside `benefit_realization: true`; the
+  function no longer reads the pools.
+- *1, the benefit* (`crates/policy/src/evaluator/benefit.rs`, `judge`). `V` is added signed
+  (`ExactSum::add` of its absolute value with its sign; `|V| ≤ 2^53 − 1` cannot overflow the sum),
+  so the evaluation error a negative value raised before is gone. The fixed-value branch reads
+  `PoolWeight::gap_weight_milli` instead of the effective weight
+  (`crates/policy/src/resource_targets.rs`: `PoolWeight` gains the member, filled by
+  `ResourceTerm::pool_weights` from the resource layer's own `WeightItem::gap_weight_milli`); for a
+  pool without a valuation the two are equal. Ruling 9 and A1, the gate, the band, the capped order,
+  the reasons and the items are as before: a goal term's item names its pool.
+- *2, the turns* (`resource_targets.rs`, `goal_runs`). For a task with a fixed value the goal term of
+  `run_cap` makes no base-weight test: the goal's runs bound the turns a run is told whatever
+  valuations its produced pools carry. Without this, a true priced drop written beside `V` would
+  remove the goal's bound. The unread-after-run rule (§1.543) reads `produces` as written and needed
+  nothing.
+- *3, the pending marker* beside a fixed value is covered exactly as a declared valuation is: the
+  compiler takes it, `judge` does not look it up, and it requires the new word.
+- *4, the score stage's resource term* (`crates/policy/src/resource_targets.rs`,
+  `weigh_production`; built in fix round 1, below). `weigh_production` takes whether the task writes
+  a fixed value, which its two callers, `base_terms` and `resolve_v2`, pass from the task's
+  declaration (`benefit_fixed_value_milli.is_some()`), never from a run state; with it a produced
+  pool's base valuation counts 0 in the pool's item and term, `T_g = ⌊r_g·Γ_g/(1000·Q_g)⌋`, so `R`
+  carries the gap's part alone, as the gate does, and so do what reads it: the score stage's
+  `effective` and `total`, `score_computed`'s `resources`, the `resource_weights` item (`base=0`)
+  and `rank_breakdown`'s `target`; a priced product no goal covers weighs 0, so without a goal
+  such a rule leaves the score stage untouched, as a fixed-value task did before this slice. The
+  weight `ResourceTerm::pool_weights` hands the net benefit
+  keeps the pool's own `B_g + Γ_g` (`WeightItem::weight_milli`), so a unit the task consumes of a
+  pool it also produces costs what it cost. For a catalogue accepted before this slice nothing
+  moves: no fixed-value task could produce a pool with a valuation, so `B_g` was 0 there already.
+  The first build had left the term as it was, under the work order's escape clause, and written
+  that it orders no judged candidate within its tier; but a selection document's promotion sorts a
+  candidate before every tier, so in a hand-written catalogue with one it could have promoted such
+  a rule by base valuations the gate ignores. It no longer can.
+- *5, `requires`* (`crates/policy/src/schema.rs`, `FIXED_VALUE_ANY_SUBSYSTEM`;
+  `crates/policy/src/compose.rs`, `read_game` and `first_fixed_value_freedom`;
+  `apps/actingd/src/config/manifest.rs`, the always-on row). A `schedule.json` names
+  `fixed_value_any` beside `benefit_fixed_value` when, after the business part is taken from
+  `pack-catalog.json` on a switched root, a rule's `fixed_value_milli` is an integer of 0 or below,
+  or a rule with a fixed value writes a `produces` entry on a pool whose `valuation` is written;
+  else the composer refuses the file `schedule_invalid` at the first such rule's
+  `fixed_value_milli`, for the Runtime and the tools alike. A value that is no integer is left to
+  the compiler.
+- *6, what 0 and below mean* is contract text ([scheduling/README.md](scheduling/README.md), "What
+  0 and below mean"): 0 is "worth nothing by itself", a negative value "costs more than its priced
+  consumption"; such a task runs only where its goal terms make it positive outside the band, or
+  where it is not judged. The case that prompted the slice is answered there and in
+  [standard-pack-schedule.md](standard-pack-schedule.md) ("A chain is judged once, at its head"): a
+  step that costs something and yields nothing by itself is the head of its chain, judged by its
+  own `B`, and a value of 0 or below keeps it below zero; the head writes the chain's value, its
+  true consumption and now its true productions, so that a goal on what the chain produces reaches
+  the decision; a step that only reads or navigates and spends nothing writes `"maintenance":
+  true`.
+- *7, the pack catalogue* (`crates/actingcommand-contract/src/standard_pack_catalog_v2.rs`).
+  `CatalogValue::milli` is an `i64`; `Check::value` takes a whole number in the signed range
+  (`catalog_out_of_limits` outside it, `malformed` for a non-integer); `Check::part` gives
+  `catalog_value_conflict` beside the realization mark only, and `CatalogScheduleFacts` no longer
+  holds the valued pools; `rule_part` (`--refresh`) and `rule_value` (the differences) read the
+  value signed, so a negative value is neither `schedule_invalid` under `--refresh` nor a false
+  `value_differs`. `standard-pack adopt`'s decided value (at least 1) is not this slice.
+
+**A worked example** (the tests' numbers, neutral names). A capped pool valued 1000 milli a unit
+(step 1), read at 150; a priced pool of 5000 milli a step of 10, read at 10; a goal of at least 40
+on it, step 10, importance 1000: gap 30, `Γ = 3000`, a production of 2 a run worth `2000·3000/(10·1000)
+= 600`. A chain head of `V` 10 000 consuming 2 and producing 2 of the priced pool: `B = 8 000`
+without the goal, `8 600` with it (before, had the compiler taken it, `9 000` and `9 600`); its run
+is told `run_cap` min(⌊(150 − 104) ÷ 2⌋ = 23, ⌈30 ÷ 2⌉ = 15) = 15. A step of `V` 0 alone:
+`policy_benefit_nonpositive` 0; of −1000 consuming 30: −31 000; of −500 consuming 1 and producing
+6 of a lacking pool with a goal: 300, dispatched.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The range and the conflict | `crates/policy/src/validation.rs` (`validate_fixed_value`); `crates/policy/src/schema.rs` (the member's doc, `FixedValueConflict`); `contracts/scheduling/v2/tasks.schema.json` |
+| The benefit | `crates/policy/src/evaluator/benefit.rs` (`judge`, the module doc); `crates/policy/src/resource_targets.rs` (`PoolWeight`, `ResourceTerm::pool_weights`) |
+| The turns | `crates/policy/src/resource_targets.rs` (`goal_runs`) |
+| The score stage's term (fix round 1) | `crates/policy/src/resource_targets.rs` (`weigh_production` and its callers `base_terms` and `resolve_v2`; `WeightItem::weight_milli`, `ResourceTerm::pool_weights`) |
+| `requires` | `crates/policy/src/schema.rs` (`FIXED_VALUE_ANY_SUBSYSTEM`); `crates/policy/src/compose.rs` (`read_game`, `first_fixed_value_freedom`); `apps/actingd/src/config/manifest.rs` (the row) |
+| The pack catalogue | `crates/actingcommand-contract/src/standard_pack_catalog_v2.rs` (`CatalogValue`, `CatalogScheduleFacts`, `Check::value`, `Check::part`, `rule_part`, `rule_value`); `standard_pack_catalog.rs` and `standard_pack.rs` (docs) |
+| The two descriptions | `contracts/outcome-codes/policy.json` (`benefit_fixed_value`, `fixed_value_conflict`), `crates/policy/src/codes.rs` (its doc); `contracts/outcome-codes/catalog.json` (the four texts above); the index regenerated |
+
+`PoolWeight` has one struct literal in the workspace, in `pool_weights`, and `WeightItem` one, in
+`weigh_production`; `CatalogScheduleFacts` is
+built in one place, and `CatalogValue` in the reader and in `gate_477_cv1`.
+
+**Tests** (incident `#503 FIXV`: `crates/policy/src/tests/gate_503_fixv.rs`, policy gate map;
+`apps/actingd/src/config/gate_503_fixv.rs` and `crates/resource-tooling/src/gate_503_fixv.rs`, apps
+gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `fixv_t1_a_value_of_any_sign_compiles_and_keeps_its_canonical_bytes` | 0, −1 and −(2^53 − 1) compile and are held as written; the canonical bytes write them as those integers; the same documents give the same hash, another sign another |
+| `fixv_t2_the_gate_reads_a_value_of_any_sign` | `V` 0 alone `policy_benefit_nonpositive` 0 after `benefit_fixed_value` 0; −1000 consuming 30 −31 000; −500 with a goal term of 1800 −1500 without the goal and 300 dispatched with it; below a regenerating pool's trigger line −1500 with the note, with `goal_tiers` 300 dispatched, at the line the head of the capped episode with 1300; −600 with a goal term of 600 `benefit_within_tolerance` `unmarked`, tolerance 1 |
+| `fixv_t3_beside_a_priced_product_the_base_value_is_v_alone` | −1000 with the consumption's item alone; with a goal on the product −400 and the item `pool.priced:+600`; 10 000 and 10 600 dispatched; beside a pending product 10 000 |
+| `fixv_t4_the_capped_order_lists_a_consumer_by_its_value_of_any_sign` | consumers of `V` −1000 and 0 not listed, judged −31 000 and −30 000; one of −1000 with a goal term of 1200 the head, rank 1, `B` 200 |
+| `fixv_t5_the_goal_s_runs_bound_the_turns_beside_a_priced_product` | beside a priced product `run_cap` 15 of the lines' 23 and the gap 30 at production entry 1; the run leaves the goal's pool unread, the priced pool read |
+| `fixv_t6_a_chain_head_with_its_true_products_reaches_its_goal` | the work order's test 1: 8000 exactly without the goal, its `rank_breakdown` naming `B` and `V`; 8600 with it, the gap term once, the base valuation nowhere; `run_cap` 15 and the gap 30 |
+| `fixv_t7_the_composer_requires_fixed_value_any_and_an_older_runtime_refuses_the_file` | the work order's test 2: a value of 0, a negative value, a value beside a priced and beside a pending product without the word `schedule_invalid` at `/rules/1/fixed_value_milli`; a file of neither freedom composes without it; with it the file composes, each value as written; a Runtime that does not name it `schedule_requires_missing` at `/requires/1` |
+| `fixv_t8_beside_a_fixed_value_the_score_stage_counts_the_gap_s_part_alone` (fix round 1) | a rule consuming 1 of the capped pool and producing 2 of the priced pool, a goal on it (gap 30, `Γ` 3000): with `V` 10 000 `resources=600`, the item `pool.priced:r=2,per=10,base=0,gap=3000,effective=3000,term=600`, `rank_breakdown` `target=600`, `B` 9600; without the value `resources=1600`, the item `base=5000,gap=3000,effective=8000,term=1600`, `target=1600`, `B` 600 |
+| `fixv_this_runtime_names_fixed_value_any_and_composes_a_file_that_requires_it` (actingd) | the assembled manifest names the word beside `benefit_fixed_value`; the composer given those subsystems composes a value of −2500 beside a priced product |
+| `fixv_the_writer_writes_a_value_of_any_sign_back_and_finds_no_false_difference` (resource tooling) | `--schema-version 2` writes −2500 (with its origin) and 0 into their entries, no difference; `--refresh` agrees; `--values` −700 one `value_differs`, then 0 none |
+| `fixv_a_negative_value_taken_from_the_catalog_composes_as_the_file_that_writes_it` (resource tooling) | `--cut` of a root whose rule writes −3000 is written, `requires` naming `catalog_business` after the two words; `standard-pack compose` of the root cut over gives the cut's digest |
+
+Adapted in place, each because this slice changes on purpose what it pinned:
+`gate_sched_c1a::sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer` (0 and −1 compile,
+−2^53 is `limit_exceeded`, a valued and a pending product compile; the realization conflict stays)
+and `gate_477_cv1::cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word` (0, −1 and
+−(2^53 − 1) taken, −2^53 out of limits, a value beside a pending product taken; the realization
+conflict stays; `CatalogValue::milli` is an `i64`). `schema.rs`'s
+`published_schema_bounds_match_compiler_constants` gains the member's bounds. The guards the study
+named pass unchanged, read case by case: `sched_c1a_t1` to `t5`, `t7` (its "a priced product" case
+is now refused by the `requires` check, `schedule_invalid` at the same pointer) and `t8`;
+`gate_455_b1` `b1_t1` to `b1_t14` (every product beside a value there declares no valuation, so its
+gap weight is its weight, and `goal_runs` meets no base-weighted product); `gate_455_sl1`, `gate_455_rr3b`,
+`gate_455_rr3c` and `gate_ss2b` `ss2e_t1` to `t5`, likewise. No golden re-recorded; no test leaves the
+gate maps.
+
+**What is not changed.** Every catalogue and file that writes no value of 0 or below and no priced
+or pending product beside a value: its documents, canonical bytes, hash, diagnostics, rules digest,
+coverage, provenance, `requires`, every `S`, `ε`, `B`, item and reason, `run_cap`, `gap_remaining`
+and the unread rule. Every task without a fixed value: the resource layer computes for it what it
+computed. The score stage's term of a fixed-value task whose products carry no valuation (ruling 4,
+fix round 1). The zero tier and its conflict. `standard-pack adopt`
+(its decided value stays at least 1, and it adds no new word), and the standard-pack trial. The
+ledger, `runtime-client`, `actingd-config`, every declared interface range, every code and word.
+
+**At deploy.** Nothing to configure. No installed catalogue or `schedule.json` uses either freedom,
+so nothing changes until a resource repository writes a value of 0 or below, or a value beside a
+priced or pending product; a file that does names `fixed_value_any` in `requires` and needs this
+build. In the release notes' language:
+规则的固定价值现在可以写 0 或负数，也可以和有估值（或估值待定）池子的产出写在一起：写了固定价值的任务，它的基础价值就只是这个固定价值，产出照写，只用于目标那一层（目标的缺口权重、目标下告诉这一趟跑几次、跑完后不读的池子），池子本身的估值不再加到固定价值上。0 表示这一趟本身不值什么，负数表示比它的消耗还亏；这样的任务只有目标把它推成正数时才会跑。花东西却本身不产出的准备步骤不该靠写 0 或负数：链条在链头上一次算账，链头写整条链的价值、真实消耗和真实产出。用了这两种新写法的 `schedule.json` 要在 `requires` 里写 `fixed_value_any`；没用的文件一切照旧。旧版本的 Runtime 不认这个名字，会拒绝这样的文件；装了这样的游戏根之后，安装器不允许回滚到这一版之前。
+
+**Rollback.** A start of a build before this one fails (`catalog_generation_invalid`, fatal) once a
+generation holding a value of 0 or below, or a value beside a priced or pending product, is active
+or pinned: its compiler refuses the generation. With the word, the installer's plan (#429 RB-1)
+refuses such a rollback while a game's `schedule.json`, or a fragment of the active generation,
+lists it. The way back: take the freedoms and the word out of the files, let this build activate a
+generation without them, stop the scheduler so that no dispatch pins the old generation (the plan
+does not see a generation pinned only by a dispatch in flight), then roll back. Decision records
+holding a `fixed_value_milli` of 0 or below are read by an older build as any integer value. A raw
+configured catalogue carries no `requires`: there a person removes the freedoms before rolling
+back.
+
+**Fix round 1** (coordinator work order `rd-1123/brief-503-fixv-fix1.md`, on the independent review
+of pull request #1938, its findings F1 to F11; the rulings are the coordinator's). The review found
+the rulings 1 to 3 and 5 to 7 built as written and nothing to fix for correctness. *Acted on*: F1,
+ruling 4 is built (its item above; the test `fixv_t8`); F2, kept as built and said in
+[resource-targets.md](resource-targets.md) where the goal term of `run_cap` is described for a
+fixed value: a rule whose value would pay for its run alone is still told only its goals' turns
+while a goal on what it produces is open, and a later dispatch spends the rest of the consumed pool
+once the produced pool is read again, which keeps such rules as they were before this slice; F3,
+the productions of the runs a chain hands over to, written on its head, are intended, and
+[standard-pack-schedule.md](standard-pack-schedule.md) ("A chain is judged once, at its head") says
+what follows (they bound the head's `run_cap` and are marked unread from the end of the head's own
+run, so a reading taken between that run and the one that yields the drop is believed and the need
+can look open one more round) and what limits it (the step that yields the drop keeps its own
+`produces`); F5, the header of `gate_sched_c1a::sched_c1a_t7` says what the test pins now: its
+cases "a priced product" and "no integer" (a value of text beside the produced valued pool) are
+refused by the composer for want of `fixed_value_any`, `schedule_invalid` at the same pointer,
+before the compiler reads the value. *Left for later, nothing changed for them*: F4 and F6 (tests:
+the switched root's half of the word's check; fixtures whose goal step equals the priced pool's
+scale, and a pending product under a goal), F7 (a warning for a head that can never pass), F8 (a
+warning from the catalogue writer), F9 (`standard-pack adopt` and the word), F10 (diagnostics) and
+F11 (an installer-plan test of the word). Existing tests that show no number moves for a catalogue
+accepted before this slice: `gate_455_rr3b::rr3b_t4` and `gate_455_rr3c::rr3c_t3` pin the items of
+fixed-value tasks on pools without a valuation (`base=0` and their gap, effective weight and term)
+and `gate_455_b1::b1_t8` the item of such a task; `gate_ss1::ss1_t3`, `ss1_t4` and
+`gate_455_b3p::b3p_t4` pin the items of tasks without a fixed value, for which the flag is off.
+`fixv_t3`, `t5` and `t6` pin the gate's `B`, items and turns beside a priced product; they read the
+weights the net benefit is handed, which do not change. Every other test passes as it stands.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

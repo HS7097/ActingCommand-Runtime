@@ -34,9 +34,10 @@ use super::{
     STANDARD_PACK_CATALOG_VALUES_SCHEMA_VERSION, StandardPackCatalog, at,
     parse_standard_pack_catalog_with, read_catalog, read_document, standard_pack_schedule_pools,
 };
+use crate::canonical::{CANONICAL_SAFE_INTEGER_MAX, CANONICAL_SAFE_INTEGER_MIN};
 use crate::resource_effect::{
-    EffectDirection, MAX_EFFECT_QUANTITY, MAX_EFFECTS_PER_TASK, MAX_SCHEDULING_IDENTIFIER_BYTES,
-    ResourceEffectSpec, scheduling_identifier,
+    EffectDirection, MAX_EFFECTS_PER_TASK, MAX_SCHEDULING_IDENTIFIER_BYTES, ResourceEffectSpec,
+    scheduling_identifier,
 };
 use crate::standard_pack::{StandardPackProblem, StandardPackRegistry, StandardPackRootIssue};
 use crate::standard_pack_schedule::{
@@ -95,12 +96,14 @@ const VALUES_FILE_MEMBERS: [&str; 2] = ["schema_version", "packs"];
 const VALUES_ITEM_MEMBERS: [&str; 5] = ["package_id", "rule_id", "value", "limited", "realization"];
 
 /// CV-1: the fixed value of one run of a package, `value` `{milli, origin?}`: in milli of its
-/// game's one value unit, 1 to [`MAX_EFFECT_QUANTITY`], with the meaning of a rule's
-/// `fixed_value_milli`; `origin` `"model"` when the model's export wrote it (a rule's
-/// `fixed_value_origin`), else absent, the pack's own hand.
+/// game's one value unit, with the meaning of a rule's `fixed_value_milli`; #503 FIXV (register
+/// §1.550): of either sign, 0 included, within [`CANONICAL_SAFE_INTEGER_MIN`] to
+/// [`CANONICAL_SAFE_INTEGER_MAX`], the range the compiler holds that value to; `origin` `"model"`
+/// when the model's export wrote it (a rule's `fixed_value_origin`), else absent, the pack's own
+/// hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogValue {
-    pub milli: u64,
+    pub milli: i64,
     pub origin: ScheduleValueOrigin,
 }
 
@@ -241,12 +244,12 @@ impl CatalogParts {
 }
 
 /// CV-1: what a reader of `pack-catalog.json` holds it to of the game root's `schedule.json`: the
-/// pools it declares (every catalog's), and for version 2 the pools with a valuation (a declared
-/// block or the pending marker) and each rule's package by the rule's id.
+/// pools it declares (every catalog's), and for version 2 each rule's package by the rule's id.
+/// #503 FIXV (register §1.550): no longer the pools with a valuation, which a value now stands
+/// beside.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CatalogScheduleFacts {
     pools: BTreeSet<String>,
-    valued: BTreeSet<String>,
     rules: BTreeMap<String, String>,
 }
 
@@ -258,16 +261,6 @@ impl CatalogScheduleFacts {
         };
         Self {
             pools: standard_pack_schedule_pools(schedule),
-            valued: schedule
-                .pools
-                .iter()
-                .filter(|pool| {
-                    pool.body
-                        .get("valuation")
-                        .is_some_and(|value| !value.is_null())
-                })
-                .map(|pool| pool.id.clone())
-                .collect(),
             rules: schedule
                 .rules
                 .iter()
@@ -325,9 +318,9 @@ impl Check<'_> {
     /// One business part, the members of `object` at `pointer`: `consumes` and `produces`
     /// (both required, [`Self::effects`]), `value` ([`Self::value`]), `limited` and
     /// `realization` ([`Self::mark`]). What the compiler refuses for a rule's fixed value is an
-    /// error here, `catalog_value_conflict` at `value`: beside the realization mark, and beside a
-    /// production of a pool whose valuation `schedule.json` declares or leaves pending (judged
-    /// only when the reader holds the root's schedule).
+    /// error here, `catalog_value_conflict` at `value`: beside the realization mark. #503 FIXV
+    /// (register §1.550): a value beside a production of a pool whose valuation `schedule.json`
+    /// declares or leaves pending is taken, as the compiler takes it.
     fn part(&mut self, object: &Map<String, Value>, pointer: &str) -> CatalogPart {
         let consumes = self.effects(
             object.get("consumes"),
@@ -345,12 +338,7 @@ impl Check<'_> {
             .and_then(|value| self.value(value, &at_value));
         let limited = self.mark(object.get(LIMITED), &at(pointer, LIMITED));
         let realization = self.mark(object.get("realization"), &at(pointer, "realization"));
-        let valued_production = self.facts.is_some_and(|facts| {
-            produces
-                .iter()
-                .any(|effect| facts.valued.contains(&effect.pool_id))
-        });
-        if value.is_some() && (realization || valued_production) {
+        if value.is_some() && realization {
             self.error(StandardPackProblem::CatalogValueConflict, at_value);
         }
         CatalogPart {
@@ -446,8 +434,9 @@ impl Check<'_> {
     }
 
     /// A fixed value at `pointer`: an object of `milli`, a whole number (`malformed` otherwise)
-    /// of 1 to [`MAX_EFFECT_QUANTITY`] (`catalog_out_of_limits` otherwise), and `origin`, which
-    /// when written is `"model"` (`malformed` otherwise); a member it does not know is
+    /// of [`CANONICAL_SAFE_INTEGER_MIN`] to [`CANONICAL_SAFE_INTEGER_MAX`], of either sign and 0
+    /// included (#503 FIXV, register §1.550; `catalog_out_of_limits` otherwise), and `origin`,
+    /// which when written is `"model"` (`malformed` otherwise); a member it does not know is
     /// `malformed` at it.
     fn value(&mut self, value: &Value, pointer: &str) -> Option<CatalogValue> {
         let Some(object) = value.as_object() else {
@@ -456,11 +445,15 @@ impl Check<'_> {
         };
         self.unknown(object, pointer, &VALUE_MEMBERS);
         let at_milli = at(pointer, "milli");
-        let milli = match object.get("milli").map(Value::as_u64) {
-            Some(Some(milli)) if (1..=MAX_EFFECT_QUANTITY).contains(&milli) => Some(milli),
-            Some(Some(_)) => {
-                self.error(StandardPackProblem::CatalogOutOfLimits, at_milli);
-                None
+        let milli = match object.get("milli") {
+            Some(Value::Number(number)) if number.is_i64() || number.is_u64() => {
+                let within = number.as_i64().filter(|milli| {
+                    (CANONICAL_SAFE_INTEGER_MIN..=CANONICAL_SAFE_INTEGER_MAX).contains(milli)
+                });
+                if within.is_none() {
+                    self.error(StandardPackProblem::CatalogOutOfLimits, at_milli);
+                }
+                within
             }
             _ => {
                 self.error(StandardPackProblem::Malformed, at_milli);
@@ -933,9 +926,10 @@ fn rule_part(rule: &ScheduleRule, index: usize) -> Result<CatalogPart, StandardP
             sides[slot].push(effect);
         }
     }
+    // #503 FIXV (register §1.550): a whole number of either sign, as the compiler reads it.
     let value = match &rule.fixed_value_milli {
         None => None,
-        Some(value) => match value.as_u64() {
+        Some(value) => match value.as_i64() {
             Some(milli) => Some(CatalogValue {
                 milli,
                 origin: rule.fixed_value_origin,
@@ -997,11 +991,12 @@ fn rule_effects(
     named
 }
 
-/// The fixed value `rule` writes, as an entry holds one.
+/// The fixed value `rule` writes, as an entry holds one; #503 FIXV (register §1.550): of either
+/// sign.
 fn rule_value(rule: &ScheduleRule) -> Option<CatalogValue> {
     rule.fixed_value_milli
         .as_ref()
-        .and_then(Value::as_u64)
+        .and_then(Value::as_i64)
         .map(|milli| CatalogValue {
             milli,
             origin: rule.fixed_value_origin,
