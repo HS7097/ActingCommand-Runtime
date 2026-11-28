@@ -222,7 +222,7 @@ table's prerequisites, roles and prerequisites' positions), then the references'
 | `table_list_key_duplicate` | fix round 1: a progress list's `fact_key` is the one of an earlier list of its table | the later list's `fact_key` |
 | `table_reading_column_duplicate` | a reading column listed twice among a table's lists, or twice in one `read` or sub; fix round 1: a list's `key_column` listed among its own `columns` (the list names that column twice) | the later; the key column among the `columns` |
 | `table_pool_unknown` | an item's pool is no pool of the composed `schedule.json` (none without the file) | `/items/<item>/pool` |
-| `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
+| `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. #455 SL2 (since 0.12.101): a pool that writes `spend_line`, which the goal check takes because its goal is the pool's line, gives no step and no importance, so it is refused here too, the map saying which pools are lines. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
 
 `goal_tables_undeclared` is the installer's ("Interface").
 

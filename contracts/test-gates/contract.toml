@@ -1030,3 +1030,11 @@ tests = [
     "actingcommand-contract::lib::standard_pack_goal_tables::tests::rr1_fix1_a_prerequisite_on_a_sub_column_or_on_its_own_column_is_refused",
 ]
 incident = ["#455 RR1"]
+
+# #455 SL2 (0.12.101; register §1.547; brief rd-1123/brief-455-sl2.md, ruling 2 and tests 4 and 5; contracts/standard-pack-goal-tables.md, the row of table_pool_unvalued; contracts/standard-pack-goals.md, the row of goal_pool_unvalued): the references' one map says what each pool of the root offers a goal (Valued, Line for a pool that writes spend_line, Unvalued), and each check reads it by its own rule: on the first example's root whose gel_3 and core_5 pools are Line, gel_3, an item without a recipe, is table_pool_unvalued at its pool, the only problem, and core_5, an item with a recipe, is taken; a goals.json resource entry governing a Line pool is accepted and one governing an Unvalued pool is goal_pool_unvalued at /entries/0/governs/pool (tests 4 and 5). Adapted, the map's value becoming GoalPool: standard_pack_goals' goals_neutral_example_reads_to_typed_entries and goals_each_type_reads_its_members (their valued pool GoalPool::Valued) and standard_pack_goal_tables' references helper (true is Valued, false Unvalued)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-contract::lib::standard_pack_goal_tables::tests::sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it",
+]
+incident = ["#455 SL2"]

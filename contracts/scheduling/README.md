@@ -265,10 +265,19 @@ it reads any pool without a valuation: the reserve gate holds a consumer whose r
 ("Task Reserves"), the forward projection applies the consumption, a run handed a `run_cap` leaves
 the pools its task consumes unread until they are read after it ("Pool lines"), a reserve on the
 pool gives its spend values; the pool's lines and the capped spending order act on valued pools
-only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). The goal page and
-the stored goals are untouched: the pool is not offered as one a goal can be set on by
-`{at_least}`, a goal by its pool id is refused `pool_unvalued`, and the Lab's root check refuses a
-`resource` entry on it (`goal_pool_unvalued`). The line itself, its date, the pressing, the hold
+only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). Until #455 SL2
+the goal page and the stored goals were untouched: the pool was not offered as one a goal can be set
+on by `{at_least}`, a goal by its pool id was refused `pool_unvalued`, and the Lab's root check
+refused a `resource` entry on it (`goal_pool_unvalued`).
+
+**With a line** (#455 SL2, since 0.12.101; register §1.547; [../resource-targets.md](../resource-targets.md),
+"A pool's line"). There is now a way to give such a pool its line: a stored target on it is the
+pool's line, set by `{at_least}` alone on the goal page or in a document, with no producer asked,
+listed with the member's `scale` and `price_milli` as its numbers and neither required, and taken by
+a `resource` entry of `goals.json`; no need of the records lands on it. A line has no date of its
+own, and it never weighs: the evaluation reads each stored record without its lines, so the tasks
+that produce the pool are judged as with no target on it and the tasks that consume it as above, the
+consumption still costing nothing. The pressing of the spenders below the line, its date, the hold
 and the statement of a shortfall are later slices. A `schedule.json` whose pool writes the member
 names `pool_spend_line` in `requires`
 ([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
@@ -1267,7 +1276,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) carry
   `<pool>:-0` at its place in the consumption's declaration order, so a reader of the decision sees
   the consumption was read and cost nothing. This 0 is a declared one, not an unknown read as 0:
-  the pool says its spending is governed by a line, and no line is set. Its reading is not read for
+  the pool says its spending is governed by a line, and no line is set. #455 SL2 (since 0.12.101):
+  with a line set it is the same 0, as the evaluation reads no line yet (the pressing below it is a
+  later slice's). Its reading is not read for
   the cost, and the pool takes no part in the pools' lines (below). An entry on it whose `amount`
   is the pending marker stays `entry_pending`; a task that produces it is judged as with any pool
   without a valuation (without a fixed value `valuation_missing`). A task without a fixed value

@@ -732,7 +732,11 @@ root's files write its id, a scheduling identifier, and any other text, a compos
 `<id>@<alias>` among them, is `wrong_type` at `/resource`; `at_least` from 1 to the pool's capacity, `out_of_range`;
 `pool_not_targetable`, `pool_unvalued` with `pool_id`, which names the pool by that same id,
 the one the page's targetable list names it by: [resource-targets.md](resource-targets.md), "A
-target's pool"). A `clear` removes what is stored under the
+target's pool"; #455 SL2, since 0.12.101: on a pool that writes `spend_line` the value is the
+pool's line, which the list names whatever its producers with neither term required, so the same
+check takes it, `by_unix_ms` and the range as on any pool, and the page shows its entry as any
+resource entry's, with the pool's reading and the gap below the line, no member new:
+[resource-targets.md](resource-targets.md), "A pool's line"). A `clear` removes what is stored under the
 name whatever its entry is (a resource entry's target on its pool, else the entry row of the name,
 else the target of that id); with nothing stored under it the name's own word answers
 (`holds_no_value` for a heading or a note (from RR1 until RR2 a `records` entry too),

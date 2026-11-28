@@ -92,11 +92,17 @@ fn unit_with(change: impl Fn(&mut Value)) -> Value {
     value
 }
 
-/// References whose pools are `valued`, each `true` (a goal can be put on it) or not.
+/// References whose pools are `valued`, each `true` (a goal can be put on it) or not (#455 SL2: the
+/// map's [`GoalPool::Valued`] and [`GoalPool::Unvalued`]).
 fn references(valued: &[(&str, bool)]) -> GoalReferences {
     let mut references = GoalReferences::new(BTreeSet::new());
     for (pool, takes_a_goal) in valued {
-        references.pools.insert((*pool).to_owned(), *takes_a_goal);
+        let offered = if *takes_a_goal {
+            GoalPool::Valued
+        } else {
+            GoalPool::Unvalued
+        };
+        references.pools.insert((*pool).to_owned(), offered);
     }
     references
 }
@@ -863,5 +869,48 @@ fn rr1_fix1_a_prerequisite_on_a_sub_column_or_on_its_own_column_is_refused() {
             StandardPackProblem::TableRequiresCycle,
             "/tables/0/columns/0/requires"
         )])
+    );
+}
+
+// #455 SL2 (0.12.101; register §1.547; contracts/standard-pack-goal-tables.md, the row of
+// `table_pool_unvalued`; contracts/standard-pack-goals.md, the row of `goal_pool_unvalued`): the
+// references' one map says what each pool offers a goal, and each check reads it by its own rule.
+// On the first example's root whose `gel_3` and `core_5` pools write `spend_line` (the map's
+// `Line`): `gel_3`, an item without a recipe, is `table_pool_unvalued` at its pool, the only
+// problem, as on a pool that offers nothing; `core_5`, an item with a recipe, is taken. A
+// `resource` entry of `goals.json` governing such a pool is accepted; one governing a pool that
+// offers nothing is `goal_pool_unvalued` at its pool, as before.
+#[test]
+fn sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it() {
+    use StandardPackProblem as P;
+    let tables = read(&example(HERO_EXAMPLE), GAME)
+        .unwrap_or_else(|issues| panic!("the first example reads: {issues:?}"));
+    let mut root = hero_references();
+    for pool in ["pool.neutral.gel_3", "pool.neutral.core_5"] {
+        root.pools.insert(pool.to_owned(), GoalPool::Line);
+    }
+    assert_eq!(
+        check_standard_pack_goal_table_references(&tables, &root),
+        [issue(P::TablePoolUnvalued, "/items/gel_3/pool")]
+    );
+    root.pools
+        .insert("pool.neutral.gold".to_owned(), GoalPool::Unvalued);
+    let governing = |pool: &str| {
+        let document = json!({"schema_version": "actingcommand.goals.v3", "game": GAME,
+            "entries": [{"name": "saved", "type": "resource", "governs": {"pool": pool},
+                         "title": {"en": "Saved"}}]});
+        crate::parse_standard_pack_goals(&serde_json::to_vec(&document).expect("JSON"), GAME)
+            .unwrap_or_else(|issues| panic!("the goals read: {issues:?}"))
+    };
+    let on_line =
+        crate::check_standard_pack_goal_references(&governing("pool.neutral.gel_3"), &root);
+    assert!(on_line.is_empty(), "{on_line:?}");
+    assert_eq!(
+        crate::check_standard_pack_goal_references(&governing("pool.neutral.gold"), &root),
+        [StandardPackRootIssue {
+            file: crate::STANDARD_PACK_GOALS_FILE,
+            problem: P::GoalPoolUnvalued,
+            pointer: "/entries/0/governs/pool".to_owned(),
+        }]
     );
 }
