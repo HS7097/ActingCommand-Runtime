@@ -6,8 +6,9 @@
 //! `perf.monitor_degraded` and no `perf.monitor_recovered` (until 0.12.102 it wrote one of each).
 //! One fake device instance, the performance monitor on with a scripted sampler of calm samples,
 //! a person's run of a package whose one step restarts the instance's application to `home`,
-//! which its recognition pack knows by pixel 0 of the fake device's first frame. No clock is read
-//! and nothing sleeps here.
+//! which its recognition pack knows by pixel 0 of the fake device's frame once the application
+//! command has reached the device (before it the frame shows no page of the package, so the run
+//! takes the step). No clock is read and nothing sleeps here.
 
 use super::*;
 use actingcommand_host_metrics::{
@@ -18,6 +19,8 @@ use serde_json::{Value, json};
 const ALIAS: &str = "neutral.instance";
 /// The fake device's first pixel: the package's home.
 const HOME: [u8; 3] = [255, 0, 0];
+/// A first pixel that shows no page of the package (the fake device's unknown frame).
+const NO_PAGE: [u8; 3] = [1, 2, 3];
 
 /// Every sample calm, at the time the monitor asks for, so no sampler failure is recorded.
 struct CalmSampler;
@@ -136,6 +139,22 @@ fn noise_a_an_application_step_writes_no_degraded_or_recovered_monitor_record() 
     host.replace_capacity_sampler_for_test(Box::new(CalmSampler))
         .expect("the calm sampler");
     let package = application_step_package(&root);
+    // A run takes its first frame first and runs the package's restart step only on a frame that
+    // shows no page of the package (`gate_ord1c`'s `no_page_until_next_command`): the frames show
+    // none until the application command has reached the device, and the package's home from then
+    // on. On a first frame that is already the home the run completes with no step at all.
+    let device = Arc::downgrade(&state);
+    *state.pixel_script.lock().expect("pixel script") =
+        Some(Arc::new(move |_: usize, _: usize| {
+            let commands = device
+                .upgrade()
+                .map_or(0, |live| live.application_count.load(Ordering::Acquire));
+            if commands == 0 {
+                vec![(0, NO_PAGE)]
+            } else {
+                Vec::new()
+            }
+        }));
 
     let ids = IdentifierIssuer::new().expect("identifier issuer");
     let receipt = host
