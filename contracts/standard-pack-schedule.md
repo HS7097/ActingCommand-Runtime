@@ -757,6 +757,17 @@ steps that require its success are never due. Write the chain on its head instea
   writes `"maintenance": true`; a step that spends a valued pool is never marked maintenance, or
   its spending would be judged by nothing.
 
+The head may so write the productions of the runs its chain hands over to (the drops a claim step
+after it yields, say), on purpose: a goal on them then reaches the one place the chain is judged
+(fix round 1, the coordinator's ruling 3). What follows: those productions bound the head's own
+`run_cap` by the goal's runs, and the pool is marked unread from the end of the head's own run
+(when its turns could close the gap), not from the end of the run that yields the drop
+([resource-targets.md](resource-targets.md), "A pool a run was told enough to close the gap on");
+a reading of the pool taken after the head's run and before the run that yields the drop is
+believed, so the need can look open for one more round. What limits it: the step that yields the
+drop keeps its own `produces` too, so that a dispatch of that step handed the gap leaves the pool
+unread after its own run in the same way.
+
 A value of 0 or below is for a run whose own worth is truly nothing or less, so that only a goal
 moves it ([scheduling/README.md](scheduling/README.md), "What 0 and below mean").
 

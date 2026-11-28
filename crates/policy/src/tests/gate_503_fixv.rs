@@ -18,7 +18,9 @@
 // - the case the slice is for: a chain head with a fixed value, a priced consumption and a priced
 //   product a goal asks for (test 6);
 // - the composer requires `fixed_value_any` for either freedom, and a Runtime that does not name
-//   it refuses the file (test 7).
+//   it refuses the file (test 7);
+// - fix round 1: beside a fixed value the score stage's resource term counts a priced product's
+//   gap weight alone, and the same rule without the value its base valuation and gap (test 8).
 //
 // The catalog is neutral and V2, as #455 B1's gate: judged tasks on one instance; the capped pool
 // `pool.neutral` read from `resource.neutral`, its capacity read from `resource.neutral.capacity`
@@ -556,6 +558,80 @@ fn fixv_t7_the_composer_requires_fixed_value_any_and_an_older_runtime_refuses_th
     let issue = &failure.issues()[0].issue;
     assert_eq!(issue.problem, StandardPackProblem::ScheduleRequiresMissing);
     assert_eq!(issue.pointer, "/requires/1");
+}
+
+// Test 8, the score stage (fix round 1, the coordinator's ruling 1 on the review's first finding).
+// `task_r` consumes 1 of the capped pool (read at 150, a cost of 1000) and produces 2 of the priced
+// pool (read at 10, 5000 milli a step of 10), a goal on the priced pool (gap 30, `Γ` 3000). With
+// `V` 10 000 its resource term counts the gap's part alone, `R = ⌊2000·3000/(10·1000)⌋ = 600`: its
+// `score_computed` says `resources=600`, its `resource_weights` item reads
+// `pool.priced:r=2,per=10,base=0,gap=3000,effective=3000,term=600` and its `rank_breakdown`
+// `target=600`; its `B` is `10 000 − 1000 + 600 = 9600`. The same rule without the value carries
+// base plus gap: `R = ⌊2000·8000/(10·1000)⌋ = 1600`, the item
+// `base=5000,gap=3000,effective=8000,term=1600`, `target=1600`, its `B` `1600 − 1000 = 600`.
+#[test]
+fn fixv_t8_beside_a_fixed_value_the_score_stage_counts_the_gap_s_part_alone() {
+    let rule = |value: Option<i64>| {
+        let task = with(judged("task_r", 1), "produces", json!([produce(PRICED, 2)]));
+        let task = match value {
+            Some(fixed_value) => fixed(task, fixed_value),
+            None => task,
+        };
+        catalog(vec![task], pools())
+    };
+    for (case, value, benefit, term, item) in [
+        (
+            "with the fixed value",
+            Some(10_000),
+            9_600,
+            600,
+            "pool.priced:r=2,per=10,base=0,gap=3000,effective=3000,term=600",
+        ),
+        (
+            "without it",
+            None,
+            600,
+            1_600,
+            "pool.priced:r=2,per=10,base=5000,gap=3000,effective=8000,term=1600",
+        ),
+    ] {
+        let mut world = World::new(rule(value), 150)
+            .with_priced(10)
+            .with_goals(&[PRICED]);
+        let evaluation = world.evaluate();
+        assert_eq!(
+            dispatched(&evaluation),
+            ["task_r"],
+            "{case}: {evaluation:#?}"
+        );
+        let winner = decision(&evaluation, "task_r");
+        let score = &reason(winner, PolicyCode::ScoreComputed).detail;
+        assert!(
+            score.ends_with(&format!(" resources={term}")),
+            "{case}: {score}"
+        );
+        let weights = &reason(winner, PolicyCode::ResourceWeights).detail;
+        assert!(
+            weights.ends_with(&format!(" term={term} items={item}")),
+            "{case}: {weights}"
+        );
+        let breakdown = reason(winner, PolicyCode::RankBreakdown);
+        assert!(
+            breakdown
+                .detail
+                .contains(&format!(" target={term} target_id=* mode=adjust ")),
+            "{case}: {}",
+            breakdown.detail
+        );
+        assert_eq!(
+            breakdown.outcome.value("benefit_milli"),
+            Some(&json!(benefit)),
+            "{case}"
+        );
+        if let Some(fixed_value) = value {
+            fixed_first(winner, benefit, fixed_value, E);
+        }
+    }
 }
 
 // ---- The world a test drives ----

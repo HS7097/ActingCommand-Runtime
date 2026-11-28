@@ -506,7 +506,10 @@ fn sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer() {
 // `valuation_origin`); the member on a declared maintenance rule (the reader) or on a rule whose
 // package is maintenance-role (the composer); the task member written by a rule; an origin of
 // another value, an origin without a value, a valuation origin beside the pending marker (the
-// reader); and the compiler's refusals of the task member, mapped back to `fixed_value_milli`.
+// reader); and a value beside a production of a valued pool, an integer ("a priced product") or
+// text ("no integer"), which the composer refuses for want of `fixed_value_any` in `requires`
+// before its compiler reads the value (#503 FIXV, register §1.550; before it, these two were the
+// compiler's refusals, mapped back to `fixed_value_milli`).
 #[test]
 fn sched_c1a_t7_the_composer_writes_the_member_and_keeps_the_origins_out() {
     let requires = [BENEFIT_FIXED_VALUE_SUBSYSTEM];

@@ -1039,18 +1039,29 @@ below that line too; only the goal terms of pools without the member are left ou
 every reason above are unchanged, and so is `gap_remaining`.
 
 #503 FIXV (since 0.12.101; register §1.550; the coordinator's rulings on the owner's direction of
-11-28). A task with a fixed value may also produce a priced or pending pool. For it the net benefit
-reads of each produced pool **only its gap weight `Γ`** (the resource layer's term gives it beside
+11-28, and of the slice's fix round 1). A task with a fixed value may also produce a priced or
+pending pool. For it the net benefit reads of each produced pool **only its gap weight `Γ`** (the
+resource layer's term gives it beside
 the effective weight, `PoolWeight::gap_weight_milli`), at the step `Q_p` its term divides by (a
 priced pool's `valuation.scale`, else the target's or the pool's `target_defaults` step as above):
 `r(k,p)·Γ/(1000·Q_p)`. The pool's base valuation `B_p` is never added to `V`, so without a target
 on it a priced product adds nothing, and with one its gap term is added once. For a pool without a
 valuation `Γ` is `W(k,p)`, so nothing above changes for it. The goal term of `run_cap` makes no
 base-weight test for such a task: the goal's runs bound the turns a run is told whatever
-valuations its produced pools carry (the coordinator's ruling 2). `R`, the score stage's term, is
-left as the resource layer computes it for every task, `B_p + Γ` included: it orders no judged
-candidate within its tier (the business tier orders by `B ÷ E`), and the `resource_weights` reason
-shows it as before.
+valuations its produced pools carry (the coordinator's ruling 2). So a rule whose value would pay
+for a run on its own is still told no more turns than its goals need while a goal on what it
+produces is open, and what is left of the pool it consumes is spent by a later dispatch, once the
+produced pool is read again: this keeps such rules as they were before 0.12.101, when every pool a
+fixed-value task produced was goal-driven (fix round 1, the coordinator's ruling 2). The score
+stage reads the same (fix round 1, ruling 1): for a task with a fixed value the resource layer
+counts `B_p` as 0 in each product's term, `⌊r(k,p)·Γ/(1000·Q_p)⌋`, so `R` holds the gaps' part
+alone, and the `resource_weights` item says `base=0` with `effective` equal to `gap` (a priced
+product no goal covers weighs 0 and adds nothing to `R`); the same rule without a value carries
+`B_p + Γ`. So no base valuation beside `V` reaches an order through `R` either: neither the score
+stage's total nor a selection document's promotion, which sorts a candidate before every tier. A
+unit the task consumes of a pool it also produces still costs `B_p + Γ` in its net benefit. A
+catalogue that writes no priced product beside a value is weighed as before: `B_p` is 0 for every
+pool its fixed-value tasks produce.
 
 **A goal never takes `run_cap` away** (#455 B1 ruling 10, since 0.12.82; register §1.518). The
 goal term of `run_cap` ([remedies.md](remedies.md), section 4, "Spend values") of a produced pool
