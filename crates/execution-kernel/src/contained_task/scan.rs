@@ -40,6 +40,13 @@
 //! that (the repeats that fail a scan with `end` `selection_scan_end_unconfirmed`) it fails
 //! `selection_scan_early_stop_unreached`. A lower preference it read is not pressed, because
 //! without positive evidence of the list's end nothing says that no better item follows.
+//!
+//! Workflow #503 LIST-C (`package` revision 30): a scan's `end` may write `require_stationary:
+//! true`. Its end check then ends the coverage only on the forward viewport on which the list has
+//! stopped moving by the judgement above (the second consecutive forward viewport that repeats the
+//! one before it) and the check passes there: a pass on a viewport after which the list still
+//! moves counts for nothing, and a list that stops where the check does not pass fails
+//! `selection_scan_end_unconfirmed` as before. Every viewport is read and aligned as before.
 
 mod admission;
 mod online;
@@ -270,10 +277,16 @@ struct DeclaredStart {
     rewind: bool,
 }
 
+/// The end of the list: the check that passes on its foot, and (Workflow #503 LIST-C, `package`
+/// revision 30) whether the coverage also waits for the list to have stopped moving. The member is
+/// written only `true` (the declaration gate refuses `false`, as it refuses a pool entry's `other`
+/// written `false`); absent, the end check alone ends the coverage, as before.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeclaredEnd {
     check: String,
+    #[serde(default)]
+    require_stationary: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -637,7 +650,9 @@ pub(super) trait ScanSource {
 
     /// Workflow #428 S168-4: the end check passed on the latest frame, a coverage viewport (the
     /// start or a forward one); a list reading's evidence names that frame. A source that keeps
-    /// no evidence of it does nothing.
+    /// no evidence of it does nothing. Workflow #503 LIST-C: called once, for the viewport that
+    /// ends the list, so for a scan whose end requires the list to be stationary only on the
+    /// forward viewport on which it stopped moving and the check passed.
     fn end_passed(&mut self) -> Result<(), ContainedTaskRunError<Self::Error>> {
         Ok(())
     }
@@ -1563,9 +1578,13 @@ impl<'a> ScanSession<'a> {
             return Ok(end);
         }
         // The coverage viewport (start or forward) on which the end check passed, and its
-        // offset; a corrective that follows it does not move the end.
-        let mut end_viewport = reading.end_check.then_some((0_u32, 0_i64));
-        if reading.end_check {
+        // offset; a corrective that follows it does not move the end. Workflow #503 LIST-C: of a
+        // scan whose end requires the list to be stationary, the forward viewport on which the
+        // list stopped moving and the end check passed (`Self::end_reached`), never the start.
+        let mut end_viewport = self
+            .end_reached(reading.end_check)
+            .then_some((0_u32, 0_i64));
+        if end_viewport.is_some() {
             source.end_passed()?;
         }
         loop {
@@ -1608,7 +1627,7 @@ impl<'a> ScanSession<'a> {
             {
                 return Ok(end);
             }
-            if reading.end_check {
+            if self.end_reached(reading.end_check) {
                 end_viewport = Some((index, offset));
                 source.end_passed()?;
             }
@@ -1644,12 +1663,28 @@ impl<'a> ScanSession<'a> {
         }
     }
 
+    /// Whether the coverage viewport just observed, whose end check passed when `end_check`, ends
+    /// the list. Without `end.require_stationary` the end check alone does, as it always did.
+    /// Workflow #503 LIST-C (`contracts/selection-graph.md`, "An end that must also be
+    /// stationary"): with it, the list must also have stopped moving on that viewport, by the one
+    /// judgement `EndTest`'s repeats make (`forward_repeats` at 2: it is the second consecutive
+    /// forward viewport that repeats the one before it), so the start viewport never ends it.
+    fn end_reached(&self, end_check: bool) -> bool {
+        let stationary = self
+            .scan
+            .end
+            .as_ref()
+            .is_none_or(|end| !end.require_stationary || self.forward_repeats >= 2);
+        end_check && stationary
+    }
+
     /// `EndTest`'s repeats (S0 §2.2): two consecutive forward viewports repeated the one before
     /// them, so the list stopped moving before the scan could end, at the coverage viewport
     /// `viewport_index`. A scan that declares `end` never saw its end check pass
-    /// (`selection_scan_end_unconfirmed`); Workflow #463 K-c: one that declares none stopped before
-    /// its early stop held (`selection_scan_early_stop_unreached`). One detection, the code by
-    /// the declaration.
+    /// (`selection_scan_end_unconfirmed`; Workflow #503 LIST-C: one whose end requires the list to
+    /// be stationary did not see it pass on that viewport, the same cause); Workflow #463 K-c: one
+    /// that declares none stopped before its early stop held
+    /// (`selection_scan_early_stop_unreached`). One detection, the code by the declaration.
     fn stopped_moving(&self, viewport_index: u32) -> ContainedTaskError {
         let code = if self.scan.end.is_some() {
             ExecutionKernelCode::SelectionScanEndUnconfirmed
@@ -1818,7 +1853,10 @@ impl<'a> ScanSession<'a> {
     }
 
     /// The offsets a forward viewport may lie at: no move, or a full step; where the end check
-    /// passed, any step up to the largest, because the list stopped at its end.
+    /// passed, any step up to the largest, because the list stopped at its end. Workflow #503
+    /// LIST-C: the same for a scan whose end requires the list to be stationary, each viewport by
+    /// its own end check, so the repeats at the foot lie in the window and a move after a viewport
+    /// whose check passed is held to the full step again.
     fn forward_window(&self, previous: i64, end_passed: bool) -> Vec<(i64, i64)> {
         let tolerance = self.geometry.tolerance;
         let (minimum, maximum) = self.moves.advance_steps;

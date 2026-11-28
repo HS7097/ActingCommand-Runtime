@@ -110,6 +110,9 @@ mod gate_503_list_a3;
 // Workflow #503 LIST-B: a list reading over cards identified by pictures.
 #[cfg(test)]
 mod gate_503_list_b;
+// Workflow #503 LIST-C: a scan's end may require that the list has stopped moving.
+#[cfg(test)]
+mod gate_503_list_c;
 // Workflow #450 FL-1a and FL-1b: a list grouped from fields read one position per frame.
 mod field_list;
 // Workflow #450 FL-1a and FL-1b: the field list's named tests, the kernel's halves.

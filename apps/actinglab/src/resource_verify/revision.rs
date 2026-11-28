@@ -73,6 +73,9 @@
 //! - **A `repeated_anchor` layout's picture pool**, 29 (Workflow #503 LIST-B, register §1.536):
 //!   the member `identity_templates` of a candidate layout and the member `region` of a layout's
 //!   feature, whatever they hold, in a pack of either mode, two rows of [`ROWS`].
+//! - **A scan's end that must also be stationary**, 30 (Workflow #503 LIST-C, register §1.541):
+//!   the member `require_stationary` of a scan's `end`, of a select step or of a list reading,
+//!   whatever it holds, in a pack of either mode, a row of [`ROWS`].
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -166,6 +169,9 @@ const LIST_OTHERS_REVISION: u64 = 27;
 /// `identity_templates` of a candidate layout and `region` of a layout's feature (two rows of
 /// [`ROWS`]).
 const LAYOUT_POOL_REVISION: u64 = 29;
+/// Revision 30: a scan's end that must also be stationary (Workflow #503 LIST-C), the member
+/// `require_stationary` of a scan's `end` (a row of [`ROWS`]).
+const STATIONARY_END_REVISION: u64 = 30;
 const VARIABLES: &str = "variables";
 const PROVIDES: &str = "provides";
 const IRREVERSIBLE: &str = "irreversible";
@@ -295,11 +301,11 @@ const fn when(
 
 /// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
 /// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22, (Workflow #477 LR-1) 25,
-/// (Workflow #455 TK-1) 26, (Workflow #503 LIST-A) 27 and (Workflow #503 LIST-B) 29 and the
-/// register sections they cite, and the B train's sections, put into a revision: each with its
-/// file, its place, what it holds, its condition and its revision
+/// (Workflow #455 TK-1) 26, (Workflow #503 LIST-A) 27, (Workflow #503 LIST-B) 29 and (Workflow
+/// #503 LIST-C) 30 and the register sections they cite, and the B train's sections, put into a
+/// revision: each with its file, its place, what it holds, its condition and its revision
 /// (`contracts/resource-verify.md`, "The `package` revision", lists them with their sources).
-const ROWS: [Row; 55] = [
+const ROWS: [Row; 56] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -585,6 +591,16 @@ const ROWS: [Row; 55] = [
         "region",
         Place::Under("features"),
         LAYOUT_POOL_REVISION,
+    ),
+    // 30, Workflow #503 LIST-C (§1.541; contracts/selection-graph.md, "An end that must also be
+    // stationary"): a scan's `end` that writes `require_stationary`, the scan of a select step or
+    // of a list reading, whatever it holds and in a pack of either mode: every Runtime before it
+    // refuses the member at its admission, whose reader of `end` denies unknown members.
+    row(
+        TASK,
+        "require_stationary",
+        Place::Under(END),
+        STATIONARY_END_REVISION,
     ),
 ];
 
