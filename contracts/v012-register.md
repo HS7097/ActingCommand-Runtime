@@ -54058,6 +54058,393 @@ a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It rea
 codes in the records as text it does not know. The gate's memory was memory only and is gone; the
 older build starts automatic emulators with no gate, as before.
 
+### 1.555 Slice #503 FACT-R (0.12.103): a scope of the instance fact store at its bound takes a publication's new keys in the room of its facts that have been expired for more than seven days, each removed by its own record; `ledger` 11, one way (board #503; the owner's decisions of 11-28 and 11-29, in neutral words below; the rulings are the coordinator's, after a read-only study of the store's capacity on main `cdc3e0b4`, v0.12.99; built on that main, merged with main `924f4034`, which holds §1.546; §1.545 and §1.547 to §1.554 are slices of the same days)
+
+It ships in 0.12.103 and takes `ledger` 11. [instance-fact-store.md](instance-fact-store.md)
+("Expiry reclamations", new; "Accept first, revisions and tagged load", "Capacity ledger": "Counted
+once", "What counts", "Where it is checked", "Booking"), [ledger-observer.md](ledger-observer.md)
+(§1, the instance fact store's bound), [component-interfaces.md](component-interfaces.md) (the
+`ledger` row 11 and the paragraph on the planned rows) and the outcome code
+`fact_store_expired_facts_reclaimed` (`contracts/outcome-codes/runtime-host.json`) are the contract.
+
+**The problem** (the work order's, in neutral words). A scope of the store holds a bounded number of
+facts: 224 for an instance, 16 for a server, 16 for a game (§1.496). An expired fact stays active
+and counts until a newer observation of its key or an invalidation replaces it; nothing removes a
+fact because it expired. A key that is written no more (a package unloaded or no longer bound, a
+key a package's new version renamed, a reading retired, a priority offset that outlived its task)
+and whose fact lists no trigger therefore holds its room for ever, and a scope at its bound refuses
+every key it does not hold (`fact_store_capacity_exceeded`). With list readings of several
+applications arriving, each of them a key, the owner called this a main problem.
+
+**The owner's decisions** (11-28 and 11-29, on board #503; the words here are the coordinator's).
+The communication protocol's size limits are not touched; a scope near its bound reclaims keys
+that expired long ago; and the change ships in one release, reader and writer together, accepting
+that the installation cannot go back below that release.
+
+**The designs compared.** *Implicit reclamation* (the check skips expired facts and the reducers
+recompute the same decision) is ruled out: the start's tagged load cannot reproduce it without
+replaying the whole ledger, a build before it would bring every reclaimed fact back, and nothing
+in the ledger would say what was dropped. *Explicit records* (built): the decision is made once,
+live, and each removed fact is a `fact.invalidated` of the existing shape, so the store stays a
+pure function of the ledger; it changes the rule of an existing record, so `ledger` moves.
+*The same in two releases, reader first*, which would have kept a way back from the writer to the
+reader, is set aside by the owner's decision of one release. A dedicated trigger type that facts
+list (the ordinary rule would drop unexpired ones too, and older decoders refuse a new type),
+counting only unexpired facts (a snapshot could pass 256 and halt the Runtime) and a request that
+retires a key (the same rule change, and not automatic) are rejected.
+
+**What it rests on** (read on main; none of the stop conditions holds).
+- *`ledger` 11 is free* on main (`[3, 10]` since §1.529, `924f4034` included); raising it needs no
+  migration and no fresh state root: no record shape, type, table, index or view changes.
+- *Every path of this build rebuilds the store the live one holds.* The live store and the full
+  replay apply each record through `replay_event` and `apply_invalidation`, which accept the third
+  form. The start's tagged load: a reclaimed key's `state` row names its invalidation (the latest
+  record of the key), so its publication is not loaded for it, the invalidation files the
+  tombstone and sets `latest_observed` to its time, the fact's expiry, which is what the live store
+  sets (the maximum of the fact's observation and its expiry). The history at a position replays
+  every event and applies the form where it stands, as an adjustment's. The State projection
+  verifies it inside the invalidation's transaction. Test 4 compares the load, the replay and the
+  live store (LN-2's view), and the history at every position from the first warning on.
+- *An older build does not stop at its start.* Builds 0.12.76 to 0.12.102 decode the records (no
+  shape changed); their tagged load files a reclaimed key's tombstone without checking the trigger
+  again (the State row's identity and origin only), and a start reads no history at a position (the
+  strategic report, the policy input identity and the console's paged read are requests). They stop
+  at the first reclamation in range when such a request reads history
+  (`fact_invalidation_source_mismatch`).
+- *The State projection takes the request-published facts.* Every `fact.published` the store writes
+  has the fact store's module; the facts published under a request's source and actor are priority
+  offsets, pack schedules, remedy choices, resource targets and goal records; the last four are the
+  keys the plan excludes, and a priority offset is taken (test 7). No other key is published under a
+  request's origin.
+- *A failure half way leaves a store a start loads as it is.* The warning and each invalidation with
+  its tombstone are records of their own, each one transaction, in one hold of the fact write gate
+  (no other fact write between them). A failure or a stop between them leaves the facts reclaimed
+  so far reclaimed and the rest active, the publication not appended; a start loads exactly that
+  (every path above), and the next publication that needs the room reclaims again.
+
+**The rulings, as built.**
+- *1, when* (`HostShared::publish_facts_under_gate`, `crates/runtime-host/src/host/facts.rs`). Only
+  inside a publication, when its observation brings keys its scope does not hold and they would pass
+  the bound: the plan (`InstanceFactStore::plan_expiry_reclamation`) is made with the publication's
+  clock, the check counts the room it frees (`preview_observation_freeing`, the two bound checks
+  alone), every other check follows as before, and only then are the records written
+  (`reclaim_expired_under_gate`), the check run again without the room, and the publication appended.
+- *2, which and how many.* The scope's facts whose expiry lies more than
+  `FACT_RECLAIM_AFTER_EXPIRY_MS` (seven days, a contract constant) before the plan, but the
+  observation's keys, facts without an expiry, facts that list `runtime.failed` (the warning drops
+  them by the ordinary rule; they count as freed) and `session.pack.schedule`,
+  `session.remedy.choices`, `session.resource_targets`, `session.goal_records`
+  (`RECLAIM_EXCLUDED_KEYS`), and (fix round 1) every key of the scope a condition of the active
+  catalog reads (`CatalogReadFacts`); ascending expiry, then the sequence of the fact's publication,
+  then the key; exactly `active + new − bound − dropped`. Fewer candidates: nothing is written, and
+  the refusal is the one of before.
+- *3, the records.* One Warning `runtime.failed` `fact_store_expired_facts_reclaimed` (warning,
+  ladder `none`) under the system links, `instance_id` the alias, or `server` or `game` the scope's
+  id, `count` the facts the plan reclaims, `limit_count` the bound, disposition `not_performed` as
+  the share warning's, drafted first and appended only when the plan made again at its time is the
+  same (fix round 1); the store follows it and the invalidations it derives are written; then per
+  fact one `fact.invalidated` (trigger the warning's id and type, `invalidated_at_unix_ms` the
+  fact's expiry) with its State tombstone in one transaction
+  (`InstanceFactStore::prepare_expiry_reclamation`), the store following each; then the daemon's log
+  line, with how many were written (fix round 1). The publication's answer is unchanged; no
+  decision reads the code.
+- *4, the third form* (`actingcommand_contract::is_expiry_reclamation`): the trigger's type is
+  `runtime.failed` and the fact does not list it, the fact has an expiry and the invalidation's
+  time is that expiry. Accepted by `apply_invalidation`, `HistoricalFactProjection::replay` and
+  `::invalidate`, and `verify_sources` (`crates/runtime-state/src/store/fact.rs`), which for this
+  form also requires the expiry to lie more than the margin before the trigger, compares that
+  instead of the trigger's time, and takes a published event of any source and actor of the fact
+  store's module.
+- *5, what replaces the old protection.* "Refuse, never evict" stays for every unexpired fact and
+  every fact without an expiry. Only facts no condition of the active catalog reads (fix round 1)
+  and every reader already takes as unknown, and has for at least the margin, are reclaimed, and
+  each one is a record.
+
+**Decided here.** When the facts the warning would drop cover the whole need, nothing is reclaimed
+or written and the publication is refused as before (a warning that reclaims nothing is not
+written); when the warning would drop the fact of one of the observation's own keys, the same (the
+key would then be new and its observation older than the drop). A plan that does not hold at its
+warning's own time (the wall clock stepped back between the plan and the warning) writes nothing,
+and the publication is refused `fact_store_capacity_exceeded`, a request's refusal (fix round 1;
+before it, the reclamation stopped there with the warning and the first invalidations written). The
+margin at the trigger's time is checked by the State projection alone: a reducer has the record and
+not the trigger's time, and every invalidation reaches the ledger through that check. The fact store's
+one-record check (`preview_publish`) is now the form its unit tests call; the store checks through
+the observation's check.
+
+**Fix round 1** (an independent review of the pull request, findings F1 to F9; the coordinator's
+rulings on them). *Acted on.* F1: a probe (`on_unknown: probe`) dates its unknown period from the
+fact's expiry and from nothing once the key is missing, so a task whose package stayed closed for
+longer than the margin would never be admitted again after its key was reclaimed; every key of the
+scope that a condition of the active catalog reads is now excluded (every `fact`, `record_deadline`
+and `fact_time_reached` predicate of a trigger or a feedback stop, and the facts a `fact` or a
+`resource_projection` predicate compares with). The set (`CatalogReadFacts`) is made from the
+compiled catalog when it becomes active, at the start and at each transition under the policy's
+lock, and kept beside it under a leaf lock of the host (`HostShared::catalog_read_facts`); a
+publication reads it, without the policy's lock and without a walk of the catalog, only once its
+plan needs room (the plan takes it as a call it makes after its count), so a publication that needs
+no room costs nothing more and one that does costs one leaf lock and one shared pointer. No record
+carries it and no reader computes it again; `ledger` stays 11. F3: the warning is drafted first,
+nothing written; the plan is made again at the warning's own time and must be the plan the check
+counted, or nothing is written and the publication is refused as one with too few candidates
+(`InstanceFactStore::confirm_expiry_reclamation`). The warning is therefore appended by the ledger
+and wakes the driver directly, as the store's own invalidations are; the other steps of a Runtime
+record's append (device details, the stability count, the agent wake tap) read an instance link or
+a lifecycle failure, which the warning has not. F2: the contract and the catalogue entry say that
+`count` is the facts the plan reclaims, that the facts removed are those whose invalidation names
+the warning, and that a publication missing after them means a stop or a failure came between and
+the next one plans again; the daemon's log line follows the invalidations, with how many were
+written. F7: "At deploy" says what the plan of an installation checks. F6: tests 12 to 15 (a plan
+that fails at its warning's time, a server scope, the host with a catalog, the host with too few
+candidates) and the gate row's words on the clock. *Left as they are, in the contract's "Known
+limits".* F4: a wall clock set far ahead reclaims facts live in real time, whose keys then refuse
+readings observed before the old expiry until real time passes it, as "not newer" already does.
+F8: every key ever reclaimed stays in the tagged load and in `latest_observed`, so a start's cost
+grows with the reclamations ever made. What F1's exclusion leaves open: a key no condition of the
+active catalog reads and a person still wants (a priority offset or a client key with an expiry, a
+list only a selection reads) is a candidate once expired for the margin; of the records a person
+sets, the four excluded keys never are. F5 and F9 were notes; nothing changed for them. No record
+shape, code, setting or interface revision changed in this round.
+
+**Tests** (host gate map row "#503 FACT-R"; the store-driven tests read only the fixture's clock and
+test 14 the host's manual clock; tests 9 and 15 use the S168-4 gate's host, which runs on the wall
+clock, and read it through the crate's `unix_ms_now`, as that gate does).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_factr::factr_a_a_full_instance_takes_a_new_key_in_the_room_of_its_longest_expired_fact` (1) | at 224 with facts expired one, two and three days after the base, ten days after it a new key reclaims the first; warning, invalidation (trigger the warning, time the expiry) and publication in that order; still 224; gone from the store and the snapshot |
+| `…::factr_b_three_new_keys_take_three_and_too_few_candidates_write_nothing` (2) | three new keys reclaim three by expiry under one warning; two candidates for three keys: `fact_store_capacity_exceeded`, not fatal, head unchanged, no warning, no invalidation |
+| `…::factr_c_the_margin_and_the_exclusions_keep_their_facts_and_ties_go_by_sequence_then_key` (3) | the four excluded keys, the observation's own key, a fact expired six days before and facts without expiry stay; among equal expiries the earlier publication, then the smaller key |
+| `…::factr_d_a_start_a_replay_and_the_history_rebuild_the_live_store_after_reclamations` (4) | after two reclamations the tagged load and the replay equal the live store (LN-2's view), each reclaimed key's `latest_observed` its expiry; the history at every position from the first warning equals the live store there |
+| `…::factr_e_a_made_up_reclamation_is_refused_by_the_state_the_store_the_history_and_the_replay` (5) | another trigger type, a fact expired less than the margin before the trigger, a time other than the expiry, a fact without expiry: the State projection refuses each, fatal, nothing appended; the three a record shows are refused by the live reducer, the history and the replay too |
+| `…::factr_f_a_reading_captured_before_the_reclamation_is_a_new_key_after_it` (6) | the reclaimed snapshot `fact_source_snapshot_invalidated`; a reading at the expiry `fact_observation_not_newer`; one observed after the expiry and before the reclamation taken as a new key |
+| `…::factr_g_a_full_game_reclaims_an_expired_offset_a_request_published` (7) | a game at 16 reclaims a priority offset published under the operator's origin; the warning names the game; the offset's snapshot is refused afterwards |
+| `…::factr_h_a_store_past_its_bound_reclaims_back_to_it_or_is_refused` (8) | 240 facts of one instance from before 0.12.76: with 20 expired long ago a new key reclaims 17; with 10, refused and nothing written |
+| `…::factr_i_a_runs_new_list_on_a_full_instance_takes_the_room_of_expired_facts` (9) | on the S168-4 host, a run's new list on an instance full of facts expired eight days before completes and is published; one warning under the system links (`instance_id`, `count` 1, `limit_count` 224), one invalidation naming it, the first fill at its expiry |
+| `…::factr_j_a_fact_that_lists_runtime_failed_is_dropped_by_the_warning_and_counted_as_freed` (10) | two new keys reclaim one fact: the listing fact is dropped at the warning's time by the ordinary rule, the reclaimed one at its expiry; the plan frees two |
+| `…::factr_k_the_declaration_and_the_ledger_row_say_3_to_11` (11) | `component-interfaces.json` and the `ledger` row 11 say [3, 11] |
+| `…::factr_l_a_plan_that_no_longer_holds_at_its_warnings_time_writes_nothing` (12, fix round 1) | two new keys plan two facts at the publication's time; their warning drafted where the second lies less than the margin before it: `fact_store_capacity_exceeded`, not fatal, head unchanged, no warning, no invalidation; with the warning at the next millisecond the same plan is written |
+| `…::factr_m_a_full_server_takes_a_new_key_in_the_room_of_its_longest_expired_fact` (13, fix round 1) | a server at 16 reclaims the fact expired first; the warning names the server and `limit_count` 16; the invalidation the fact at its expiry |
+| `…::factr_n_a_key_the_active_catalog_reads_is_kept_until_a_catalog_reads_it_no_more` (14, fix round 1) | a host with the fixture catalog whose feedback stop reads one key: a new key reclaims the other fact, not the one expired first; with only the read one left, refused as before, nothing written; after the next version, which reads it no more, it is reclaimed |
+| `…::factr_o_a_runs_new_list_on_a_full_instance_without_candidates_is_refused_and_writes_nothing` (15, fix round 1) | on the S168-4 host, an instance full of facts expired one day before: the run's new list is refused (`read_members:fact_store_capacity_exceeded`), not published, no reclamation's warning, the instance's facts unchanged |
+
+Adapted, the requirement moving the shipped `ledger` range to [3, 11]: actinglab-architecture's
+`component_interfaces` (`V0120`). No golden re-recorded; no test leaves the gate maps; every other
+existing test (the factcap, S168-4, S168-LK, FL-2 and LN-2 gates, the store's unit tests, the
+adjustment gate) is unchanged: their fills have no expiry, so no plan is made. Fix round 1 changes
+no test of the gate; the fixture's copy of the host's sequence (`Store::publish`, `reclaim`) follows
+the host's new order (the warning drafted, the plan made again at its time, then written), as a host
+without an active catalog.
+
+**What is not changed.** The three bounds, the share warning and the 256 per scope of the commit and
+the history; every record shape and type, the tag index, the tagged load and `latest_observed`'s
+rule; every other refusal; a store with nothing to reclaim, byte for byte; the protocol's limits,
+every read and what clients are shown; `runtime-client`, `actingd-config` and `package`.
+`runtime-outcomes` stays 1 with one code added.
+
+**At deploy.** Nothing to configure. One way: no going back below this build; once it has run, the
+installation does not go back to an earlier one, whether or not a reclamation was written. No record
+shape changed, so a console that declares the earlier range ([3, 10]) still decodes every record,
+and no step of an installation's update or rollback checks the console's range; the console's
+declaration of 11 follows in its own release (the interface table's rule for the combination stays
+as the table states it). On production a scope at its bound with facts expired for more than seven
+days, that no condition of the active catalog reads, writes one warning
+`fact_store_expired_facts_reclaimed` per publication that needs the room; the same scope recurring
+means it is too small for what its packages write.
+
+**Rollback.** Refused below this build by the `ledger` edge's one-way rule (Rp.max in R\*): builds
+0.12.76 to 0.12.102 would load the same store at their start but stop at the first history read that
+crosses a reclamation. In the release notes' language: 实例事实库的一个范围满额时，新键可以占用其中过期超过七天的事实的位置，每回收一条都单独记一条失效记录（告警码 `fact_store_expired_facts_reclaimed`）；没有到期时间、刚过期不满七天、或当前生效目录里有条件在读的事实照旧不动，照旧拒绝。账本修订升到 11、单向：装上后不能退回 0.12.103 以前；记录形状没有变，控制台不必先换。
+
+### 1.557 Slice #455 RR4b-1 (0.12.104): the goal page's records with their positions, a table's options and one ladder's positions, read in pages by a new read, `GoalPageView`, so that a person can choose in the console whom to raise and how far; `GoalView` stays byte for byte (board #455; the rulings 1 to 8 and Addendum 1 are the coordinator's of 11-29, after a read-only study of the goal page's records and of reads in pages and the console side's statement of what its page needs; coordinator work order `rd-1123/brief-455-rr4b1.md`; on main `924f4034`, merged with main `698dc268`, the release of 0.12.100, which brought §1.545; §1.547 to §1.556 are slices of the same days under review, and whichever merges later keeps the sections in order)
+
+It ships in 0.12.104 and takes `runtime-client` 15, written over row 14 of §1.493.
+[runtime-interface.md](runtime-interface.md) ("Goal request kinds": the kind's row and the new
+"The goal page in pages"), [standard-pack-goals.md](standard-pack-goals.md) ("The records entry",
+"What a client sees"), [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("Who reads
+it"), [component-interfaces.md](component-interfaces.md) (the `runtime-client` row 15),
+[lab-two-entries.md](lab-two-entries.md) (§3, the UI list) and `lab-operations.json` (`ui_kinds`,
+`not_exposed`) are the contract.
+
+**The problem.** A root may declare goal tables and a `records` entry, and a person's records ("this
+key, to this position") push what the scheduler farms (§1.538). But the goal page's view lists no
+records entry (RR1's ruling 7), and the Lab's `goals get` of one answers `not_recognised`: a console
+can neither show the stored records nor offer a key and a position to choose; only an agent can, by
+writing the whole array. What a person needs to see (each lane's current and target position, the
+position a prerequisite raises it to, whether the key is held, why a record does not apply) is
+computed by each evaluation's walk of the records and then dropped.
+
+**Why a new read and a frozen view.** Every type of `GoalView`'s answer refuses unknown members, and
+a connection negotiates no revision: the Runtime cannot tell which revision a client reads. So a
+member added to `GoalView` would make every installed console of revision 14 refuse the first page
+that carried it. The only way that keeps the installed console working is to leave every answer it
+asks for exactly as it is and to put everything new into the answer of a request it never sends:
+one new read kind, in parts, in pages.
+
+**The rulings, as built.**
+- *1, `GoalView` frozen* (`crates/runtime-host/src/host/goals.rs`). Its request and its answer are
+  byte for byte those of revision 14, records entries skipped as before. The one change in its file
+  is that three of its judgements are now functions `GoalPageView` calls too, unchanged in what
+  they decide: the instance's game (`page_game`), the remedy table the next evaluation keeps
+  (`kept_remedy_table`) and whether the page is in memory (`page_sources`); `page_version`,
+  `unchecked_state` and `goal_declaration` are shared as they are.
+- *2, one new read kind* (`RuntimeOperation::GoalPageView {instance_alias, part, cursor?, limit?}`,
+  `RuntimeResult::GoalPageViewed {page}`; `crates/actingcommand-contract/src/runtime/goals.rs`;
+  `crates/runtime-host/src/host/goal_page_view.rs`; `crates/runtime-host/src/goal_page.rs`). Block
+  general, class read, records nothing, no G14 copy; on the `ui` list (`ui_allows`, `ui_kinds` with
+  `console_today: false`); in `not_exposed` (`unsent`): no Lab operation sends it in this slice.
+  Success `request_goal_page_view_completed`.
+- *3, three parts.* `records`, `options` of one entry, `positions` of one ladder (shapes below).
+- *4, one walk* (`crates/runtime-host/src/goal_needs.rs`). The walk of the needs' computation is
+  split: `walk_records` judges each stored record in its order (the edit's word, or `key_repeated`
+  for a key an earlier record of the same table names), walks an applied one (`Walk::need`) and
+  answers, besides the notes and what the walked records need, each record's judgement, its key's
+  held state and each lane's own target, the index the walk takes it to and its current position or
+  the note of why not. `instance_needs` calls it and does what it did after the walk, so its pools,
+  notes, freshness and identity are what they were (the identity is a function of those, of the
+  tables' sha256 and of the records' time). A key's held state and current positions for `options`
+  are read by the walk's own `held` and `read_current` (`read_key`). The read takes the gates the
+  evaluation computes the needs under, in the host's order (policy outcome gate, policy, fact write
+  gate, the fact store), the authoritative projection, the handed runs at its position and the
+  evaluator's own `NeedsProjection`, so freshness is judged as the evaluation judges it. A list's
+  rows are looked up by an index built once per read and per key column (`ProgressLists::key_row`),
+  which keeps the first row of each key as the walk of the rows did; the needs read through it too.
+- *5, the cursor refuses instead of mixing two states, one code for each source.* A cursor of
+  `records` whose records version moved is `goal_page_view_records_moved`; a cursor of any part
+  whose tables' sha256 or records entries' digest moved is `goal_page_view_declaration_moved`;
+  each Denied with `current_version`, the page's version now.
+- *6, codes.* `request_goal_page_view_completed` and `invalid_goal_page_view` (contract);
+  `goal_page_view_refused`, `goal_page_view_records_moved`, `goal_page_view_declaration_moved`
+  (host, `GoalPageCode`); each catalogue entry says the result (Denied, nothing answered, nothing
+  recorded) and the operation (read again from the first page; or send a cursor of the same part).
+- *7, unchanged*: `GoalView`, `EditGoal` and every other request and answer a client of 14 sends or
+  reads; the needs' computation's output; every record; `ledger`, `package`, `actingd-config` and
+  `runtime-outcomes`. Nothing is stored.
+- *8, not this slice*: the Lab's `goals get` of a records entry, the pools' needs and lifted tasks,
+  the line's mark, facts in pages and a guard for oversize reads, a search or a held-only filter of
+  keys, amounts of what a record lacks.
+- *Addendum 1* (the console side's reading of the shapes): the cursor of `options` and `positions`
+  carries no records version (`GoalPageCursor::records_version` is written by `records` alone, and
+  the request's check refuses a cursor that has it on another part or lacks it on `records`): those
+  parts say nothing of the stored records, so an edit of them between two of their pages is
+  answered with the next page; only the declaration's code refuses their cursor.
+
+**The shapes.** `part`: `{part: records}` (default `limit` 512), `{part: options, entry}` (64),
+`{part: positions, entry, ladder}` (512), `ladder` `{of: class, class, column}` or `{of: key, key,
+column, sub?}`. The page: `instance_alias`, `game_id`, `version`, `declaration`, `tables {state,
+sha256?, standard_pack_problem?, json_pointer?}`, `read_at_unix_ms`, `fresh_until_unix_ms?`,
+`records_state?`, `ladder? {source, class?, positions}`, `rows`, `rows_total`, `cut?`
+(`count`|`bytes`), `next?`. Rows: `entry {name, declared, after_entry?, entry?, applies, problem?,
+records_total}`; `record {entry, key, key_name?, to, set, applied, problem?, held?, lanes,
+texts_left_out?}`, a lane `{column, sub?, column_name?, sub_name?, source, target?, raised_to?,
+current?, unknown? {code, fact_key?, reading?, unknown_reason?}, conditions?}`, a position `{index,
+position, said?}`; `column {column, name?, per, subs?, requires}`; `class {class, name?}`; `key
+{key, name?, class, held, lanes [{column, sub?, source, positions, current?, unknown?}]}`; `position
+{index, position, said?}`. The cursor: `{records_version?, tables_sha256?, entries_sha256,
+part_sha256, after}`; `part_sha256` digests the part's members length-prefixed, `entries_sha256`
+the root's records entries (name, table, `max_records`) in file order, each `sha256:` and 64
+lowercase hex digits. A text is an object of locale to string in the pack's order; a position is
+said only by `say_goal_position`.
+
+**Sizes and pages.** A page holds the rows after the cursor, at most `limit`, cut before the row that
+would make it pass 786,432 bytes, at least one; a row is at most 262,144 bytes. Worst cases at the
+contract's bounds (serialized JSON, by hand):
+
+| Row | Worst | Realistic |
+|---|---|---|
+| a text (16 locales of 35 bytes, strings of 128 bytes, every byte escaped) | about 4.8 KiB | about 0.1 KiB |
+| a said position (16 locales) | about 12 KiB | about 0.1 KiB |
+| `column` (named, 8 subs named, 4 requirements each said twice) | about 140 KiB | about 1 KiB |
+| `class` | about 5 KiB | 0.1 KiB |
+| `key` (64 lanes) | about 32 KiB | about 0.3 KiB |
+| `position` | about 12.2 KiB | about 0.1 KiB |
+| `entry` (help of 16 locales) | about 40 KiB | about 0.5 KiB |
+| `record` with its texts / without | can pass 2 MiB / about 50 KiB | about 3 KiB |
+
+A record row that would pass the row bound is built again without its texts (`texts_left_out`); no
+other row passes it within the contract's bounds. At the page bound a page holds at least 24 key rows
+or 62 position rows in the worst case, and the limit in practice.
+
+**Decided here.** A cursor past the part's rows is `invalid_goal_page_view` (the host's own check of
+the contract code; the request's form is the contract's). `next` and `cut` are counted at their
+largest when a page is measured. A record whose entry the root does not declare has no lanes and no
+held state; one whose table the root does not apply has none either. A key's current positions in
+`options` are read only for a key the `held_by` list holds, as the walk reads them. A page not in
+memory answers `GoalView`'s word and no row to a request without a cursor (one with a cursor: fix
+round 1, below); `tables` is then what the workbench holds of the root, `not_read` without it. The part's digest is not the JSON of the part, so a
+client's own spelling of the request cannot move it. A stored row the reader took that gives back no
+setter or target (none does) is `goal_records_record_invalid`, and a page that does not serialize
+`runtime_frame_encode_failed`, each Denied for that request alone.
+
+**Tests** (host gate map row "#455 RR4b-1", contract gate map row "#455 RR4b-1"; no clock read in a
+gate file). What reading could not verify is said beside each.
+
+| Test | What it shows |
+|---|---|
+| runtime-host `gate_455_rr4b1::rr4b1_p1_the_needs_and_the_page_take_their_judgement_from_one_walk` | the needs' pools, notes and freshness are the walk's; each record's judgement, held state and lanes (a target raised by a prerequisite, the condition); the records part's rows in order, lanes said in two languages, nothing lacked (not run: the fixture files' reading) |
+| `…::rr4b1_p2_a_lane_not_known_says_why_with_the_walks_own_code` | a key not held or not known has its targets alone; each unknown lane says the walk's note code with its list, reading and `unknown_reason` |
+| `…::rr4b1_p3_a_record_row_past_its_cap_is_answered_without_its_texts` | 57 lanes with 16-language texts are answered without them, under 256 KiB (not run: the sizes are estimated by hand) |
+| `…::rr4b1_p4_a_page_is_cut_by_bytes_and_by_count_and_next_is_there_exactly_when_rows_remain` | 512 said positions cut by bytes under 768 KiB, the rest on the next page, a limit cuts by count, a cursor past the rows is invalid |
+| `…::rr4b1_p5_a_cursor_refuses_each_moved_source_with_its_own_word` | records cursor: moved records, moved tables, moved entries each its word; options and positions cursors take a records edit (Addendum 1) and refuse a moved declaration; the request's form refusals; fix round 1 (F6): an options cursor sent to positions, and to the options of another entry on the same table, refused by the part's digest alone |
+| `…::rr4b1_p6_options_and_positions_and_what_the_root_does_not_have` | the options' rows (requirements said, keys held, not held, a lane not known), positions of a class ladder and of a key's sub, each refusal at its pointer |
+| `…::rr4b1_p7_an_options_page_cut_by_bytes_stays_under_the_bound_with_its_freshness` | fix round 1 (F3): 600 keys named in 16 languages, `options` with a limit of 512 cut by bytes under 768 KiB with the lists' freshness, the next row would not have fit, the next page holds the rest, together in the table's order (not run: the row sizes are estimated by hand) |
+| `…::rr4b1_h1_records_options_and_positions_are_read_in_pages_beside_an_unchanged_goal_page` | in composer mode, the page's version and declaration are `GoalView`'s, the record's lanes from a published list (fix round 1, F4: in the table's order, `grade`, `skill`, `mastery` sub `1`), options and positions in pages (not run: the list's freshness through the evaluator's projection) |
+| `…::rr4b1_h2_a_records_edit_moves_the_records_cursor_alone_and_a_new_tables_file_moves_every_cursor` | ruling 5 and Addendum 1 on the host, with `current_version` (not run: the workbench's re-read of a shorter file at the next check) |
+| `…::rr4b1_h3_a_page_not_in_memory_an_undeclared_name_and_what_the_root_does_not_have` | `not_checked_yet` and no row before the first check; `goal_page_view_refused` at `/part/entry`; a cursor past the rows; undeclared records listed `declared: false`; `instance_unknown` |
+| `…::rr4b1_h4_a_cursor_sent_to_a_page_not_in_memory_is_refused_with_its_own_code` | fix round 1 (F1): in composer mode, after a first page of `options`, another procedure manifest in place takes the page out of memory; its cursor is `goal_page_view_declaration_absent` with `not_checked_yet` and `current_version`, and a first page answers `not_checked_yet`, no row and the same tables (not run: that nothing between the two requests builds the remedy table again) |
+| runtime-client `gate_455_rr4b1::rr4b1_c1_goal_page_view_sends_its_members_as_given_and_answers_the_page` | the request member by member, `cursor` and `limit` absent when `None`; the page answered |
+| `…::rr4b1_c2_an_older_runtime_is_unsupported_and_another_instances_page_unexpected` | a Runtime that drops the kind gives `runtime_operation_unsupported`; another instance's page is unexpected |
+
+The gates that pin today's page and must stay green unchanged (they prove the page of 14 byte for
+byte): `gate_455_rr1`, `gate_455_rr2`, the `gate_463_v3` host tests, `gate_455_tk1`, `gate_500_sv2`,
+`gate_503_goal1`, `gate_455_p2`, the MCP `serve_calls` goal rows, and every `gate_455_rr3*` and
+`gate_455_rr4a` test (the walk split). Adapted, the requirement adding a kind and raising the range:
+`gate_434_lab6s3`'s UI list (34 kinds); the rescue module's `gate_429_r0b_pairing` and
+`gate_480_pg2e`, their first tests renamed for [12, 15] (retirements in `ci/retired-gates.toml`);
+actinglab-architecture's `component_interfaces` ([12, 15]) and `workspace_guards`'
+`RUNTIME_OPEN_ORIGIN_OPERATIONS` (the new kind takes no origin gate). No golden is re-recorded.
+
+**What is not changed.** `GoalView` and `EditGoal`, every earlier request and answer, the needs'
+computation and its identity, every record, the ledger, the configuration and every setting.
+
+**At deploy.** Nothing to configure. The installed console keeps working: it sends only revision-14
+requests, whose answers are unchanged, and shows no records until a console that asks the new read
+is installed. The installer's edges pass both ways ([12, 14] and [12, 15] meet).
+
+**Rollback.** Nothing is stored, so nothing is undone. A console that asks the new read of an older
+Runtime has its connection dropped (that Runtime cannot decode the kind); its client reports
+`runtime_operation_unsupported`, and the console shows the page of 14. In the release notes'
+language: 新增：只读的分页读取 `GoalPageView`（`runtime-client` 升到 15）：目标页的记录条目连同每条记录每条梯的目标、被前置拉到的位置、当前位置或读不到的原因、键是否持有（`records`），一张表的列、类别和键及其梯的大小和当前位置（`options`），一条梯的全部位置（`positions`），名字和位置的念法都照包里写的；每页最多 512 行、768 KiB，游标在记录或表变了时拒绝并说明是哪个变了；页不在内存时带游标的请求也拒绝（`goal_page_view_declaration_absent`），不会被当成最后一页。`GoalView` 一字节不变，已装的界面照常可用。
+
+**Fix round 1** (the independent review of pull request #1944, findings F1 to F10; the
+coordinator's rulings of 11-29). Acted on: *F1*, a page not in memory looked like a part's last
+page while its `tables` kept an unmoved sha256, so a console that keeps options by that digest could
+keep an empty or cut list: the contract now says such a page (`not_checked_yet`, `root_failing`,
+`no_schedule`) holds nothing of its part, and a request with a cursor that meets one is refused with
+a code of its own, `goal_page_view_declaration_absent` (`goal_problem` the state's word,
+`current_version` as the two moved codes carry it, under the locks the read takes already), not the
+declaration's code, because the digest did not move and the operation differs (keep what was kept,
+read again from the first page once it is in memory); a request without a cursor is answered as
+before, and `GoalView` is not touched. *F3*, an `options` page is measured with
+`fresh_until_unix_ms` at its largest, since its lists are read as the page's keys are, and given its
+value after. *F4*, a record row's lanes come in the table's order (`key_lanes`), a raised lane in its
+column's place, in the row's construction alone: the walk, its map and the needs are byte for byte
+as before; h1, which pinned the name order, is adapted. *F6*, the two refusals only the part's
+digest makes are asserted (an `options` cursor sent to `positions`, and to `options` of another
+entry on the same table). *F9*, the contract code's comment names the cursor past the part's rows.
+Read (the review could not tell): under the console's `codes` detail, `goal_problem` (a vocabulary
+word) and `current_version` (kept at a denied receipt's top since 0.12.36) reach the console and
+`json_pointer` (a pointer) does not; keeping it would change what `EditGoal`'s refusals carry to a
+console of 14, so nothing is registered and the contract says the console asks `detail: full` for
+the pointer. Left for later slices, changed by nothing here: *F2* (each page holds the four locks
+while it builds and measures its rows, and `positions` pays a projection it does not need; a known
+limit in the contract, with "never poll pages in a loop"), *F5* (a stored row's setter and target
+parsed a second time), *F7* (a golden of the revision-14 form of `GoalView`; a needs fixture with
+one key's row twice in a list), *F8* (titles, help and other entries are outside the cursor),
+*F10* (a sub given on an unknown column refused at `/part/ladder/sub`; with a small `limit`,
+`records` costs grow with the square of its rows; `max_records` moves the entries' digest for
+`options` and `positions` too). Tests p7 and h4 are new, p5 gains the two asserts.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -54108,6 +54495,7 @@ lift check of one package runs at most once per
 | W22 | the player hold's request kinds `AcquirePlayerHold`, `ReleasePlayerHold`, their results, the status members `player_hold`, `player_hold_operation`, `control` and the start report members `player_holds_restored`, `player_holds_dropped`, `player_hold_not_durable` (§1.233 R7A-1 to R7A-3) | runtime-client 4 | #429 R-7a | declared [2, 4] in 0.12.35; both kinds answer `not_implemented` until R-7b; every new member is absent until R-7b, which raises `min` to 4 ([player-hold.md](player-hold.md), "Interfaces and rollout") |
 | W23 | `RuntimePerformanceStatus.memory` and `.vision` (§1.280 PR-1, PR-2; `since` 0.12.41) | runtime-client 6 | #407 PERF-READ | two optional members of W15's status (`deny_unknown_fields`), read from memory: the process's counters and the parts its owners hold, and each vision model's lock waits and inference times; declared [3, 6] in 0.12.41 with `min` unchanged; a reader whose `max` is below 6 refuses an answer that carries them (`runtime_receipt_decode_failed`), and this build fills `memory` on every answer; on PerformanceStatus, not on Status, as W20 |
 | W24 | `RuntimeOperation::GoalView { instance_alias }` → `RuntimeResult::GoalViewed { view }`; `RuntimeOperation::EditGoal { instance_alias, expected_version?, op }` → `RuntimeResult::GoalEdited { edited }` | runtime-client 9 | #463 V3 | §1.383; both on the console's list |
+| W25 | `RuntimeOperation::GoalPageView { instance_alias, part, cursor?, limit? }` → `RuntimeResult::GoalPageViewed { page }` | runtime-client 15 | #455 RR4b-1 | §1.557; on the console's list; no answer of an earlier kind changes |
 
 U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `LoadPack` and
 `UnloadPack` (W11; UIM §8.1; LoadPack and UnloadPack without any digest, M-PKG §5.1).

@@ -271,6 +271,8 @@ actingcommand_contract::outcome_locations! {
         // Workflow #463 V3 (register §1.383): the goal page's methods of `runtime-client` 9.
         RuntimeGoalView => "runtime_goal_view",
         RuntimeEditGoal => "runtime_edit_goal",
+        // Workflow #455 RR4b-1 (register §1.557): the goal page in pages, `runtime-client` 15.
+        RuntimeGoalPageView => "runtime_goal_page_view",
         RuntimeMonitorConfigure => "runtime_monitor_configure",
         RuntimeMonitorClear => "runtime_monitor_clear",
         RuntimeConfigureSettings => "runtime_configure_settings",

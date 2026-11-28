@@ -31,8 +31,9 @@ const EVIDENCE_AGE: &str = "frame_retention_evidence_max_age_days";
 
 /// The UI list as contracts/lab-two-entries.md §3 writes it, the transitional kind included;
 /// Workflow #455 T1-R (register §1.351, since 0.12.60) adds `ApplyResourceTargets`; Workflow #463
-/// V3 (register §1.383, since 0.12.61, adapted) adds `GoalView` and `EditGoal`.
-const UI_LIST: [Kind; 33] = [
+/// V3 (register §1.383, since 0.12.61, adapted) adds `GoalView` and `EditGoal`; Workflow #455
+/// RR4b-1 (register §1.557, since 0.12.104, adapted) adds `GoalPageView`.
+const UI_LIST: [Kind; 34] = [
     Kind::Status,
     Kind::RuntimeFactSnapshot,
     Kind::ScheduleExplanation,
@@ -61,6 +62,7 @@ const UI_LIST: [Kind; 33] = [
     Kind::ApplyResourceTargets,
     Kind::GoalView,
     Kind::EditGoal,
+    Kind::GoalPageView,
     Kind::RunInstanceTask,
     Kind::EditResourceTarget,
     Kind::AcquirePlayerHold,

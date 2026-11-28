@@ -114,48 +114,12 @@ pub(crate) fn instance_needs(
         }
     };
     let tables = root.and_then(|root| root.tables.as_ref());
-    let mut lists = Lists {
-        sources,
-        read: BTreeMap::new(),
-        fresh_until_unix_ms: None,
-    };
-    let mut raw = BTreeMap::<String, u128>::new();
-    // Fix round 1 (the review): two records entries may name one table, and a key recorded under
-    // both would be walked twice and its need added twice. The first record of a table's key, in
-    // the stored order, is walked; a later one is not applied (`key_repeated`), so the result
-    // stays a lower bound of the need.
-    let mut walked = BTreeSet::<(String, String)>::new();
-    for stored_record in records {
-        let record = RecordRef {
-            entry: stored_record.entry.clone(),
-            key: stored_record.key.clone(),
-        };
-        match applied(root, stored_record) {
-            Err(problem) => notes.push(RecordNeedsNote::NotApplied {
-                record: Some(record),
-                problem,
-            }),
-            Ok((table, _, _))
-                if !walked.insert((table.name.clone(), stored_record.key.clone())) =>
-            {
-                notes.push(RecordNeedsNote::NotApplied {
-                    record: Some(record),
-                    problem: GoalProblem::KeyRepeated,
-                });
-            }
-            Ok((table, key, to)) => {
-                let mut walk = Walk {
-                    table,
-                    key,
-                    record: &record,
-                    lists: &mut lists,
-                    notes: &mut notes,
-                };
-                walk.need(&to, &mut raw);
-            }
-        }
-    }
-    let mut fresh_until_unix_ms = lists.fresh_until_unix_ms;
+    // Workflow #455 RR4b-1 (register §1.557, ruling 4): the walk is the one function the goal
+    // page's view calls too ([`walk_records`]); what follows it is as before.
+    let walk = walk_records(records, root, sources);
+    notes.extend(walk.notes);
+    let raw = walk.raw;
+    let mut fresh_until_unix_ms = walk.fresh_until_unix_ms;
     let pools = match tables {
         Some((tables, _)) => take_apart(tables, raw, sources, &mut notes, &mut fresh_until_unix_ms),
         None => BTreeMap::new(),
@@ -167,6 +131,203 @@ pub(crate) fn instance_needs(
         notes,
         fresh_until_unix_ms,
     ))
+}
+
+/// Workflow #455 RR4b-1 (register §1.557, ruling 4): what the walk of one instance's stored
+/// records gives: for each record, in the stored order, its judgement ([`RecordJudgement`]); the
+/// notes, in the order computed; what the walked records need, by item; and the earliest expiry
+/// of the progress lists read.
+pub(crate) struct RecordsWalk {
+    pub(crate) records: Vec<RecordJudgement>,
+    pub(crate) notes: Vec<RecordNeedsNote>,
+    raw: BTreeMap<String, u128>,
+    pub(crate) fresh_until_unix_ms: Option<u64>,
+}
+
+/// Workflow #455 RR4b-1: how the walk judged one stored record: the record applied, with what it
+/// read of the key ([`WalkedKey`]), or the word it is not applied with (the edit's word, or
+/// `key_repeated` for a key an earlier stored record of the same table names).
+pub(crate) type RecordJudgement = Result<WalkedKey, GoalProblem>;
+
+/// Workflow #455 RR4b-1: what the walk of an applied record read: the key's held state, and for
+/// each lane it walks (by column and sub, in their order) what it read and where it went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalkedKey {
+    pub(crate) held: KeyHeld,
+    pub(crate) lanes: BTreeMap<LaneKey, WalkedLane>,
+}
+
+/// Workflow #455 RR4b-1: a key's held state as the walk judges it (`Walk::held`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyHeld {
+    /// The table names no `held_by` list: every key is held.
+    Every,
+    /// The table's `held_by` list (`fact_key`), read whole, holds a row of the key.
+    Held { fact_key: String },
+    /// The list, read whole, holds no row of the key: known, and the record adds nothing.
+    NotHeld { fact_key: String },
+    /// The list gives no reading, and why: the record adds nothing.
+    Unknown {
+        fact_key: String,
+        reason: ProgressListUnknown,
+    },
+}
+
+impl KeyHeld {
+    /// Whether the walk walks the key's lanes.
+    pub(crate) fn is_held(&self) -> bool {
+        matches!(self, Self::Every | Self::Held { .. })
+    }
+}
+
+/// Workflow #455 RR4b-1: a key's current position on a lane, by its index on the lane's ladder,
+/// or the note that says why it is not known.
+pub(crate) type LaneCurrent = Result<usize, RecordNeedsNote>;
+
+/// Workflow #455 RR4b-1: one lane of an applied record as the walk read it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalkedLane {
+    /// The index of the record's own target on the lane's ladder; none for a lane only a
+    /// prerequisite raised.
+    pub(crate) target: Option<usize>,
+    /// The index the walk takes the lane to: its own target, or beyond it where a prerequisite of
+    /// another column raises it.
+    pub(crate) walked_to: usize,
+    /// The key's current position on the lane as read, or the note that says why it is not known;
+    /// none when it is not read (a key the walk does not hold).
+    pub(crate) current: Option<LaneCurrent>,
+    /// The conditions the lane's steps ask, in the order the walk first met them.
+    pub(crate) conditions: Vec<String>,
+}
+
+/// Workflow #455 RR4b-1 (ruling 4): the walk of `records`, in their stored order, against `root`
+/// (`None`: no entry applies), reading `sources`: the one function [`instance_needs`] and the goal
+/// page's view call. Each record is judged by [`applied`] and the walked-once rule; an applied
+/// one is walked ([`Walk::need`]).
+pub(crate) fn walk_records(
+    records: &[StoredRecordRow],
+    root: Option<&RecordsRoot>,
+    sources: &dyn NeedsSources,
+) -> RecordsWalk {
+    let mut notes = Vec::new();
+    let mut lists = ProgressLists::new(sources);
+    let mut raw = BTreeMap::<String, u128>::new();
+    let mut judged = Vec::with_capacity(records.len());
+    // Fix round 1 (the review): two records entries may name one table, and a key recorded under
+    // both would be walked twice and its need added twice. The first record of a table's key, in
+    // the stored order, is walked; a later one is not applied (`key_repeated`), so the result
+    // stays a lower bound of the need.
+    let mut walked = BTreeSet::<(String, String)>::new();
+    for stored_record in records {
+        let record = RecordRef {
+            entry: stored_record.entry.clone(),
+            key: stored_record.key.clone(),
+        };
+        match applied(root, stored_record) {
+            Err(problem) => {
+                notes.push(RecordNeedsNote::NotApplied {
+                    record: Some(record),
+                    problem,
+                });
+                judged.push(Err(problem));
+            }
+            Ok((table, _, _))
+                if !walked.insert((table.name.clone(), stored_record.key.clone())) =>
+            {
+                notes.push(RecordNeedsNote::NotApplied {
+                    record: Some(record),
+                    problem: GoalProblem::KeyRepeated,
+                });
+                judged.push(Err(GoalProblem::KeyRepeated));
+            }
+            Ok((table, key, to)) => {
+                let mut walk = Walk {
+                    table,
+                    key,
+                    record: &record,
+                    lists: &mut lists,
+                    notes: &mut notes,
+                };
+                judged.push(Ok(walk.need(&to, &mut raw)));
+            }
+        }
+    }
+    RecordsWalk {
+        records: judged,
+        notes,
+        raw,
+        fresh_until_unix_ms: lists.fresh_until_unix_ms,
+    }
+}
+
+/// Workflow #455 RR4b-1: what the walk's own readings say of the key `key` of `table` (the goal
+/// page's `options`), as the walk of a record of the entry `entry` for it would read them: its
+/// held state ([`Walk::held`]) and, for a key held, its current position on each of its lanes
+/// ([`key_lanes`], [`Walk::read_current`]), through `lists`. The notes the readings make are
+/// dropped.
+pub(crate) fn read_key(
+    table: &GoalTable,
+    key: &GoalKey,
+    entry: &str,
+    lists: &mut ProgressLists<'_>,
+) -> (KeyHeld, Vec<(LaneKey, Option<LaneCurrent>)>) {
+    let record = RecordRef {
+        entry: entry.to_owned(),
+        key: key.name.clone(),
+    };
+    let mut notes = Vec::new();
+    let mut walk = Walk {
+        table,
+        key,
+        record: &record,
+        lists,
+        notes: &mut notes,
+    };
+    let held = walk.held();
+    let mut lanes = Vec::new();
+    for lane_key in key_lanes(table, key) {
+        let current = match lane_of(table, key, &lane_key.0, lane_key.1.as_deref()) {
+            Some(lane) if held.is_held() => Some(walk.read_current(&lane)),
+            _ => None,
+        };
+        lanes.push((lane_key, current));
+    }
+    (held, lanes)
+}
+
+/// Workflow #455 RR4b-1: every lane the key `key` has in `table`: for each column in the file's
+/// order, the column (of `per: "class"` when its class has the ladder, of `per: "key"` when the key
+/// writes one) or, of `per: "sub"`, each sub the key writes a ladder of, in the column's order.
+pub(crate) fn key_lanes(table: &GoalTable, key: &GoalKey) -> Vec<LaneKey> {
+    let mut lanes = Vec::new();
+    for column in &table.columns {
+        match &column.read {
+            GoalColumnRead::Class(_) | GoalColumnRead::Key(_) => {
+                if lane_of(table, key, &column.name, None).is_some() {
+                    lanes.push((column.name.clone(), None));
+                }
+            }
+            GoalColumnRead::Sub(subs) => {
+                for (sub, _) in subs {
+                    if lane_of(table, key, &column.name, Some(sub)).is_some() {
+                        lanes.push((column.name.clone(), Some(sub.clone())));
+                    }
+                }
+            }
+        }
+    }
+    lanes
+}
+
+/// Workflow #455 RR4b-1: the ladder the key `key` walks in the column `column` of `table` (of
+/// `per: "sub"`, its sub `sub`), as the walk finds it.
+pub(crate) fn ladder_of<'t>(
+    table: &'t GoalTable,
+    key: &'t GoalKey,
+    column: &str,
+    sub: Option<&str>,
+) -> Option<&'t GoalLadder> {
+    lane_of(table, key, column, sub).map(|lane| lane.ladder)
 }
 
 /// The table, the key and the target of `record` when the root in force declares them, or the
@@ -194,18 +355,39 @@ fn applied<'t>(
     }
 }
 
+/// One row of a list.
+type ListRow = BTreeMap<String, FactScalar>;
 /// The rows of a list.
-type ListRows<'s> = &'s [BTreeMap<String, FactScalar>];
+type ListRows<'s> = &'s [ListRow];
+/// A list's rows by the text their key column holds (the first row of each).
+type KeyIndex<'s> = BTreeMap<&'s str, &'s ListRow>;
 
 /// The progress lists one instance's records read, each judged once, and the earliest expiry of
-/// those read.
-struct Lists<'s> {
+/// those read. Workflow #455 RR4b-1 (register §1.557, the study's 2.9): a key's row is looked up
+/// in an index of the list built once per read and per key column, not by a walk of its rows.
+pub(crate) struct ProgressLists<'s> {
     sources: &'s dyn NeedsSources,
     read: BTreeMap<String, Result<ListRows<'s>, ProgressListUnknown>>,
+    indexes: BTreeMap<(String, String), KeyIndex<'s>>,
     fresh_until_unix_ms: Option<u64>,
 }
 
-impl<'s> Lists<'s> {
+impl<'s> ProgressLists<'s> {
+    /// The lists of `sources`, none read yet.
+    pub(crate) fn new(sources: &'s dyn NeedsSources) -> Self {
+        Self {
+            sources,
+            read: BTreeMap::new(),
+            indexes: BTreeMap::new(),
+            fresh_until_unix_ms: None,
+        }
+    }
+
+    /// The earliest expiry of the lists read so far.
+    pub(crate) fn fresh_until_unix_ms(&self) -> Option<u64> {
+        self.fresh_until_unix_ms
+    }
+
     /// The rows of `list`, or why it gives no reading.
     fn rows(&mut self, list: &GoalProgressList) -> Result<ListRows<'s>, ProgressListUnknown> {
         if let Some(read) = self.read.get(&list.fact_key) {
@@ -214,6 +396,21 @@ impl<'s> Lists<'s> {
         let read = self.judge(list);
         self.read.insert(list.fact_key.clone(), read);
         read
+    }
+
+    /// The row of `list` whose key column holds the text `key` (the first such row; `None` for a
+    /// list read without it), or why the list gives no reading.
+    fn key_row(
+        &mut self,
+        list: &GoalProgressList,
+        key: &str,
+    ) -> Result<Option<&'s ListRow>, ProgressListUnknown> {
+        let rows = self.rows(list)?;
+        let index = self
+            .indexes
+            .entry((list.fact_key.clone(), list.key_column.clone()))
+            .or_insert_with(|| key_index(rows, &list.key_column));
+        Ok(index.get(key).copied())
     }
 
     /// `list` judged by the rules a list a pool is read from obeys: present, of a confidence above
@@ -236,14 +433,17 @@ impl<'s> Lists<'s> {
     }
 }
 
-/// The row of `rows` whose `key_column` holds the text `key`.
-fn row_of<'r>(
-    rows: &'r [BTreeMap<String, FactScalar>],
-    key_column: &str,
-    key: &str,
-) -> Option<&'r BTreeMap<String, FactScalar>> {
-    rows.iter()
-        .find(|row| matches!(row.get(key_column), Some(FactScalar::String(text)) if text == key))
+/// The rows of `rows` by the text their `key_column` holds, the first row of each text kept: the
+/// row a lookup of a key finds is the first whose `key_column` holds the text, as a walk of the
+/// rows finds it.
+fn key_index<'r>(rows: &'r [ListRow], key_column: &str) -> KeyIndex<'r> {
+    let mut index = KeyIndex::new();
+    for row in rows {
+        if let Some(FactScalar::String(text)) = row.get(key_column) {
+            index.entry(text.as_str()).or_insert(row);
+        }
+    }
+    index
 }
 
 /// One ladder a record walks: its column (and sub), the ladder, the reading columns its current
@@ -323,24 +523,24 @@ fn lane_of<'t>(
 }
 
 /// A lane by its column and its sub.
-type LaneKey = (String, Option<String>);
+pub(crate) type LaneKey = (String, Option<String>);
 
 /// The walk of one applied record.
 struct Walk<'w, 't, 's> {
     table: &'t GoalTable,
     key: &'t GoalKey,
     record: &'w RecordRef,
-    lists: &'w mut Lists<'s>,
+    lists: &'w mut ProgressLists<'s>,
     notes: &'w mut Vec<RecordNeedsNote>,
 }
 
 impl Walk<'_, '_, '_> {
     /// Adds to `raw`, by item, what the record's target `to` needs from the key's current
-    /// positions (module doc, "The walk"); a part not known adds nothing and is noted.
-    fn need(&mut self, to: &Map<String, Value>, raw: &mut BTreeMap<String, u128>) {
-        if !self.held() {
-            return;
-        }
+    /// positions (module doc, "The walk"); a part not known adds nothing and is noted. Workflow
+    /// #455 RR4b-1 (ruling 4): answers what it read of the key and of each lane, which the goal
+    /// page's view shows; the notes, their order and what is added to `raw` are as before.
+    fn need(&mut self, to: &Map<String, Value>, raw: &mut BTreeMap<String, u128>) -> WalkedKey {
+        let held = self.held();
         let mut targets = BTreeMap::<LaneKey, usize>::new();
         for (column, target) in to {
             match target {
@@ -352,8 +552,27 @@ impl Walk<'_, '_, '_> {
                 position => self.note_target(&mut targets, column, None, position),
             }
         }
-        let mut currents = BTreeMap::<LaneKey, Option<usize>>::new();
+        let own = targets.clone();
+        if !held.is_held() {
+            let lanes = own
+                .iter()
+                .map(|(lane_key, target)| {
+                    (
+                        lane_key.clone(),
+                        WalkedLane {
+                            target: Some(*target),
+                            walked_to: *target,
+                            current: None,
+                            conditions: Vec::new(),
+                        },
+                    )
+                })
+                .collect();
+            return WalkedKey { held, lanes };
+        }
+        let mut currents = BTreeMap::<LaneKey, Result<usize, RecordNeedsNote>>::new();
         let mut conditions = BTreeSet::<(String, String)>::new();
+        let mut lane_conditions = BTreeMap::<LaneKey, Vec<String>>::new();
         loop {
             let mut raised = false;
             let walked = targets
@@ -366,11 +585,12 @@ impl Walk<'_, '_, '_> {
                     continue;
                 };
                 let current = match currents.get(&lane_key) {
-                    Some(current) => *current,
+                    Some(read) => read.as_ref().ok().copied(),
                     None => {
                         let read = self.read_current(&lane);
+                        let known = read.as_ref().ok().copied();
                         currents.insert(lane_key.clone(), read);
-                        read
+                        known
                     }
                 };
                 // A position not known, or a target at or behind it: no step is taken, and
@@ -390,6 +610,11 @@ impl Walk<'_, '_, '_> {
                                     column: lane_key.0.clone(),
                                     condition: condition.clone(),
                                 });
+                            }
+                            // Workflow #455 RR4b-1: the condition on the lane that asked it, once.
+                            let asked = lane_conditions.entry(lane_key.clone()).or_default();
+                            if !asked.contains(condition) {
+                                asked.push(condition.clone());
                             }
                         }
                         GoalRequirement::Column {
@@ -437,14 +662,14 @@ impl Walk<'_, '_, '_> {
             }
         }
         for (lane_key, target) in &targets {
-            let Some(Some(current)) = currents.get(lane_key).copied() else {
+            let Some(Ok(current)) = currents.get(lane_key) else {
                 continue;
             };
             let Some(lane) = lane_of(self.table, self.key, &lane_key.0, lane_key.1.as_deref())
             else {
                 continue;
             };
-            for index in current..*target {
+            for index in *current..*target {
                 let Some(step) = lane.step(index) else {
                     continue;
                 };
@@ -465,16 +690,30 @@ impl Walk<'_, '_, '_> {
                 }
             }
         }
+        let lanes = targets
+            .into_iter()
+            .map(|(lane_key, walked_to)| {
+                let lane = WalkedLane {
+                    target: own.get(&lane_key).copied(),
+                    walked_to,
+                    current: currents.remove(&lane_key),
+                    conditions: lane_conditions.remove(&lane_key).unwrap_or_default(),
+                };
+                (lane_key, lane)
+            })
+            .collect();
+        WalkedKey { held, lanes }
     }
 
     /// Whether the key is held: the table's `held_by` list, read whole, holds a row of it (a table
     /// without one holds every key). Not known, the whole record is noted pending; not held, it is
-    /// noted not held; either adds nothing.
-    fn held(&mut self) -> bool {
+    /// noted not held; either adds nothing. Workflow #455 RR4b-1: answered as the state with its
+    /// list.
+    fn held(&mut self) -> KeyHeld {
         let Some(held_by) = self.table.progress.iter().find(|list| list.held_by) else {
-            return true;
+            return KeyHeld::Every;
         };
-        match self.lists.rows(held_by) {
+        match self.lists.key_row(held_by, &self.key.name) {
             Err(reason) => {
                 self.notes.push(RecordNeedsNote::ProgressUnknown {
                     record: self.record.clone(),
@@ -482,15 +721,22 @@ impl Walk<'_, '_, '_> {
                     fact_key: held_by.fact_key.clone(),
                     reason,
                 });
-                false
+                KeyHeld::Unknown {
+                    fact_key: held_by.fact_key.clone(),
+                    reason,
+                }
             }
-            Ok(rows) if row_of(rows, &held_by.key_column, &self.key.name).is_none() => {
+            Ok(None) => {
                 self.notes.push(RecordNeedsNote::NotHeld {
                     record: self.record.clone(),
                 });
-                false
+                KeyHeld::NotHeld {
+                    fact_key: held_by.fact_key.clone(),
+                }
             }
-            Ok(_) => true,
+            Ok(Some(_)) => KeyHeld::Held {
+                fact_key: held_by.fact_key.clone(),
+            },
         }
     }
 
@@ -520,8 +766,9 @@ impl Walk<'_, '_, '_> {
     }
 
     /// The index of the key's current position on `lane`'s ladder, read from its reading columns
-    /// in the key's rows of the table's lists; `None`, noted with its cause, when it is not known.
-    fn read_current(&mut self, lane: &Lane<'_>) -> Option<usize> {
+    /// in the key's rows of the table's lists; when it is not known, the note of its cause, which is
+    /// noted.
+    fn read_current(&mut self, lane: &Lane<'_>) -> Result<usize, RecordNeedsNote> {
         let mut position = Vec::with_capacity(lane.reads.len());
         for reading in lane.reads {
             let Some(list) = self
@@ -530,31 +777,28 @@ impl Walk<'_, '_, '_> {
                 .iter()
                 .find(|list| list.columns.iter().any(|column| column == reading))
             else {
-                self.position_unknown(lane);
-                return None;
-            };
-            let rows = match self.lists.rows(list) {
-                Ok(rows) => rows,
-                Err(reason) => {
-                    self.notes.push(RecordNeedsNote::ProgressUnknown {
-                        record: self.record.clone(),
-                        column: Some(lane.label.clone()),
-                        fact_key: list.fact_key.clone(),
-                        reason,
-                    });
-                    return None;
-                }
+                return Err(self.position_unknown(lane));
             };
             // Fix round 1 (the review): two causes, two notes. A list without the key's row has
             // not covered the character, which its next reading may; a row without the reading
             // column is a package that does not write it, which no later reading mends.
-            let Some(row) = row_of(rows, &list.key_column, &self.key.name) else {
-                self.notes.push(RecordNeedsNote::RowMissing {
-                    record: self.record.clone(),
-                    column: lane.label.clone(),
-                    fact_key: list.fact_key.clone(),
-                });
-                return None;
+            let row = match self.lists.key_row(list, &self.key.name) {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    return Err(self.noted(RecordNeedsNote::RowMissing {
+                        record: self.record.clone(),
+                        column: lane.label.clone(),
+                        fact_key: list.fact_key.clone(),
+                    }));
+                }
+                Err(reason) => {
+                    return Err(self.noted(RecordNeedsNote::ProgressUnknown {
+                        record: self.record.clone(),
+                        column: Some(lane.label.clone()),
+                        fact_key: list.fact_key.clone(),
+                        reason,
+                    }));
+                }
             };
             match row.get(reading) {
                 Some(FactScalar::Integer(value)) => position.push(*value),
@@ -563,36 +807,34 @@ impl Walk<'_, '_, '_> {
                 // is there or is not), and a ladder's position may count such marks.
                 Some(FactScalar::Boolean(marked)) => position.push(i64::from(*marked)),
                 None => {
-                    self.notes.push(RecordNeedsNote::ReadingMissing {
+                    return Err(self.noted(RecordNeedsNote::ReadingMissing {
                         record: self.record.clone(),
                         column: lane.label.clone(),
                         fact_key: list.fact_key.clone(),
                         reading: reading.clone(),
-                    });
-                    return None;
+                    }));
                 }
-                Some(_) => {
-                    self.position_unknown(lane);
-                    return None;
-                }
+                Some(_) => return Err(self.position_unknown(lane)),
             }
         }
-        let found = lane
-            .ladder
+        lane.ladder
             .positions
             .iter()
-            .position(|written| *written == position);
-        if found.is_none() {
-            self.position_unknown(lane);
-        }
-        found
+            .position(|written| *written == position)
+            .ok_or_else(|| self.position_unknown(lane))
     }
 
-    fn position_unknown(&mut self, lane: &Lane<'_>) {
-        self.notes.push(RecordNeedsNote::PositionUnknown {
+    /// Notes `note` and answers it.
+    fn noted(&mut self, note: RecordNeedsNote) -> RecordNeedsNote {
+        self.notes.push(note.clone());
+        note
+    }
+
+    fn position_unknown(&mut self, lane: &Lane<'_>) -> RecordNeedsNote {
+        self.noted(RecordNeedsNote::PositionUnknown {
             record: self.record.clone(),
             column: lane.label.clone(),
-        });
+        })
     }
 }
 

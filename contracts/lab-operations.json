@@ -49,6 +49,7 @@
     {"kind": "ApplyResourceTargets", "class": "write", "console_today": false},
     {"kind": "GoalView", "class": "read", "console_today": false},
     {"kind": "EditGoal", "class": "write", "console_today": false},
+    {"kind": "GoalPageView", "class": "read", "console_today": false},
     {"kind": "EditResourceTarget", "class": "write", "console_today": false},
     {"kind": "AcquirePlayerHold", "class": "write", "console_today": false},
     {"kind": "ReleasePlayerHold", "class": "write", "console_today": false},
@@ -70,7 +71,8 @@
     {"kind": "CompileProposal", "reason": "unsent", "note": "the planning session; nothing starts a session"},
     {"kind": "PromoteProposal", "reason": "unsent", "note": "the planning session; nothing starts a session"},
     {"kind": "RecordAuthoringEvent", "reason": "unsent", "note": "no front end sends it today"},
-    {"kind": "RecordDebugEvent", "reason": "unsent", "note": "no front end sends it today"}
+    {"kind": "RecordDebugEvent", "reason": "unsent", "note": "no front end sends it today"},
+    {"kind": "GoalPageView", "reason": "unsent", "note": "the goal page's records, options and positions in pages (#455 RR4b-1, runtime-client 15); no Lab operation sends it in this slice, and the console's next release reads it"}
   ],
   "operations": [
     {

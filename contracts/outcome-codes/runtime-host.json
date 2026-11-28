@@ -22206,6 +22206,92 @@
       "common_causes": "A value written by hand or by an agent that the declaration does not take; a package update that removed the option, narrowed the range or changed the type; a name of another application's game.",
       "handling": "Read the page (goals get) and set a value the entry's declaration takes; for variable_not_applying fix the root as standard-pack check's warning says; for not_offered bind a package that declares the variable on the application, or set nothing; for not_checked_yet send the same request again after the Runtime's next check; for root_failing repair the game root the page's declaration names (asking again does not help); for no_schedule give the game root a schedule.json; for record_unreadable write the whole document with targets set first."
     },
+    "goal_page_view_refused": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "json_pointer": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): a GoalPageView of the part options or positions names what the application's game root does not have, for the reason goal_problem names at json_pointer, the goal edit's words: no records entry of that name whose table is one of the root's accepted tables (name_unknown at /part/entry: a name no records entry has, a records entry whose table the root's goal-tables.json does not hold, or a root without an accepted goal-tables.json); a key or a class the table does not hold (not_an_option at /part/ladder/key or /part/ladder/class); a ladder the key or the class does not have in that column or sub (out_of_range at /part/ladder/column or /part/ladder/sub). Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "A records entry, a key or a ladder of a page read before the root's files changed, or a name written by hand.",
+      "handling": "Read the part records (the root's records entries and whether each applies) and the part options of an entry that applies, then ask a key, class and ladder its rows list."
+    },
+    "goal_page_view_records_moved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "current_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): the cursor of a GoalPageView of the part records came from a page answered over other stored records: the application's session.goal_records record was written after that page (its records_version is no longer the record's sequence). The pages would mix two states, so none is answered. current_version is the goal page's version now. Only the part records is refused for this: the cursors of options and positions carry no records version (Addendum 1). Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "An EditGoal of a records entry, from this or another client, between two pages of the part records.",
+      "handling": "Read the part records again from its first page (no cursor)."
+    },
+    "goal_page_view_declaration_moved": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "current_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): the cursor of a GoalPageView came from a page answered over another declaration: the game root's accepted goal-tables.json (its sha256) or the root's records entries (their names, tables and max_records, in file order) changed after that page, as the scheduler workbench's checks read them. The pages would mix two declarations, so none is answered; any part's cursor is refused for this. current_version is the goal page's version now. Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "A new bundle placed, or a root's goals.json or goal-tables.json changed and read by the workbench's next check, between two pages.",
+      "handling": "Drop what was kept under the old tables' sha256 and read the part again from its first page (no cursor)."
+    },
+    "goal_page_view_declaration_absent": {
+      "category": "error",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "current_version": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Workflow #455 RR4b-1 fix round 1 (contracts/runtime-interface.md, \"Goal request kinds\"; runtime-client 15): a GoalPageView with a cursor reached a page that is not in the Runtime's memory: its declaration's state is not_checked_yet, root_failing or no_schedule (goal_problem, the word GoalView's declaration says), and such a page holds nothing of its part, whatever its tables say. The declaration did not move (the tables' sha256 and the records entries are still the cursor's), so it is not goal_page_view_declaration_moved, but the pages before the cursor cannot go on over it. current_version is the goal page's version now. A request without a cursor is answered with that state and no row. Result: Denied, nothing is answered and nothing is recorded.",
+      "common_causes": "Between two pages a new bundle was placed, another catalog activated or the procedure manifest changed, until the next evaluation reads the bound packages again; or the Runtime started again, until its first check of the game root.",
+      "handling": "Keep what was kept under the tables' sha256, and read the part again from its first page (no cursor) once a first page or GoalView says the declaration is in memory: for not_checked_yet after the Runtime's next check; for root_failing once the game root is repaired; for no_schedule once the game root holds schedule.json."
+    },
     "goal_value_package_unreadable": {
       "category": "warning",
       "ladder_class": "none",
@@ -24821,6 +24907,31 @@
       "description": "Workflow #498 FACT-CAP (contracts/instance-fact-store.md, \"Capacity ledger\"): an instance's own active facts in the instance fact store (instance_id the instance's alias, count its own active facts) reached 80% of its bound (limit_count, 224: each instance has a bound of its own, and each server and each game one of 16). One Warning runtime.failed record under the instance's links, written by the publication that reached the share, or by the first publication after a start that finds the instance at or past it; none more until its count falls back under the share. Nothing is refused: the instance takes new keys up to its bound, and only then is a new key refused (fact_store_capacity_exceeded).",
       "common_causes": "The packages bound to the instance read many distinct keys (readings, lists, display and policy seeds), or a publisher wrote many keys of its own under the instance.",
       "handling": "Read the instance's keys (ac_facts) against its rows in the capacity ledger of contracts/instance-fact-store.md before a new package with keys of its own is placed on it; a count falls back only when facts of the instance are invalidated. The bound is a contract constant, not a setting."
+    },
+    "fact_store_expired_facts_reclaimed": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "count": "required",
+        "limit_count": "required",
+        "instance_id": "optional",
+        "server": "optional",
+        "game": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.103",
+      "description": "Workflow #503 FACT-R (contracts/instance-fact-store.md, \"Expiry reclamations\"): one scope of the instance fact store was at its bound (limit_count: 224 for an instance, 16 for a server or a game) when a publication brought keys it did not hold, and the publication's plan reclaims count of its facts that had been expired for more than seven days to make room for them. The scope is named by exactly one value: instance_id (the instance's alias), server or game (the scope's id). One Warning runtime.failed record under the system links; the facts the plan takes are the ones expired longest, and never a fact without an expiry, one expired less than seven days, one of the publication's own keys, a key a condition of the active catalog reads (the fact of a trigger or a feedback stop) or a key whose writer reads an expired record back (session.pack.schedule, session.remedy.choices, session.resource_targets, session.goal_records).",
+      "common_causes": "Keys that are written no more and stay stored until something replaces them: a package unloaded or no longer bound, a reading or a list a package's new version renamed or retired, a priority offset or a lock that outlived what it named.",
+      "handling": "Nothing to do. The facts removed are those whose fact.invalidated record names this one as its trigger, each at the fact's expiry; a later reading of a removed key is a new key and needs room again. When the publication's fact.published is not in the ledger after them, a stop or a failure came between: the other facts stay, and the next publication that needs the room plans again. If the record recurs for the same scope, the scope is too small for what its packages write: read its keys (ac_facts) against the capacity ledger of contracts/instance-fact-store.md. The margin of seven days is a contract constant, not a setting."
     }
   },
   "locations": {
@@ -26624,6 +26735,14 @@
       "status": "active",
       "since": "0.12.0",
       "description": "A Runtime host operation or stage: gate recovery preparation."
+    },
+    "goal_page_view": {
+      "owner": "runtime-host",
+      "layer": "host",
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "A Runtime host operation or stage: goal page view (Workflow #455 RR4b-1, GoalPageView)."
     },
     "goal_view": {
       "owner": "runtime-host",

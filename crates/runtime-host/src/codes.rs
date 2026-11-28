@@ -2173,6 +2173,9 @@ actingcommand_contract::outcome_locations! {
         GatePumpPerformanceControl => "gate_pump_performance_control",
         GateRecoveryPause => "gate_recovery_pause",
         GateRecoveryPreparation => "gate_recovery_preparation",
+        // Workflow #455 RR4b-1 (register §1.557): one page of one part of an application's goal
+        // page.
+        GoalPageView => "goal_page_view",
         // Workflow #463 V3 (register §1.383): one application's goal page.
         GoalView => "goal_view",
         // Workflow #369 S6b.
@@ -3755,6 +3758,42 @@ actingcommand_contract::outcome_codes! {
 }
 
 actingcommand_contract::outcome_codes! {
+    /// The host's codes of the goal page read in pages (Workflow #455 RR4b-1, register §1.557;
+    /// `contracts/runtime-interface.md`, "Goal request kinds"). No existing code fits:
+    /// `goal_value_invalid` refuses an edit, and the cursor of event pages names a ledger snapshot
+    /// a page of memory does not have. One code for each cause a reader tells apart: a part that
+    /// names what the root does not have, each source of a cursor that moved, and (fix round 1) a
+    /// cursor sent to a page that is not in memory.
+    pub(crate) enum GoalPageCode {
+        /// Error (since 0.12.104). A `GoalPageView` names, for its part, what the application's
+        /// game root does not have, for the reason `goal_problem` names at `json_pointer`, the
+        /// edit's words: no records entry of that name whose table is one of the root's accepted
+        /// tables (`name_unknown` at `/part/entry`), no such key or class of the table
+        /// (`not_an_option` at `/part/ladder/key` or `/part/ladder/class`), no such ladder
+        /// (`out_of_range` at `/part/ladder/column` or `/part/ladder/sub`). Denied, nothing
+        /// answered.
+        Refused => "goal_page_view_refused": error / none,
+        /// Error (since 0.12.104). The cursor of a `GoalPageView` of the part `records` was
+        /// answered over other stored records: the instance's `session.goal_records` record was
+        /// written after that page (`current_version` the goal page's version now). Denied,
+        /// nothing answered: read the part again from its first page.
+        RecordsMoved => "goal_page_view_records_moved": error / none,
+        /// Error (since 0.12.104). The cursor of a `GoalPageView` was answered over another
+        /// declaration: the root's accepted `goal-tables.json` or its `records` entries changed
+        /// after that page (`current_version` the goal page's version now). Denied, nothing
+        /// answered: read the part again from its first page.
+        DeclarationMoved => "goal_page_view_declaration_moved": error / none,
+        /// Error (since 0.12.104, fix round 1). The cursor of a `GoalPageView` reached a page that
+        /// is not in the Runtime's memory, which holds nothing of its part (`goal_problem` its
+        /// declaration's state: `not_checked_yet`, `root_failing` or `no_schedule`); the
+        /// declaration did not move (`current_version` the goal page's version now). Denied,
+        /// nothing answered: keep what was kept under the tables' sha256 and read the part again
+        /// from its first page once a first page says the declaration is in memory.
+        DeclarationAbsent => "goal_page_view_declaration_absent": error / none,
+    }
+}
+
+actingcommand_contract::outcome_codes! {
     /// The host's code of a game root's `goals.json` that is not applied while the root runs
     /// (Workflow #463 V2 fix round 2). No existing code fits: `standard_pack_root_invalid` and
     /// `standard_pack_root_unreadable` say of every other root file that the root is not
@@ -3966,6 +4005,13 @@ actingcommand_contract::outcome_codes! {
         /// the share, and once more after a start that finds it at or past it. Nothing is
         /// refused; the instance takes new keys up to its bound.
         ShareReached => "fact_store_capacity_share_reached": warning / none,
+        /// Warning (Workflow #503 FACT-R, since 0.12.103). A scope at its bound took a
+        /// publication's new keys in the room of its records that had been expired for more than
+        /// seven days: one Warning `runtime.failed` under the system links (`instance_id` the
+        /// alias, or `server` or `game`; `count` the records removed; `limit_count` the scope's
+        /// bound), each removed record's `fact.invalidated` naming it as its trigger. The
+        /// publication goes on.
+        ExpiredFactsReclaimed => "fact_store_expired_facts_reclaimed": warning / none,
     }
 }
 // ---- #498 FACT-CAP: end ----

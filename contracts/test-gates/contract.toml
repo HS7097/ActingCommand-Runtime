@@ -1048,3 +1048,12 @@ tests = [
     "actingcommand-contract::lib::standard_pack_goal_tables::tests::sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it",
 ]
 incident = ["#455 SL2"]
+
+# Workflow #455 RR4b-1 (0.12.104; register §1.557; brief rd-1123/brief-455-rr4b1.md; contracts/runtime-interface.md, "Goal request kinds", "The goal page in pages"; runtime-client 15), the client's half, over the scripted Runtime, no sleep and no device: goal_page_view sends GoalPageView member by member as given, cursor and limit absent from the wire when None, and answers the page the Runtime answered (c1); a Runtime that does not know the kind ends the connection after the request frame and, the same owner answering again, the call is runtime_operation_unsupported, settled; a page of another instance is runtime_result_unexpected (c2). Adapted, the requirement raising runtime-client max to 15: actinglab-architecture's component_interfaces::the_runtime_declares_each_v0120_interface_revision_once ([12, 15]) and workspace_guards::b3_every_runtime_operation_has_an_explicit_origin_category (GoalPageView among the operations without an origin gate).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-client::lib::tests::gate_455_rr4b1::rr4b1_c1_goal_page_view_sends_its_members_as_given_and_answers_the_page",
+    "actingcommand-runtime-client::lib::tests::gate_455_rr4b1::rr4b1_c2_an_older_runtime_is_unsupported_and_another_instances_page_unexpected",
+]
+incident = ["#455 RR4b-1"]

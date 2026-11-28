@@ -447,6 +447,18 @@ Every reader calls the two functions above; none has a copy.
   reads them, and the needs computed from a file whose only change is `names` are byte for byte
   those of the file without it, but for the file's sha256, which the set carries by definition. A
   file without `names` is read, kept and hashed as before.
+- **The goal page's read `GoalPageView`** (Workflow #455 RR4b-1, since 0.12.104; `runtime-client`
+  15; [runtime-interface.md](runtime-interface.md), "The goal page in pages") reads the tables the
+  workbench keeps, with their sha256 and their names, from memory, and says through them what a
+  person chooses from: a records entry's stored records with each ladder's target, the position a
+  prerequisite raises it to and the key's current position (part `records`), a table's columns,
+  classes and keys with each key's held state, its ladders' sizes and current positions (part
+  `options`), and one ladder's positions (part `positions`). Every position, held state and applied
+  word it gives is the walk of "What is computed" itself, one function the computation and the read
+  both call over the same inputs; a key's row is found by an index of its list built once per read.
+  A position is said by `say_goal_position` only, in every language its segment writes; what the
+  file names nothing has no name there. The read changes nothing the computation gives: its sets
+  and their identities are byte for byte those of before.
 
 ## What is computed
 
