@@ -1429,6 +1429,9 @@ impl HostShared {
             state.pair_marks.extend(now);
             if changed {
                 self.clear_entry_pairs()?;
+                // #503 PACE (register §1.545, ruling 5): every pair whose scheduled runs keep
+                // failing is freed the same way.
+                self.clear_failure_pairs()?;
             }
         }
         // G-R2s round 2: while a game is noted uncomposed, the check reads and composes again

@@ -346,6 +346,35 @@ actingcommand_contract::outcome_codes! {
         /// outcome, `skipped`; the climb's plan lists the rung pending, as a plan drill's does).
         RecoveryRungSkippedEmulatorRestartedInStretch => "recovery_rung_skipped_emulator_restarted_in_stretch": info / none,
         // Workflow #490 ENTRY-A end
+        // #503 PACE begin: a pair whose scheduled runs keep failing waits between its dispatches.
+        /// Info (#503 PACE). The candidate's task failed on its instance `count` times in a row
+        /// in its activity window (failures with no condition that left it unpaused), the latest
+        /// (`decision_id`, `failure_code`, settled at `observed_at_unix_ms`) less than
+        /// `scheduling.unavailable_probe`'s interval for `count` − 1 before now: it is not
+        /// dispatched there before `next_eligible_unix_ms` (never after the window's end), when it
+        /// wakes; the fact refresh names it as its gate (keys `instance_id`, `task_id` as well).
+        /// The settlement of each failure that sets such a wait writes it once too, as a
+        /// `runtime.failed` record under the instance with the same keys; no evaluation does.
+        InstanceTaskFailureWaiting => "instance_task_failure_waiting": info / none,
+        /// Info (#503 PACE). The candidate's task is set aside on its instance until its activity
+        /// window ends (`window_end_unix_ms`), when it wakes: in that window `count` of its
+        /// failures in a row, each setting `scheduling.unavailable_probe`'s longest interval as
+        /// its wait (fix round 2), came although another scheduled run had succeeded on the
+        /// instance since its previous one, reaching its rule's `escalation_threshold`
+        /// (`limit_count`); its latest `decision_id`, `failure_code`, `observed_at_unix_ms` (keys
+        /// `instance_id`, `task_id` as well). The fact refresh names it as its gate.
+        InstanceTaskFailureSetAside => "instance_task_failure_set_aside": info / none,
+        /// Warning (#503 PACE). A person is told, once per task, instance and window (and again
+        /// when it is set aside again after a catalogue's activation, a changed package, a store
+        /// update task's success on the instance or a Runtime start cleared the counts), that a
+        /// task is set aside on its instance until its activity window ends
+        /// (`window_end_unix_ms`): `count` of its failures in a row in that window, each setting
+        /// the longest interval as its wait (fix round 2), came although another scheduled run had
+        /// succeeded on the instance since its previous one, which reached its rule's
+        /// `escalation_threshold` (`limit_count`); keys `instance_id`, `task_id`, `decision_id`,
+        /// `failure_code`, `observed_at_unix_ms` of the failure that reached it.
+        InstanceTaskFailureSetAsideReported => "instance_task_failure_set_aside_reported": warning / none,
+        // #503 PACE end
         // Workflow #387 D1c begin
         /// Info. A ladder skipped a rung before the start rung its trigger item names (the
         /// rung's `recovery_rung_finished` outcome; M387 §4.1).
@@ -2327,6 +2356,9 @@ actingcommand_contract::outcome_locations! {
         // ended without success; the lease sweep takes up a recovery its cool-down held back.
         InstanceEntryBlock => "instance_entry_block",
         TakeUpEntryRecoveries => "take_up_entry_recoveries",
+        // #503 PACE: the pairs whose scheduled runs keep failing, their waits, their being set
+        // aside and the warning that tells a person of it.
+        InstanceTaskFailurePacing => "instance_task_failure_pacing",
         ReadActiveContainedRun => "read_active_contained_run",
         ReadActiveContainedRuns => "read_active_contained_runs",
         ReadActiveInstances => "read_active_instances",
@@ -3067,6 +3099,8 @@ pub(crate) mod test_spellings {
             // Workflow #490 ENTRY-A fix round 3: a test lets a scheduled run in on an instance, as
             // its settlement tells the entry blocks.
             LetRunInForTest => "let_run_in_for_test",
+            // #503 PACE: a test reads and seeds a pair whose scheduled runs keep failing.
+            FailurePairForTest => "failure_pair_for_test",
             // Workflow #398 RD-5b: a test runs one sample of the handsets' device state at once.
             DeviceStateSampleForTest => "device_state_sample_for_test",
             // ISO-START-1 (#419): a test writes and reads the Runtime's fact store.
