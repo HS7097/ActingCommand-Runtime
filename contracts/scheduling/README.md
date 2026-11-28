@@ -931,7 +931,8 @@ read it, and the candidate waits.
   lines", "At each evaluation"), with the reason the pool values give it
   (`fact_stale` for a current reading), as a `resource_projection` on the pool
   would; one that passes raises none and is not deferred. A pool read from
-  rows of a list raises none ("A pool read from rows of a list").
+  rows of a list raises none; its list's reader is owed a run instead ("A
+  pool read from rows of a list", "The list's reader").
   Workflow #411 6438574534 follow-up 2 (since 0.12.26): a task's own placement
   never holds back the demand its undecided trigger or feedback stop raises.
   Whether the reading can be placed is R_I's own gates' to decide (below): an
@@ -1097,7 +1098,10 @@ target record `session.remedy.choices` (an overlaid instance fact) and the confi
   pair it serves (at most 16); after the remedy is served, the blocked pair is treated so once,
   with `policy_remedy_retry`. Placement, the feedback stop, the deferrals, budgets, activity
   windows, one winner per instance and the shared run limits still apply. Between several requested
-  providers the ranking of "Score-Assisted Priority" decides, unchanged.
+  providers the ranking of "Score-Assisted Priority" decides, unchanged. #455 RR3e (since 0.12.104;
+  register §1.560): a fourth exists, the owed reading of a list (`list_reading_owed`, "A pool read
+  from rows of a list", "The list's reader"): treated as triggered only, neither promoted nor past
+  its cooldown.
 - **Hold and stop.** While its round is open the blocked pair is deferred with
   `policy_remedy_waiting` at position 8a of the order of deferrals
   ([scheduling-blackout.md](../scheduling-blackout.md)); a stopped round defers it there with
@@ -2811,10 +2815,53 @@ its inventory is read from rows of that list ([v2/README.md](v2/README.md);
   detection allowance. The package that reads the list is scheduled by its own rule; refresh on
   demand is a later slice. #455 RR3e (since 0.12.104; register §1.560): so a producer held as not
   positive while its goal on such a pool waits for a reading ("Net benefit within a tier", "Not
-  positive") asks nothing either. Asking the package whose scheduled run published the list for a
-  run is not built: the list's record names the run that published it, but the host's dispatch
-  journal keeps a settled run's identity only for a task some catalog predicate reads an outcome
-  of, so the run cannot be mapped to its task for every list.
+  positive") asks nothing of the fact refresh either; what a run leaves unread is asked of the
+  list's reader instead (below).
+- **The list's reader** (#455 RR3e, since 0.12.104; register §1.560; the coordinator's rulings of
+  11-29, not the owner's words). A run that leaves a pool read from rows of a list unread (its
+  production told under a goal's gap, or its consumption under a `run_cap`, "Pool lines", "At each
+  evaluation") owes the task that reads the list a run, once, while a candidate waits on the pool.
+  - *The binding.* When a scheduled run publishes a list at its end, the host notes in memory, for
+    the list's instance and key, the run's catalog task and the record it published (its
+    `source_snapshot_id` names the run). Beside the readings the evaluation is given, each list
+    whose record in force is the one so noted is bound to that task (by its id in the catalog in
+    force, else the task that continues it). A list a client or the Lab published, or whose record
+    in force a scheduled run published before the host's start, has no reader: it waits for its own
+    rule, as before. Nothing is stored and no catalog member names the reader.
+  - *Who waits on the list.* On an instance, a candidate whose undecided trigger or feedback stop
+    suggests the list's key, a judged candidate whose net benefit is unknown on a pool read from the
+    list, and a judged producer held as not positive while a goal that covers it waits on such a
+    pool ("Fact Refresh", "Demand").
+  - *The owed reading.* Where such a list has a reader and a pool read from it is unread, the
+    reader's (task, instance) pair is treated as triggered, with the info reason
+    `list_reading_owed` (`fact_key` the list's key, `pool_id` the first such pool by id): a
+    Runtime-made trigger override beside the owed rerun ("Remedies", "Trigger override and
+    promotion"), which passes no gate. It is not promoted and not put past its cooldown, nor exempt
+    from the no-progress guard; its run limits, its activity window and budget, placement, the
+    pauses, one winner per instance, its pair's failure pacing and the asleep rules apply, and on an
+    instance the idle action closed as the cycle starts it is owed only while a candidate that waits
+    on the list is due (its trigger true and its feedback stop false): a reading alone never wakes a
+    closed game, as for the fact refresh's reader (IDLE-1P).
+  - *Once in an unread episode.* An unread episode of the pool is what the dispatches that leave it
+    unread make: for the produced side every dispatch the sum counts once it reaches the gap (#455
+    RR3d), for the consumed side each pair LF-1 reads; it lasts until a reading observed at or after
+    their end. While the reader's pair has a dispatch admitted after the latest of those dispatches
+    (in the order the host notes them, their admission's), its run open or ended, nothing is owed:
+    one reading for an episode, however many dispatches made it together. A dispatch of the reader
+    that failed at its entry is not noted, so the reading is owed again; its pair's own backoff and
+    pacing then decide.
+  - *How the evaluation finds it.* While a list is bound to a reader, the round is judged first as
+    before; where that judgement finds a reading owed, the round is judged again from the same
+    inputs with the reader treated as triggered, the first judgement dropped with the capped
+    episodes it changed. Without one, the first judgement is the evaluation, byte for byte as
+    without the binding; without a bound list there is one judgement.
+  - *Known limits.* A producer that reads its own list at its end publishes a reading observed
+    before its own settlement, which does not release the pool: the reading is owed, and read, once
+    more. After a start no list has a reader until a scheduled run publishes it again. The
+    dispatches that leave the pool unread are those the handed runs judge (a task's production is
+    matched by its id across instances, §1.543 ruling 6); a forward projection reads no owed
+    reading. A list read too rarely for the rules that wait on it is the resource root's:
+    the reader's cooldown and limits are its own, and the Runtime does not step over them.
 - **Wakes.** The reading's expiry wakes the evaluation a millisecond after it, as a fact reading's
   does; a list's publication wakes it as every fact publication does.
 - **In 0.12.78** (P1) no host computed the reading: every reader met the pool as a `ledger_fact`
@@ -2993,7 +3040,8 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   which ask the fact refresh for it, the net benefit, the lines, the reserve gate, the spend
   values; #455 RR3e, since 0.12.104, register §1.560: and a judged producer held as not positive
   whose covering goal waits on the pool asks for it too, "Fact Refresh"; for a pool read from rows
-  of a list nothing asks, "A pool read from rows of a list"), until a reading observed at or after
+  of a list the list's reader is owed a run instead, "A pool read from rows of a list", "The list's
+  reader"), until a reading observed at or after
   the end of every run of the sum that reached the gap (a reading observed at a run's end or after
   counts only the dispatches after it); and, for
   this pool alone, also for the two readers that do not read the pool values: a resource target's

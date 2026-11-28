@@ -635,6 +635,28 @@
       "common_causes": "The idle action stopped the instance's emulator or closed its application, and the pool has regenerated enough for one run above its hard line but not up to the line at which its capped episode begins.",
       "handling": "Nothing for a person to do. The task is no reason to wake the instance before next_eligible_unix_ms; it is judged again then (the idle plan wakes the instance at that time less the wake lead, no earlier than a blackout covering the instance or its closed activity window lets it through), or as soon as the instance is awake for anything else, when it is judged as on an awake instance."
     },
+    "list_reading_owed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "pool_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.104",
+      "description": "Scheduling decision reason (#455 RR3e, register 1.560; contracts/scheduling/README.md \"The list's reader\"): the task whose scheduled run published the list fact_key on the instance is treated as triggered, once, because runs left the pool pool_id, read from rows of that list, unread (their production told under a goal's gap, or their consumption under a run_cap, made its reading stale) and a candidate on the instance waits on it: its undecided trigger or feedback stop suggests the list, its net benefit is unknown on the pool, or it is held as not positive while a goal that covers it waits on the pool. It is owed once in the pool's unread episode: no longer once a dispatch of the task on the instance was admitted after the latest of the dispatches that leave the pool unread. It passes no gate: it is not promoted and not put past its cooldown, and its run limits, activity window and budget, placement, the pauses, one winner per instance, the failure pacing of its pair and the asleep rules apply; on an instance the idle action closed, it is owed only while a candidate that waits on the list is due.",
+      "common_causes": "A goal's run was told enough turns to close the gap on a pool read from rows of a list, or a run handed a run_cap consumed from one, and the list has not been read since that run ended.",
+      "handling": "Nothing to do: the task runs when its own cooldown, limits, window and the instance allow, and its run reads the list again. A list read too rarely for the rules that wait on it is the resource root's to fix: shorten or remove the cooldown and limits of the task that reads it."
+    },
     "capability_missing": {
       "category": "info",
       "ladder_class": "none",

@@ -381,6 +381,15 @@ actingcommand_contract::outcome_codes! {
         /// `lines_source`).
         InstanceAsleepBelowTriggerLine => "instance_asleep_below_trigger_line": info / none,
         // ---- #503 WAKE: end ----
+        // ---- #455 RR3e (register §1.560; `contracts/scheduling/README.md`, "The list's reader"):
+        // begin ----
+        /// Info. The task whose scheduled run published the list `fact_key` is treated as
+        /// triggered once on the instance: runs left the pool `pool_id`, read from rows of that
+        /// list, unread, and a candidate there waits on it. It passes no gate (not promoted, not
+        /// past its cooldown); its own limits, window and budget and the Runtime's gates decide
+        /// when it runs (keys `fact_key`, `pool_id`).
+        ListReadingOwed => "list_reading_owed": info / none,
+        // ---- #455 RR3e: end ----
         // ---- Workflow #455 RR3 (register §1.538; `contracts/resource-targets.md`, "Needs
         // computed from the records"): begin ----
         /// Info. A pool has a need computed from the instance's stored records, and its stacked

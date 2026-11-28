@@ -57,6 +57,8 @@ mod capped;
 mod consumption;
 // Workflow #437 ORD-1b (register §1.352): the selection among the members of one device.
 mod device_order;
+// #455 RR3e (register §1.560): the reading a run left owed to the task that reads a list.
+mod list_reading;
 
 use benefit::KnownBenefit;
 pub(crate) use benefit::manual_request;
@@ -83,6 +85,7 @@ pub use fact_refresh::{
     FACT_REFRESH_TASK_ID, FactRefreshInputs, FactRefreshReader, FactRefreshSettings, IdleClosed,
     InstanceHold, fact_refresh_task,
 };
+use list_reading::OwedListReadings;
 use no_progress::Decision as NoProgressDecision;
 pub use no_progress::{
     BasisReading, MAX_NO_PROGRESS_BASIS_KEYS, NoProgressBasis, NoProgressGuard, NoProgressGuards,
@@ -323,11 +326,19 @@ pub struct HandedRuns {
     /// #455 RR3c and RR3d: every noted dispatch that carried `gaps_remaining` with a gap of at
     /// least 1, in the order noted (their admission's).
     told: Vec<ToldRun>,
+    /// #455 RR3e (register §1.560): by instance alias and then task id, the place of each pair's
+    /// latest noted dispatch in the order noted (the first noted is 1), which the owed reading of
+    /// a list compares with the place of the dispatches that leave a pool unread.
+    latest: BTreeMap<String, BTreeMap<String, u64>>,
+    /// #455 RR3e: how many dispatches were noted.
+    noted: u64,
 }
 
 /// #455 RR3c and RR3d: one noted dispatch that carried `gaps_remaining`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToldRun {
+    /// #455 RR3e (register §1.560): its place in the order noted.
+    place: u64,
     /// Its task's id, as the pair's task snapshot is keyed.
     task_id: String,
     /// When its run ended, `None` while it has not.
@@ -374,6 +385,13 @@ impl HandedRuns {
         ended_at_unix_ms: Option<u64>,
         reasons: impl IntoIterator<Item = &'r Outcome>,
     ) {
+        // #455 RR3e (register §1.560): its place in the order noted, the pair's latest.
+        self.noted = self.noted.saturating_add(1);
+        let place = self.noted;
+        self.latest
+            .entry(instance_id.to_owned())
+            .or_default()
+            .insert(task_id.to_owned(), place);
         let mut run_cap = None;
         let mut gaps = Vec::new();
         for reason in reasons {
@@ -408,6 +426,7 @@ impl HandedRuns {
         }
         if !gaps.is_empty() {
             self.told.push(ToldRun {
+                place,
                 task_id: task_id.to_owned(),
                 ended_at_unix_ms,
                 turns: run_cap.unwrap_or(1),
@@ -484,6 +503,61 @@ impl HandedRuns {
             });
             sum.is_none_or(|total| total >= u128::from(gap) * 1_000)
         })
+    }
+
+    /// #455 RR3e ruling 3 (register §1.560): the place in the order noted of the latest noted
+    /// dispatch of the pair (`task_id`, `instance_id`); `None` when none of it was noted.
+    fn latest_noted(&self, task_id: &str, instance_id: &str) -> Option<u64> {
+        self.latest
+            .get(instance_id)
+            .and_then(|pairs| pairs.get(task_id))
+            .copied()
+    }
+
+    /// #455 RR3e ruling 3 (register §1.560): the place in the order noted of the latest of the
+    /// dispatches that leave a reading of `pool_id` observed at `observed_at_unix_ms` unread, of the
+    /// tasks of `tasks`: each pair LF-1 reads for it ([`Self::consumed_unshown`]: its latest
+    /// dispatch carried a `run_cap`, its task consumes the pool, its run has not ended or ended
+    /// after the reading), and, once the production told under the pool's gap reaches the gap
+    /// ([`Self::produced_unshown`]), every dispatch that sum counts. `None` when none leaves it
+    /// unread. An unread episode of the pool is what these dispatches leave: it lasts until a
+    /// reading observed at or after their end, and a dispatch admitted after the latest of them is
+    /// after the episode began.
+    fn unread_since(
+        &self,
+        tasks: &[TaskSpec],
+        pool_id: &str,
+        observed_at_unix_ms: u64,
+    ) -> Option<u64> {
+        let mut since = None::<u64>;
+        for (instance_id, pairs) in &self.capped {
+            for (task_id, &ended_at_unix_ms) in pairs {
+                let consumes = tasks.iter().any(|task| {
+                    task.id == *task_id
+                        && task.consumes.iter().any(|effect| effect.pool_id == pool_id)
+                });
+                if consumes && ended_at_unix_ms.is_none_or(|ended| ended > observed_at_unix_ms) {
+                    since = since.max(self.latest_noted(task_id, instance_id));
+                }
+            }
+        }
+        if self.produced_unshown(tasks, pool_id, observed_at_unix_ms) {
+            for run in &self.told {
+                let counted = run
+                    .ended_at_unix_ms
+                    .is_none_or(|ended| ended > observed_at_unix_ms)
+                    && tasks.iter().any(|task| {
+                        task.id == run.task_id
+                            && crate::resource_targets::production_milli(&task.produces, pool_id)
+                                > 0
+                            && run.gap_on(task, pool_id).is_some()
+                    });
+                if counted {
+                    since = since.max(Some(run.place));
+                }
+            }
+        }
+        since
     }
 }
 
@@ -564,6 +638,11 @@ impl LeftOutFacts {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GivenPoolReadings {
     readings: BTreeMap<String, GivenPoolReading>,
+    /// #455 RR3e ruling 2 (register §1.560; `contracts/scheduling/README.md`, "A pool read from
+    /// rows of a list", "The list's reader"): by instance alias and then list key, the catalog task
+    /// whose scheduled run published the list record the readings were computed from, as the host
+    /// noted it in memory when that run published it; none for a list another run published.
+    readers: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// #455 P2: the reading the host computed for one pool read from rows of a list.
@@ -639,6 +718,39 @@ impl GivenPoolReadings {
     /// Whether no pool was given a reading.
     pub fn is_empty(&self) -> bool {
         self.readings.is_empty()
+    }
+
+    /// #455 RR3e ruling 2 (register §1.560): binds each list the readings were computed from (by
+    /// its instance and key) to the catalog task `reader_of` names for it, the task whose scheduled
+    /// run published its record; a list it names none for has no reader.
+    pub fn bind_readers(&mut self, mut reader_of: impl FnMut(&str, &str) -> Option<String>) {
+        let lists = self
+            .readings
+            .values()
+            .map(|reading| (reading.instance_id.clone(), reading.fact_key.clone()))
+            .collect::<BTreeSet<_>>();
+        for (instance_id, fact_key) in lists {
+            if let Some(task_id) = reader_of(&instance_id, &fact_key) {
+                self.readers
+                    .entry(instance_id)
+                    .or_default()
+                    .insert(fact_key, task_id);
+            }
+        }
+    }
+
+    /// #455 RR3e ruling 2: the catalog task bound to the list `fact_key` of the instance
+    /// `instance_id` ([`Self::bind_readers`]).
+    pub fn reader(&self, instance_id: &str, fact_key: &str) -> Option<&str> {
+        self.readers
+            .get(instance_id)
+            .and_then(|lists| lists.get(fact_key))
+            .map(String::as_str)
+    }
+
+    /// #455 RR3e ruling 2: whether any list is bound to a reader.
+    pub(crate) fn has_readers(&self) -> bool {
+        !self.readers.is_empty()
     }
 
     /// #455 P2 fix round 1: each pool read from rows of the list `fact_key` of the instance
@@ -2614,8 +2726,110 @@ pub fn evaluate_with_device_groups<E: From<PolicyEvaluationError>>(
     )
 }
 
+/// #455 RR3e ruling 2 (register §1.560; `contracts/scheduling/README.md`, "The list's reader"):
+/// what one judgement of a round gives: its evaluation, or the readings it found owed, with which
+/// the round is judged again.
+enum Round {
+    Evaluated(PolicyEvaluation),
+    Owed(OwedListReadings),
+}
+
+/// The evaluation every entry point gives ([`evaluate_round`]). #455 RR3e ruling 2 (register
+/// §1.560; `contracts/scheduling/README.md`, "The list's reader"): while a list the host gave
+/// readings of is bound to its reader, the round is judged first as before; where that judgement
+/// finds a candidate held by a pool read from rows of the list that the runs left unread, and the
+/// list's reader owed its reading in the pool's unread episode ([`list_reading::owed`]), the round
+/// is judged again from the same inputs with that reader treated as triggered, and the first
+/// judgement is dropped with the capped episodes it changed. Otherwise the first judgement is the
+/// evaluation, byte for byte as without the binding; without a bound list there is one judgement.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    resources: &EvaluationResources,
+    time: EvaluationTime,
+    seed: u64,
+    immediate_retries: &BTreeSet<(String, String)>,
+    refresh_inputs: Option<&FactRefreshInputs>,
+    remedies: Option<&RemedyPlan>,
+    mut chain: Option<(&ChainHandoverInputs, &mut ChainEntryHolds<'_, E>)>,
+    run_slots: &RunSlots,
+    owed_reruns: &OwedReruns,
+    instance_holds: &InstanceHolds,
+    no_progress: &NoProgressGuards,
+    capped: &mut CappedMemory,
+    instance_lines: &InstancePoolLines,
+    left_out: &LeftOutFacts,
+    device_groups: &DeviceGroups,
+    mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
+) -> Result<PolicyEvaluation, E> {
+    let probing = left_out.pool_readings().has_readers();
+    let kept = probing.then(|| capped.clone());
+    let first = evaluate_round(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        refresh_inputs,
+        remedies,
+        chain
+            .as_mut()
+            .map(|(inputs, holds)| (*inputs, &mut **holds)),
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        no_progress,
+        capped,
+        instance_lines,
+        left_out,
+        device_groups,
+        &OwedListReadings::default(),
+        probing,
+        &mut eligibility,
+    )?;
+    let owed = match first {
+        Round::Evaluated(evaluation) => return Ok(evaluation),
+        Round::Owed(owed) => owed,
+    };
+    if let Some(kept) = kept {
+        *capped = kept;
+    }
+    match evaluate_round(
+        catalog,
+        facts,
+        resources,
+        time,
+        seed,
+        immediate_retries,
+        refresh_inputs,
+        remedies,
+        chain,
+        run_slots,
+        owed_reruns,
+        instance_holds,
+        no_progress,
+        capped,
+        instance_lines,
+        left_out,
+        device_groups,
+        &owed,
+        false,
+        eligibility,
+    )? {
+        Round::Evaluated(evaluation) => Ok(evaluation),
+        Round::Owed(_) => Err(E::from(PolicyEvaluationError::invalid(
+            "a round judged with its owed list readings asked for a judgement again",
+        ))),
+    }
+}
+
+/// One judgement of a round. #455 RR3e ruling 2 (register §1.560): each pair of `owed_readings`
+/// is treated as triggered, with its reason (`list_reading_owed`); with `probing`, the judgement
+/// stops before the fact refresh and the allocation when it finds a reading owed, and gives it.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_round<E: From<PolicyEvaluationError>>(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
@@ -2633,8 +2847,10 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     instance_lines: &InstancePoolLines,
     left_out: &LeftOutFacts,
     device_groups: &DeviceGroups,
+    owed_readings: &OwedListReadings,
+    probing: bool,
     mut eligibility: impl FnMut(&DispatchIntent) -> Result<CandidateEligibility, E>,
-) -> Result<PolicyEvaluation, E> {
+) -> Result<Round, E> {
     validate_inputs(catalog, facts, resources, time)?;
     validate_run_slots(run_slots)?;
     // Stored resource target policies are read before the time-validity projection, so a
@@ -2871,6 +3087,15 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 trigger.truth = PredicateTruth::True;
                 trigger.suggestions.clear();
                 task_work.reasons.push(owed_rerun.reason.clone());
+            }
+            // #455 RR3e ruling 2 (register §1.560): the reader of a list owed its reading is
+            // treated as triggered too, with the Runtime's reason (`list_reading_owed`), but not
+            // past its cooldown, nor exempt from the no-progress guard: every later gate holds it
+            // as it holds any candidate.
+            if let Some(owed_reading) = owed_readings.get(&task.id, &instance.instance_id) {
+                trigger.truth = PredicateTruth::True;
+                trigger.suggestions.clear();
+                task_work.reasons.push(owed_reading.clone());
             }
             task_work.next_wake_unix_ms = trigger.next_wake_unix_ms;
             task_work.chance_end_unix_ms = trigger.end_unix_ms;
@@ -3134,6 +3359,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         }
     }
 
+    // #455 RR3e ruling 2 (register §1.560): the readings the benefit gate's held candidates wait
+    // for, by instance and key.
+    let mut list_waits = BTreeSet::new();
     let (mut candidates, scored_affected, spends) = apply_priority_selection(
         catalog,
         facts,
@@ -3143,6 +3371,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         &target_policies,
         refresh_inputs.is_some(),
         &mut *capped,
+        &mut list_waits,
     )?;
     affected.extend(scored_affected);
     // Workflow #411 B15 R2: a remedy request or retry ranks among the promoted candidates.
@@ -3170,6 +3399,28 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             if let Some(record) = work[candidate.work_index].record.as_mut() {
                 record.promoted = true;
             }
+        }
+    }
+    // #455 RR3e ruling 2 (register §1.560): the first judgement of a round in which a list is bound
+    // to its reader looks, before the fact refresh and the allocation, for a candidate held by a
+    // pool read from rows of the list that the runs left unread, whose reader is owed its reading
+    // in the pool's unread episode; with one, the round is judged again (`evaluate_scheduling`).
+    if probing {
+        let owed = list_reading::owed(
+            &list_reading::Probe {
+                tasks: &catalog_bundle.tasks.tasks,
+                pool_specs: &pool_specs,
+                pool_values: &pool_values,
+                facts,
+                bindings: left_out.pool_readings(),
+                handed: &left_out.handed_runs,
+                idle_closed: refresh_inputs.map(|inputs| &inputs.idle_closed),
+            },
+            &work,
+            &list_waits,
+        );
+        if !owed.is_empty() {
+            return Ok(Round::Owed(owed));
         }
     }
     // Workflow #384 D2-S4: every instance's recognition maintenance package joins the allocation
@@ -3732,13 +3983,13 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     for task_work in &work {
         next_wake = min_wake(next_wake, task_work.next_wake_unix_ms);
     }
-    Ok(PolicyEvaluation {
+    Ok(Round::Evaluated(PolicyEvaluation {
         decisions: work.into_iter().map(TaskDecision::from).collect(),
         next_wake_unix_ms: next_wake,
         preload_hint,
         dispatch_intents,
         reason_chains,
-    })
+    }))
 }
 
 #[derive(Debug)]
@@ -5325,7 +5576,9 @@ impl LeftOutWhy {
 ///
 /// #455 RR3e (register §1.560): the gate is given, for each judged candidate, the pools on which
 /// a goal that covers it waits for a reading the production told under the goal's gap left
-/// unread, and a candidate it holds as not positive asks the fact refresh for them.
+/// unread, and a candidate it holds as not positive asks the fact refresh for them. #455 RR3e
+/// ruling 2: the gate adds to `waits` the readings, by instance and key, that each candidate it
+/// holds waits for (a reading its unknown net benefit needs, or one of those pools).
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_priority_selection(
     catalog: &CompiledCatalog,
@@ -5336,6 +5589,7 @@ fn apply_priority_selection(
     target_policies: &BTreeMap<String, InstanceTargetPolicy>,
     refreshing: bool,
     memory: &mut CappedMemory,
+    waits: &mut BTreeSet<(String, String)>,
 ) -> PolicyEvaluationResult<(
     Vec<PlacementCandidate>,
     Vec<AffectedCandidate>,
@@ -5386,6 +5640,7 @@ fn apply_priority_selection(
             refreshing,
             &mut affected,
             memory,
+            waits,
         )?;
         return Ok((ranked, affected, BTreeMap::new()));
     }
@@ -5967,6 +6222,7 @@ fn apply_priority_selection(
         refreshing,
         &mut affected,
         memory,
+        waits,
     )?;
     // LF-1 (register §1.509): the consumed pools whose lines take part in each judged candidate's
     // spend values, read once the capped order has given its blocks.

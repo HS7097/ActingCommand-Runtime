@@ -1131,9 +1131,13 @@ decision (`fact_refresh_pending`, `fact_refresh_exhausted`, `fact_refresh_unreso
 `fact_refresh_unbound` with its `reader_problem`). A producer that passes on its own value asks
 nothing and is not deferred; a candidate within its rounding bound or held by a pool's lines asks
 nothing for it. A pool read from rows of a list is not asked of the fact refresh, whose reader never
-reads a list: it waits for a run that publishes the list, as before ("A pool read from rows of a
-list" there). Before 0.12.104 the pending goal asked for nothing, and a pool read from a fact was
-read again only when a trigger or a regenerating pool's cost term happened to ask for its key.
+reads a list: the task whose scheduled run published the list is owed a run instead, treated as
+triggered once in the pool's unread episode (`list_reading_owed`) and held by every gate a
+candidate meets, its own cooldown and limits included ("A pool read from rows of a list", "The
+list's reader" there); a list no such task is bound to waits for its own rule, as before. Before
+0.12.104 the pending goal asked for nothing, a pool read from a fact was read again only when a
+trigger or a regenerating pool's cost term happened to ask for its key, and one read from rows of a
+list only when the list's own rule came round.
 
 ## Needs computed from the records
 

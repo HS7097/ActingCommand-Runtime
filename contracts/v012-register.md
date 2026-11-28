@@ -54058,17 +54058,21 @@ a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It rea
 codes in the records as text it does not know. The gate's memory was memory only and is gone; the
 older build starts automatic emulators with no gate, as before.
 
-### 1.560 Slice #455 RR3e (0.12.104): a producer held as not positive while its goal waits on a pool a run left unread asks the fact refresh for the pool's reading; the owed reading of a list's reader is not built (board #455; the rulings are the coordinator's of 11-29, taken from the study's R3, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr3e.md` after the read-only study `rd-1123/study-rr3c-gaps-1128.md`; on main `b5e9102e`, v0.12.101, merged with main `cec07ec4`, which holds §1.552 to §1.554 and §1.556, slices of the same days, before this one; §1.555 and §1.557 to §1.559 are others under review)
+### 1.560 Slice #455 RR3e (0.12.104): a producer held as not positive while its goal waits on a pool a run left unread asks the fact refresh for the pool's reading, and a pool read from rows of a list owes the task whose scheduled run published the list one run (`list_reading_owed`) (board #455; the rulings are the coordinator's of 11-29, taken from the study's R3, with its ruling of the same day on the binding after this slice's first stop, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr3e.md` after the read-only study `rd-1123/study-rr3c-gaps-1128.md`; on main `b5e9102e`, v0.12.101, merged with main `cec07ec4`, which holds §1.552 to §1.554 and §1.556, slices of the same days, before this one; §1.555 and §1.557 to §1.559 are others under review)
 
 This section takes 1.560. It ships in 0.12.104. [scheduling/README.md](scheduling/README.md) ("Fact
-Refresh", the bullet "Demand"; "Net benefit within a tier", the bullet "Not positive"; "A pool read
-from rows of a list", the bullet "No refresh is asked for it"; "Pool lines", the bullet "At each
-evaluation", RR3c's paragraph) and [resource-targets.md](resource-targets.md) ("A pool a run was
-told enough to close the gap on", a new paragraph "Who asks for the reading") are the contract.
-[resource-readings.md](resource-readings.md) ("Staleness") is unchanged: nothing refreshes a list on
-demand yet. No `package`, `ledger`, `runtime-client` or `actingd-config` revision moves, no declared
-interface range, no configuration key, no code or word (the code the work order's ruling 2 adds is
-not added, below), no record, event, wire member or catalog member; the index is untouched.
+Refresh", the bullet "Demand"; "Net benefit within a tier", the bullet "Not positive"; "Remedies",
+the bullet "Trigger override and promotion"; "A pool read from rows of a list", the bullet "No
+refresh is asked for it" and a new bullet "The list's reader"; "Pool lines", the bullet "At each
+evaluation", RR3c's paragraph), [resource-targets.md](resource-targets.md) ("A pool a run was told
+enough to close the gap on", a new paragraph "Who asks for the reading") and
+[resource-readings.md](resource-readings.md) ("Staleness", "Nothing refreshes a list on demand") are
+the contract. One policy outcome code is new, `list_reading_owed` (info; keys `fact_key`, `pool_id`,
+both existing keys in the meaning other policy codes give them), in the policy fragment, with
+`policy` added to the owners of the code domain `list_` in the catalog's header (the index
+regenerated). No `package`, `ledger`, `runtime-client` or `actingd-config` revision moves, no
+declared interface range (a new code moves none, as §1.549's did not), no configuration key, no
+record, event, wire member or catalog member, no `requires` word; nothing is stored.
 
 **The problem** (the study's claim 3, confirmed by reading `b5e9102e`). A run that was told enough
 turns to close a goal's gap leaves the pool it produced unread (§1.543, summed since the reading by
@@ -54101,42 +54105,103 @@ instance waited on a reading nobody requested.
   a pool's lines asks nothing for it. For a pool read from rows of a list the suggestion names the
   list's key, which `give_pool_readings` left out for the pool's instance, so `predicate_keys` drops
   it and the fact refresh is untouched (§1.505 ruling 8; `p2_t2` holds).
-- *2, a list-row pool asks for its list: not built.* Stopped by the work order's first condition (the
-  binding cannot be had from what the host keeps), below. The new info code it would have added is
-  not added.
+- *2, a list-row pool asks for its list* (`crates/policy/src/evaluator/list_reading.rs`;
+  `crates/policy/src/evaluator.rs`, `evaluate_scheduling`, `evaluate_round`, `GivenPoolReadings`;
+  the host, below). *The binding* is the coordinator's form (b), below: the readings the evaluation is
+  given carry, for each list whose record in force a scheduled run published, that run's catalog
+  task (`GivenPoolReadings::bind_readers`, `reader`); a list a client or the Lab published, and every
+  list after a start until a scheduled run publishes it again, has none and stays as today. *Who
+  waits*: on an instance, a candidate whose undecided trigger or feedback stop suggests the list's
+  key (its decision's suggestions), a judged candidate whose net benefit is unknown on a pool read
+  from the list, and one ruling 1 holds as not positive on such a pool (the readings the gate notes,
+  refreshing or not, beside what it asks of the fact refresh). *The owed reading*: where such a list
+  has a reader and a pool read from it is unread (the evaluation's pool values hold it `fact_stale`:
+  the produced side's rule or LF-1's), the reader's (task, instance) pair is treated as triggered,
+  beside the owed rerun in the evaluation's loop, with one new info reason `list_reading_owed`
+  (`fact_key` the list's key, `pool_id` the first such pool by id). The catalogue entry states the
+  result and the operation: nothing to do; it runs when its cooldown, limits, window and the
+  instance allow, and a list read too rarely for the rules that wait on it is the resource root's
+  cooldown and limits to shorten. *How the round finds it*: the owed reading depends on what holds
+  other candidates, which the round itself decides, so while any list is bound to a reader the round
+  is judged once as before up to the fact refresh and the allocation (`evaluate_round` with
+  `probing`); where that judgement owes a reading, it stops there and the round is judged again from
+  the same inputs with the reader treated as triggered, the first judgement dropped with the capped
+  episodes it changed (a copy taken before it); otherwise the first judgement goes on and is the
+  evaluation. The first judgement calls neither the eligibility callback nor the chain's entry
+  holds, so nothing outside the evaluation sees it.
 - *3, the bounds* (for ruling 1). A pool is asked for only while a candidate is actually held by it:
   judged, held not positive, and covered by a goal on a pool the produced side's rule holds unread,
   at that evaluation. The reading itself is bounded by the fact refresh's own gates as for every
   other key: its minimum interval and failure backoff, its daily limit, its rest after failures in a
   row, placement, the instance's holds and IDLE-1P's rule. The candidate lends the reader its catalog
-  rank with its manual offset, as an affected candidate does.
-- *4, known limits, changed by nothing here.* A pool read from rows of a list waits for a run that
-  publishes the list, as before; a producer that reads its own list at its end publishes a reading
-  observed before its own settlement, which does not release the pool (the span's rule); a pool
-  whose scope is not one instance raises no refresh demand (`predicate_keys` reads exactly the
-  instance's scope), so it waits too; the study's R4 (the gap a run is told while the need's part is
-  open) stays as it is.
+  rank with its manual offset, as an affected candidate does. (For ruling 2.) *At most one owed
+  reading per unread episode* (`HandedRuns::unread_since`, `latest_noted`): the host notes the
+  dispatches in the order of their admission, and the list now keeps each one's place in that
+  order. An unread episode of a pool is what the dispatches that leave it unread make: on the
+  produced side, once the production told under the pool's gap reaches the gap, every dispatch that
+  sum counts (§1.548's ruling 2: since the reading, its run not ended or ended after it); on the
+  consumed side, each pair LF-1 reads for it (its latest dispatch carried a `run_cap`, its task
+  consumes the pool, its run not ended or ended after the reading). While the reader's pair has a
+  noted dispatch placed after the latest of them, its run open or ended, no override is given: one
+  reading for the episode, however many dispatches made it together, and a new dispatch that leaves
+  the pool unread again begins a new one. *Only while a candidate is actually held by the pool*, at
+  that round's first judgement. *The task's own cooldown and limits*, and every other gate (below).
+- *4, known limits, changed by nothing here.* A producer that reads its own list at its end
+  publishes a reading observed before its own settlement, which does not release the pool (the
+  span's rule): the reading is owed, and read, once more. A list with no reader waits for its own
+  rule, as today; so does every list after a start until a scheduled run publishes it again (the
+  binding is memory only). A pool whose scope is not one instance raises no refresh demand
+  (`predicate_keys` reads exactly the instance's scope), so it waits too. A dispatch of the reader
+  that failed at its entry is not noted (§1.548 ruling 1), so the reading is owed again and its
+  pair's own backoff and pacing decide. A forward projection reads no owed reading. The study's R4
+  (the gap a run is told while the need's part is open) stays as it is.
 
 **Why no gate is passed.** Ruling 1 adds a demand, not a dispatch: the reading is the recognition
 maintenance package's run, admitted, placed, budgeted and held exactly as one a trigger's
-suggestion asks for, and the producer stays deferred with its own reason first.
+suggestion asks for, and the producer stays deferred with its own reason first. Ruling 2 changes
+the reader's trigger alone: the override sits where the owed rerun's does, but leaves its cooldown
+check and the no-progress guard as for any candidate (the owed rerun, the immediate rerun and a
+remedy are exempted from both; this one is not), takes no promotion, and every later gate is the
+one any candidate meets: its run limits, activity window and budget, placement, the pauses and the
+instance holds, one winner per instance, the Runtime's admission (its pair's failure pacing among
+its positions), the asleep rules; on an instance the idle action closed as the cycle starts it is
+owed only while a candidate that waits on the list is due, so a reading alone never wakes a closed
+game. An audit proposed to exempt such a reading from the package's cooldown and daily count; the
+coordinator's ruling is no: the Runtime does not step over a package's own cooldown and limits.
 
-**What stops ruling 2** (the work order's first stop condition; the study's section 6, second
-point, verified in code). The list record the host's store holds and `pool_list_rows_readings`
-reads (`FactRecord`) names the run that published it: `source_snapshot_id` is
-`run:<run>/frame:<frame>/<operation>` (`list_reading_snapshot_id`, written at the run's end by
-`list_reading_fact_record`), and `parse_resource_reading_snapshot_id` reads the run back. The host's
-dispatch journal does not map that run to its catalogue task for every run: a `SeenDispatch` keeps
-its run's identity (`CompletedPolicyRunIdentity`, with `run_id` and `catalog_task_id`) only in
+**The binding** (the work order's first stop condition, then the coordinator's ruling on it). The
+list record the host's store holds and `pool_list_rows_readings` reads (`FactRecord`) names the run
+that published it: `source_snapshot_id` is `run:<run>/frame:<frame>/<operation>`
+(`list_reading_snapshot_id`, written at the run's end by `list_reading_fact_record`). The dispatch
+journal does not map that run to its catalogue task for every run: a `SeenDispatch` keeps its run's
+identity (`CompletedPolicyRunIdentity`, with `run_id` and `catalog_task_id`) only in
 `completed_run`, which the completion (`complete_dispatch`) and the start's recovery set only when
-the dispatch's own catalogue references an outcome key of its task (`referenced_outcome_keys`, a
-predicate somewhere reading `outcome.<task>.<key>`); for any other task it is `None`. A task that
-reads a list is ordinarily of the second kind. The record's `source_detector`
-(`list_reading:<entry task>/<operation>`) names the package's own entry task and the reading's
-operation, neither of them a catalogue task id. So the binding needs either a journal that keeps
-every completed dispatch's run id (a change of what the journal keeps, not this slice's) or a
-declared member naming the list's reader (a `requires` word, which the work order rules out). Ruling
-1 is built alone, as the work order says for this case.
+the dispatch's own catalogue references an outcome key of its task; a task that reads a list is
+ordinarily of the other kind, and the record's `source_detector` names the package's own entry task,
+no catalogue task. The first build stopped there and built ruling 1 alone. The coordinator's ruling
+then allowed a binding in memory alone, nothing persisted changing, in one of two forms, the first
+the code permits: (a) fill `completed_run` for every admitted scheduled dispatch, unless a reader of
+it decides otherwise when it is present for a task it was absent for; (b) else note the reader where
+the list is published. (a) is not taken: two readers decide by its presence. `latest_completed_policy_runs`
+counts the pairs whose latest completion has one, refuses beyond its limit
+(`policy_scheduling_outcome_capacity_exceeded`, fatal) and projects an authoritative outcome for each
+(Workflow #399: a pair whose latest completion has none has no authoritative outcome); and
+`outcome_key_snapshot`'s `completed_runs`, which the cycle validates against
+(`policy_outcome_snapshot_changed`), would hold a run identity for a pair whose latest completion
+was under a catalogue that referenced none of its outcomes, which today reads `outcome_missing`.
+(`remedy_completed_run` reads the ledger's record itself, not the member.) (b) is built
+(`crates/runtime-host/src/host/contained_task.rs`, `note_scheduled_list_reader`;
+`crates/runtime-host/src/policy_host.rs`, `note_list_reader`, `list_reader`, the member
+`list_readers`; `crates/runtime-host/src/host/policy_dispatch.rs`, the projection of the inputs):
+where a run's end publishes a list it read (the publication with the list reading's purpose), the
+run is a scheduled one when its settlement is still to come (`entry_settling_dispatch`, the
+registration the scheduled path makes when the run starts, which names its dispatch); its
+dispatch's task, as the journal holds it, is noted under the policy lock for the list's instance
+and key, with the record's `source_snapshot_id`, before the record is published, so no evaluation
+sees the record without its note. The projection of an evaluation's inputs, under the policy lock
+and the gates it already takes, binds each list whose record in force names that snapshot to the
+noted task (by its id in the catalogue in force, else the task that continues it). No new ledger
+query, no lock the evaluation did not take; one entry per instance and list key. Lost at a start.
 
 **Where it is built.**
 
@@ -54144,25 +54209,42 @@ declared member naming the list's reader (a `requires` word, which the work orde
 |---|---|
 | The goals waiting on unread pools | `crates/policy/src/resource_targets.rs` (`InstanceTargets::unread_goal_pools`, beside `goal_gap`) |
 | Handing them to the gate | `crates/policy/src/evaluator.rs` (`apply_priority_selection`, before `benefit::gate`; the early call with no goal hands none) |
-| The ask | `crates/policy/src/evaluator/benefit.rs` (`gate`: the parameter `unread_goals`; the closure `ask`, which the not-positive branch and the unknown branch call, the second as before) |
+| The ask | `crates/policy/src/evaluator/benefit.rs` (`gate`: the parameters `unread_goals` and `waits`; the closure `ask`, which the not-positive branch and the unknown branch call, the second as before, and which notes the readings waited for) |
+| The owed reading | `crates/policy/src/evaluator/list_reading.rs` (`OwedListReadings`, `Probe`, `owed`); `crates/policy/src/evaluator.rs` (`evaluate_scheduling` judging once or twice, `evaluate_round` with the override beside the owed rerun and the stop before the fact refresh, `Round`); `crates/policy/src/codes.rs` and the policy fragment (`list_reading_owed`) |
+| The episode | `crates/policy/src/evaluator.rs` (`HandedRuns` with `latest` and `noted`, `ToldRun::place`, `HandedRuns::latest_noted`, `HandedRuns::unread_since`; `note_dispatch`'s signature unchanged) |
+| The binding | `crates/policy/src/evaluator.rs` (`GivenPoolReadings::bind_readers`, `reader`, `has_readers`); `crates/runtime-host/src/host/contained_task.rs` (`note_scheduled_list_reader`, before the publication; the test seam `publish_scheduled_list_reading_for_test`); `crates/runtime-host/src/policy_host.rs` (`list_readers`, `note_list_reader`, `list_reader`); `crates/runtime-host/src/host/policy_dispatch.rs` (the binding in the projection) |
 
 **Decided here.** The pools are found from the resolved goals of the candidate's own instance (as
 the gate's weights are), not from the needs' notes, so a stored goal and a computed need ask alike.
 The reason a suggestion carries is the pool values' own (`resource_suggestion`), so a pool whose
 reading has also expired asks with `fact_expired`, as a trigger on it would. The v1 policy is read as
-`goal_gap` reads it, by its pending effect's key.
+`goal_gap` reads it, by its pending effect's key. For ruling 2: a candidate whose feedback stop,
+not only its trigger, is undecided on the list waits on it too; the pool the reason names is the
+first unread one of the list by id; a reader its own trigger makes due while a reading is owed is
+judged again too, and carries the reason beside its own, which changes nothing else (the owed
+reading names no state of the reader's own trigger); the binding is noted before the publication,
+so a refused publication leaves a note no record in force names, which binds nothing.
 
-**Tests** (incident `#455 RR3e`: `crates/policy/src/tests/gate_455_rr3e.rs`, policy gate map; RR3c's
-fixture; no clock read).
+**Tests** (incident `#455 RR3e`: `crates/policy/src/tests/gate_455_rr3e.rs`, policy gate map, two
+rows; `crates/runtime-host/src/tests/gate_455_rr3e.rs`, host gate map; RR3c's fixture with a list's
+reader, and RR3d's host fixture; no clock read).
 
 | Test | What it shows |
 |---|---|
 | `rr3e_t1_a_producer_held_not_positive_asks_for_the_pool_its_pending_goal_is_on` (1, the study's first R3a test) | a producer of `V` 900 sent with `B` 1900 and told 2 at `run_cap` 2; on the old reading `B` −100, `policy_benefit_nonpositive`, its goal pending: the reader requested for the pool's key with `fact_stale` and dispatched, the producer `fact_refresh_pending` with the key, the reason and the package; with a reading after the run's end showing the need met, not positive and nothing asked |
 | `rr3e_t2_a_producer_that_passes_on_its_own_value_asks_for_nothing` (1, the second) | a producer of `V` 10 000, the same rounds: `B` 9000 with its goal pending, dispatched, no `fact_refresh_*` reason, no decision of the reader |
 | `rr3e_t3_a_pool_read_from_rows_of_a_list_is_not_asked_of_the_fact_refresh` (1, the third) | the first test's rounds on a pool read from rows of a list: held not positive with its goal pending, no `fact_refresh_*` reason, no decision of the reader, nothing dispatched |
+| `rr3e_t4_the_reader_of_a_list_is_owed_its_reading_once_while_a_candidate_waits_on_it` (2, 3, the study's first and second R3b tests) | t3's rounds with the list bound to `task_r`, never due by its own trigger: on the second round `list_reading_owed` (the list's key, the pool) and `task_r` dispatched, the producer held not positive; with a dispatch of `task_r` noted after the producer's, its run open or ended, owed no more, `trigger_false`, nothing dispatched |
+| `rr3e_t5_the_readers_cooldown_holds_the_owed_reading_with_its_own_reason` (2, the third) | `task_r` of a cooldown of an hour dispatched ten minutes before: owed and treated as triggered, last reason `task_cooldown_active`, waking at the cooldown's end, nothing dispatched |
+| `rr3e_t6_on_an_instance_the_idle_action_closed_a_reading_alone_waits` (2, the fourth) | a producer that passes and a watcher whose trigger reads the pool, the only one waiting (not due): awake, owed and `task_r` dispatched ahead of the producer; closed by the idle action, nothing owed and the producer dispatched |
+| `rr3e_t7_a_list_without_a_reader_is_owed_nothing` (2, the fifth) | no reader bound: nothing owed, `trigger_false`, nothing dispatched |
+| `rr3e_t8_a_list_read_after_the_runs_end_releases_the_pool_and_owes_nothing` (2, the sixth) | after the owed round, a list read after the producer's end showing the need met: the goal satisfied, nothing owed |
+| `rr3e_t9_two_dispatches_that_together_leave_the_pool_unread_owe_one_reading` (3, the work order's first addition) | two dispatches told the gap 2 at `run_cap` 1: read after the first, nothing owed; unread after the second, one reading owed and `task_r` dispatched; with `task_r`'s dispatch noted after both, nothing owed |
+| `rr3e_t10_a_reader_the_failure_pacing_holds_waits_for_the_pacings_end` (2, the work order's second addition) | the admission holding `task_r` as its pair's failure pacing does (`instance_task_failure_waiting`) for five minutes: owed, deferred with that reason, waking then; then dispatched, still owed |
+| `rr3e_h1_a_list_a_scheduled_run_publishes_is_bound_to_its_task` (2, host, the study's first R3b host test) | a list a direct run published has no reader; the one the task's scheduled run publishes before its settlement is bound to the task, and stays so once it is settled; a list a direct run publishes afterwards has none |
+| `rr3e_h2_after_a_start_the_list_has_no_reader_until_a_scheduled_run_publishes_it_again` (2, host, the second, as form (b) answers it) | after a start on the same state root the run's list is read as before and has no reader |
 
-The study's R3b tests and the work order's two added for ruling 2 are not built with it. The gates
-that pin today's behaviour pass as read, none edited: `rr3c_t1` to `rr3c_t8`; of them `rr3c_t3`
+The gates that pin today's behaviour pass as read, none edited: `rr3c_t1` to `rr3c_t8`; of them `rr3c_t3`
 pins no reason list of a held candidate (its producer passes), and `rr3c_t4` pins its held
 producer's first reason, `policy_benefit_nonpositive` among its reasons and the watcher's
 suggestion, not the whole list, so the `fact_refresh_unbound` (`reader_problem` `disabled`) its held
@@ -54176,7 +54258,21 @@ pool read from rows of a list compiles beside `target_defaults` and `goal_tiers`
 needs' goal as RR3c's fact pool does; that in t1 the reader's own gates let it through on the
 fixture's whole-day window and its candidate wins the instance (as `gate_390_pool1` shows for a
 trigger's demand); that in t3 the list's reading is current at the second round, so the reason is
-`fact_stale` (the test does not depend on it).
+`fact_stale` (the test does not depend on it). For ruling 2, no existing gate binds a list to a
+reader (no fixture passes a binding, and no host gate publishes a list through a scheduled run's
+end), so every existing evaluation is judged once, as before; the noting order's new places change
+no `HandedRuns` an existing gate compares, each built by `note_dispatch` in the order the host
+notes. Not settled by reading: that the evaluator's two judgements compile as written (the chain's
+entry holds reborrowed for the first, the eligibility callback lent to it); that in t4 to t10 the
+reader's candidate wins its instance in the maintenance tier ahead of the judged producer (t6) and
+that its decision's last reason is the cooldown's (t5) or the admission's (t10), with the wake
+asserted; that in h1 and h2 the test seam's registration of the run as one whose settlement is to
+come (`entry_settlement_pending`, which the scheduled path calls when it starts and the seam calls
+in its place) leaves the fixture's settlement of a success as before; that h2's start restores the
+catalogue and computes the reading from the ledger, as RR3d's h6 shows for its evaluations. The
+seam publishes the list as the run's end does, but does not run a package: the call in the
+publication itself (`note_scheduled_list_reader` in `publish_contained_task_resource_readings`) is
+read, not driven, by a test.
 
 **What is not changed.** Every evaluation in which no pool is unread by the produced side's rule
 gives the gate no pool, and the gate's two branches decide as before, byte for byte (the unknown
@@ -54185,20 +54281,32 @@ candidate is given one, as a goal resolves only on pools of the instance's scope
 asked, its run takes its instance and the round's shared run limits as any reading does, so another
 instance's candidate may then wait for a shared slot as it waits behind any dispatch. LF-1's rule,
 RR3c's and RR3d's judgement, the turns a run is told, the triggers' and the regenerating pools'
-demand, every record, every interface range.
+demand, every record, every interface range. For ruling 2: an evaluation in which no list is bound
+to a reader is judged once, as before, byte for byte; one in which a list is bound but no reading
+is owed is its first judgement, which is today's (the gate's noting of the readings waited for is
+memory the decision does not read); an instance on which no pool is unread is owed nothing, and its
+candidates differ only where a second judgement's reader on another instance takes a shared slot,
+or moves the score stage's thresholds across instances, as any other candidate does. The fact
+refresh still never reads a list. The journal keeps what it kept; `completed_run` is filled as
+before.
 
-**At deploy.** Nothing to configure and nothing to migrate: the demand is computed in each
-evaluation from the memory it already reads. On production, a need-lifted rule held
+**At deploy.** Nothing to configure and nothing to migrate: the demand and the owed reading are
+computed in each evaluation from memory. On production, a need-lifted rule held
 `policy_benefit_nonpositive` after a run that closed its gap on a pool read from a fact shows a
 `fact_refresh_*` reason after it, and the recognition maintenance package's decision carries
-`fact_refresh_requested` for the pool's key with `fact_stale`. What a resource author checks: that
-the instance's recognition maintenance package marks that key (else `fact_refresh_unbound` with
-`key_not_marked`). A pool read from rows of a list still waits for its list's own rule.
+`fact_refresh_requested` for the pool's key with `fact_stale`; on a pool read from rows of a list,
+the first owed reading shows `list_reading_owed` (the list's key and the pool) on the decision of
+the task that reads the list, once a scheduled run of it has published the list since the start.
+What a resource author checks: that the instance's recognition maintenance package marks a fact
+pool's key (else `fact_refresh_unbound` with `key_not_marked`), and that the cooldown and the limits
+of the task that reads a list let it run as often as the rules that wait on the list need: the
+Runtime does not step over them.
 
-**Rollback.** Nothing is stored: an older build asks nothing for a pending goal, and the pool is
+**Rollback.** Nothing is stored: an older build asks nothing for a pending goal and gives no
+override; it reads `list_reading_owed` in recorded reasons as a code it only spells, and the pool is
 read again only as a trigger, a cost term or the list's own rule brings it. In the release notes'
 language:
-目标缺口派出去的一趟把产出的池子读数用旧之后，那个目标挂起期间，被它推的任务如果自己的净收益不为正被压住，就去向识别维护包要这个池子的新读数（池子的键，`fact_stale`），走现有的读数刷新、它自己的间隔和上限；自己净收益为正、照常派出的任务什么也不要。按列表行读的池子照旧不向读数刷新要，等列表自己的规则；列表读取任务的"欠一次读取"这次没做：派发记录里只有被别处读结果的任务才留着运行号，列表没法对回读它的那个任务。没有要配置的东西。
+目标缺口派出去的一趟把产出的池子读数用旧之后，那个目标挂起期间，被它推的任务如果自己的净收益不为正被压住，就去向识别维护包要这个池子的新读数（池子的键，`fact_stale`），走现有的读数刷新、它自己的间隔和上限；自己净收益为正、照常派出的任务什么也不要。按列表行读的池子不向读数刷新要，而是欠读这个列表的任务一趟：一趟定时运行在结束时发布了列表，运行时就在内存里记下这趟运行的任务；之后池子被别的运行用旧、又有任务在等它时，这个任务被当作已触发一次（`list_reading_owed`），它自己的冷却、次数上限、时段、暂停、失败退避都照常管它，同一段未读期间只欠一次。重启后要等它再发布一次列表才重新记上。没有要配置的东西。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

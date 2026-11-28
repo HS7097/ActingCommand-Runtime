@@ -3029,7 +3029,19 @@ impl HostShared {
             // read from its instance's list in this projection, at this position, under the gate
             // the fact pools are projected under; its number goes where a fact pool's projected
             // reading goes, so it enters the snapshot's identity below and each instance's view.
-            let readings = fact_projection.list_pool_readings(catalog.compiled());
+            let mut readings = fact_projection.list_pool_readings(catalog.compiled());
+            // #455 RR3e ruling 2 (register §1.560): each list whose record in force a scheduled run
+            // published is bound to that run's task, as this start noted it when the run published
+            // it; a list another run published has no reader.
+            readings.bind_readers(|instance_id, fact_key| {
+                let record = fact_projection.active_record(
+                    &actingcommand_contract::FactScope::Instance {
+                        instance_id: instance_id.to_owned(),
+                    },
+                    fact_key,
+                )?;
+                policy.list_reader(instance_id, fact_key, &record.source_snapshot_id)
+            });
             let resources = actingcommand_policy::project_fact_pools_with_readings(
                 catalog.compiled(),
                 &facts,

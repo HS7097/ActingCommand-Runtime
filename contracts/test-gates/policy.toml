@@ -1828,3 +1828,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t3_a_pool_read_from_rows_of_a_list_is_not_asked_of_the_fact_refresh",
 ]
 incident = ["#455 RR3e"]
+
+# #455 RR3e ruling 2, the policy's half (0.12.104; register §1.560; the coordinator's ruling of 11-29 on the binding; contracts/scheduling/README.md, "The list's reader"): the task whose scheduled run published a list, bound to it beside the reading, is treated as triggered once (list_reading_owed, fact_key and pool_id) while a candidate waits on a pool read from the list that the runs left unread, and passes no gate, no clock read; t1's fixture with task_r, never due by its own trigger, producing pool.listed. Owed and dispatched while the producer is held not positive; owed no more once a dispatch of task_r is noted after the producer's, its run open or ended, trigger_false again (t4); its cooldown of an hour holds it, task_cooldown_active last, waking at the cooldown's end (t5); a producer that passes and a watcher whose trigger reads the pool: owed and dispatched ahead of the producer on an awake instance, nothing owed on one the idle action closed (t6); no reader bound: nothing owed (t7); a list read after the run's end showing the need met releases the pool, the goal satisfied, nothing owed (t8); two dispatches told the gap 2 at run_cap 1 each: read after the first, nothing owed, unread after the second, one reading owed, none after task_r's dispatch noted after both (t9); the admission holding task_r as its failure pacing does (instance_task_failure_waiting) until five minutes on: deferred with that reason, waking then, and dispatched then, still owed (t10).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t4_the_reader_of_a_list_is_owed_its_reading_once_while_a_candidate_waits_on_it",
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t5_the_readers_cooldown_holds_the_owed_reading_with_its_own_reason",
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t6_on_an_instance_the_idle_action_closed_a_reading_alone_waits",
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t7_a_list_without_a_reader_is_owed_nothing",
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t8_a_list_read_after_the_runs_end_releases_the_pool_and_owes_nothing",
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t9_two_dispatches_that_together_leave_the_pool_unread_owe_one_reading",
+    "actingcommand-policy::lib::tests::gate_455_rr3e::rr3e_t10_a_reader_the_failure_pacing_holds_waits_for_the_pacings_end",
+]
+incident = ["#455 RR3e"]

@@ -95,7 +95,7 @@
 //!   such a pool the gate reads the sums with every term and says nothing of it.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_selection_policy::UnknownReason;
@@ -824,7 +824,9 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// pool unread. With `refreshing`, a candidate held as not positive (`policy_benefit_nonpositive`)
 /// asks the fact refresh for those pools' readings through `affected`, as one whose only gap is an
 /// unknown reading does; a pool read from rows of a list is left out there, so nothing is asked for
-/// it. A candidate that passes asks nothing.
+/// it. A candidate that passes asks nothing. Ruling 2: every reading such a candidate, or one whose
+/// net benefit is unknown, waits for is added to `waits` by its instance and key, refreshing or
+/// not, so the owed reading of a list sees the candidates that wait on it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn gate(
     context: &PlacementContext<'_>,
@@ -836,6 +838,7 @@ pub(super) fn gate(
     refreshing: bool,
     affected: &mut Vec<AffectedCandidate>,
     memory: &mut CappedMemory,
+    waits: &mut BTreeSet<(String, String)>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // Phase 1: judge every judged candidate.
     let mut judged = Vec::with_capacity(ranked.len());
@@ -898,11 +901,18 @@ pub(super) fn gate(
         capped::plan(context, facts, &ranked, &known, work, memory)?
     };
     // Phase 3: decide. A candidate that waits for readings asks the fact refresh for them, lending
-    // the reader its catalog rank before the score stage, with its manual offset (D2 model §3.4).
+    // the reader its catalog rank before the score stage, with its manual offset (D2 model §3.4);
+    // #455 RR3e ruling 2: and the readings are noted as waited for on its instance.
     let mut ask = |candidate: &PlacementCandidate,
                    task_work: &TaskWork,
                    instance: &InstanceSnapshot,
                    suggestions: &[DetectionSuggestion]| {
+        for suggestion in suggestions {
+            waits.insert((instance.instance_id.clone(), suggestion.fact_key.clone()));
+        }
+        if !refreshing {
+            return;
+        }
         let keys = fact_refresh::predicate_keys(suggestions, instance, context.left_out);
         if keys.is_empty() {
             return;
@@ -1095,7 +1105,7 @@ pub(super) fn gate(
                 // #455 RR3e ruling 1 (register §1.560): held so while a goal that covers it waits on
                 // a pool the production told under the goal's gap left unread, it asks for that
                 // pool's reading, the key and reason a trigger that reads the pool asks for.
-                if refreshing && let Some(pools) = unread_goals.get(&candidate.work_index) {
+                if let Some(pools) = unread_goals.get(&candidate.work_index) {
                     let suggestions = pools
                         .iter()
                         .filter_map(|pool_id| context.pool_specs.get(pool_id.as_str()))
@@ -1109,7 +1119,7 @@ pub(super) fn gate(
             Judgement::Unknown { gap, suggestions } => {
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(unknown_reason(&gap));
-                if refreshing && !suggestions.is_empty() {
+                if !suggestions.is_empty() {
                     ask(&candidate, task_work, instance, &suggestions);
                 }
             }
