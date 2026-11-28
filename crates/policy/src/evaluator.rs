@@ -5391,7 +5391,29 @@ fn apply_priority_selection(
             &mut affected,
             memory,
         )?;
-        return Ok((ranked, affected, BTreeMap::new()));
+        // #455 SL3 (register §1.559): a line in effect still tells its spenders their turns: their
+        // spend values hold its terms alone (no reserve, no valued pool, no goal here). Without a
+        // line in effect none, as before.
+        let line_views = line_allowances(catalog, facts, context, &ranked)?;
+        let mut spends = BTreeMap::new();
+        for candidate in &ranked {
+            let Some(views) = line_views.get(&candidate.work_index) else {
+                continue;
+            };
+            let spend = crate::resource_targets::spend_values_with_lines(
+                catalog_task(catalog, &candidate.task_id)?,
+                None,
+                |_| None,
+                |pool_id| line_allowance_of(Some(views.as_slice()), pool_id),
+                |_| 0,
+                &catalog.catalog().pools.pools,
+                |_| None,
+            );
+            if !spend.is_empty() {
+                spends.insert(candidate.work_index, spend);
+            }
+        }
+        return Ok((ranked, affected, spends));
     }
     // Each instance's stored policy is resolved once: every target's pool and named tasks
     // against the catalog, its inventory in the time-validity projected facts; with a valued
@@ -5968,14 +5990,17 @@ fn apply_priority_selection(
     }
     // SS-6: the spend values of the candidates the gate admitted, from the same reserve views and
     // pending consumption (the gate's own available amount, at the same instant) and each
-    // instance's resolved goals; LF-1: and the lines of the pools they consume.
+    // instance's resolved goals; LF-1: and the lines of the pools they consume; #455 SL3 (register
+    // §1.559): and the lines in effect on the pools whose spending a line governs.
+    let line_views = line_allowances(catalog, facts, context, &ranked)?;
     let mut spends = BTreeMap::new();
     for candidate in &ranked {
         let task = catalog_task(catalog, &candidate.task_id)?;
         // G-R2s: a left-out candidate's gaps are those of an instance without a record.
         let targets = targets_for(candidate.work_index, candidate.instance_id.as_str());
         let candidate_lines = lines.get(&candidate.work_index);
-        let spend = crate::resource_targets::spend_values_with(
+        let candidate_line_views = line_views.get(&candidate.work_index).map(Vec::as_slice);
+        let spend = crate::resource_targets::spend_values_with_lines(
             task,
             // SCHED-C1f1: the views hold the candidate's consumption in effect on its instance,
             // which `run_cap` reads as one run's amount.
@@ -5985,6 +6010,7 @@ fn apply_priority_selection(
                     .and_then(|views| views.iter().find(|(id, _)| *id == pool_id))
                     .map(|(_, view)| *view)
             },
+            |pool_id| line_allowance_of(candidate_line_views, pool_id),
             |pool_id| {
                 crate::resource_targets::pending_total(
                     &unshown,
@@ -6062,6 +6088,81 @@ fn catalog_task<'a>(
 /// LF-1 (register §1.509): by work index, the pools whose lines take part in a candidate's spend
 /// values, each with its [`crate::resource_targets::LineView`] ([`spend_lines`]).
 type SpendLines<'a> = BTreeMap<usize, Vec<(&'a str, crate::resource_targets::LineView)>>;
+
+/// #455 SL3 (register §1.559): by work index, the pools whose spending a line in effect governs
+/// that a judged candidate consumes on net, each with its
+/// [`crate::resource_targets::LineAllowance`] ([`line_allowances`]).
+type LineAllowances<'a> = BTreeMap<usize, Vec<(&'a str, crate::resource_targets::LineAllowance)>>;
+
+/// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs", "The turns"): by work index, for each judged candidate of `candidates` (the gate's,
+/// past it), each pool it consumes that writes `spend_line`, has a line `L` in effect on its
+/// instance and is consumed on net (`c ≥ 1`), read as the pressing reads it
+/// ([`benefit::line_read`]), each once in its `consumes` order, with what the line lets its run
+/// spend: `max(r − L, c)`. A candidate without such a pool, and every candidate the gate does not
+/// judge, has no entry; a pool whose amount is not known gives none (such a candidate is no
+/// candidate past the gate).
+fn line_allowances<'a>(
+    catalog: &'a CompiledCatalog,
+    facts: &EvaluationFacts,
+    context: &PlacementContext<'_>,
+    candidates: &[PlacementCandidate],
+) -> PolicyEvaluationResult<LineAllowances<'a>> {
+    let mut allowances = LineAllowances::new();
+    for candidate in candidates.iter().filter(|candidate| candidate.judged) {
+        let task = catalog_task(catalog, &candidate.task_id)?;
+        let instance = facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == candidate.instance_id)
+            .ok_or_else(|| {
+                PolicyEvaluationError::invalid(format!(
+                    "judged candidate's instance '{}' is missing from the snapshot",
+                    candidate.instance_id
+                ))
+            })?;
+        let mut views: Vec<(&str, crate::resource_targets::LineAllowance)> = Vec::new();
+        for effect in &task.consumes {
+            let pool_id = effect.pool_id.as_str();
+            if views.iter().any(|(seen, _)| *seen == pool_id) {
+                continue;
+            }
+            let Some(pool) = benefit::spend_line_pool(pool_id, instance, context) else {
+                continue;
+            };
+            if let benefit::LineRead::Read {
+                line,
+                reading,
+                spent,
+                ..
+            } = benefit::line_read(task, instance, context, facts, pool)?
+            {
+                let above = reading.saturating_sub(i128::from(line));
+                views.push((
+                    pool_id,
+                    crate::resource_targets::LineAllowance {
+                        allowance: u64::try_from(above.max(i128::from(spent))).unwrap_or(u64::MAX),
+                        consumes: spent,
+                    },
+                ));
+            }
+        }
+        if !views.is_empty() {
+            allowances.insert(candidate.work_index, views);
+        }
+    }
+    Ok(allowances)
+}
+
+/// #455 SL3: the [`crate::resource_targets::LineAllowance`] of `pool_id` among `views`.
+fn line_allowance_of(
+    views: Option<&[(&str, crate::resource_targets::LineAllowance)]>,
+    pool_id: &str,
+) -> Option<crate::resource_targets::LineAllowance> {
+    views
+        .and_then(|views| views.iter().find(|(id, _)| *id == pool_id))
+        .map(|(_, view)| *view)
+}
 
 /// LF-1 (register §1.509; `contracts/scheduling/README.md`, "Task Reserves", "Capped spending
 /// order"): by work index, the pools each judged candidate consumes whose lines take part in its

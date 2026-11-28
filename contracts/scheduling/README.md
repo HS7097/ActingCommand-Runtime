@@ -295,18 +295,22 @@ hands those lines to the benefit gate (by instance and pool, through the evaluat
 a line is **in effect** while its record, read whole, is an active policy with the line among the
 targets it weighs (a v1 or v2 document within its lifetime, a v3 target within its own lifetime or
 without one; [../resource-targets.md](../resource-targets.md), "A pool's line"), and `L` is its
-`at_least`. For a judged candidate, on its instance, for each pool it consumes that writes
-`spend_line` and has a line in effect there, unless the task also produces the pool:
+`at_least`. For a judged candidate, on its instance, for each pool it consumes on net that writes
+`spend_line` and has a line in effect there:
 
-- **The amount.** `r` is the pool's amount at the evaluation as the pools' lines read it ("Pool
-  lines", "At each evaluation"): its value in the evaluation's pool values, projected, less the
-  consumption its reading does not show yet (every task dispatched on the instance at or after the
-  reading's observation, each by its own amount in effect), computed in the one function the lines
-  read it by. `c` is the candidate's consumption of the pool in effect on the instance in whole
-  units, `⌈C/1000⌉`, as the hard line's check counts it. `a = r − c`.
-- **At or above the line**, `a ≥ L` (and where `c` takes no unit from below it): nothing is added,
-  no term, no reason, the item `<pool>:-0`; the decision and its records are byte for byte those of
-  a build without this rule.
+- **The amount and the net.** `r` is the pool's amount at the evaluation as the pools' lines read
+  it ("Pool lines", "At each evaluation"): its value in the evaluation's pool values, projected,
+  less the consumption its reading does not show yet (every task dispatched on the instance at or
+  after the reading's observation, each by its own amount in effect), computed in the one function
+  the lines read it by. `c` is the candidate's **net** consumption of the pool for one run,
+  `max(0, consumption − production)` of the pool in thousandths (its consumption in effect on the
+  instance, its production as a run's goal term reads it), in whole units as the hard line's check
+  counts a consumption, `⌈·/1000⌉`: a production is never weighed by the line, and a token
+  production does not take a spending out of it. A net of 0 is not pressed, adds no turns and is
+  not read (its item `<pool>:-0`). `a = r − c`.
+- **At or above the line**, `a ≥ L` (and where `c` takes no unit from below it): nothing is added
+  to the judgement, no term, no reason, the item `<pool>:-0`, as a build without this rule judges
+  it; the dispatch is told its turns ("The turns" below).
 - **Below the line**, `d = L − a`, the units taken from below the line are `min(c, d)`, and the
   candidate's exact sum `S` is charged the **pressing**
   `P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli: every unit below the line at the
@@ -330,10 +334,26 @@ without one; [../resource-targets.md](../resource-targets.md), "A pool's line"),
   reads a fact), and the fact refresh is asked for the reading, as for a regenerating pool's missing
   reading. A currency under a line is not spent blind. With no line in effect the pool's value is
   not read.
-- **Never pressed:** a task that produces the pool (a line never weighs its producers; its
-  consumption of the pool, if it also has one, costs nothing as before); whatever the gate does not
-  judge (a manual request, a chain's successor that rides with its chain, the Runtime's own tasks);
-  and the capped order, the stop and hard lines and the trigger line, which are a valued pool's.
+- **The turns** (ruling 7, as decided on 11-29: a run told turns never crosses the line
+  unjudged). Where a dispatch's spend values give `run_cap` its terms ([../remedies.md](../remedies.md),
+  section 4, "Spend values"), each such pool adds one more term, the line's turns: `⌊(r − L) ÷ c⌋`
+  when that is at least 1, so the last turn told still leaves the pool at or above the line and none
+  of them is pressed, else 1, the one turn the gate judged with its pressing. `run_cap` is the least
+  of its terms, as before (a reserve, the lines of a valued pool, a goal, the ceiling of 1000). A
+  candidate that carried no `run_cap` before carries this term alone, so its dispatch is told its
+  turns and the rule of "Pool lines" ("a run told its turns leaves its pools unread") leaves every
+  pool its task consumes unread until it is read after that run's end: a currency under a line is
+  not spent on a count nobody judged. What a person sees: the same `policy_dispatch_parameters`
+  carries, for each entry of the task's `consumes` on such a pool, a `spend_allowance` of
+  `max(r − L, c)` (what the line lets the run spend: what the pool holds above it, or the one judged
+  run; the less of it and the reserve's where the task also reserves the pool), beside `run_cap`;
+  where the line's term is the least, `run_cap = ⌊spend_allowance ÷ c⌋`. With no line in effect, or
+  a net of 0, no term and no allowance: the values of before, byte for byte. A package that ignores
+  the turns it is told is the package's matter.
+- **Never pressed:** a production (a line never weighs what produces its pool; a task that also
+  consumes the pool is pressed on its net); whatever the gate does not judge (a manual request, a
+  chain's successor that rides with its chain, the Runtime's own tasks); and the capped order, the
+  stop and hard lines and the trigger line, which are a valued pool's.
 - **The price rises with the shortfall** so that the candidate with the least return for each unit
   is the first whose `B` falls to 0 and stops, and one that is worth its price still runs: the
   pressing reduces the spending, it forbids nothing. It is charged on the units below the line only:
@@ -342,11 +362,8 @@ without one; [../resource-targets.md](../resource-targets.md), "A pool's line"),
   starts at the line pays up to twice the integral of the slope: simple, and on the careful side.
   The price and its slope are the resource side's, and a wrong one makes the line too weak or too
   strong. A line on a pool nothing reads holds its spenders until a reader is bound or the line is
-  cleared. The gate judges one run's consumption: a dispatch told several turns (`run_cap`, from a
-  reserve on the pool or another pool that bounds the run) may take up to that many times `c`, and
-  the turns after the first are not charged; nothing bounds the turns by the line yet. A pool that
-  regenerates is read again at the next evaluation; its rise wakes none of its own. The goal page
-  does not yet say which tasks a line presses.
+  cleared. A pool that regenerates is read again at the next evaluation; its rise wakes none of its
+  own. The goal page does not yet say which tasks a line presses.
 
 The line is judged by the amount alone: no date, no income and no list of exempt tasks; the
 member's `income_floor_milli_per_day` is not read and nothing dated is stored.
@@ -1350,8 +1367,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   the consumption was read and cost nothing. This 0 is a declared one, not an unknown read as 0:
   the pool says its spending is governed by a line, and no line is set. #455 SL2 (since 0.12.101):
   with a line set it was the same 0, as the evaluation read no line. #455 SL3 (since 0.12.104;
-  register §1.559): with a line in effect on the instance (and the task no producer of the pool) the
-  pool's amount is read, and a consumption whose run stays at or above the line is the same 0, the
+  register §1.559): with a line in effect on the instance and a net consumption of the pool above 0
+  (its consumption less its production, a run's) the pool's amount is read, and a consumption
+  whose run stays at or above the line is the same 0, the
   item `<pool>:-0`; one that would leave the pool below it is charged the exact term `−P`, no share
   of `ε`, the item `<pool>:-⌊P⌋`, the reason `spend_line_pressed` ("A pool whose spending a line
   governs", "Below a line"). Without a line in effect its reading is not read for

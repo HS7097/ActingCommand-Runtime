@@ -147,14 +147,16 @@ fn sl2_t2_a_stored_line_carries_at_least_alone_and_needs_no_producer() {
 // `task_spend` heads the round with `run_cap` 4 (⌊(500 − 10) / 120⌋), `task_earn` is `B = 800`,
 // `task_lone` is `policy_benefit_nonpositive` with the item `pool.currency:-0` (0.12.99's
 // judgement), and no decision carries a `resource_targets` reason. Each of these records equals
-// that evaluation whole: the line of 380 in a v3 record, the line of 800 with its own lifetime past
-// before NOW, the line of 380 in a v2 document of a day's lifetime, and a target with its own
-// `scale` 10 and `importance_milli` 1000 on the pool at least 380, as an earlier build stored it
+// that evaluation whole: the line of 10 in a v3 record, the line of 800 with its own lifetime past
+// before NOW, the line of 10 in a v2 document of a day's lifetime, and a target with its own
+// `scale` 10 and `importance_milli` 1000 on the pool at least 10, as an earlier build stored it
 // (read as the line now). With the needs computed from the records (30 covered on the currency, 3
 // landing on the valued pool) the line record and no record evaluate alike too. #455 SL3 (register
 // §1.559) changes on purpose what this test pinned for a line in effect: below it the consumers are
-// pressed, so the lines in effect here are 380, at which each run of 120 from 500 leaves the pool
-// exactly at its line and nothing is pressed (they were 800).
+// pressed, and a dispatch is told at most the turns that keep the pool at or above it, so the
+// lines in effect here are 10, the reserve's own floor: each run of 120 from 500 stays above the
+// line and nothing is pressed, and the line's turns ⌊(500 − 10) ÷ 120⌋ = 4 and its allowance 490
+// are the reserve's, so `task_spend`'s spend values are the ones without the line (they were 800).
 #[test]
 fn sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before() {
     let lined = || catalog(tasks(true), pools(true));
@@ -202,17 +204,17 @@ fn sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before() {
     lapsing["valid_until_unix_ms"] = json!(NOW - MINUTE_MS);
     let earlier = goal_record(
         &catalog(tasks(true), pools(false)),
-        &v3(vec![own_terms("own", 380)]),
+        &v3(vec![own_terms("own", 10)]),
     );
     for (label, record) in [
         (
             "v3",
-            goal_record(&lined(), &v3(vec![line_target("line", 380)])),
+            goal_record(&lined(), &v3(vec![line_target("line", 10)])),
         ),
         ("v3 lapsed", goal_record(&lined(), &v3(vec![lapsing]))),
         (
             "v2",
-            goal_record(&lined(), &v2(vec![line_target("line", 380)])),
+            goal_record(&lined(), &v2(vec![line_target("line", 10)])),
         ),
         ("own terms stored earlier", earlier),
     ] {
@@ -223,7 +225,7 @@ fn sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before() {
         );
     }
 
-    let line = goal_record(&lined(), &v3(vec![line_target("line", 380)]));
+    let line = goal_record(&lined(), &v3(vec![line_target("line", 10)]));
     assert_eq!(
         World::new(lined())
             .with_record(line)

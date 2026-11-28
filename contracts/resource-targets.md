@@ -1274,13 +1274,15 @@ in one place of the policy crate (`line_pool`), and nowhere copied.
   record, read whole by its own reader, is an active policy with the line among the targets it
   weighs: a v1 or v2 document within its lifetime, a v3 target within its own lifetime or without
   one. Its `at_least` is the line `L` on the catalogue pool its `resource` names for the instance
-  ("A target's pool"). A judged candidate that consumes the pool and does not produce it is judged
-  against it by the pool's amount and its own consumption
+  ("A target's pool"). A judged candidate that consumes the pool on net (its consumption less its
+  production of it, a run's) is judged against it by the pool's amount and that net
   ([scheduling/README.md](scheduling/README.md), "A pool whose spending a line governs", "Below a
-  line"): at or above the line nothing changes (its item `<pool>:-0`, as in 0.12.99), below it its
-  net benefit is charged for the units it takes from below the line and its decision carries
-  `spend_line_pressed`; with a line in effect and the pool's amount not known its benefit is unknown
-  (`reading_unknown`). A line on an instance's pool presses nothing on another instance.
+  line"): at or above the line its judgement is unchanged (its item `<pool>:-0`, as in 0.12.99),
+  below it its net benefit is charged for the units it takes from below the line and its decision
+  carries `spend_line_pressed`; with a line in effect and the pool's amount not known its benefit is
+  unknown (`reading_unknown`). Its dispatch is told at most the turns that keep the pool at or above
+  the line, or the one turn judged ("The turns" there). A line on an instance's pool presses nothing
+  on another instance.
 - **No end of its own.** Nothing gives a line a date. A document's own validity and a v3 target's
   own lifetime apply to it as to every row: past them it is not in effect and presses nothing.
 - **Shown as a goal is shown.** `ResourceTargetView`'s `active` lists it as stored, with its

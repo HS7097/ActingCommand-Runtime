@@ -689,8 +689,9 @@ goal on such a pool is its line, `{at_least}` alone, never a weight on its produ
 held by the reserve gate as for any pool.
 
 *What `price_milli` and `scale` decide* (#455 SL3, since 0.12.104; register §1.559). With a line `L`
-in effect, a rule that spends the currency and does not produce it is charged, when its run of `c`
-units would leave the pool's amount `r` below the line, the pressing
+in effect, a rule that spends the currency on net (`c`, its run's consumption less its production of
+the currency) is charged, when its run would leave the pool's amount `r` below the line, the
+pressing
 `P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli, `d = L − (r − c)`: each unit below
 the line at the full price of a unit, `price_milli ÷ scale`, times `min(1, d ÷ scale)`
 ([scheduling/README.md](scheduling/README.md), "A pool whose spending a line governs", "Below a
@@ -700,8 +701,9 @@ the line at which a unit is to cost that whole price: a small `scale` presses ha
 line, a large one lets the pressing grow slowly. A rule is still dispatched while its value exceeds
 its pressing, so of two rules the one with the least value for each unit spent stops first. For
 example, `{"price_milli": 100000, "scale": 100, "income_floor_milli_per_day": 0}` (a unit at most
-1000 milli) and a line of 400: read at 500, a rule of `V` 50 000 spending 100 a run leaves 400 and
-is judged `B = 50 000` as before; spending 120 it leaves 380, 20 below the line at a fifth of the
+1000 milli) and a line of 400: read at 500, a rule of `V` 50 000 spending 100 a run leaves 400, is
+judged `B = 50 000` as before and is told one turn (read at 1000, six); spending 120 it leaves 380,
+20 below the line at a fifth of the
 full price, `P = 100 000 · 20 · 20 ÷ 100² = 4000`, `B = 46 000`; read at 250, every unit of its
 120 is below the line at the full price, `P = 120 000`, and it waits `policy_benefit_nonpositive`
 until the amount rises, the line is lowered or it is cleared. `income_floor_milli_per_day` is still

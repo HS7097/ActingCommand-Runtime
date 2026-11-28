@@ -7,17 +7,22 @@
 // run would leave a pool below its line in effect, `a = r − c < L`, is charged
 // `P = price_milli · min(d, scale) · min(c, d) ÷ scale²`, `d = L − a`, and carries
 // `spend_line_pressed`; the codes that decide are the ones of before.
-// - at or above the line, with a line past its own lifetime and with a line on another pool, the
-//   evaluation equals, whole, the one without the stored line (t1);
+// - at or above the line the judgement is the one without the line, only the turns told added;
+//   with a line past its own lifetime and with a line on another pool, the evaluation equals,
+//   whole, the one without the stored line (t1);
 // - a little below: `P` pinned, the candidate passes; a twin of lower value shows the item (t2);
 // - far below: `f = 1` from `d ≥ scale` on, every unit at the full price (t3);
 // - two spenders of one pool: the one with the least return for each unit stops first (t4);
 // - the owner's two cases in neutral numbers (t5);
 // - a line in effect and no reading: unknown, the reading asked for; no line: not read (t6);
 // - a fixed value is `V − P`, a production `W·r − P` (t7);
-// - a producer of the pool, one that also consumes it included, is never pressed (t8);
+// - a producer of the pool is pressed on its net consumption alone, a net of 0 not at all (t8);
 // - two such pools on one task, each its own `P` (t9);
-// - a dispatch after the reading lowers the amount the line reads (t10).
+// - a dispatch after the reading lowers the amount the line reads (t10);
+// - the turns a dispatch is told (ruling 7 as decided on 11-29): well above the line the least of
+//   the line's `⌊(r − L) ÷ c⌋` and another term (t11); one turn from the line and below it, one
+//   (t12); a consumer that carried no `run_cap` carries the line's, and its run leaves the pool
+//   unread until read (t13); no line, no term (t14).
 //
 // The fixture: one instance, the window open all day, judged tasks on an hourly clock; the currency
 // (`pool.currency`, no valuation, capacity 100 000, `spend_line` 100 000 milli of 100 units: 1000
@@ -36,12 +41,12 @@ use super::selection_catalog::{DAY_MS, HOUR_MS, NOW, fact, instance};
 use crate::{
     CandidateEligibility, CappedMemory, CatalogDocumentSource, CatalogSources, ChainHandoverInputs,
     CompiledCatalog, DecisionReason, DispatchIntent, EvaluationFacts, EvaluationResources,
-    EvaluationTime, FactRefreshInputs, FactRefreshSettings, FactValue, HostResourceSnapshot,
-    InstanceHolds, InstancePoolLines, LeftOutFacts, NoProgressGuards, ObservedFact, OwedReruns,
-    PolicyCode, PolicyEvaluation, PolicyEvaluationError, RemedyPlan, RunSlots,
-    SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TargetSetter, TaskDecision, TaskRuntimeSnapshot,
-    TaskTerminalState, check_resource_targets, compile_catalog, evaluate_with_left_out_facts,
-    parse_resource_targets, project_fact_pools,
+    EvaluationTime, FactRefreshInputs, FactRefreshSettings, FactValue, HandedRuns,
+    HostResourceSnapshot, InstanceHolds, InstancePoolLines, LeftOutFacts, NoProgressGuards,
+    ObservedFact, OwedReruns, PolicyCode, PolicyEvaluation, PolicyEvaluationError, RemedyPlan,
+    RunSlots, SCHEDULING_SCHEMA_VERSION_V2, ScopeSelector, TargetSetter, TaskDecision,
+    TaskRuntimeSnapshot, TaskTerminalState, check_resource_targets, compile_catalog,
+    evaluate_with_left_out_facts, parse_resource_targets, project_fact_pools,
 };
 
 const A: &str = "instance-a";
@@ -62,14 +67,17 @@ const LINE: u64 = 400;
 /// The declared duration of every task, `E` without a snapshot.
 const E: u64 = 60_000;
 
-// t1 (rulings 3 and 6; the work order's first stop condition). The spenders: `task_spend` (`V`
-// 50 000) and `task_lone` (no fixed value) consume 100 of the currency, read at 500; `task_earn`
-// (`V` 800) produces 50 of it, `task_neutral` 2 of the valued pool. Without a record `task_spend`
-// is dispatched. A line of 400 (each run leaves exactly 400), a line of 100, a line of 450 past its
-// own lifetime and a line on the second pool, which no task consumes: each evaluation equals, whole,
-// the one without the record.
+// t1 (rulings 3 and 6; the work order's first stop condition; ruling 7 as decided on 11-29). The
+// spenders: `task_spend` (`V` 50 000) and `task_lone` (no fixed value) consume 100 of the currency,
+// read at 500; `task_earn` (`V` 800) produces 50 of it, `task_neutral` 2 of the valued pool.
+// Without a record `task_spend` is dispatched and told nothing. With a line of 400 (each run leaves
+// exactly 400) and of 100 the judgement is the one without the line: every decision equals it but
+// for the dispatched spender's `policy_dispatch_parameters`, which tells it the line's turns (an
+// allowance of 100 and one turn; 400 and four). A line of 450 past its own lifetime and a line on
+// the second pool, which no task consumes: each evaluation equals, whole, the one without the
+// record.
 #[test]
-fn sl3_t1_at_or_above_the_line_and_without_a_line_in_effect_nothing_changes() {
+fn sl3_t1_above_the_line_only_the_turns_change_and_without_a_line_nothing_does() {
     let world = || {
         World::new(
             vec![
@@ -90,14 +98,18 @@ fn sl3_t1_at_or_above_the_line_and_without_a_line_in_effect_nothing_changes() {
         Some(&"task_spend"),
         "{without:#?}"
     );
+    assert!(untold(&without, "task_spend"), "{without:#?}");
+    for (label, line, allowance, turns) in
+        [("at the line", LINE, 100, 1), ("above it", 100, 400, 4)]
+    {
+        let lined = world().with_lines(&[("line", CURRENCY, line)]).evaluate();
+        assert_eq!(dispatched(&lined), dispatched(&without), "{label}");
+        assert_eq!(stripped(&lined), stripped(&without), "{label}");
+        assert_told(&lined, "task_spend", allowance, turns);
+    }
     let mut lapsing = line_target("lapsed", CURRENCY, 450);
     lapsing["valid_until_unix_ms"] = json!(NOW - MINUTE_MS);
     for (label, lined) in [
-        (
-            "at the line",
-            world().with_lines(&[("line", CURRENCY, LINE)]),
-        ),
-        ("above it", world().with_lines(&[("line", CURRENCY, 100)])),
         (
             "past its own lifetime",
             world().with_document(&v3(vec![lapsing])),
@@ -242,19 +254,29 @@ fn sl3_t4_the_spender_with_the_least_return_for_each_unit_stops_first() {
 }
 
 // t5 (ruling 3, the owner's two cases in neutral numbers). A line of 400 and an amount of 500: a
-// spend of 100 leaves 400 and the evaluation equals, whole, the one without the line; a spend of 120
-// leaves 380 and is pressed on 20 units at a fifth of the full price, `P` 4000 (`B` 46 000). An
-// amount of 300: a spend of 1 leaves 299, `d` 101, the one unit at the full price, `P` 1000.
+// spend of 100 leaves 400, is judged as without the line (every decision equal but for the turns
+// told: one, its allowance 100); a spend of 120 leaves 380 and is pressed on 20 units at a fifth of
+// the full price, `P` 4000 (`B` 46 000). An amount of 300: a spend of 1 leaves 299, `d` 101, the
+// one unit at the full price, `P` 1000.
 #[test]
 fn sl3_t5_the_owners_two_cases_in_neutral_numbers() {
     let alone =
         |consumed, reading| World::new(vec![spender("task_spend", 50_000, consumed)], reading);
+    let hundred = alone(100, Some(500))
+        .with_lines(&[("line", CURRENCY, LINE)])
+        .evaluate();
     assert_eq!(
-        alone(100, Some(500))
-            .with_lines(&[("line", CURRENCY, LINE)])
-            .evaluate(),
-        alone(100, Some(500)).evaluate()
+        stripped(&hundred),
+        stripped(&alone(100, Some(500)).evaluate())
     );
+    assert!(
+        decision(&hundred, "task_spend")
+            .reasons
+            .iter()
+            .all(|given| !given.outcome.is(PolicyCode::SpendLinePressed)),
+        "{hundred:#?}"
+    );
+    assert_told(&hundred, "task_spend", 100, 1);
 
     let more = alone(120, Some(500))
         .with_lines(&[("line", CURRENCY, LINE)])
@@ -378,11 +400,26 @@ fn sl3_t7_a_fixed_value_spender_is_v_less_p_and_a_producer_its_production_less_p
     );
 }
 
-// t8 (ruling 6). `task_earn` (`V` 800) produces 50 of the currency; `task_swap` (`V` 5000) produces
-// 20 of it and consumes 120. Read at 100, far below a line of 400: neither is pressed, and the
-// evaluation equals, whole, the one without the line.
+// t8 (ruling 6 as the coordinator read it on 11-29: a production is never weighed by the line, and
+// a spending is pressed on its net). Read at 100, far below a line of 400. `task_earn` (`V` 800)
+// only produces 50: no pressing, no turns. `task_short` (`V` 5000) consumes 120 and produces 20: it
+// is pressed on its net 100, every unit at the full price, `P` 100 000, `consumption` 100 in its
+// reason, `policy_benefit_nonpositive` −95 000 with the item `pool.currency:-100000`. `task_even`
+// (`V` 3000) consumes and produces 120, `task_over` (`V` 2000) consumes 120 and produces 150: a net
+// of 0, neither pressed nor told any turn; `task_even` is dispatched with no
+// `policy_dispatch_parameters`.
 #[test]
-fn sl3_t8_a_producer_of_the_pool_is_never_pressed() {
+fn sl3_t8_a_producer_of_the_pool_is_pressed_on_its_net_consumption_alone() {
+    let swap = |id: &str, value, produced| {
+        fixed(
+            judged(
+                id,
+                json!([consume(CURRENCY, 120)]),
+                json!([produce(CURRENCY, produced)]),
+            ),
+            value,
+        )
+    };
     let world = || {
         World::new(
             vec![
@@ -390,28 +427,32 @@ fn sl3_t8_a_producer_of_the_pool_is_never_pressed() {
                     judged("task_earn", json!([]), json!([produce(CURRENCY, 50)])),
                     800,
                 ),
-                fixed(
-                    judged(
-                        "task_swap",
-                        json!([consume(CURRENCY, 120)]),
-                        json!([produce(CURRENCY, 20)]),
-                    ),
-                    5_000,
-                ),
+                swap("task_short", 5_000, 20),
+                swap("task_even", 3_000, 120),
+                swap("task_over", 2_000, 150),
             ],
             Some(100),
         )
     };
     let lined = world().with_lines(&[("line", CURRENCY, LINE)]).evaluate();
-    assert!(
-        lined
-            .decisions
-            .iter()
-            .flat_map(|entry| &entry.reasons)
-            .all(|given| !given.outcome.is(PolicyCode::SpendLinePressed)),
-        "{lined:#?}"
+    assert_eq!(dispatched(&lined), ["task_even"], "{lined:#?}");
+    assert!(untold(&lined, "task_even"), "{lined:#?}");
+    for task_id in ["task_earn", "task_even", "task_over"] {
+        assert!(
+            decision(&lined, task_id)
+                .reasons
+                .iter()
+                .all(|given| !given.outcome.is(PolicyCode::SpendLinePressed)),
+            "{task_id}: {lined:#?}"
+        );
+    }
+    let short = decision(&lined, "task_short");
+    assert_pressed(&short.reasons[1], CURRENCY, (LINE, 100, 100, 400, 100_000));
+    assert_eq!(
+        last(short).detail,
+        "benefit_milli=-95000 expected_duration_ms=60000 items=pool.currency:-100000",
+        "{short:#?}"
     );
-    assert_eq!(lined, world().evaluate());
 }
 
 // t9 (ruling 3, several pools). `task_both` (`V` 2500) consumes 110 of the currency, read at 500
@@ -473,19 +514,7 @@ fn sl3_t10_a_dispatch_after_the_reading_lowers_the_amount_the_line_reads() {
         .with_lines(&[("line", CURRENCY, LINE)])
     };
     let after = world()
-        .with_snapshot(TaskRuntimeSnapshot {
-            task_id: "task_other".to_owned(),
-            instance_id: A.to_owned(),
-            last_dispatched_unix_ms: Some(NOW - MINUTE_MS / 2),
-            eligible_since_unix_ms: None,
-            terminal_state: Some(TaskTerminalState::Succeeded),
-            completed_window: None,
-            last_duration_ms: None,
-            failure_streak: None,
-            expected_runtime_ms: None,
-            expected_runtime_runs: None,
-            clock_owed: false,
-        })
+        .with_snapshot(succeeded("task_other", NOW - MINUTE_MS / 2))
         .evaluate();
     let spend = decision(&after, "task_spend");
     assert_pressed(
@@ -502,19 +531,146 @@ fn sl3_t10_a_dispatch_after_the_reading_lowers_the_amount_the_line_reads() {
     );
 }
 
+// t11 (ruling 7 as decided on 11-29, the turns well above the line). The currency read at 1000, a
+// line of 400, a spender of 100 a run that reserves the pool: the line lets it spend 600, six turns.
+// Reserving 100 (900 above it, nine turns) it is told the line's: `spend_allowance` 600 and
+// `run_cap` 6, where without the line it was told 900 and 9. Reserving 800 (200, two turns) it is
+// told the reserve's, 200 and 2, with the line as without it.
+#[test]
+fn sl3_t11_well_above_the_line_the_least_of_the_lines_turns_and_another_term_is_told() {
+    let world = |at_least| World::new(vec![reserving("task_spend", 100, at_least)], Some(1000));
+    for (at_least, lined, without) in [(100, (600, 6), (900, 9)), (800, (200, 2), (200, 2))] {
+        let told = world(at_least)
+            .with_lines(&[("line", CURRENCY, LINE)])
+            .evaluate();
+        assert_told(&told, "task_spend", lined.0, lined.1);
+        assert_told(
+            &world(at_least).evaluate(),
+            "task_spend",
+            without.0,
+            without.1,
+        );
+    }
+}
+
+// t12 (ruling 7, one turn from the line and below it). A spender of 100 a run, no reserve, a line of
+// 400. Read at 500 the one run leaves exactly 400: told one turn, its allowance 100, not pressed.
+// Read at 450 the run the gate judged leaves 350: told that one turn (allowance 100, `run_cap` 1),
+// and pressed as the gate judged it, `d` 50, `P = 100 000 · 50 · 50 ÷ 100² = 25 000`, dispatched
+// with `B` 25 000.
+#[test]
+fn sl3_t12_one_turn_from_the_line_and_below_it_one_turn_is_told() {
+    let world = |reading| {
+        World::new(vec![spender("task_spend", 50_000, 100)], Some(reading))
+            .with_lines(&[("line", CURRENCY, LINE)])
+            .evaluate()
+    };
+    let from = world(500);
+    assert_told(&from, "task_spend", 100, 1);
+    assert!(
+        decision(&from, "task_spend")
+            .reasons
+            .iter()
+            .all(|given| !given.outcome.is(PolicyCode::SpendLinePressed)),
+        "{from:#?}"
+    );
+    let below = world(450);
+    assert_eq!(dispatched(&below), ["task_spend"], "{below:#?}");
+    assert_told(&below, "task_spend", 100, 1);
+    let spend = decision(&below, "task_spend");
+    assert_pressed(&spend.reasons[1], CURRENCY, (LINE, 450, 100, 50, 25_000));
+    assert_eq!(
+        spend.reasons[0].outcome.value("benefit_milli"),
+        Some(&json!(25_000))
+    );
+}
+
+// t13 (ruling 7: a consumer that carried no `run_cap`). `task_a` (`V` 50 000) and `task_b` (`V`
+// 40 000) each spend 100 a run and reserve nothing; the currency read at 1000. Without the line
+// `task_a` is dispatched told nothing. With a line of 400 it is told six turns, `spend_allowance`
+// 600 and `run_cap` 6. Its run ends half a minute after its dispatch and the currency is not read
+// again: a minute after the dispatch the pool is unread, so `task_b` is `benefit_unknown`
+// `reading_unknown` with `fact_stale` and nothing is dispatched. Read again after the run's end at
+// 1000, `task_b` is dispatched, told six turns too.
+#[test]
+fn sl3_t13_a_consumer_without_a_run_cap_is_told_the_lines_turns_then_the_pool_is_unread() {
+    let spenders = || {
+        vec![
+            spender("task_a", 50_000, 100),
+            spender("task_b", 40_000, 100),
+        ]
+    };
+    let untouched = World::new(spenders(), Some(1000)).evaluate();
+    assert_eq!(dispatched(&untouched), ["task_a"], "{untouched:#?}");
+    assert!(untold(&untouched, "task_a"), "{untouched:#?}");
+
+    let mut world = World::new(spenders(), Some(1000)).with_lines(&[("line", CURRENCY, LINE)]);
+    let first = world.evaluate();
+    assert_eq!(dispatched(&first), ["task_a"], "{first:#?}");
+    assert_told(&first, "task_a", 600, 6);
+    world.run(&first);
+
+    let unread = world.evaluate();
+    assert!(dispatched(&unread).is_empty(), "{unread:#?}");
+    let waiting = &reason(decision(&unread, "task_b"), PolicyCode::BenefitUnknown).outcome;
+    assert_eq!(
+        waiting.value("benefit_gap"),
+        Some(&json!("reading_unknown"))
+    );
+    assert_eq!(waiting.value("unknown_reason"), Some(&json!("fact_stale")));
+
+    world.read_again(1000);
+    let read = world.evaluate();
+    assert_eq!(dispatched(&read), ["task_b"], "{read:#?}");
+    assert_told(&read, "task_b", 600, 6);
+}
+
+// t14 (ruling 7: no line, no term). A spender of 100 that reserves 100, read at 1000, is told its
+// reserve's 900 and nine turns, and a spender that reserves nothing is told nothing, with no record
+// and with a line past its own lifetime alike, each evaluation equal, whole, to the one without the
+// record.
+#[test]
+fn sl3_t14_without_a_line_in_effect_no_turns_are_added() {
+    let mut lapsing = line_target("lapsed", CURRENCY, LINE);
+    lapsing["valid_until_unix_ms"] = json!(NOW - MINUTE_MS);
+    let reserved = || World::new(vec![reserving("task_spend", 100, 100)], Some(1000));
+    let plain = || World::new(vec![spender("task_spend", 50_000, 100)], Some(1000));
+    let without = reserved().evaluate();
+    assert_told(&without, "task_spend", 900, 9);
+    assert_eq!(
+        reserved()
+            .with_document(&v3(vec![lapsing.clone()]))
+            .evaluate(),
+        without
+    );
+    let without = plain().evaluate();
+    assert!(untold(&without, "task_spend"), "{without:#?}");
+    assert_eq!(
+        plain().with_document(&v3(vec![lapsing])).evaluate(),
+        without
+    );
+}
+
 // ---- The world a test drives ----
 
-/// The catalog, the readings, the instance's stored goal record and its task snapshots.
+/// The catalog, the readings, the instance's stored goal record, its task snapshots, the runs
+/// handed a `run_cap` and the evaluation's time.
 struct World {
     catalog: CompiledCatalog,
-    /// The currency's reading a minute before NOW; `None`: not read.
+    /// The currency's reading at `read_at`; `None`: not read.
     currency: Option<i64>,
-    /// The second pool's reading a minute before NOW; `None`: not read.
+    /// The second pool's reading at `read_at`; `None`: not read.
     second: Option<i64>,
+    /// When the readings were observed: a minute before NOW unless read again.
+    read_at: u64,
     /// The instance's `session.resource_targets` record; `None` without one.
     record: Option<ObservedFact>,
     /// The task snapshots the evaluation is given.
     snapshots: Vec<TaskRuntimeSnapshot>,
+    /// The pairs whose latest dispatch carried a `run_cap`, as the host notes them.
+    handed: HandedRuns,
+    /// The evaluation's time.
+    now: u64,
 }
 
 impl World {
@@ -524,9 +680,41 @@ impl World {
             catalog: catalog(task_list),
             currency,
             second: None,
+            read_at: NOW - MINUTE_MS,
             record: None,
             snapshots: Vec::new(),
+            handed: HandedRuns::default(),
+            now: NOW,
         }
+    }
+
+    /// The round's one dispatch ran: its task succeeded, dispatched now, its run ending half a
+    /// minute later, and the host notes whether its recorded reasons carried a `run_cap`; the next
+    /// round is a minute after the dispatch, the pools not read again.
+    fn run(&mut self, evaluation: &PolicyEvaluation) {
+        let [intent] = evaluation.dispatch_intents.as_slice() else {
+            panic!("one dispatch: {evaluation:#?}");
+        };
+        let chain = evaluation
+            .reason_chains
+            .iter()
+            .find(|chain| chain.id == intent.reason_chain_id)
+            .unwrap_or_else(|| panic!("the dispatch's reason chain: {evaluation:#?}"));
+        self.snapshots.push(succeeded(&intent.task_id, self.now));
+        self.handed.note_dispatch(
+            &intent.task_id,
+            &intent.instance_id,
+            Some(self.now + MINUTE_MS / 2),
+            chain.reasons.iter().map(|given| &given.outcome),
+        );
+        self.now += MINUTE_MS;
+    }
+
+    /// The currency read again at `value`, observed now; the next round is a minute later.
+    fn read_again(&mut self, value: i64) {
+        self.currency = Some(value);
+        self.read_at = self.now;
+        self.now += MINUTE_MS;
     }
 
     /// The same world with the second pool read at `reading`.
@@ -560,7 +748,7 @@ impl World {
     /// The readings, the record and the snapshots.
     fn facts(&self) -> EvaluationFacts {
         let mut facts = bare_facts();
-        let read = |key: &str, value: i64| fact(A, key, value, NOW - MINUTE_MS, None);
+        let read = |key: &str, value: i64| fact(A, key, value, self.read_at, None);
         facts.facts.push(read(VALUED_KEY, 5_000));
         facts
             .facts
@@ -573,16 +761,19 @@ impl World {
         facts
     }
 
-    /// One round at NOW by the Runtime's entry, with a fresh memory, every candidate admitted.
+    /// One round now by the Runtime's entry, with a fresh memory, the handed runs beside the
+    /// left-out facts (none left out), every candidate admitted.
     fn evaluate(&self) -> PolicyEvaluation {
         let facts = self.facts();
         let resource_snapshot = resources(&self.catalog, &facts);
         let mut memory = CappedMemory::default();
+        let mut left_out = LeftOutFacts::default();
+        left_out.give_handed_runs(self.handed.clone());
         evaluate_with_left_out_facts::<PolicyEvaluationError>(
             &self.catalog,
             &facts,
             &resource_snapshot,
-            time(NOW),
+            time(self.now),
             11,
             &BTreeSet::new(),
             &refresh_inputs(),
@@ -594,11 +785,28 @@ impl World {
             &NoProgressGuards::default(),
             &mut memory,
             &InstancePoolLines::default(),
-            &LeftOutFacts::default(),
+            &left_out,
             |_, _, _| Ok(false),
             |_: &DispatchIntent| Ok(CandidateEligibility::Eligible),
         )
         .unwrap_or_else(|error| panic!("the round evaluates: {error}"))
+    }
+}
+
+/// The snapshot of `task_id` on the instance after a run that succeeded, dispatched at `at`.
+fn succeeded(task_id: &str, at: u64) -> TaskRuntimeSnapshot {
+    TaskRuntimeSnapshot {
+        task_id: task_id.to_owned(),
+        instance_id: A.to_owned(),
+        last_dispatched_unix_ms: Some(at),
+        eligible_since_unix_ms: None,
+        terminal_state: Some(TaskTerminalState::Succeeded),
+        completed_window: None,
+        last_duration_ms: None,
+        failure_streak: None,
+        expected_runtime_ms: None,
+        expected_runtime_runs: None,
+        clock_owed: false,
     }
 }
 
@@ -762,6 +970,52 @@ fn code_at(entry: &TaskDecision, index: usize) -> &str {
         .as_str()
 }
 
+/// The decisions of `evaluation` without their `policy_dispatch_parameters`: the judgement, and
+/// not the turns a dispatch is told.
+fn stripped(evaluation: &PolicyEvaluation) -> Vec<TaskDecision> {
+    evaluation
+        .decisions
+        .iter()
+        .map(|entry| {
+            let mut judged_only = entry.clone();
+            judged_only
+                .reasons
+                .retain(|given| !given.outcome.is(PolicyCode::PolicyDispatchParameters));
+            judged_only
+        })
+        .collect()
+}
+
+/// Whether `task_id`'s decision carries no `policy_dispatch_parameters`: its dispatch is told
+/// nothing.
+fn untold(evaluation: &PolicyEvaluation, task_id: &str) -> bool {
+    decision(evaluation, task_id)
+        .reasons
+        .iter()
+        .all(|given| !given.outcome.is(PolicyCode::PolicyDispatchParameters))
+}
+
+/// `task_id`'s dispatch is told the currency's entry 0 `spend_allowance` `allowance` and `run_cap`
+/// `turns` on its `policy_dispatch_parameters`.
+#[track_caller]
+fn assert_told(evaluation: &PolicyEvaluation, task_id: &str, allowance: u64, turns: u64) {
+    let told = &reason(
+        decision(evaluation, task_id),
+        PolicyCode::PolicyDispatchParameters,
+    )
+    .outcome;
+    assert_eq!(
+        told.value("spend_allowances"),
+        Some(&json!([{"effect_index": 0, "spend_allowance": allowance}])),
+        "{task_id}: {told:?}"
+    );
+    assert_eq!(
+        told.value("run_cap"),
+        Some(&json!(turns)),
+        "{task_id}: {told:?}"
+    );
+}
+
 /// The values of a `spend_line_pressed`: `(line_at_least, pool_reading, consumption,
 /// line_shortfall, pressing_milli)`.
 type Pressed = (u64, i64, u64, u64, i64);
@@ -879,6 +1133,13 @@ fn spender(id: &str, value: i64, consumed: u64) -> Value {
         judged(id, json!([consume(CURRENCY, consumed)]), json!([])),
         value,
     )
+}
+
+/// [`spender`] of `V` 50 000 consuming `consumed` of the currency a run and reserving `at_least`.
+fn reserving(id: &str, consumed: u64, at_least: u64) -> Value {
+    let mut task = spender(id, 50_000, consumed);
+    task["reserves"] = json!([{"pool_id": CURRENCY, "at_least": at_least}]);
+    task
 }
 
 /// A pool of the instance that does not regenerate, read from `resource.<the id without

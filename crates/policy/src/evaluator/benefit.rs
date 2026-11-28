@@ -40,16 +40,17 @@
 //! - **Below a line** (#455 SL3, register §1.559; `contracts/scheduling/README.md`, "A pool whose
 //!   spending a line governs"). With a line `L` in effect on the instance on such a pool (a stored
 //!   goal `{at_least}` on it, read from the stored records by the walk that leaves it out of what
-//!   is weighed) and a task that does not produce the pool, the pool's amount `r` is read as the
-//!   pools' lines read it ([`super::capped::pool_amount`]); unknown, `B` is unknown
-//!   (`reading_unknown`) and the fact refresh is asked for the reading, as for a regenerating
-//!   pool's. With `a = r − c` (`c` the consumption in whole units) `a ≥ L` adds nothing, as
-//!   before; otherwise, `d = L − a`, the pressing `P = price_milli · min(d, scale) · min(c, d) ÷
-//!   scale²` in milli (the pool's `spend_line`) is subtracted from `S` exactly, adds no share of `ε`
-//!   and no consumed term, its item is `<pool>:-⌊P⌋`, and the decision carries
-//!   `spend_line_pressed` where `benefit_fixed_value` is placed. The codes that decide stay the
-//!   others. The price rises with the shortfall, so the task with the least return for each unit
-//!   stops first.
+//!   is weighed) and a net consumption `c` of it above 0 (a run's consumption less its production
+//!   of the pool, in whole units), the pool's amount `r` is read as the pools' lines read it
+//!   ([`line_read`], [`super::capped::pool_amount`]); unknown, `B` is unknown (`reading_unknown`)
+//!   and the fact refresh is asked for the reading, as for a regenerating pool's. With
+//!   `a = r − c` `a ≥ L` adds nothing, as before; otherwise, `d = L − a`, the pressing
+//!   `P = price_milli · min(d, scale) · min(c, d) ÷ scale²` in milli (the pool's `spend_line`) is
+//!   subtracted from `S` exactly, adds no share of `ε` and no consumed term, its item is
+//!   `<pool>:-⌊P⌋`, and the decision carries `spend_line_pressed` where `benefit_fixed_value` is
+//!   placed. The codes that decide stay the others. The price rises with the shortfall, so the
+//!   task with the least return for each unit stops first. The turns a dispatch is told are held
+//!   to the line by the spend values (`crate::resource_targets::LineAllowance`).
 //! - **The one-way rule.** Nothing here writes a pool weight: the weights are read from the
 //!   resource layer's own term, which reads no task state.
 //! - **The zero band** (SS-2d, register §1.235; Alice's ruling 127, the review's version; design
@@ -468,7 +469,7 @@ fn valued_pool<'a>(
 /// task's consumption of it is no gap and, while no line is in effect, costs nothing (module doc,
 /// "A declared 0"); its production is read as any pool's without a valuation. #455 SL3 (register
 /// §1.559): below a line in effect its consumption is pressed (module doc, "Below a line").
-fn spend_line_pool<'a>(
+pub(super) fn spend_line_pool<'a>(
     pool_id: &str,
     instance: &InstanceSnapshot,
     context: &PlacementContext<'a>,
@@ -480,10 +481,69 @@ fn spend_line_pool<'a>(
         .filter(|pool| pool.spend_line.is_some() && scope_matches_instance(&pool.scope, instance))
 }
 
-/// #455 SL3 (register §1.559, ruling 6): whether `task` produces `pool_id`. A task that produces a
-/// pool whose spending a line governs is never pressed on it: a line never weighs its producers.
-fn produces_pool(task: &TaskSpec, pool_id: &str) -> bool {
-    task.produces.iter().any(|effect| effect.pool_id == pool_id)
+/// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs", "Below a line"): what a judged candidate reads of a pool whose spending a line
+/// governs ([`line_read`]).
+pub(super) enum LineRead<'a> {
+    /// No line is in effect on the instance, or the task's net consumption of the pool is 0:
+    /// nothing is read, and the consumption costs nothing.
+    Free,
+    /// A line is in effect and the pool's amount is not known at the evaluation.
+    Unread(&'a PoolSpec),
+    /// A line `line` (`L`) is in effect, the pool's amount is `reading` (`r`), the task's net
+    /// consumption `spent` (`c`, at least 1), and the pool's `spend_line` is `declared`.
+    Read {
+        line: u64,
+        reading: i128,
+        spent: u64,
+        declared: &'a PoolSpendLine,
+    },
+}
+
+/// #455 SL3 (register §1.559, rulings 1, 2 and 5 and the coordinator's ruling on the net of
+/// 11-29): `pool`, a pool of the instance that writes `spend_line` ([`spend_line_pool`]), as a
+/// judged candidate of `task` reads it: the line `L` in effect on the instance
+/// ([`crate::resource_targets::StoredSpendLines`]); the task's net consumption `c`, `max(0,
+/// consumption − production)` of the pool for one run in thousandths, in whole units as a
+/// consumption is counted ([`super::capped::units`]): a production is never weighed by the line,
+/// and a token production does not take a spending out of it; and the pool's amount `r` as the
+/// pools' lines read it ([`super::capped::pool_amount`]). The one reading both the pressing
+/// ([`judge`]) and the turns a dispatch is told (the evaluation's spend values) take.
+pub(super) fn line_read<'a>(
+    task: &TaskSpec,
+    instance: &InstanceSnapshot,
+    context: &PlacementContext<'a>,
+    facts: &EvaluationFacts,
+    pool: &'a PoolSpec,
+) -> PolicyEvaluationResult<LineRead<'a>> {
+    let (Some(line), Some(declared)) = (
+        context.stored_lines.line(&instance.instance_id, &pool.id),
+        pool.spend_line.as_ref(),
+    ) else {
+        return Ok(LineRead::Free);
+    };
+    let consumed = crate::resource_targets::consumption_milli(
+        task,
+        &pool.id,
+        context.amounts.on(&instance.instance_id),
+    )?;
+    let produced = crate::resource_targets::production_milli(&task.produces, &pool.id);
+    let spent = capped::units(consumed.saturating_sub(produced))?;
+    if spent == 0 {
+        return Ok(LineRead::Free);
+    }
+    let Some(value) = context.pool_values.get(pool.id.as_str()) else {
+        return Ok(LineRead::Unread(pool));
+    };
+    let Some(holding) = capped::pool_amount(context, facts, instance, pool, value)? else {
+        return Ok(LineRead::Unread(pool));
+    };
+    Ok(LineRead::Read {
+        line,
+        reading: holding.reading(),
+        spent,
+        declared,
+    })
 }
 
 /// #455 SL3 (register §1.559; `contracts/scheduling/README.md`, "A pool whose spending a line
@@ -708,52 +768,39 @@ fn judge(
         // #455 SL1 (register §1.540): a pool whose spending a line governs, with no line in
         // effect, costs nothing whatever the amount: no term of `S`, no share of `ε`, no consumed
         // term (it has no valuation, so no lines and no capped order); its item says it was read.
-        // #455 SL3 (register §1.559): with a line `L` in effect on the instance (and the task no
-        // producer of the pool) its amount `r` is read as the pools' lines read it; unknown, `B`
-        // is unknown as for a regenerating pool's reading; below the line the consumption is
-        // pressed by an exact term `P`, no share of `ε`, its item `<pool>:-⌊P⌋`, its reason
-        // `spend_line_pressed`; at or above the line nothing is added, as before.
+        // #455 SL3 (register §1.559): with a line `L` in effect on the instance and a net
+        // consumption `c` of the pool above 0 ([`line_read`]) its amount `r` is read as the pools'
+        // lines read it; unknown, `B` is unknown as for a regenerating pool's reading; below the
+        // line the consumption is pressed by an exact term `P`, no share of `ε`, its item
+        // `<pool>:-⌊P⌋`, its reason `spend_line_pressed`; at or above the line nothing is added.
         if let Some(pool) = spend_line_pool(&effect.pool_id, instance, context) {
-            let in_effect = context
-                .stored_lines
-                .line(&instance.instance_id, &effect.pool_id)
-                .filter(|_| !produces_pool(task, &effect.pool_id));
-            let (Some(line), Some(declared)) = (in_effect, pool.spend_line.as_ref()) else {
-                items.push(format!("{}:-0", effect.pool_id));
-                continue;
-            };
-            let Some(value) = context.pool_values.get(effect.pool_id.as_str()) else {
-                readings.push(pool);
-                continue;
-            };
-            let Some(holding) = capped::pool_amount(context, facts, instance, pool, value)? else {
-                readings.push(pool);
-                continue;
-            };
-            // `c`, in whole units as the hard line's check counts a consumption.
-            let spent = capped::units(crate::resource_targets::consumption_milli(
-                task,
-                &effect.pool_id,
-                context.amounts.on(&instance.instance_id),
-            )?)?;
-            match pressing(line, holding.reading(), spent, declared)? {
-                None => items.push(format!("{}:-0", effect.pool_id)),
-                Some(charged) => {
-                    let (numerator, denominator) = charged.cost;
-                    sum.add(numerator, denominator, true).ok_or_else(overflow)?;
-                    items.push(format!(
-                        "{}:-{}",
-                        effect.pool_id,
-                        numerator / denominator.max(1)
-                    ));
-                    pressed.push(pressed_reason(
-                        &effect.pool_id,
-                        line,
-                        holding.reading(),
-                        spent,
-                        &charged,
-                    ));
-                }
+            match line_read(task, instance, context, facts, pool)? {
+                LineRead::Free => items.push(format!("{}:-0", effect.pool_id)),
+                LineRead::Unread(unread) => readings.push(unread),
+                LineRead::Read {
+                    line,
+                    reading,
+                    spent,
+                    declared,
+                } => match pressing(line, reading, spent, declared)? {
+                    None => items.push(format!("{}:-0", effect.pool_id)),
+                    Some(charged) => {
+                        let (numerator, denominator) = charged.cost;
+                        sum.add(numerator, denominator, true).ok_or_else(overflow)?;
+                        items.push(format!(
+                            "{}:-{}",
+                            effect.pool_id,
+                            numerator / denominator.max(1)
+                        ));
+                        pressed.push(pressed_reason(
+                            &effect.pool_id,
+                            line,
+                            reading,
+                            spent,
+                            &charged,
+                        ));
+                    }
+                },
             }
             continue;
         }
