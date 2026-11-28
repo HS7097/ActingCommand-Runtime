@@ -535,6 +535,11 @@ struct TrustedPolicyDispatch {
     /// Workflow #369 W-1: the intent's instance view of the evaluation's inputs
     /// (`dispatch_view_identity`).
     view_identity: String,
+    /// Workflow #455 RR3 (register §1.538, ruling 6): the identity of the needs computed from the
+    /// stored records of the intent's instance for its evaluation, `None` without stored records,
+    /// and that evaluation's time, at which the admission computes them again.
+    needs_identity: Option<String>,
+    evaluation_time: EvaluationTime,
     /// Workflow #405 D1 (register X14): the random delay the intent was dispatched under, which
     /// its `policy.dispatch_intent` record carries; `None` for an instance with the delay off.
     random_delay: Option<PolicyRandomDelay>,
@@ -547,12 +552,15 @@ struct TrustedPolicyDispatch {
 /// every host. A pool the catalog does not declare counts as selecting every instance. The
 /// cycle's earlier dispatches on other instances (their intents, runs, settlement records and
 /// device facts) change only records outside it. Without the instance's snapshot no scope
-/// resolves, so the whole snapshot identity is the view.
+/// resolves, so the whole snapshot identity is the view. Workflow #455 RR3 (register §1.538,
+/// ruling 6): with `needs_identity`, the identity of the needs computed from the instance's stored
+/// records, hashed after the rest; without stored records the bytes hashed are those of before.
 fn dispatch_view_identity(
     facts: &EvaluationFacts,
     resources: &EvaluationResources,
     pool_scopes: &BTreeMap<String, actingcommand_policy::ScopeSelector>,
     instance_id: &str,
+    needs_identity: Option<&str>,
 ) -> RuntimeHostResult<String> {
     use actingcommand_policy::ScopeSelector;
     let Some(instance) = facts
@@ -600,8 +608,13 @@ fn dispatch_view_identity(
     pools.sort_by(|left, right| left.pool_id.cmp(&right.pool_id));
     let mut hosts = resources.hosts.iter().collect::<Vec<_>>();
     hosts.sort_by(|left, right| left.host_id.cmp(&right.host_id));
-    let bytes = serde_json::to_vec(&(instance, observed, outcomes, tasks, offsets, pools, hosts))
-        .map_err(|_| {
+    let bytes = match needs_identity {
+        None => serde_json::to_vec(&(instance, observed, outcomes, tasks, offsets, pools, hosts)),
+        Some(needs) => serde_json::to_vec(&(
+            instance, observed, outcomes, tasks, offsets, pools, hosts, needs,
+        )),
+    }
+    .map_err(|_| {
         RuntimeHostError::fatal(
             HostCode::FactSnapshotEncodeFailed,
             HostLocation::HashPolicyFactSnapshot,
@@ -639,17 +652,27 @@ pub(super) struct TrustedPolicyDispatchStore {
     order: VecDeque<String>,
 }
 
+/// What an intent's instance view is computed from (`dispatch_view_identity`): the evaluation's
+/// facts and resources, the scopes of the active catalog's pools, and (Workflow #455 RR3) the needs
+/// computed from the instances' stored records for the evaluation at `time`.
+struct DispatchView<'a> {
+    facts: &'a EvaluationFacts,
+    resources: &'a EvaluationResources,
+    pool_scopes: &'a BTreeMap<String, actingcommand_policy::ScopeSelector>,
+    record_needs: &'a actingcommand_policy::RecordNeeds,
+    time: EvaluationTime,
+}
+
 impl TrustedPolicyDispatchStore {
     /// Records the cycle's pending intents with the instance view of each in the evaluation's
-    /// `facts` and `resources` (`dispatch_view_identity`) and (Workflow #405 D1) the random delay
-    /// each was dispatched under (`random_delays`, by decision id).
+    /// inputs `view` (`dispatch_view_identity`) and (Workflow #405 D1) the random delay each was
+    /// dispatched under (`random_delays`, by decision id). Workflow #455 RR3: with the identity of
+    /// the needs computed for its instance and the evaluation's time.
     fn record_cycle(
         &mut self,
         cycle: &PolicyCycle,
         observed_monotonic_ms: u64,
-        facts: &EvaluationFacts,
-        resources: &EvaluationResources,
-        pool_scopes: &BTreeMap<String, actingcommand_policy::ScopeSelector>,
+        view: &DispatchView<'_>,
         random_delays: &BTreeMap<String, PolicyRandomDelay>,
     ) -> RuntimeHostResult<()> {
         let Some(evaluation) = &cycle.evaluation else {
@@ -666,16 +689,23 @@ impl TrustedPolicyDispatchStore {
                         HostLocation::RecordTrustedPolicyDispatch,
                     )
                 })?;
+            let needs_identity = view
+                .record_needs
+                .get(&intent.instance_id)
+                .map(|needs| needs.identity().to_owned());
             let trusted = TrustedPolicyDispatch {
                 intent: intent.clone(),
                 reason_chain: reason_chain.clone(),
                 observed_monotonic_ms,
                 view_identity: dispatch_view_identity(
-                    facts,
-                    resources,
-                    pool_scopes,
+                    view.facts,
+                    view.resources,
+                    view.pool_scopes,
                     &intent.instance_id,
+                    needs_identity.as_deref(),
                 )?,
+                needs_identity,
+                evaluation_time: view.time,
                 random_delay: random_delays.get(&intent.decision_id).copied(),
             };
             if let Some(existing) = self.entries.get(&intent.decision_id) {
@@ -1962,6 +1992,10 @@ impl HostShared {
         // Workflow #463 V2 fix round 1: the variable table the workbench's last read of each
         // game root judged over the whole root, read from memory; none in configured mode.
         let standard_pack_variables = self.standard_pack_variables()?;
+        // Workflow #455 RR3 (register §1.538, ruling 1): what the workbench keeps of each game root
+        // that the needs computed from stored records read (its records entries and its accepted
+        // tables), from memory, before the gates.
+        let record_roots = self.goal_record_roots()?;
         #[cfg(test)]
         self.before_policy_inputs_read_for_test()?;
         // #503 CYC-1 (ruling 1): what precedes the gates ends here; from here to their release the
@@ -1996,6 +2030,7 @@ impl HostShared {
             left_out_lists,
             availability_withdrawals,
             pool_readings,
+            record_needs,
             dispatches_read,
             queue_wait_starts,
             entry_blocked,
@@ -2070,6 +2105,17 @@ impl HostShared {
                 Some(time.unix_ms),
             )?;
             let projection_micros = crate::policy_host::micros_since(projection_started);
+            // Workflow #455 RR3 (register §1.538, rulings 1 and 6): the needs computed from each
+            // instance's stored records, under the gate these inputs were projected under, with
+            // the holdings through the evaluator's own projection of them.
+            let record_needs = self.record_needs_under_gate(
+                &policy,
+                &facts,
+                &pool_readings,
+                &record_roots,
+                time,
+                None,
+            )?;
             // IDLE-3 (#447, register §1.332): the policy's own dispatches as these inputs count
             // them, read under the guard they were projected under (a settlement that comes
             // between this read and the evaluation below is not in them).
@@ -2085,6 +2131,7 @@ impl HostShared {
                 left_out_lists,
                 availability_withdrawals,
                 pool_readings,
+                record_needs,
                 dispatches_read,
                 queue_wait_starts,
                 entry_blocked,
@@ -2103,6 +2150,9 @@ impl HostShared {
         // pools read from rows of a list beside the left-out facts, and each list's key is left
         // out for its pool's instance, so it raises no fact refresh demand.
         left_out.give_pool_readings(pool_readings);
+        // Workflow #455 RR3 (register §1.538, ruling 6): and the needs computed from each
+        // instance's stored records, one more kind beside them, for this evaluation alone.
+        left_out.give_record_needs(record_needs);
         // Workflow #455 G-R2s round 2 (register §1.369; `contracts/resource-targets.md`, "A task
         // that can do something irreversible"): a game whose root cannot be composed has no goals
         // in effect until it composes; every instance of it reads as without a target record.
@@ -2457,9 +2507,13 @@ impl HostShared {
         .record_cycle(
             &cycle,
             observed_monotonic_ms,
-            &facts,
-            &resources,
-            &pool_scopes,
+            &DispatchView {
+                facts: &facts,
+                resources: &resources,
+                pool_scopes: &pool_scopes,
+                record_needs: left_out.record_needs(),
+                time,
+            },
             &random_delays,
         )?;
         Ok(cycle)
@@ -3131,6 +3185,10 @@ impl HostShared {
                 HostLocation::AuthorizeTrustedPolicyDispatch,
             )?
             .authorize(intent, reason_chain)?;
+            // Workflow #455 RR3 (register §1.538, ruling 6): what the workbench keeps of each game
+            // root for the needs computed from stored records, from memory, before any lock the
+            // admission takes, so the needs of the intent's instance are computed again below.
+            let record_roots = self.goal_record_roots()?;
             // Workflow #411 B15 R4 (model-b15 §7.9): an intent that names a remedy round is
             // checked against the remedy keys in effect for its instance.
             let remedy_context = if reason_chain
@@ -3413,7 +3471,7 @@ impl HostShared {
                 HostLocation::SnapshotPolicyOutcomeState,
             )?;
             let mut policy = lock(self.policy()?, HostLocation::ReadPolicyOutcomeKeys)?;
-            let (outcome_keys, current_facts, current_resources, fact_gate) = {
+            let (outcome_keys, current_facts, current_resources, current_needs, fact_gate) = {
                 let outcome_keys = policy.outcome_key_snapshot()?;
                 if outcome_keys.generation.as_ref().is_none_or(|generation| {
                     generation.catalog_hash() != intent.catalog_hash
@@ -3430,7 +3488,7 @@ impl HostShared {
                 )?;
                 // The eligibility ages are projected as of the intent's evaluation instant, as
                 // that evaluation projected them (Workflow #308 slice 5b).
-                let (current_facts, current_resources, _, _, _, _, _) = self
+                let (current_facts, current_resources, _, _, _, _, current_readings) = self
                     .project_authoritative_policy_inputs_with_gaps_under_gate(
                         &mut policy,
                         HostLocation::AdmitPolicyDispatch,
@@ -3439,19 +3497,44 @@ impl HostShared {
                         None,
                         Some(trusted.intent.prerequisites.evaluated_at_unix_ms),
                     )?;
-                (outcome_keys, current_facts, current_resources, fact_gate)
+                // Workflow #455 RR3 (register §1.538, ruling 6): the needs of the intent's
+                // instance computed again from what the store holds now, at its evaluation's
+                // time, under the same gate.
+                let current_needs = self.record_needs_under_gate(
+                    &policy,
+                    &current_facts,
+                    &current_readings,
+                    &record_roots,
+                    trusted.evaluation_time,
+                    Some(&intent.instance_id),
+                )?;
+                (
+                    outcome_keys,
+                    current_facts,
+                    current_resources,
+                    current_needs,
+                    fact_gate,
+                )
             };
             drop(outcome_gate);
             // Workflow #369 W-1 (model-369 v3.1 §3.3): the intents of one cycle are admitted one
             // after another, and an earlier one's dispatch on another instance moves the snapshot
             // identity (its task state, settlement and device facts). The intent is stale only
-            // when its own instance view moved too.
-            if current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id
+            // when its own instance view moved too. Workflow #455 RR3 (ruling 6): the needs
+            // computed from its instance's stored records are part of that view, and the lists
+            // and the tables they read are in no snapshot identity: an intent whose needs moved
+            // is stale whatever the snapshot.
+            let current_needs_identity = current_needs
+                .get(&intent.instance_id)
+                .map(|needs| needs.identity().to_owned());
+            if (current_facts.fact_snapshot_id != trusted.intent.fact_snapshot_id
+                || current_needs_identity != trusted.needs_identity)
                 && dispatch_view_identity(
                     &current_facts,
                     &current_resources,
                     &catalog_pool_scopes(&policy),
                     &intent.instance_id,
+                    current_needs_identity.as_deref(),
                 )? != trusted.view_identity
             {
                 return Err(policy_admission_request(

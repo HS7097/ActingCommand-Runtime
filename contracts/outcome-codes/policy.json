@@ -2645,6 +2645,213 @@
       "description": "Scheduling decision reason (Workflow #455 G-R2s round 2, register section 1.369; contracts/resource-targets.md \"A game whose root cannot be composed\", since 0.12.77, Workflow #455 G-R2x, register section 1.499, a section of its own): the Runtime's scheduler workbench cannot compose the root of the candidate's game (its metadata cannot be read, it is damaged, the composition is refused as a whole, or a refused composition cannot be narrowed to a game it composed), so the active catalog generation may not hold the game as its files give it now, and the instance holds a resource target record. A game whose root cannot be composed has no goals in effect until it composes: the record's targets are left out for every candidate of the game's instances, each computed exactly as on an instance without a record. Which games are voided: a game whose own root fails; while a game's own root fails, also every other game the active generation holds otherwise (it holds a task of the game that the present composition of the game's files does not compose with the same id and procedure; until 0.12.77 also a task that composition marked irreversible and the active generation did not, a comparison withdrawn with the mark); a composition refused as a whole voids every game whose files changed since their last composed read, which at the first check after a start is every game in use. It ends at the first successful composition of every game. Memory only: the Runtime tells the evaluator per instance, never through a fact or a snapshot; the void is part of the decision identity of each candidate of a voided instance that holds a target record (fix rounds 3 and 4), so one identity never names two decisions when a root breaks or heals, and an instance without a record keeps the identity it has when no game is voided. Fix round 4: also the workbench's info record (standard_pack_read lifecycle record), with game, one per game a check voids because the active generation holds it otherwise, at each such check; a game whose own root fails is named by that root's own record. Known limit: the forward projection does not read the void, so while a game is voided its steps still weigh that game's candidates with their goals (it would need the voided instances as an input, and its answer has no member for a candidate's reason); left to a later slice.",
       "common_causes": "A game root's bundle.json or schedule.json is damaged, mid-write during a placement, or cannot be stat'ed; or the composed catalog of every game in use exceeds a catalog limit.",
       "handling": "Fix the root the workbench's standard_pack_root_invalid or standard_pack_root_unreadable record names; the next check that composes ends it. During a hot placement it lasts at most one check interval."
+    },
+    "goal_records_need": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538; contracts/resource-targets.md \"Needs computed from the records\"): the host computed, before the evaluation, what the characters the instance's stored records name still need of the pool pool_id (as the root's files write it), and the goal stacked on the pool covers the candidate. Its text gives what the characters need (needed), the stock the pool's stored goal asks (stock, 0 without one), the holding (held), how much of the holding goes to the characters (to_characters, the lesser of the two), the gap max(0, needed + stock - held) and the sha256 of the tables file; the holding and what follows from it read pending while the evaluation does not know the holding. A pool without a stored goal is judged as if it held a goal of the need with the pool's own step and importance; one with a stored goal keeps that goal's step and importance and is judged as if it asked stock + needed. Memory only: nothing computed is stored.",
+      "common_causes": "A records entry of the game root's goals.json holds records on the instance, and the characters they name are below their targets.",
+      "handling": "None: the producers of the pool are raised until the gap closes."
+    },
+    "goal_records_not_applied": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "goal_problem": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a record stored in the instance's session.goal_records that the game root in force does not declare adds nothing, and goal_problem is the word a goal edit of it would be refused with now: name_unknown (its entry applies no table of the root's accepted goal-tables.json: no such records entry, no accepted tables file, or its table is not there), not_an_option (its key is no key of the table), out_of_range or wrong_type (its target names a column or a position the key's ladder does not hold), record_unreadable (the stored record is one its reader does not read, which only a fault of the Runtime writes; then no record applies). Its text lists the records (entry/key). On every candidate of the instance; the record stays stored.",
+      "common_causes": "A placement changed the root's goals.json or goal-tables.json after the records were set.",
+      "handling": "Set the entry's records again (goals set), or clear them; for record_unreadable, clear the entry."
+    },
+    "goal_records_not_held": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the table's held_by list, read whole and fresh, holds no row of a record's key, so the character is not held: known, and the record adds nothing. Its text lists the records (entry/key). On every candidate of the instance.",
+      "common_causes": "A record names a character the account does not have yet; or the list's reading took the character's card for another.",
+      "handling": "None until the character is held; a misread card is the reading package's to correct."
+    },
+    "goal_records_progress_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "unknown_reason": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a progress list fact_key that a record's column reads gives no reading, unknown_reason why (fact_missing: the instance holds no such list, or a timeline reset invalidated it; fact_expired: it is past its expiry; fact_low_confidence: its confidence is 0; type_mismatch: it is no record list, or a row of it holds no text under its key column). Pending: that column adds nothing; for the table's held_by list the whole record adds nothing, since whether the key is held is not known. Its text lists the records and columns (entry/key/column, or entry/key for the whole record). One for each list and reason, on every candidate of the instance.",
+      "common_causes": "The package that reads the list has not run yet, or its reading expired.",
+      "handling": "None: the list's next reading wakes an evaluation, which computes the column."
+    },
+    "goal_records_reading_missing": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "fact_key": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the progress list fact_key is known and holds no reading of a column a record's column reads for its key (no row of the key, or a row without that reading column). Pending: that column adds nothing. Its text lists them (entry/key/column:reading column). One for each list, on every candidate of the instance.",
+      "common_causes": "The package that reads the list does not read the column, or did not see the character's card.",
+      "handling": "The list's reading package reads the column; until then the column adds nothing."
+    },
+    "goal_records_position_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a record's column reads a position its ladder does not hold: a reading that is no whole number, or a tuple of readings equal member for member to no position of the ladder (or a reading column no list of the table gives). Pending: that column adds nothing. Its text lists them (entry/key/column, a sub as column/sub). On every candidate of the instance.",
+      "common_causes": "The table's ladder does not list a grade the account's character stands at, or the list's reading is wrong.",
+      "handling": "The resource side adds the position to the ladder, or the reading package is corrected."
+    },
+    "goal_records_holding_unknown": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "pool_id": "required",
+        "unknown_reason": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the holding of an item with a recipe, held in pool_id, is not known as the evaluator reads a target's inventory (unknown_reason the observation's: fact_missing, fact_expired, fact_low_confidence or type_mismatch; absent when the id names no pool of the instance, or one not observable or out of its scope), so nothing below the item is taken apart: the items it is made from add nothing for it. Its text names the item. One for each pool, on every candidate of the instance.",
+      "common_causes": "The pool's reading has not been taken yet or has expired.",
+      "handling": "None: the pool's next reading wakes an evaluation, which takes the item apart."
+    },
+    "goal_records_item_unweighed": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the characters the stored records name need an item of the tables file that has no recipe and no pool: it is shown with what they need of it (its text lists item:need) and weighs nothing. On every candidate of the instance.",
+      "common_causes": "The tables file names an item the game root keeps no pool of.",
+      "handling": "None; the resource side gives the item a pool when one is read."
+    },
+    "goal_records_condition": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a step a record's walk takes is asked a prerequisite that is a condition, no column's: it is named (its text lists entry/key/column:condition) and asks for nothing countable. On every candidate of the instance.",
+      "common_causes": "The tables file declares a prerequisite the game states outside its ladders.",
+      "handling": "None: a person meets the condition in the game."
+    },
+    "goal_records_not_stacked": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.95",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): the instance holds stored records and its stored session.resource_targets record is a v1 policy, which weighs its named tasks alone: the needs the records compute are not stacked on it. On every candidate of the instance.",
+      "common_causes": "The instance's targets were written as an actingcommand.resource-targets.v1 document.",
+      "handling": "Write the instance's targets as a v2 document, or set its goals by name (goals set); the needs then stack on them."
     }
   }
 }

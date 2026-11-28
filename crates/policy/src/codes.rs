@@ -368,6 +368,49 @@ actingcommand_contract::outcome_codes! {
         /// evaluation's time (key `instance_id` the candidate's alias).
         InstanceAsleepWakeDue => "instance_asleep_wake_due": info / none,
         // ---- #486 ASLEEP-1: end ----
+        // ---- Workflow #455 RR3 (register §1.538; `contracts/resource-targets.md`, "Needs
+        // computed from the records"): begin ----
+        /// Info. A pool has a need computed from the instance's stored records, and its stacked
+        /// goal covers the candidate (key `pool_id` the pool as the root's files write it): what
+        /// the characters need, the stock its stored goal asks, the holding, how much of it goes
+        /// to the characters, the gap and the tables' sha256 are in its text.
+        GoalRecordsNeed => "goal_records_need": info / none,
+        /// Warning. A stored record the root in force does not declare, which adds nothing (key
+        /// `goal_problem` the word a goal edit of it would be refused with now: `name_unknown` for
+        /// an entry that applies no table, `not_an_option` for a key, `out_of_range` or
+        /// `wrong_type` for its target, `record_unreadable` for a stored record the reader does
+        /// not read).
+        GoalRecordsNotApplied => "goal_records_not_applied": warning / none,
+        /// Info. The table's `held_by` list, read whole, holds no row of a record's key: the
+        /// character is not held, and the record adds nothing (no keys).
+        GoalRecordsNotHeld => "goal_records_not_held": info / none,
+        /// Info. A list a record's column reads, or the table's `held_by` list, gives no reading
+        /// (keys `fact_key` the list, `unknown_reason`: `fact_missing`, `fact_expired`,
+        /// `fact_low_confidence` or `type_mismatch`): that column, or the whole record, adds
+        /// nothing until it is read.
+        GoalRecordsProgressUnknown => "goal_records_progress_unknown": info / none,
+        /// Info. A list a record's column reads is known and holds no reading of the column for
+        /// the key: no row of the key, or a row without the reading column (key `fact_key`); that
+        /// column adds nothing.
+        GoalRecordsReadingMissing => "goal_records_reading_missing": info / none,
+        /// Info. A record's column reads a position its ladder does not hold (a reading that is
+        /// no whole number, or a tuple equal to no position); that column adds nothing (no
+        /// keys).
+        GoalRecordsPositionUnknown => "goal_records_position_unknown": info / none,
+        /// Info. The holding of an item with a recipe is not known (key `pool_id` its pool;
+        /// `unknown_reason` the observation's, absent when the pool names no pool of the
+        /// instance): nothing below it is taken apart.
+        GoalRecordsHoldingUnknown => "goal_records_holding_unknown": info / none,
+        /// Info. An item without a recipe and without a pool that the characters need: shown,
+        /// weighing nothing (no keys).
+        GoalRecordsItemUnweighed => "goal_records_item_unweighed": info / none,
+        /// Info. A step the walk takes is asked a condition that is no column's, which asks for
+        /// nothing countable (no keys).
+        GoalRecordsCondition => "goal_records_condition": info / none,
+        /// Warning. The instance's stored target record is a v1 policy, which weighs its named
+        /// tasks alone: the needs its stored records compute are not stacked on it (no keys).
+        GoalRecordsNotStacked => "goal_records_not_stacked": warning / none,
+        // ---- Workflow #455 RR3: end ----
     }
 }
 

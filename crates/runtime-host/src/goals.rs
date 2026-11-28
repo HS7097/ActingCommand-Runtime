@@ -440,8 +440,9 @@ fn check_records(
 /// has no ladder for `out_of_range` at it); each at the column or the sub. The canonical text is
 /// compact JSON, the members of every object in ascending byte order of their names, each position
 /// an array of whole numbers; longer than [`MAX_GOAL_RECORD_TO_BYTES`] it is `value_too_large` at
-/// `at` (`range_min` 0, `range_max` the bound).
-fn check_to(
+/// `at` (`range_min` 0, `range_max` the bound). Workflow #455 RR3: the computation of needs holds a
+/// stored record's `to` to the root in force with it (`crate::goal_needs`).
+pub(crate) fn check_to(
     table: &GoalTable,
     key: &GoalKey,
     to: Option<&Value>,
@@ -528,7 +529,7 @@ fn within_pointer(at: &str, member: &str) -> String {
 
 /// A position as a record writes it: an array of whole numbers within 64 bits; `None` for any
 /// other value.
-fn position_of(value: &Value) -> Option<Vec<i64>> {
+pub(crate) fn position_of(value: &Value) -> Option<Vec<i64>> {
     value.as_array()?.iter().map(Value::as_i64).collect()
 }
 

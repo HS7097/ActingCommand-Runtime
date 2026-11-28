@@ -25,7 +25,7 @@ use crate::{
     ActivityProfile, ClockSchedule, ClockSource, Comparison, CompiledCatalog, FactComparand,
     FactReference, FactScalar, FactUnknownRule, FactValue, LoadProfile, MAX_PRIORITY_OFFSET_MILLI,
     MAX_TEXT_BYTES, ManualOffset, MissedSlotRule, ObservationRef, PoolCapacity, PoolProjection,
-    PoolSpec, PredicateSpec, PrioritySelection, ProjectionComparand, RemedyPlan,
+    PoolSpec, PredicateSpec, PrioritySelection, ProjectionComparand, RecordNeeds, RemedyPlan,
     ResourceEffectSpec, ScopeSelector, TargetMode, TaskSpec, TaskTerminalState, TimelineEvent,
 };
 
@@ -268,6 +268,12 @@ pub struct EvaluationFacts {
 ///
 /// #477 LF-1 (register §1.509): also the pairs whose latest scheduled dispatch carried a
 /// `run_cap`, with when that run ended ([`LeftOutFacts::give_handed_runs`], [`HandedRuns`]).
+///
+/// Workflow #455 RR3 (register §1.538; `contracts/resource-targets.md`, "Needs computed from the
+/// records"): also what the host computed, for each instance that holds stored records, of what
+/// the recorded characters still need ([`LeftOutFacts::give_record_needs`], [`RecordNeeds`]). The
+/// evaluator stacks it on the instance's stored goals and hashes its identity into the decision
+/// identity of every candidate of the instance; it enters no snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LeftOutFacts {
     keys: BTreeMap<String, BTreeSet<String>>,
@@ -277,6 +283,8 @@ pub struct LeftOutFacts {
     pool_readings: GivenPoolReadings,
     /// #477 LF-1: the pairs whose latest scheduled dispatch carried a `run_cap`.
     handed_runs: HandedRuns,
+    /// Workflow #455 RR3: the needs computed from each instance's stored records.
+    record_needs: RecordNeeds,
 }
 
 /// #477 LF-1 (register §1.509; `contracts/scheduling/README.md`, "Pool lines"): the pairs whose
@@ -349,6 +357,17 @@ impl LeftOutFacts {
     /// #455 P2: the readings given to the pools read from rows of a list.
     pub fn pool_readings(&self) -> &GivenPoolReadings {
         &self.pool_readings
+    }
+
+    /// Workflow #455 RR3 (register §1.538, ruling 6): gives the evaluation the needs the host
+    /// computed from each instance's stored records, for this evaluation alone.
+    pub fn give_record_needs(&mut self, needs: RecordNeeds) {
+        self.record_needs = needs;
+    }
+
+    /// Workflow #455 RR3: the needs computed from each instance's stored records.
+    pub fn record_needs(&self) -> &RecordNeeds {
+        &self.record_needs
     }
 
     /// Workflow #455 G-R2s round 2: leaves out the resource target record of the instance
@@ -1636,10 +1655,11 @@ pub(crate) fn project_time_validity(
 
 /// The timeline events that invalidate fact prefixes, each with its latest occurrence at or
 /// before an evaluation's time and its next one (`invalidation_occurrences`).
-type TimelineResets<'a> = Vec<(&'a TimelineEvent, (Option<u64>, Option<u64>))>;
+pub(crate) type TimelineResets<'a> = Vec<(&'a TimelineEvent, (Option<u64>, Option<u64>))>;
 
-/// The resets of `catalog`'s timeline at `time` ([`TimelineResets`]).
-fn timeline_resets(
+/// The resets of `catalog`'s timeline at `time` ([`TimelineResets`]). Workflow #455 RR3: a
+/// progress list's freshness reads them too (`NeedsProjection::list_freshness`).
+pub(crate) fn timeline_resets(
     catalog: &CompiledCatalog,
     time: EvaluationTime,
 ) -> PolicyEvaluationResult<TimelineResets<'_>> {
@@ -1657,8 +1677,9 @@ fn timeline_resets(
 /// covers the scope and invalidates the key, at or after the observation, removes it; the next
 /// occurrence of every such reset bounds its `expiry`. The one rule [`project_time_validity`]
 /// applies to a fact, an outcome and a task's settled run, and (#455 P2) [`project_given_validity`]
-/// to a list a pool's reading was computed from.
-fn survives_resets(
+/// to a list a pool's reading was computed from; Workflow #455 RR3: and to a progress list
+/// (`NeedsProjection::list_freshness`).
+pub(crate) fn survives_resets(
     resets: &TimelineResets<'_>,
     instances: &[InstanceSnapshot],
     scope: &ScopeSelector,
@@ -2407,8 +2428,14 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
     validate_inputs(catalog, facts, resources, time)?;
     validate_run_slots(run_slots)?;
     // Stored resource target policies are read before the time-validity projection, so a
-    // timeline reset never silently withdraws one (Workflow #308 RT-S1b).
-    let target_policies = crate::resource_targets::instance_target_policies(facts, time)?;
+    // timeline reset never silently withdraws one (Workflow #308 RT-S1b). Workflow #455 RR3
+    // (register §1.538, ruling 5): the needs the host computed from each instance's stored
+    // records are stacked on them, in memory, for this evaluation alone.
+    let target_policies = crate::resource_targets::stack_record_needs(
+        crate::resource_targets::instance_target_policies(facts, time)?,
+        left_out.record_needs(),
+        &facts.instances,
+    );
     // Workflow #411 P19: each task's own last result, as the input holds it: no timeline reset
     // clears it. A task's own edges read it (`evaluate_predicate`'s `task_state`).
     let last_results: BTreeMap<(&str, &str), &TaskRuntimeSnapshot> = facts
@@ -3219,6 +3246,13 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
             targets_void_decision_id(&decision_id)
         } else {
             decision_id
+        };
+        // Workflow #455 RR3 (register §1.538, ruling 6): the needs computed from the instance's
+        // stored records are part of what the identity covers ([`record_needs_decision_id`]);
+        // an instance without stored records keeps its identity.
+        let decision_id = match left_out.record_needs().get(&candidate.instance_id) {
+            Some(needs) => record_needs_decision_id(&decision_id, needs.identity()),
+            None => decision_id,
         };
         let reason_chain_id = format!("reason:{decision_id}");
         let intent = DispatchIntent {
@@ -5191,9 +5225,12 @@ fn apply_priority_selection(
         if unrecorded.contains_key(instance.instance_id.as_str()) {
             continue;
         }
+        // Workflow #455 RR3: the needs computed from its records are goals in effect too, and are
+        // left out with the record.
         let without_record = InstanceTargetPolicy {
             state: None,
             ignored: recorded.ignored,
+            needs: None,
         };
         let resolved = crate::resource_targets::resolve_instance_targets(
             catalog,
@@ -6149,7 +6186,7 @@ fn is_realistic_on(
 /// A selection-policy reason as a token of the catalog vocabulary `unknown_reason`, so a reason's
 /// outcome can carry it (Workflow #378 A2-P).
 #[derive(Clone, Copy)]
-struct UnknownReasonToken(UnknownReason);
+pub(crate) struct UnknownReasonToken(pub(crate) UnknownReason);
 
 impl VocabularyToken for UnknownReasonToken {
     const VOCABULARY: &'static str = "unknown_reason";
@@ -8911,6 +8948,26 @@ fn targets_void_decision_id(decision_id: &str) -> String {
     let mut hasher = Sha256::new();
     hash_part(&mut hasher, TARGETS_VOID_IDENTITY_PART);
     hash_part(&mut hasher, decision_id.as_bytes());
+    format!("decision:{:x}", hasher.finalize())
+}
+
+/// Workflow #455 RR3 (register §1.538): the part [`record_needs_decision_id`] hashes before the
+/// identity it extends.
+const RECORD_NEEDS_IDENTITY_PART: &[u8] = b"goal-records-needs";
+
+/// Workflow #455 RR3 (register §1.538, ruling 6; `contracts/resource-targets.md`, "Needs computed
+/// from the records"): the decision identity of a candidate of an instance that holds stored
+/// records: its identity so far hashed once more after [`RECORD_NEEDS_IDENTITY_PART`] with the
+/// identity of the needs computed for the instance (`needs_identity`). A change of a progress
+/// list, of the records or of the tables changes the needs, and a change of the tables appends
+/// nothing to the ledger; without it two evaluations of one instant, ledger position and snapshot
+/// on two tables would give two decisions one identity. Every candidate of an instance without
+/// stored records keeps the identity it had.
+fn record_needs_decision_id(decision_id: &str, needs_identity: &str) -> String {
+    let mut hasher = Sha256::new();
+    hash_part(&mut hasher, RECORD_NEEDS_IDENTITY_PART);
+    hash_part(&mut hasher, decision_id.as_bytes());
+    hash_part(&mut hasher, needs_identity.as_bytes());
     format!("decision:{:x}", hasher.finalize())
 }
 

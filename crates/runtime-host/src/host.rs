@@ -258,6 +258,9 @@ mod policy_wake;
 mod ppocr_diagnostic;
 mod prerequisite;
 mod read_events;
+// Workflow #455 RR3: the needs computed from each instance's stored records before an evaluation
+// and at an admission, under the fact write gate.
+mod record_needs;
 // Workflow #411 A22: a direct run refuses a recovery binding that no path of it can use.
 mod recovery_binding;
 #[cfg(test)]
@@ -2463,6 +2466,8 @@ impl RuntimeHost {
             refused_close_record_failure_for_test: AtomicBool::new(false),
             #[cfg(test)]
             unreadable_goal_edit_for_test: AtomicBool::new(false),
+            #[cfg(test)]
+            goal_record_roots_for_test: Mutex::new(None),
             #[cfg(test)]
             resource_close_hook_for_test: Mutex::new(None),
             #[cfg(test)]
@@ -7686,6 +7691,10 @@ struct HostShared {
     // not read back (`HostShared::unreadable_edit_for_test`).
     #[cfg(test)]
     unreadable_goal_edit_for_test: AtomicBool,
+    // Workflow #455 RR3, test only: while set, what the needs computed from stored records read of
+    // each game root instead of the scheduler workbench's memory (`goal_record_roots`).
+    #[cfg(test)]
+    goal_record_roots_for_test: Mutex<Option<crate::goal_needs::RecordRoots>>,
     // Workflow #475, test only: the hook the next close of an instance's resources that finds a
     // session to close runs once, before it asks its write authority (`retire_instance_resources`).
     #[cfg(test)]

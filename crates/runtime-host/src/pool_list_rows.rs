@@ -23,6 +23,8 @@
 //!   invalidation and a number a constant capacity cannot hold.
 //! - **Freshness is the list's**: its observation time, its expiry, its confidence.
 
+use std::collections::BTreeMap;
+
 use actingcommand_contract::{FactContent, FactRecord, FactScalar, FactValue};
 use actingcommand_policy::{
     CompiledCatalog, GivenPoolReading, GivenPoolReadings, GivenReadingState, ListRowsUnknown,
@@ -78,6 +80,39 @@ pub(crate) fn pool_list_rows_readings<'a>(
     readings
 }
 
+/// The rows of `list` (an instance's list fact, `None` when there is none), held to what every
+/// reader of a list holds it to: present (else `fact_missing`), of at least
+/// `minimum_confidence_milli` (else `fact_low_confidence`), a record list each of whose rows holds
+/// a text under `key_column` (else `type_mismatch`: fix round 1 of #455 P2, a list keyed otherwise
+/// is no list of these columns). The one implementation the reading of a pool read from rows of a
+/// list ([`list_rows_reading`]) and, Workflow #455 RR3, a progress list of a table of goals
+/// (`crate::goal_needs`) read a list by. Pure.
+pub(crate) fn list_rows_of<'a>(
+    list: Option<&'a FactRecord>,
+    minimum_confidence_milli: u16,
+    key_column: &str,
+) -> Result<&'a [BTreeMap<String, FactScalar>], ListRowsUnknown> {
+    let Some(list) = list else {
+        return Err(ListRowsUnknown::FactMissing);
+    };
+    if list.confidence_milli < minimum_confidence_milli {
+        return Err(ListRowsUnknown::FactLowConfidence);
+    }
+    let FactContent::Inline {
+        value: FactValue::RecordList(listed),
+    } = &list.content
+    else {
+        return Err(ListRowsUnknown::TypeMismatch);
+    };
+    if listed
+        .iter()
+        .any(|entry| !matches!(entry.get(key_column), Some(FactScalar::String(_))))
+    {
+        return Err(ListRowsUnknown::TypeMismatch);
+    }
+    Ok(listed.as_slice())
+}
+
 /// The reading of a pool read from `rows` of `list` (its instance's list fact under the pool's
 /// key, `None` when there is none) by `key_column` and `value_column`, with at least
 /// `minimum_confidence_milli` (module doc). Pure.
@@ -89,24 +124,16 @@ pub(crate) fn list_rows_reading(
     list: Option<&FactRecord>,
 ) -> GivenReadingState {
     let unknown = GivenReadingState::Unknown;
+    let listed = match list_rows_of(list, minimum_confidence_milli, key_column) {
+        Ok(listed) => listed,
+        Err(reason) => return unknown(reason),
+    };
     let Some(list) = list else {
         return unknown(ListRowsUnknown::FactMissing);
     };
-    if list.confidence_milli < minimum_confidence_milli {
-        return unknown(ListRowsUnknown::FactLowConfidence);
-    }
-    let FactContent::Inline {
-        value: FactValue::RecordList(listed),
-    } = &list.content
-    else {
-        return unknown(ListRowsUnknown::TypeMismatch);
-    };
-    // Fix round 1: a list keyed otherwise than the pool declares is no list of these columns.
-    let unkeyed = listed
-        .iter()
-        .any(|entry| !matches!(entry.get(key_column), Some(FactScalar::String(_))));
+    // Fix round 1: a list none of whose rows holds the value column is no list of these columns.
     let unvalued = listed.iter().all(|entry| !entry.contains_key(value_column));
-    if !listed.is_empty() && (unkeyed || unvalued) {
+    if !listed.is_empty() && unvalued {
         return unknown(ListRowsUnknown::TypeMismatch);
     }
     let mut sum = 0_u128;

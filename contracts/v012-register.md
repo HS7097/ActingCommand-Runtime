@@ -51072,6 +51072,150 @@ longer declares will apply nothing, and say why); the page lists no records entr
 **At deploy.** Nothing to configure, and nothing changes for an instance until a records entry is
 set on it. In the release notes' language: 新增：`goals.json` 里的 records 条目可以存值了。`goals set <实例> <条目名> '[{"key": …, "to": {…}}]'` 把“练谁、练到哪”存进实例事实 `session.goal_records`（只有目标编辑能写，用 `facts` 读回）；目标页的版本号取两份记录的较大者。这一版不据此计算任何需求，调度不变。
 
+### 1.538 Slice #455 RR3 (0.12.95): what the recorded characters still need is computed before every evaluation from the stored records, the root's tables, the progress lists and the holdings, stacked on the stored goals in memory as `max(0, need + stock − held)`, and part of each decision's and each instance view's identity; nothing computed is stored (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets, its answer 五 and its dispositions, after the owner's words that a goal on a material has two layers and that what is in hand serves the character first; coordinator work order `rd-1123/brief-455-rr3.md`; on RR2's branch `c4d7f85f`; §1.536, a slice merged before this one, is not in its tree, and the coordinator joins it at the merge)
+
+It ships in 0.12.95. [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("What is
+computed", which replaces "What arrives later"; "Who reads it"), [resource-targets.md](resource-targets.md)
+("Needs computed from the records"), [standard-pack-goals.md](standard-pack-goals.md) ("The records
+entry": what the records do), [scheduling/README.md](scheduling/README.md) ("Needs computed from
+the records"), [instance-fact-store.md](instance-fact-store.md) ("Goal records facts": the
+sentences that said no evaluation computed from the records), and the policy fragment's ten codes
+are the contract.
+
+**What it is for.** A person has said whom to raise and to which grade (§1.537 stores it), and the
+root carries the game's rules for it (§1.535). This slice makes the scheduler act on it: before
+every evaluation the host computes, for each instance, how much of each material the recorded
+characters still need and do not have, stacks that on the stock the person asked to keep, and gives
+the result to the evaluator, which then raises the tasks that produce what is lacking. Nothing
+computed is stored. With no record set, nothing changes by a byte.
+
+**The rulings, as built.**
+- *1, one function from what is true now* (`crates/runtime-host/src/goal_needs.rs`, `instance_needs`,
+  pure). Its inputs: the instance's `session.goal_records` record read by RR2's own reader
+  (`StoredGoalRecords::read`); what the workbench keeps of the game root for the generation in force
+  (`goal_record_roots`: the records entries of the accepted `goals.json` and the accepted tables with
+  their sha256, read from memory before the gates, as the goal page reads the roots); the
+  instance's progress lists as the fact store holds them; and the holdings through the evaluator's
+  own projection (`actingcommand_policy::NeedsProjection`: `project_time_validity` and
+  `project_given_validity` of the same facts and readings, then `observe_target`, the reading a
+  target's inventory takes; no second reading of facts). The host calls it
+  (`host/record_needs.rs`, `record_needs_under_gate`) in the cycle under the fact write gate right
+  after the projection, and at an admission for the intent's instance at its evaluation's time. A
+  list is judged by the rules a list a pool is read from obeys: present, of a confidence above 0,
+  a record list keyed by its key column (`pool_list_rows::list_rows_of`, now the one implementation
+  P2's reading and this one share), not invalidated by a timeline reset (`survives_resets`) and not
+  past its expiry.
+- *2, walking one record*. For each column `to` names (each named sub), the current position is the
+  tuple of the column's reading columns in the key's row, equal member for member to one of
+  `positions`; the need is the sum of the steps to the target in the order of `positions` (a key's
+  override of its class's step taken instead; a role resolved to the key's own item); a target at or
+  behind asks nothing. A prerequisite asked by a step the walk takes (every step without `from`, a
+  step that arrives at `from` or beyond with it: the walk takes such a step when its target is at
+  `from` or beyond) takes the required column to `at_least` too, when the record's own target for it
+  does not, to a fixpoint (the reader refuses cycles); a requiring column whose position is not
+  known takes no step and asks nothing; a `condition` is named (`goal_records_condition`).
+- *3, not known is pending*. A missing, expired, zero-confidence or unkeyed list:
+  `goal_records_progress_unknown` (`fact_key`, `unknown_reason`), the `held_by` list's pending
+  holding the whole record; a known list without a reading of the column for the key (no row of the
+  key, or a row without the reading column): `goal_records_reading_missing`; readings forming no
+  position (a value of another kind, a tuple equal to none): `goal_records_position_unknown`. A
+  `held_by` list read whole without the key: `goal_records_not_held`, known. A record whose entry,
+  key or target the root in force does not declare: `goal_records_not_applied` with the word the
+  goal edit's own check (`check_records`' parts, `check_to`) would refuse it with now
+  (`name_unknown`, `not_an_option`, `out_of_range`, `wrong_type`), and `record_unreadable` for a
+  stored record its reader does not read. Each adds nothing: the result is a lower bound.
+- *4, summing, then taking apart once*. The records' needs are summed by item; the items are taken
+  in the recipes' topological order from the top (Kahn's order over `from` and `cost`): an item with
+  a recipe is covered by its holding up to its need (`Covered` on its pool), the rest made, rounded
+  up by `makes`, adding `from` and `cost`; one whose holding is not known keeps its whole need on its
+  pool (`Unsplit`) and adds nothing below (`goal_records_holding_unknown`); an item without a recipe
+  lands on its pool (`Lands`); one without a pool is noted (`goal_records_item_unweighed`) and weighs
+  nothing. Needs are bounded by the safe integers.
+- *5, stacking* (`crates/policy/src/resource_targets.rs`, `stack_record_needs`, on the policies
+  `instance_target_policies` read, in the evaluation alone). An active v2 policy (a v2 record, a v3
+  record's live targets): each target on a pool with a need asks `stock + need`, its own step,
+  importance, mode and coverage kept; each landing pool with a need above 0 that no target names
+  gains a target of `need` (id `goal_records`, no step or importance of its own, so the pool's,
+  adjusting every producer); its lifetime ends no later than the needs' freshness. No record, or a
+  record of entries alone: an active v2 policy of the landing targets alone (identity
+  `goal-records:<identity>`, applied at the records' observation), so an instance with records and
+  no stored goal is evaluated for goals. An expired v2 policy: that policy with its targets kept as
+  lapsed. A v1 policy stacks nothing (`goal_records_not_stacked` on its candidates); an unreadable
+  record neither. Nothing stored is rewritten and no computed target counts among the sixteen.
+- *6, in memory, and part of what a decision is*. The set (`actingcommand_policy::RecordNeeds`:
+  per instance, each pool's need and kind, the notes, the tables' sha256, the records' time and the
+  freshness, with its identity, the SHA-256 of all of them) is given beside the left-out facts
+  (`LeftOutFacts::give_record_needs`). Its identity extends each candidate's decision identity of
+  the instance (`record_needs_decision_id`, as the void's `targets_void_decision_id` does) and the
+  instance's view (`dispatch_view_identity` hashes it after the rest); the trusted dispatch keeps it
+  with the evaluation's time, and the admission, computing the set again under its gate, refuses
+  the intent `policy_facts_stale` when it moved, whatever the snapshot: the lists and the tables are
+  in no snapshot identity.
+- *7, it lives one evaluation*: its freshness is the earliest expiry among the lists and holdings
+  it read; a candidate the stacked policy moves is no fresher and wakes a millisecond after.
+- *8, what the run says*: on each candidate a stacked goal covers, `goal_records_need` (`pool_id`;
+  in its text needed, stock, held, to_characters, gap and tables) for each covering pool with a
+  need; then on every candidate of the instance one reason for each note code and value. No log.
+- *9, what a client sees*: `GoalView`, the goal page and `ResourceTargetView` read the stored record
+  as before; no member, no word.
+- *10, not in this slice*: the view of records and needs, a character's own page, a rule producing
+  an item with a recipe counting for its inputs, and subtracting what dispatches since the last
+  reading produced.
+- *11, nothing else moves*: no interface revision, no ledger shape, no setting, no file format. An
+  instance without records gets no set: the stacking, the decision identity, the view identity and
+  the admission's comparison are those of before (`None` on both sides).
+
+| Code | The one cause | Category |
+|---|---|---|
+| `goal_records_need` | a pool has a computed need and its stacked goal covers the candidate (`pool_id`) | info |
+| `goal_records_not_applied` | a stored record the root in force does not declare (`goal_problem`) | warning |
+| `goal_records_not_held` | the `held_by` list, read whole, holds no row of the key | info |
+| `goal_records_progress_unknown` | a list a column (or the `held_by` list) reads gives no reading (`fact_key`, `unknown_reason`) | info |
+| `goal_records_reading_missing` | a known list holds no reading of the column for the key (`fact_key`) | info |
+| `goal_records_position_unknown` | the readings form no position of the ladder | info |
+| `goal_records_holding_unknown` | an item with a recipe whose holding is not known (`pool_id`, `unknown_reason` when given) | info |
+| `goal_records_item_unweighed` | an item without a recipe and without a pool is needed | info |
+| `goal_records_condition` | a step taken asks a condition that is no column's | info |
+| `goal_records_not_stacked` | the instance's stored record is a v1 policy | warning |
+
+All are decision reasons of the policy fragment, of ladder class `none`; none refuses. The domain
+`goal_records_` names the policy beside the host, whose RR2 codes share the prefix.
+
+**Tests** (incident `#455 RR3`; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `rr3_t1_the_two_layers_stack_and_the_holding_goes_to_the_characters_first` (policy) | stock 200 and need 30: held 50 gap 180, held 10 gap 220; need 24 held 5 gap 219; `goal_records_need`'s pool and numbers |
+| `rr3_t2_an_instance_with_records_and_no_stored_goal_is_judged_for_goals_and_pushes_the_producers` (policy) | without needs no `resource_targets` and `gap=0`; with need 30 held 10 a `goal_records` target, gap 20, shortfall weight 2000, stock 0, a note said |
+| `rr3_t3_the_computed_set_is_in_the_decision_identity_and_an_instance_without_needs_is_as_before` (policy) | no set and an empty set alike byte for byte; the set changes the intent's identity, the same set keeps it, another need or other tables change it |
+| `rr3_p1_an_item_with_a_recipe_is_covered_by_its_holding_and_the_rest_is_made` (host, pure) | need 10 held 4, 4 for 1 and 300: 4 covered, 24 and 1800 landing; an unpooled item noted; the sha256 and the freshness; no records, no set |
+| `rr3_p2_the_walk_counts_what_the_targets_ask_from_the_progress_and_sums_before_taking_apart` (host, pure) | a step before `from` asks nothing, one at it raises the required column, a target behind asks nothing, a key's own item, 17 summed then taken apart (21, not 15), the conditions named |
+| `rr3_p3_each_cause_adds_nothing_with_its_own_note_and_the_need_is_a_lower_bound` (host, pure) | twelve cases, one note each and no pool; a holding not known; a pending column under the known need |
+| `rr3_p4_two_instances_of_one_root_compute_apart` (host, pure) | 300 and 200, two identities |
+| `rr3_h1_the_host_computes_the_needs_and_the_producer_of_the_pool_is_pushed` (host) | no records no set; 3000 landing on #455 P2's pool, fresh until the roster's expiry; the producer's `goal_records_need` (3000, 0, 1400, 1400, 1600) |
+| `rr3_h2_an_intent_is_stale_once_a_progress_list_the_records_or_the_tables_change` (host) | each change moves the set's identity and the earlier intent is `policy_facts_stale` |
+
+**Nothing moved.** An instance without stored records gets no set, so the gates of stored goals
+and of the identities hold unchanged: the policy's `gate_455_gr2a`, `gate_463_v3`, `gate_455_b3p`,
+`gate_503_goal1`, `gate_455_p2`, `gate_ss1` and `gate_455_gr2s`; the host's `gate_455_p2` (its
+golden resources and identity, h5, and the stale intent of a new reading, h7), `gate_463_v3`,
+`gate_455_b3p`, `gate_503_goal1`, `gate_455_rr1` and `gate_455_rr2`. P2's `list_rows_reading` now
+calls `list_rows_of` for its first checks and answers each list as before (`gate_455_p2`'s h1, h2).
+No existing test is adapted.
+
+**Not proven by a test.** The `held_by` list judged by a timeline reset (the reset rule is P2's, its
+own gate t4); a stored v1 policy's `goal_records_not_stacked` and an expired v2 policy read with
+the needs; the cost of a set near the tables' bounds (not measured).
+
+**What is not changed, and what is left.** The forward projection reads no computed need, as it
+reads no void; a reading is not made old by a run that produced into it since; the view of records
+and needs (`runtime-client` 15) and a character's own page are later slices'. A list's rows are
+looked up linearly per reading, which a table near its bounds (1024 keys, 128 records) multiplies;
+not measured.
+
+**At deploy.** Nothing to configure, and nothing changes for an instance until records are set on
+it. In the release notes' language: 新增：存了“练谁、练到哪”记录的实例，调度器每轮评估前按根的 `goal-tables.json`、进度列表和库存算出各池还缺多少，按 `max(0, 需求 + 囤货 − 持有)` 叠在已存的目标上（不存盘，目标页照旧显示人设的值），产出所缺物品的任务得到加权；读不到的部分不加，原因写在候选的理由里（`goal_records_*`）。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

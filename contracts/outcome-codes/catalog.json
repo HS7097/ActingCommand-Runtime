@@ -11238,6 +11238,10 @@
     "goal_value_": [
       "runtime-host"
     ],
+    "goal_records_": [
+      "policy",
+      "runtime-host"
+    ],
     "goal_": [
       "runtime-host"
     ],

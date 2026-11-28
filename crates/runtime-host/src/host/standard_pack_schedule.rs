@@ -78,12 +78,13 @@
 use super::standard_pack::{RootFailure, read_root_file};
 use super::*;
 use crate::codes::{GoalsFailure, HostCode, HostLocation, StandardPackGoalsCode};
+use crate::goal_needs::{RecordRoots, RecordsRoot};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{IoOp, Outcome, Record};
 use actingcommand_contract::{
     BundleIndex, BundleMaintenance, CONFIG_CATALOG_PROVENANCE_FACT_KEY,
     CONFIG_CATALOG_WARNINGS_FACT_KEY, CatalogProvenanceEntry, CatalogValueKind, CatalogValueOrigin,
-    ConfigCatalogProvenance, ConfigCatalogWarnings, IrreversiblePackages,
+    ConfigCatalogProvenance, ConfigCatalogWarnings, DeclaredGoalKind, IrreversiblePackages,
     MAX_STANDARD_PACK_GOAL_TABLES_BYTES, MAX_STANDARD_PACK_GOALS_BYTES, RootGoalDocument,
     RootPackageVariables, STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE,
     STANDARD_PACK_DISPLAY_LAYOUT_FILE, STANDARD_PACK_GOAL_TABLES_FILE, STANDARD_PACK_GOALS_FILE,
@@ -1897,6 +1898,60 @@ impl HostShared {
             table: Arc::clone(&state.variable_table),
             unread: state.unread_roots.clone(),
         }))
+    }
+
+    /// Workflow #455 RR3 (register §1.538, ruling 1): what the workbench keeps of each game root it
+    /// read that the needs computed from stored records read, by game, from memory: the `records`
+    /// entries of its accepted `goals.json` (none for a file absent, refused or unreadable) and its
+    /// accepted `goal-tables.json` with its sha256 (none otherwise), for the generation in force.
+    /// Empty without a composed standard pack. Read before the policy, as the goal page reads the
+    /// roots (the workbench's check holds its state while it locks the policy).
+    pub(super) fn goal_record_roots(&self) -> RuntimeHostResult<RecordRoots> {
+        #[cfg(test)]
+        {
+            let overridden = lock(
+                &self.goal_record_roots_for_test,
+                HostLocation::StandardPackRead,
+            )?
+            .clone();
+            if let Some(roots) = overridden {
+                return Ok(roots);
+            }
+        }
+        let Some(workbench) = self.standard_packs.schedule.as_ref() else {
+            return Ok(RecordRoots::new());
+        };
+        let state = lock(&workbench.state, HostLocation::StandardPackRead)?;
+        Ok(state
+            .roots
+            .iter()
+            .map(|(game, root)| {
+                let entries = match &root.goals {
+                    RootGoals::Accepted(goals) => goals
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match &entry.kind {
+                            DeclaredGoalKind::Records { table, .. } => {
+                                Some((entry.name.clone(), table.clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect(),
+                    RootGoals::Absent | RootGoals::Refused { .. } | RootGoals::Unreadable(_) => {
+                        BTreeMap::new()
+                    }
+                };
+                let tables = match &root.goal_tables {
+                    RootGoalTables::Accepted { sha256, tables } => {
+                        Some((Arc::clone(tables), sha256.clone()))
+                    }
+                    RootGoalTables::Absent
+                    | RootGoalTables::Refused { .. }
+                    | RootGoalTables::Unreadable(_) => None,
+                };
+                (game.clone(), RecordsRoot { entries, tables })
+            })
+            .collect())
     }
 
     /// Workflow #463 V2 fix round 1: keeps the variables' judgement of every root of `read` (this

@@ -11,6 +11,8 @@ mod compiler;
 mod compose;
 mod evaluator;
 mod forward;
+// Workflow #455 RR3: what the stored records still need, computed by the host, given in memory.
+mod record_needs;
 mod remedy;
 mod resource_targets;
 mod schema;
@@ -28,6 +30,7 @@ pub use compiler::*;
 pub use compose::*;
 pub use evaluator::*;
 pub use forward::*;
+pub use record_needs::*;
 pub use remedy::*;
 pub use resource_targets::*;
 pub use schema::*;
@@ -219,6 +222,10 @@ mod tests {
 
     // #455 TK-1 (0.12.89; register §1.532): a package variable only a rule gives.
     mod gate_455_tk1;
+
+    // #455 RR3 (0.12.95; register §1.538): the needs computed from the stored records stack on the
+    // stored goals and enter each candidate's decision identity.
+    mod gate_455_rr3;
 
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
