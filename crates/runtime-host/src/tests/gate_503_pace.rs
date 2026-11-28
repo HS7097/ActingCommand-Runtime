@@ -984,7 +984,9 @@ fn pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_nev
 
 /// Test 7: two tasks, `TASK` set aside as in 6 (a). A millisecond before its window's end it is
 /// still set aside, waking at the end; at the end nothing of this slice holds it; its first failure
-/// of the next day's window is a first there (no wait, nothing against it).
+/// of the next day's window is a first there (no wait, nothing against it). In the next window
+/// `OTHER`, which has waited since the day before, is ranked first by its age and runs first; `TASK`
+/// is dispatched after it.
 #[test]
 fn pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure_is_a_first() {
     let mut pace = Pace::start(
@@ -997,7 +999,8 @@ fn pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure
     assert_eq!(wake, Some(window_end));
     let ended = pace.evaluate(window_end);
     assert!(!paced(&ended, TASK), "the window's end ends it: {ended:#?}");
-    let next = pace.fail(at(2, 7, 0), TASK);
+    pace.succeed(at(2, 7, 0), OTHER);
+    let next = pace.fail(at(2, 7, 0) + BACKOFF_MS, TASK);
     assert!(next.window_end > window_end, "the next window");
     assert_eq!(
         pace.pair(TASK),
@@ -1007,37 +1010,50 @@ fn pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure
     pace.close();
 }
 
-/// Test 8 (a): one task, `retry_limit` 1, waiting after its second failure in a row. A catalogue
-/// that becomes active (version 2 of the same rules) clears the pair at once, and the task is
-/// dispatched before the old wait's end with no reason of this slice. Waiting again after two more
-/// failures, a restart starts with no pair, and its first evaluation names none.
+/// Test 8 (a): one task, `retry_limit` 1, waiting after its second failure in a row, on two hosts.
+/// On the first a catalogue that becomes active (version 2 of the same rules) clears the pair at
+/// once, and the task is dispatched before the old wait's end with no reason of this slice. On the
+/// second a restart starts with no pair, and its first evaluation names none. (No run is admitted
+/// under the second catalogue: the fixture's one approval id names the first for good, and a run
+/// under another stops on `approval_target_identity_conflict`.)
 #[test]
 fn pace_p8_a_an_activation_and_a_restart_clear_every_pair() {
     let tasks = [due(TASK, 100)];
-    let mut pace = Pace::start(&sources(&tasks, 1, 3), at(1, 6, 0));
-    let first = pace.fail(at(1, 7, 0), TASK);
-    let second = pace.fail(first.settled.observed_at_unix_ms + BACKOFF_MS, TASK);
-    let settled_at = second.settled.observed_at_unix_ms;
-    assert_eq!(pace.pair(TASK), Some((2, 0, settled_at + MINUTE_MS, false)));
-    pace.host()
+    let (mut activated, settled_at) = waiting_after_its_second_failure(&tasks);
+    activated
+        .host()
         .activate_policy_catalog(&sources_at(2, &tasks, 1, 3))
         .expect("activate the next catalogue");
-    assert_eq!(pace.pair(TASK), None, "an activation clears every pair");
-    let free = pace.evaluate(settled_at + BACKOFF_MS);
+    assert_eq!(
+        activated.pair(TASK),
+        None,
+        "an activation clears every pair"
+    );
+    let free = activated.evaluate(settled_at + BACKOFF_MS);
     assert!(
         dispatched(&free, TASK),
         "dispatched before the old wait's end: {free:#?}"
     );
     assert!(!paced(&free, TASK), "{free:#?}");
-    let third = pace.fail(settled_at + BACKOFF_MS + 1_000, TASK);
-    let fourth = pace.fail(third.settled.observed_at_unix_ms + BACKOFF_MS, TASK);
-    let fourth_at = fourth.settled.observed_at_unix_ms;
-    assert_eq!(pace.pair(TASK), Some((2, 0, fourth_at + MINUTE_MS, false)));
-    let mut pace = pace.restart(fourth_at + 1_000);
-    assert_eq!(pace.pair(TASK), None, "a fresh host has none");
-    let after = pace.evaluate(fourth_at + 2_000);
+    activated.close();
+
+    let (waiting, failed_at) = waiting_after_its_second_failure(&tasks);
+    let mut restarted = waiting.restart(failed_at + 1_000);
+    assert_eq!(restarted.pair(TASK), None, "a fresh host has none");
+    let after = restarted.evaluate(failed_at + 2_000);
     assert!(!paced(&after, TASK), "{after:#?}");
-    pace.close();
+    restarted.close();
+}
+
+/// A host on which `TASK` (`retry_limit` 1, the first catalogue of `tasks`) waits after its second
+/// failure in a row: the host, and when that failure was settled.
+fn waiting_after_its_second_failure(tasks: &[SlotTask]) -> (Pace, u64) {
+    let mut pace = Pace::start(&sources(tasks, 1, 3), at(1, 6, 0));
+    let first = pace.fail(at(1, 7, 0), TASK);
+    let second = pace.fail(first.settled.observed_at_unix_ms + BACKOFF_MS, TASK);
+    let settled_at = second.settled.observed_at_unix_ms;
+    assert_eq!(pace.pair(TASK), Some((2, 0, settled_at + MINUTE_MS, false)));
+    (pace, settled_at)
 }
 
 /// The modification time `seconds` after a fixed instant (no clock is read) given to `path`.
