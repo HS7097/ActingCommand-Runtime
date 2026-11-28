@@ -349,6 +349,11 @@ mod gate_503_list_c;
 // `package` 31, on a layout of either kind, in a pack of either mode, and nothing else so.
 #[path = "gate_503_list_d.rs"]
 mod gate_503_list_d;
+// Workflow #503 NOISE-B: `resource validate` reads a repository root's `goals.json`,
+// `goal-tables.json` and `pack-catalog.json` by their readers, a removal of each is accepted, and
+// `resource verify`'s declarations step takes a diff that changes `goals.json`.
+#[path = "gate_503_noise_b.rs"]
+mod gate_503_noise_b;
 use actingcommand_contract::{IdentifierIssuer, InstanceId};
 use actingcommand_device::{CaptureBackend, DeviceError, DeviceResult, InputBackend};
 use actingcommand_runtime_host::{
