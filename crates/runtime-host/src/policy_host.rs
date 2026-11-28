@@ -2322,6 +2322,20 @@ pub(crate) struct PolicyHost {
     /// first time the journal holds it. A run's generation and admission never change, so neither
     /// does the end; the journal's last build keeps the runs it holds. Memory only.
     remedy_window_ends: Mutex<BTreeMap<String, u64>>,
+    /// #455 RR3e ruling 2 (register §1.560; `contracts/scheduling/README.md`, "The list's
+    /// reader"): by instance alias and list key, the task whose scheduled run published the list's
+    /// latest record this start saw published by such a run, with that record's
+    /// `source_snapshot_id` ([`Self::note_list_reader`]). Memory only, nothing on disk: after a
+    /// start a list has no reader until a scheduled run publishes it again.
+    list_readers: BTreeMap<(String, String), NotedListReader>,
+}
+
+/// #455 RR3e ruling 2: the task a scheduled run of which published a list record, and that
+/// record's `source_snapshot_id`, which names the run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NotedListReader {
+    task_id: String,
+    source_snapshot_id: String,
 }
 
 /// SCHED-C1d (register §1.299 SC1-11): what the host recorded of the capped episodes as
@@ -2915,6 +2929,7 @@ impl PolicyHost {
             idle_look_ahead_failures: Vec::new(),
             resolved_parameters: BTreeMap::new(),
             remedy_window_ends: Mutex::new(BTreeMap::new()),
+            list_readers: BTreeMap::new(),
         };
         match tagged {
             // Workflow #422 LN-4 (§11.6): no record counts as written, so the start's
@@ -4434,6 +4449,64 @@ impl PolicyHost {
                 .copied()
                 .or_else(|| accounting.get(task_id).copied())
         })
+    }
+
+    /// #455 RR3e ruling 2 (register §1.560; `contracts/scheduling/README.md`, "The list's
+    /// reader"): the scheduled run of the dispatch `decision_id` publishes the list `fact_key` of
+    /// the instance `instance_alias` as the record whose `source_snapshot_id` is
+    /// `source_snapshot_id`: the dispatch's task, as the journal holds it, is noted, in memory, as
+    /// that list's reader while the list's record in force is that one. A dispatch the journal no
+    /// longer holds notes nothing.
+    pub(crate) fn note_list_reader(
+        &mut self,
+        decision_id: &str,
+        instance_alias: &str,
+        fact_key: &str,
+        source_snapshot_id: &str,
+    ) {
+        let Some(dispatch) = self.seen_dispatches.get(decision_id) else {
+            return;
+        };
+        let noted = NotedListReader {
+            task_id: dispatch.data.task_id.clone(),
+            source_snapshot_id: source_snapshot_id.to_owned(),
+        };
+        self.list_readers
+            .insert((instance_alias.to_owned(), fact_key.to_owned()), noted);
+    }
+
+    /// #455 RR3e ruling 2: the reader of the list `fact_key` of the instance `instance_alias`
+    /// whose record in force names `source_snapshot_id`: the task noted for it, keyed as the
+    /// pair's task snapshot is (its own id in the active catalog, else the task that continues
+    /// it), when that record is the one the task's scheduled run published; `None` for a list
+    /// another run published since, for one this start saw no scheduled run publish, and for a
+    /// task the active catalog does not hold.
+    pub(crate) fn list_reader(
+        &self,
+        instance_alias: &str,
+        fact_key: &str,
+        source_snapshot_id: &str,
+    ) -> Option<String> {
+        let noted = self
+            .list_readers
+            .get(&(instance_alias.to_owned(), fact_key.to_owned()))?;
+        if noted.source_snapshot_id != source_snapshot_id {
+            return None;
+        }
+        let active = self.active.as_ref()?;
+        if active
+            .compiled
+            .catalog()
+            .tasks
+            .tasks
+            .iter()
+            .any(|task| task.id == noted.task_id)
+        {
+            return Some(noted.task_id.clone());
+        }
+        accounting_tasks(&active.compiled)
+            .get(noted.task_id.as_str())
+            .map(|task_id| (*task_id).to_owned())
     }
 
     /// IDLE-3 (#447, register §1.332): whether the latest evaluated cycle's plan for `alias`

@@ -5127,3 +5127,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_9_a_failing_read_starts_and_says_so_once",
 ]
 incident = ["#503 MEM"]
+
+# #455 RR3e (0.12.104; register §1.560; brief rd-1123/brief-455-rr3e.md and the coordinator's ruling of 11-29 on the binding, form (b); contracts/scheduling/README.md, "The list's reader"), the host's half of ruling 2: a list a scheduled run published is bound to the run's task beside the reading the evaluation is given, from the host's note in memory made when the run published it, no clock read. catalog-a's task due while a pool read from rows of a list holds 1000: the list a direct run published has no reader; the list the task's scheduled run publishes before its settlement is bound to the task and stays bound once it is settled; a list a direct run publishes afterwards has none (h1). After a start on the same state root the list the scheduled run published has no reader, its reading computed as before (h2).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3e::rr3e_h1_a_list_a_scheduled_run_publishes_is_bound_to_its_task",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3e::rr3e_h2_after_a_start_the_list_has_no_reader_until_a_scheduled_run_publishes_it_again",
+]
+incident = ["#455 RR3e"]

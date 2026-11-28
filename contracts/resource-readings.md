@@ -1034,7 +1034,16 @@ the run the same way.
   does not enter the projection, and its one other reader is the host, from #455 P2 on (0.12.79),
   which computes the pool's number from the rows before each evaluation (in 0.12.78 nothing read it
   for a pool). Such a pool asks no refresh either: its unknown reading raises no fact refresh
-  demand, and the package that reads the list is scheduled by its own rule.
+  demand, and the package that reads the list is scheduled by its own rule. #455 RR3e (since
+  0.12.104; register §1.560): except once a run leaves such a pool unread (its production told
+  under a goal's gap, or its consumption under a `run_cap`, made the reading stale) while a candidate
+  waits on it: then the task whose scheduled run published the list's record in force is owed a run
+  that reads it, treated as triggered once in the pool's unread episode (`list_reading_owed`) and
+  held by every gate a candidate meets ([scheduling/README.md](scheduling/README.md), "The list's
+  reader"). The fact refresh still never reads a list. Which task that is, the host notes in memory
+  when the run publishes the list; a list a client or the Lab published, and every list after a
+  start until a scheduled run publishes it again, has no reader and waits for its own rule, as
+  before.
 
 ### Capacity and reserved keys
 

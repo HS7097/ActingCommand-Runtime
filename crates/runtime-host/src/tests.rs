@@ -343,6 +343,10 @@ mod gate_455_rr4a;
 // pool's gap adds up since its reading; a start rebuilds the same from the ledger.
 mod gate_455_rr3d;
 
+// #455 RR3e (0.12.104; register §1.560): a list a scheduled run published is bound to the run's
+// task beside its reading, from the host's note in memory; a start forgets the note.
+mod gate_455_rr3e;
+
 // #455 SL2 (0.12.101; register §1.547): the goal page sets a pool's line by `{at_least}` alone on
 // a pool that writes `spend_line` and shows it as any goal; an older page refuses it and clears it.
 mod gate_455_sl2;

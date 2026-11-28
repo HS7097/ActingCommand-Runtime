@@ -95,7 +95,7 @@
 //!   such a pool the gate reads the sums with every term and says nothing of it.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_selection_policy::UnknownReason;
@@ -817,6 +817,16 @@ pub(super) fn expected_duration_ms(candidate: &PlacementCandidate) -> u64 {
 /// a consumer a capped round tries is kept with its own `B` whatever its sign, another consumer of
 /// a capped pool is held, and a candidate that would pass but leave a pool below its hard line is
 /// held. Without a valued pool nothing changes.
+///
+/// #455 RR3e ruling 1 (register §1.560; `contracts/resource-targets.md`, "A pool a run was told
+/// enough to close the gap on"): `unread_goals` holds, by work index, the pools on which a goal that
+/// covers the candidate waits for a reading because the production told under its gap left the
+/// pool unread. With `refreshing`, a candidate held as not positive (`policy_benefit_nonpositive`)
+/// asks the fact refresh for those pools' readings through `affected`, as one whose only gap is an
+/// unknown reading does; a pool read from rows of a list is left out there, so nothing is asked for
+/// it. A candidate that passes asks nothing. Ruling 2: every reading such a candidate, or one whose
+/// net benefit is unknown, waits for is added to `waits` by its instance and key, refreshing or
+/// not, so the owed reading of a list sees the candidates that wait on it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn gate(
     context: &PlacementContext<'_>,
@@ -824,9 +834,11 @@ pub(super) fn gate(
     ranked: Vec<PlacementCandidate>,
     work: &mut [TaskWork],
     weights: &BTreeMap<usize, BTreeMap<String, PoolWeight>>,
+    unread_goals: &BTreeMap<usize, Vec<String>>,
     refreshing: bool,
     affected: &mut Vec<AffectedCandidate>,
     memory: &mut CappedMemory,
+    waits: &mut BTreeSet<(String, String)>,
 ) -> PolicyEvaluationResult<Vec<PlacementCandidate>> {
     // Phase 1: judge every judged candidate.
     let mut judged = Vec::with_capacity(ranked.len());
@@ -888,7 +900,35 @@ pub(super) fn gate(
             .collect::<Vec<_>>();
         capped::plan(context, facts, &ranked, &known, work, memory)?
     };
-    // Phase 3: decide.
+    // Phase 3: decide. A candidate that waits for readings asks the fact refresh for them, lending
+    // the reader its catalog rank before the score stage, with its manual offset (D2 model §3.4);
+    // #455 RR3e ruling 2: and the readings are noted as waited for on its instance.
+    let mut ask = |candidate: &PlacementCandidate,
+                   task_work: &TaskWork,
+                   instance: &InstanceSnapshot,
+                   suggestions: &[DetectionSuggestion]| {
+        for suggestion in suggestions {
+            waits.insert((instance.instance_id.clone(), suggestion.fact_key.clone()));
+        }
+        if !refreshing {
+            return;
+        }
+        let keys = fact_refresh::predicate_keys(suggestions, instance, context.left_out);
+        if keys.is_empty() {
+            return;
+        }
+        let mut rank = candidate.rank.clone();
+        if let Some(record) = task_work.record.as_ref() {
+            rank.total_score = record.base_total;
+        }
+        affected.push(AffectedCandidate {
+            work_index: candidate.work_index,
+            instance_id: candidate.instance_id.clone(),
+            rank: offset_rank(&rank, facts, &candidate.task_id, &candidate.instance_id),
+            keys,
+            predicate: false,
+        });
+    };
     let mut kept = Vec::with_capacity(ranked.len());
     for ((mut candidate, judged), disposition) in ranked.into_iter().zip(judged).zip(dispositions) {
         let Some((task, instance, judgement)) = judged else {
@@ -1062,33 +1102,25 @@ pub(super) fn gate(
                 if let Some(wake) = wake_unix_ms.filter(|wake| *wake > context.time.unix_ms) {
                     task_work.next_wake_unix_ms = min_wake(task_work.next_wake_unix_ms, Some(wake));
                 }
+                // #455 RR3e ruling 1 (register §1.560): held so while a goal that covers it waits on
+                // a pool the production told under the goal's gap left unread, it asks for that
+                // pool's reading, the key and reason a trigger that reads the pool asks for.
+                if let Some(pools) = unread_goals.get(&candidate.work_index) {
+                    let suggestions = pools
+                        .iter()
+                        .filter_map(|pool_id| context.pool_specs.get(pool_id.as_str()))
+                        .map(|pool| {
+                            resource_suggestion(pool, facts, context.pool_values, context.time)
+                        })
+                        .collect::<Vec<_>>();
+                    ask(&candidate, task_work, instance, &suggestions);
+                }
             }
             Judgement::Unknown { gap, suggestions } => {
                 task_work.state = SchedulingDecisionState::Deferred;
                 task_work.reasons.push(unknown_reason(&gap));
-                if refreshing && !suggestions.is_empty() {
-                    let keys =
-                        fact_refresh::predicate_keys(&suggestions, instance, context.left_out);
-                    if !keys.is_empty() {
-                        // The rank it lends the reader: its catalog rank before the score stage,
-                        // with its manual offset (D2 model §3.4).
-                        let mut rank = candidate.rank.clone();
-                        if let Some(record) = task_work.record.as_ref() {
-                            rank.total_score = record.base_total;
-                        }
-                        affected.push(AffectedCandidate {
-                            work_index: candidate.work_index,
-                            instance_id: candidate.instance_id.clone(),
-                            rank: offset_rank(
-                                &rank,
-                                facts,
-                                &candidate.task_id,
-                                &candidate.instance_id,
-                            ),
-                            keys,
-                            predicate: false,
-                        });
-                    }
+                if !suggestions.is_empty() {
+                    ask(&candidate, task_work, instance, &suggestions);
                 }
             }
         }

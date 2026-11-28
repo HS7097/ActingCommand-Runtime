@@ -12841,6 +12841,10 @@ impl HostShared {
                             HostCode::ContainedTaskResourceReadingFrameMissing,
                         ));
                     };
+                    // #455 RR3e ruling 2 (register §1.560): a scheduled run notes its task as the
+                    // list's reader for this record before it is published.
+                    self.note_scheduled_list_reader(*draft.run_id.transport(), &record)
+                        .map_err(RequestFailure::poison_without_terminal)?;
                     match self.publish_facts(
                         actingcommand_contract::FactObservation {
                             records: vec![record],
@@ -12936,6 +12940,31 @@ impl HostShared {
         }
         Ok(None)
     }
+
+    /// #455 RR3e ruling 2 (register §1.560; `contracts/scheduling/README.md`, "The list's
+    /// reader"): before the run `run_id` publishes the list `record`, a scheduled run (one whose
+    /// settlement is still to come, [`Self::entry_settling_dispatch`]) notes its dispatch's task, in
+    /// memory, as the list's reader while the list's record in force is this one. A run that is no
+    /// scheduled run (a client's or the Lab's) notes nothing, so a list it publishes has no reader.
+    pub(super) fn note_scheduled_list_reader(
+        &self,
+        run_id: RunId,
+        record: &FactRecord,
+    ) -> RuntimeHostResult<()> {
+        let Some(decision_id) = self.entry_settling_dispatch(run_id)? else {
+            return Ok(());
+        };
+        let FactScope::Instance { instance_id } = &record.scope else {
+            return Ok(());
+        };
+        lock(self.policy()?, HostLocation::AppendContainedTaskTerminal)?.note_list_reader(
+            &decision_id,
+            instance_id,
+            &record.key,
+            &record.source_snapshot_id,
+        );
+        Ok(())
+    }
 }
 
 /// #407 PERF-READ, test only: a run tracked as running whose preparation measured its main
@@ -12966,6 +12995,39 @@ impl HostShared {
     ) -> RuntimeHostResult<()> {
         lock(&self.contained_runs, HostLocation::ReadActiveContainedRuns)?.remove(&request_id);
         Ok(())
+    }
+}
+
+/// #455 RR3e, test only (register §1.560): a scheduled run whose settlement is still to come
+/// publishes a list as its run's end publishes one it read.
+#[cfg(test)]
+impl RuntimeHost {
+    /// The scheduled run of `context` publishes the list `record`: it is registered as a run whose
+    /// settlement is to come, as the scheduled path registers it when it starts
+    /// (`register_scheduled_resolution`), its task is noted as the list's reader for the record
+    /// ([`HostShared::note_scheduled_list_reader`]), and the record is published with the list
+    /// reading's purpose.
+    pub(crate) fn publish_scheduled_list_reading_for_test(
+        &self,
+        context: &PolicyRunContext,
+        record: FactRecord,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(HostLocation::AppendContainedTaskTerminal)?;
+        shared.entry_settlement_pending(
+            context.run_id(),
+            context.decision_id(),
+            context.lease_token().instance_id(),
+        )?;
+        shared.note_scheduled_list_reader(context.run_id(), &record)?;
+        shared
+            .publish_facts(
+                actingcommand_contract::FactObservation {
+                    records: vec![record],
+                },
+                None,
+                FactPublicationPurpose::ListReading,
+            )
+            .map(|_| ())
     }
 }
 
