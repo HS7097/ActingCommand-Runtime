@@ -60,7 +60,11 @@ shape, every removal, every configuration key and its slice) and the capacity le
     automation and the instructions a person or an agent sets (`session.*`); at most 256 active
     facts for the whole host, shared by every instance, refused (never evicted) when full (since
     Workflow #498, 0.12.76: a bound per scope, 224 an instance's own facts and 16 a server's or a
-    game's, [instance-fact-store.md](instance-fact-store.md) "Capacity ledger");
+    game's, [instance-fact-store.md](instance-fact-store.md) "Capacity ledger"; since #503 FACT-R,
+    0.12.103, a scope at its bound reclaims for a publication's new keys only facts that have been
+    expired for more than seven days, each by its own `fact.invalidated`, and refuses as before
+    when they do not cover what it needs, [instance-fact-store.md](instance-fact-store.md)
+    "Expiry reclamations");
   - the *scheduler workbench*: the runtime fact store (`RuntimeFactStore`, at most 16 384 records)
     plus the scheduler's decision memory: the dispatch clock, the per-dispatch-pair
     `PolicyControlState` (daily and window counts, window runtime, failure streaks and pauses,

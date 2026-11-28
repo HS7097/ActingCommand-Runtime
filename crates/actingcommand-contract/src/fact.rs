@@ -226,6 +226,30 @@ pub fn is_adjustment_invalidation(data: &FactInvalidationEventData) -> bool {
         && (data.key.starts_with("resource.") || data.key.starts_with("inventory."))
 }
 
+// Interface anchor `ledger` revision 11 (contracts/component-interfaces.md): the expiry
+// reclamation's form and margin; a change of either moves the revision.
+/// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): how long a
+/// record must have been expired before a publication that needs its room may reclaim it, seven
+/// days. It is the format's, not a configuration key, as [`MAX_FACT_RECORD_LIST_ROWS`] is: the
+/// State projection checks every reclamation against it, so a configured value would let one build
+/// write a reclamation that another refuses.
+pub const FACT_RECLAIM_AFTER_EXPIRY_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+
+/// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): whether `data`
+/// drops `record` because the record expired long ago and a publication needed its room. Its
+/// trigger is the reclamation's Warning `runtime.failed`, which the record does not list in
+/// `invalidate_on`; the record has an expiry, and the invalidation's time is that expiry, so the
+/// key's "not newer" floor is computed from the record alone. That the expiry lay more than
+/// [`FACT_RECLAIM_AFTER_EXPIRY_MS`] before the trigger is checked where the trigger is at hand.
+pub fn is_expiry_reclamation(data: &FactInvalidationEventData, record: &FactRecord) -> bool {
+    data.invalidated_by_event_type == EventType::RuntimeFailed
+        && record.scope == data.scope
+        && record.key == data.key
+        && record.source_snapshot_id == data.source_snapshot_id
+        && !record.invalidate_on.contains(&EventType::RuntimeFailed)
+        && record.expires_at_unix_ms == Some(data.invalidated_at_unix_ms)
+}
+
 impl FactRecord {
     /// A manually set priority offset without expiry: the inline integer `offset_milli` under
     /// `session.task.<task_id>.priority_offset`, full confidence, no invalidating events. The

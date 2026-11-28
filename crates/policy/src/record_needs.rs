@@ -132,6 +132,12 @@ pub enum ProgressListUnknown {
 }
 
 impl ProgressListUnknown {
+    /// Workflow #455 RR4b-1 (register §1.557): the token of the vocabulary `unknown_reason` it is,
+    /// the word the note's reason says it with, which the goal page's view carries.
+    pub const fn token(self) -> &'static str {
+        unknown_token(self.reason())
+    }
+
     /// The fact reading's reason it is.
     const fn reason(self) -> UnknownReason {
         match self {

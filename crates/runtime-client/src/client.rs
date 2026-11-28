@@ -1747,6 +1747,39 @@ impl RuntimeClient {
         }
     }
 
+    /// Reads one page of the part `part` of `instance_alias`'s goal page (`GoalPageView`, Workflow
+    /// #455 RR4b-1, register §1.557, `runtime-client` 15): after `cursor` (the page before's
+    /// `next`; `None`: the first page), at most `limit` rows (`None`: the part's default).
+    /// Read-only. An answer for another instance is unexpected. A Runtime that does not know the
+    /// operation drops the connection, which this call reports as `runtime_operation_unsupported`,
+    /// as `goal_view` does: a client then shows the goal page of revision 14.
+    pub fn goal_page_view(
+        &self,
+        instance_alias: &str,
+        part: actingcommand_contract::GoalPagePart,
+        cursor: Option<actingcommand_contract::GoalPageCursor>,
+        limit: Option<u32>,
+    ) -> RuntimeClientResult<actingcommand_contract::GoalPageView> {
+        const OPERATION: Location = ClientLocation::RuntimeGoalPageView.location();
+        match self.send_or_dropped(
+            OPERATION,
+            RuntimeOperation::GoalPageView {
+                instance_alias: instance_alias.to_owned(),
+                part,
+                cursor,
+                limit,
+            },
+        )? {
+            SentOutcome::Answered(result) => match *result {
+                RuntimeResult::GoalPageViewed { page } if page.instance_alias == instance_alias => {
+                    Ok(*page)
+                }
+                _ => Err(self.unexpected_result(OPERATION)),
+            },
+            SentOutcome::Dropped(error) => Err(self.unsupported_after_drop(OPERATION, error)),
+        }
+    }
+
     /// Sets or clears one value of `instance_alias`'s goal page by its name (`EditGoal`, Workflow
     /// #463 V3, register §1.383, `runtime-client` 9), only while the goal record's version is
     /// `expected_version` when one is given (absent from the request when `None`). Returns the

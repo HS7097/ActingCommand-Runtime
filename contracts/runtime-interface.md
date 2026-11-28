@@ -661,6 +661,7 @@ application's goals, read and set by name. Shapes: `crates/actingcommand-contrac
 |---|---|---|---|---|
 | `GoalView` | general | read (memory only, records nothing) | `{instance_alias}` | `GoalViewed {view}`: `instance_alias`, `game_id`, `version` (the sequence of the `fact.published` that holds the application's `session.resource_targets` record, `0` without one; Workflow #455 RR2, since 0.12.94: the greater of that and the sequence that holds its `session.goal_records` record, "One version for the page" below: the next `expected_version`), `declaration` (`absent`, `accepted`, `refused` with its sha256 and first `standard_pack_problem` and pointer, `unreadable`, `not_read` without a composed standard pack, or, for a page that lists nothing, `not_checked_yet`, `root_failing` with the failed file's `path` and the reader's first problem and pointer or the operating system's `io_kind`, or `no_schedule`), `entries`, `orphans`, `remedy_parameters`, `other_targets`, `targets` (the resource target view) |
 | `EditGoal` | general | instruction | `{instance_alias, expected_version?, op}`, `op` `{kind: set, name, value_json}` or `{kind: clear, name}` | `GoalEdited {version, event_id, replayed, replaced_target_id?}` |
+| `GoalPageView` (Workflow #455 RR4b-1, since 0.12.104, `runtime-client` 15) | general | read (memory and the fact store, records nothing) | `{instance_alias, part, cursor?, limit?}`, `part` `{part: records}`, `{part: options, entry}` or `{part: positions, entry, ladder}`, `ladder` `{of: class, class, column}` or `{of: key, key, column, sub?}`, `limit` 1 to 512 | `GoalPageViewed {page}`: "The goal page in pages" below |
 
 **The view** reads memory only: what the scheduler workbench keeps of the game root from one
 check to the next (with a composed standard pack: the root's `goals.json` as its reader read it,
@@ -806,6 +807,100 @@ that lies after the append stays fatal, here and in `ApplyResourceTargets`.
 The client (`runtime-client` 9): `goal_view` and `edit_goal`. A Runtime that declares at most 8
 drops either request: the read reports `runtime_operation_unsupported`; the instruction a
 transport failure, whose effect `GoalView` reads back before it is sent again.
+
+**The goal page in pages** (Workflow #455 RR4b-1, since 0.12.104; register §1.557;
+`runtime-client` 15). `GoalView` is frozen: its request and answer stay byte for byte those of
+revision 14, a `records` entry still unlisted, because its types refuse unknown members and the
+Runtime cannot tell a client's revision, so a member added there would break the installed
+console on the first page that carried it. What the goal page says of records is the answer of one
+other read, `GoalPageView`, which no client of 14 sends. It reads, as `GoalView` does, what the
+workbench keeps of the game root, then, under the policy outcome gate, the policy and the fact
+write gate (the locks under which the evaluation computes the needs from the records), the
+authoritative projection, the remedy table, the instance's two goal records and its progress lists.
+A page not in memory yet answers `GoalView`'s word (`not_checked_yet`, `root_failing` or
+`no_schedule`) and no row. Fix round 1: a page whose `declaration.state` is one of those three,
+not the state of a page in memory, holds nothing of its part, whatever its `tables` says; a client
+neither ends a part on it nor keeps anything of it, and reads the part again from its first page
+later; a request with a cursor that meets such a state is refused (below). The page:
+`instance_alias`, `game_id`, `version` (`GoalView`'s, the next `expected_version`),
+`declaration` (as `GoalView` says it), `tables` (what the workbench
+holds of `goal-tables.json`: `absent`, `accepted` with its sha256, `refused` with its sha256 and
+first problem and pointer, `unreadable`, `not_read`), `read_at_unix_ms`, `fresh_until_unix_ms`
+(`records` and `options`: the earliest expiry of the lists read), `records_state` (`records`:
+`absent`, `read` or `unreadable`), `ladder` (`positions`: `{source: class|own, class?,
+positions}`), `rows`, `rows_total`, `cut` (`count` or `bytes`) and `next`.
+
+- *`records`*: for each `records` entry of the accepted `goals.json` in file order its row `{row:
+  entry, name, declared: true, after_entry?, entry, applies, problem?, records_total}`
+  (`after_entry` the entry before it, any type; `applies` whether its table is a table of the
+  accepted tables, else `problem` `name_unknown`), then its stored records in their order; then,
+  for each name the stored records hold that no records entry declares, in stored order, its row
+  (`declared: false`) and its records. A record: `{row: record, entry, key, key_name?, to, set,
+  applied, problem?, held?, lanes, texts_left_out?}`: `to` the stored canonical target as an
+  object; `applied` and `problem` the needs' own judgement of it (the edit's word, or `key_repeated`
+  for a key an earlier stored record of the same table names); `held` `{state: held|not_held|
+  unknown, fact_key?, unknown_reason?}` from the table's `held_by` list as the walk judges it; one
+  lane for each ladder the walk takes, in the table's order (fix round 1: its columns as the file
+  writes them and, in a column of `per: "sub"`, its subs as the column writes them; a lane only a
+  prerequisite raised in its column's place), `{column, sub?, column_name?, sub_name?, source:
+  class|own,
+  target?, raised_to?, current?, unknown?, conditions?}`, each position `{index, position, said?}`:
+  `target` the record's own (absent for a lane only a prerequisite raised), `raised_to` where a
+  prerequisite of another column takes it beyond its target, `current` the key's position, else
+  `unknown` with the walk's note (`goal_records_progress_unknown` with `fact_key` and
+  `unknown_reason`, `goal_records_row_missing`, `goal_records_reading_missing` with `reading`,
+  `goal_records_position_unknown`); a key not held, or whose held state is not known, has its
+  targets and no current. These are what the needs' computation reads, by the one walk both call,
+  over the same inputs; between an edit of the records and the next evaluation they are the edited
+  records walked against the lists now. No amount of what a record lacks is answered.
+- *`options`* of a records entry the root applies: its table's `{row: column, column, name?, per,
+  subs?, requires}` (each requirement `{column, at_least, at_least_said?, from?, from_said?}` or
+  `{condition, name?}`), then `{row: class, class, name?}`, then `{row: key, key, name?, class,
+  held, lanes}`, each in file order; a key's lane `{column, sub?, source, positions, current?,
+  unknown?}`, its current position read as the walk reads it, for a key held. Default `limit` 64.
+- *`positions`* of one ladder: `{row: position, index, position, said?}` for each position; a
+  class's ladder (`{of: class}`) is read once for every key of the class. Default `limit` 512.
+
+A text (`name`, `key_name`, `said`, ...) is an object of locale to string in the order the pack
+wrote them; the Runtime chooses no language and invents no name, and says a position only through
+the pack's own lists ([standard-pack-goal-tables.md](standard-pack-goal-tables.md), "Names for
+people"); what the pack names nothing has no such member. **The page rule.** The rows after the
+cursor, at most `limit`, cut before the row that would make the serialized page pass 786,432 bytes
+(768 KiB), at least one row; a row is at most 262,144 bytes, and a record row that would pass it is
+answered without its texts (`texts_left_out: true`); `next` is present exactly when rows remain.
+**The cursor** `{records_version?, tables_sha256?, entries_sha256, part_sha256, after}` is sent
+back as it came. It refuses instead of mixing two states: one of the part `records` whose
+`records_version` (the sequence of the `fact.published` holding `session.goal_records`, 0 without
+one) is no longer the record's is `goal_page_view_records_moved`; any part's whose `tables_sha256`
+(the accepted tables') or `entries_sha256` (the root's records entries: name, table, `max_records`,
+in file order) moved is `goal_page_view_declaration_moved`; each Denied with `current_version`,
+and the reader reads the part again from its first page. A cursor of `options` or `positions`
+carries no records version: an edit of the records between two of their pages is answered with the
+next page. Fix round 1: a cursor that meets a page not in memory (above) is
+`goal_page_view_declaration_absent`, Denied with `goal_problem` (the state's word,
+`not_checked_yet`, `root_failing` or `no_schedule`) and `current_version`: the declaration did not
+move, so a client keeps what it kept under the tables' sha256 and reads the part again from its
+first page once a first page (or `GoalView`) says the declaration is in memory; a request without a
+cursor is answered with the state and no row. A part, limit or cursor of the wrong form, a cursor
+of another part (its `part_sha256`) or one past the part's rows is `invalid_goal_page_view`; a
+part that names what the root does not
+have is `goal_page_view_refused` with the edit's words at the part's pointer (`name_unknown` at
+`/part/entry`, `not_an_option` at `/part/ladder/key` or `/part/ladder/class`, `out_of_range` at
+`/part/ladder/column` or `/part/ladder/sub`). A completed receipt carries
+`request_goal_page_view_completed`. The client (`runtime-client` 15): `goal_page_view(alias, part,
+cursor, limit)`; a Runtime of 14 or lower cannot decode the kind and drops the connection, which the
+client reports as `runtime_operation_unsupported`. A console then shows the page of 14 (records
+hidden), asking once per owner epoch; it keeps a table's options by instance, entry and tables'
+sha256 and a ladder's positions by ladder and sha256, and drops what it kept under the old sha256
+on `goal_page_view_declaration_moved`. In codes mode (the console's default detail) a refusal of
+this read keeps `goal_problem`, a registered word, and `current_version`, which a denied receipt
+keeps at its top in every detail mode (as for `fact_observation_version_conflict`), but not
+`json_pointer`: a console that shows the pointer of `goal_page_view_refused` asks this read with
+`detail: full`. A known limit (fix round 1, register §1.557): every page holds the policy outcome
+gate, the policy, the fact write gate and the fact store's lock while it builds and measures its
+rows, and `positions` takes them and the projection too though it reads only the tables; so a
+console reads a part when it shows it and again after an edit or a refusal, and never polls pages
+in a loop.
 
 ### The variable values of a contained run
 

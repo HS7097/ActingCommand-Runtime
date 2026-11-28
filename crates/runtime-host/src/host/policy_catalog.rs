@@ -23,6 +23,20 @@ impl HostShared {
         self.activate_policy_catalog_with_authorization(sources, None)
     }
 
+    /// Workflow #503 FACT-R fix round 1 (`contracts/instance-fact-store.md`, "Expiry
+    /// reclamations"; review F1): the facts the conditions of the active catalog read, as the start
+    /// or the last catalog transition left them (empty without an active catalog). A publication
+    /// that plans a reclamation reads it under `fact_write_gate`, without `policy`: one leaf lock
+    /// and the shared value, never a walk of the catalog.
+    pub(super) fn catalog_read_facts(
+        &self,
+    ) -> RuntimeHostResult<Arc<crate::fact_store::CatalogReadFacts>> {
+        Ok(Arc::clone(&*lock(
+            &self.catalog_read_facts,
+            ContractLocation::PublishFacts,
+        )?))
+    }
+
     /// Workflow #361 C2, A: stages the configured catalog's generation, decides its transition
     /// against the active generation and the lineage (`catalog_plan::decide_catalog_transition`)
     /// and plans the approvals the policy driver records for it. Nothing is recorded in the
@@ -208,6 +222,9 @@ impl HostShared {
             // Every task's settlement fact keys and settlement outcome keys must fit their key
             // bounds before the catalog can dispatch a run (Workflow #308 slice 5b, #313 f5).
             runtime_facts::validate_settlement_fact_keys(catalog.compiled())?;
+            // Workflow #503 FACT-R fix round 1 (review F1): the facts its conditions read, made
+            // once here, before `policy` is taken; they replace the set when it becomes active.
+            let read_facts = Arc::new(crate::fact_store::CatalogReadFacts::of(catalog.compiled()));
             let generation = catalog.generation().clone();
             let expected_active_hash = previous
                 .as_ref()
@@ -361,6 +378,12 @@ impl HostShared {
                 }
             };
             policy.publish_active(catalog);
+            // Workflow #503 FACT-R fix round 1 (review F1): in the same hold of `policy` (a leaf
+            // lock under it), the publications' reclamations read the new catalog's set.
+            *lock(
+                &self.catalog_read_facts,
+                HostLocation::SwitchActivePolicyCatalog,
+            )? = read_facts;
             drop(policy);
             // Workflow #490 ENTRY-A fix round 4 (the coordinator's addition): the catalogue now
             // active may bind other packages, so every pair's count of failures at the entry, its

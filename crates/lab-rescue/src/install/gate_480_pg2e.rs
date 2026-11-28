@@ -26,6 +26,10 @@
 // `max` to 14 and keeps the floor: this build declares [12, 14]. The first test, renamed for the
 // range it asserts, reads it and the rows that state it (revision 12 its floor, revision 14 the
 // range); the other two ask the same edges on [12, 14] (I [12, 14] in the refused row).
+// Workflow #455 RR4b-1 (0.12.104; register §1.557; the `runtime-client` row of revision 15) raises
+// `max` to 15 and keeps the floor: this build declares [12, 15]. The first test, renamed for the
+// range it asserts, reads it and the rows that state it (revision 12 its floor, revision 15 the
+// range); the other two ask the same edges on [12, 15] (I [12, 15] in the refused row).
 // No Runtime, no clock.
 
 use super::manifest::{Speaks, parse_declaration};
@@ -96,15 +100,15 @@ fn client_row(revision: u64) -> &'static str {
 }
 
 #[test]
-fn pg2e_the_build_declares_runtime_client_12_to_14_and_its_rows_say_so() {
-    assert_eq!(own().get(CLIENT), Some(&[12, 14]));
+fn pg2e_the_build_declares_runtime_client_12_to_15_and_its_rows_say_so() {
+    assert_eq!(own().get(CLIENT), Some(&[12, 15]));
     assert!(
         client_row(12).contains("`min` is 12"),
         "the row of revision 12 states the floor"
     );
     assert!(
-        client_row(14).contains("declares [12, 14]"),
-        "the row of revision 14 states the range"
+        client_row(15).contains("declares [12, 15]"),
+        "the row of revision 15 states the range"
     );
 }
 
@@ -152,7 +156,7 @@ fn pg2e_the_way_back_to_a_build_whose_tools_end_at_11_is_refused_installer_meets
             "check": "installer_meets_next",
             "result": "fail",
             "parties": [
-                {"party": "I", "source": "declaration", "range": [12, 14]},
+                {"party": "I", "source": "declaration", "range": [12, 15]},
                 {"party": "R*", "source": "manifest", "range": [3, 11]},
             ],
         })

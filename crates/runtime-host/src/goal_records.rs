@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use actingcommand_contract::{
-    FactScalar, Initiator, MAX_GOAL_TABLE_ID_BYTES, RuntimeChannel, goal_name,
+    FactScalar, GoalSetBy, Initiator, MAX_GOAL_TABLE_ID_BYTES, RuntimeChannel, goal_name,
 };
 use actingcommand_policy::TargetSetter;
 use serde_json::Value;
@@ -91,6 +91,41 @@ pub(crate) struct StoredRecordRow {
     pub(crate) key: String,
     pub(crate) to: String,
     pub(crate) row: GoalRecordsRow,
+}
+
+impl StoredRecordRow {
+    /// Workflow #455 RR4b-1: who set the record, as its row names it: the Runtime's clock at the
+    /// request, the channel and the initiator. The reader takes a row only with these of their
+    /// form, so `None` is a row it did not take.
+    pub(crate) fn set_by(&self) -> Option<GoalSetBy> {
+        let unix_ms = match self.row.get(FIELD_SET_AT) {
+            Some(FactScalar::Integer(at)) => u64::try_from(*at).ok()?,
+            _ => return None,
+        };
+        let channel = text(&self.row, FIELD_CHANNEL)?;
+        let channel = CHANNELS
+            .into_iter()
+            .find(|known| known.as_str() == channel)?;
+        let initiator = match self.row.get(FIELD_INITIATOR) {
+            None => None,
+            Some(FactScalar::String(word)) => Some(Initiator::from_word(word)?),
+            Some(_) => return None,
+        };
+        Some(GoalSetBy {
+            unix_ms,
+            channel,
+            initiator,
+        })
+    }
+
+    /// Workflow #455 RR4b-1: the record's `to` as the object its canonical text writes. The
+    /// reader takes a row only with `to` the text of an object, so `None` is a row it did not take.
+    pub(crate) fn target(&self) -> Option<serde_json::Map<String, Value>> {
+        match serde_json::from_str::<Value>(&self.to).ok()? {
+            Value::Object(members) => Some(members),
+            _ => None,
+        }
+    }
 }
 
 /// An instance's stored `session.goal_records` record, as the edit reads it.

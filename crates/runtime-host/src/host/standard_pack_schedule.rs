@@ -894,6 +894,34 @@ fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+/// Workflow #455 RR3 (register §1.538, ruling 1): what the needs computed from stored records read
+/// of one game root the workbench keeps: the `records` entries of its accepted `goals.json` (none
+/// for a file absent, refused or unreadable) and its accepted `goal-tables.json` with its sha256
+/// (none otherwise). Workflow #455 RR4b-1: the goal page's view reads it of the same root, by this
+/// one function.
+pub(super) fn records_root(root: &StandardPackGoalRoot) -> RecordsRoot {
+    let entries = match &root.goals {
+        RootGoals::Accepted(goals) => goals
+            .entries
+            .iter()
+            .filter_map(|entry| match &entry.kind {
+                DeclaredGoalKind::Records { table, .. } => {
+                    Some((entry.name.clone(), table.clone()))
+                }
+                _ => None,
+            })
+            .collect(),
+        RootGoals::Absent | RootGoals::Refused { .. } | RootGoals::Unreadable(_) => BTreeMap::new(),
+    };
+    let tables = match &root.goal_tables {
+        RootGoalTables::Accepted { sha256, tables } => Some((Arc::clone(tables), sha256.clone())),
+        RootGoalTables::Absent | RootGoalTables::Refused { .. } | RootGoalTables::Unreadable(_) => {
+            None
+        }
+    };
+    RecordsRoot { entries, tables }
+}
+
 /// Workflow #463 V2 fix round 2: the state of the files of a package the workbench could not
 /// read, from the marks of its declaration files (`marks`, none for a package without a registry
 /// entry) and the reader's refusal when it refused it: what "once" of
@@ -1929,32 +1957,7 @@ impl HostShared {
         Ok(state
             .roots
             .iter()
-            .map(|(game, root)| {
-                let entries = match &root.goals {
-                    RootGoals::Accepted(goals) => goals
-                        .entries
-                        .iter()
-                        .filter_map(|entry| match &entry.kind {
-                            DeclaredGoalKind::Records { table, .. } => {
-                                Some((entry.name.clone(), table.clone()))
-                            }
-                            _ => None,
-                        })
-                        .collect(),
-                    RootGoals::Absent | RootGoals::Refused { .. } | RootGoals::Unreadable(_) => {
-                        BTreeMap::new()
-                    }
-                };
-                let tables = match &root.goal_tables {
-                    RootGoalTables::Accepted { sha256, tables } => {
-                        Some((Arc::clone(tables), sha256.clone()))
-                    }
-                    RootGoalTables::Absent
-                    | RootGoalTables::Refused { .. }
-                    | RootGoalTables::Unreadable(_) => None,
-                };
-                (game.clone(), RecordsRoot { entries, tables })
-            })
+            .map(|(game, root)| (game.clone(), records_root(root)))
             .collect())
     }
 

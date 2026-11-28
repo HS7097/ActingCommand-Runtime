@@ -2178,6 +2178,9 @@ const RUNTIME_OPEN_ORIGIN_OPERATIONS: &[&str] = &[
     // origin gate here; the channel decides at the door (the UI list holds both).
     "EditGoal",
     "GoalView",
+    // Workflow #455 RR4b-1 (register §1.557): the goal page in pages, a general read that takes
+    // no origin gate here; the channel decides at the door (the UI list holds it).
+    "GoalPageView",
     // Workflow #384 D2-S5 (register §1.68): the fact refresh's waiting keys, a general read from
     // memory like Status.
     "FactRefreshStatus",

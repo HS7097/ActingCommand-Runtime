@@ -352,6 +352,10 @@ mod gate_455_sl2;
 // change lets through are held.
 mod gate_503_wake;
 
+// #455 RR4b-1 (0.12.104; register §1.557): the goal page's records with their positions, a table's
+// options and a ladder's positions, read in pages from the walk the needs take.
+mod gate_455_rr4b1;
+
 // #455 MAKE (0.12.104; register §1.558): the pool of an item with a recipe asks the part its items
 // in hand make now, as the needs take it apart, and nothing else changes.
 mod gate_455_make;
@@ -917,6 +921,9 @@ mod gate_455_gr2s;
 // Workflow #498 FACT-CAP (register §1.496): the instance fact store's bound follows its scopes, an
 // instance near its bound is said so, and a reading the store refuses fails its run with its cause.
 mod gate_498_factcap;
+// #503 FACT-R (0.12.103; register §1.555): a scope at its bound takes a publication's new keys in
+// the room of its facts expired for more than seven days, each removed by its own record.
+mod gate_503_factr;
 mod home_entry;
 mod input;
 mod input_failure;

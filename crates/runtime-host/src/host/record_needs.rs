@@ -31,12 +31,13 @@ pub(super) struct NeedsInputs<'i> {
 }
 
 /// What the computation reads of one instance: its facts as the store holds them under the gate,
-/// and the evaluator's projection of the evaluation's inputs.
-struct HostSources<'s, 'c> {
-    store: &'s InstanceFactStore,
-    scope: FactScope,
-    instance_id: &'s str,
-    projection: &'s NeedsProjection<'c>,
+/// and the evaluator's projection of the evaluation's inputs. Workflow #455 RR4b-1: the goal
+/// page's view reads through the same sources.
+pub(super) struct HostSources<'s, 'c> {
+    pub(super) store: &'s InstanceFactStore,
+    pub(super) scope: FactScope,
+    pub(super) instance_id: &'s str,
+    pub(super) projection: &'s NeedsProjection<'c>,
 }
 
 impl NeedsSources for HostSources<'_, '_> {

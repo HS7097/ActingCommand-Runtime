@@ -225,5 +225,7 @@ pub(crate) const fn kind_location(kind: RuntimeOperationKind) -> &'static str {
         // Workflow #463 V3: the host's own locations of the two kinds.
         Kind::GoalView => "goal_view",
         Kind::EditGoal => "edit_goal",
+        // Workflow #455 RR4b-1: the host's own location of the kind.
+        Kind::GoalPageView => "goal_page_view",
     }
 }
