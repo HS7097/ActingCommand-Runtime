@@ -10,11 +10,15 @@
 // `fact_store_expired_facts_reclaimed`, then per fact one `fact.invalidated` whose trigger is the
 // warning and whose time is the fact's own expiry, with its State tombstone; the start's tagged
 // load, the replay and the history at a position rebuild the live store, and the State projection
-// takes the third form and refuses a made-up one. Tests 1 to 8 and 10 drive the store as the host
-// does (a ledger and its State store; the plan, the check with the room it frees, the records, the
-// check again and the publication, each appended and followed), on the fixture's own clock; test 9
-// drives the host with the list reading package of the S168-4 gate, its facts observed at the wall
-// clock as S168-4's are; test 11 reads the declaration. Instances, games and keys are made up.
+// takes the third form and refuses a made-up one. Tests 1 to 8, 10, 12 and 13 drive the store as
+// the host does (a ledger and its State store; the plan, the check with the room it frees, the
+// warning drafted and the plan made again at its time, the records, the check again and the
+// publication, each appended and followed), on the fixture's own clock; tests 9 and 15 drive the
+// host with the list reading package of the S168-4 gate, its facts observed at the wall clock as
+// S168-4's are (read through the crate's `unix_ms_now`); test 14 drives a host on its manual clock
+// with the fixture catalog, whose condition reads a key no reclamation takes while it is active;
+// test 11 reads the declaration. Fix round 1 (review of the pull request: F1, F3, F6) added tests 12
+// to 15. Instances, servers, games and keys are made up.
 
 use super::gate_308_l4b::ALIAS;
 use super::gate_428_s168_4::{
@@ -24,7 +28,7 @@ use super::*;
 use crate::codes::{FactCapacityCode, HostLocation};
 use crate::fact_store::{
     ExpiryReclamation, FactTransaction, InstanceFactStore, MAX_GAME_FACTS, MAX_INSTANCE_FACTS,
-    fact_transaction_error,
+    MAX_SERVER_FACTS, fact_transaction_error,
 };
 use actingcommand_contract::codes::ContractLocation;
 use actingcommand_contract::outcome::Outcome;
@@ -52,6 +56,9 @@ const SOURCE_MISMATCH: &str = "fact_invalidation_source_mismatch";
 const TARGET_MISMATCH: &str = "fact_invalidation_target_mismatch";
 const LIST_KEY: &str = "inventory.list.example_kind_a";
 const OTHER_KEY: &str = "inventory.list.example_kind_b";
+// Test 14's keys: one a condition of the first catalog reads, one no condition reads.
+const READ_KEY: &str = "session.example.read_by_condition";
+const UNREAD_KEY: &str = "session.example.read_by_nothing";
 
 fn instance(alias: &str) -> FactScope {
     FactScope::Instance {
@@ -62,6 +69,12 @@ fn instance(alias: &str) -> FactScope {
 fn game(game_id: &str) -> FactScope {
     FactScope::Game {
         game_id: game_id.to_owned(),
+    }
+}
+
+fn server(server_id: &str) -> FactScope {
+    FactScope::Server {
+        server_id: server_id.to_owned(),
     }
 }
 
@@ -286,18 +299,32 @@ impl Store {
     // The host's publication of `observation` (`publish_facts_under_gate`) at the fixture's clock:
     // the plan and the check with the room it frees; when it reclaims, the reclamation's records
     // and the check again without the room; then the publication, followed. The plan is returned.
+    // As a host without an active catalog, no condition reads a key.
     fn publish(
         &mut self,
         observation: FactObservation,
         instances: &[IssuedInstanceId],
     ) -> RuntimeHostResult<Option<ExpiryReclamation>> {
+        self.publish_with_warning_at(observation, instances, None)
+    }
+
+    // `publish`, its reclamation's warning drafted at `warning_at` (`None`: the fixture's next
+    // millisecond), as a clock that moved between the plan and the warning would draft it.
+    fn publish_with_warning_at(
+        &mut self,
+        observation: FactObservation,
+        instances: &[IssuedInstanceId],
+        warning_at: Option<u64>,
+    ) -> RuntimeHostResult<Option<ExpiryReclamation>> {
         let now = self.now_ms;
-        let plan = self.live.plan_expiry_reclamation(&observation, now);
+        let plan = self
+            .live
+            .plan_expiry_reclamation(&observation, now, || Ok(Arc::default()))?;
         let freed = plan.as_ref().map_or(0, ExpiryReclamation::freed);
         self.live
             .preview_observation_freeing(&observation, now, &self.ledger, freed)?;
         if let Some(plan) = &plan {
-            self.reclaim(plan)?;
+            self.reclaim(&observation, plan, warning_at)?;
             self.live
                 .preview_observation(&observation, now, &self.ledger)?;
         }
@@ -306,10 +333,22 @@ impl Store {
     }
 
     // The reclamation's records as the host writes them (`reclaim_expired_under_gate`): its
-    // warning, the invalidations the warning derives by the ordinary rule, then each reclaimed
-    // fact's invalidation with its State tombstone in one transaction, each followed.
-    fn reclaim(&mut self, plan: &ExpiryReclamation) -> RuntimeHostResult<()> {
-        let warning = self.warning(plan.scope(), plan.records().len(), plan.bound());
+    // warning drafted first, the plan made again at the warning's time and found the same, or
+    // nothing written; then the warning, the invalidations it derives by the ordinary rule, and
+    // each reclaimed fact's invalidation with its State tombstone in one transaction, each
+    // followed.
+    fn reclaim(
+        &mut self,
+        observation: &FactObservation,
+        plan: &ExpiryReclamation,
+        warning_at: Option<u64>,
+    ) -> RuntimeHostResult<()> {
+        let at_ms = warning_at.unwrap_or_else(|| self.tick());
+        let draft = self.warning_draft(at_ms, plan.scope(), plan.records().len(), plan.bound());
+        self.live
+            .confirm_expiry_reclamation(observation, plan, draft.timestamp_unix_ms())?;
+        let warning = self.ledger.append(draft).expect("append the warning");
+        self.follow();
         self.write_pending();
         for (key, sequence) in plan.records() {
             let (data, work) = self.live.prepare_expiry_reclamation(
@@ -325,8 +364,24 @@ impl Store {
     }
 
     // One Warning `runtime.failed` `fact_store_expired_facts_reclaimed` of `count` facts of `scope`,
-    // whose bound is `bound`, under the system links, as the host writes it; followed.
+    // whose bound is `bound`, under the system links, as the host writes it, at the fixture's next
+    // millisecond; followed.
     fn warning(&mut self, scope: &FactScope, count: usize, bound: usize) -> PersistedEvent {
+        let at_ms = self.tick();
+        let draft = self.warning_draft(at_ms, scope, count, bound);
+        let warning = self.ledger.append(draft).expect("append the warning");
+        self.follow();
+        warning
+    }
+
+    // The draft of that warning at `at_ms`, nothing written.
+    fn warning_draft(
+        &self,
+        at_ms: u64,
+        scope: &FactScope,
+        count: usize,
+        bound: usize,
+    ) -> SanitizedEventDraft {
         let outcome = Outcome::new(FactCapacityCode::ExpiredFactsReclaimed)
             .operation(ContractLocation::PublishFacts);
         let outcome = match scope {
@@ -348,8 +403,7 @@ impl Store {
             ),
             AuditInput::new(),
         );
-        let at_ms = self.tick();
-        let draft = self.draft(
+        self.draft(
             at_ms,
             EventSeverity::Warning,
             EventOrigin::new(
@@ -358,10 +412,7 @@ impl Store {
                 EventActor::Runtime,
             ),
             payload.into(),
-        );
-        let warning = self.ledger.append(draft).expect("append the warning");
-        self.follow();
-        warning
+        )
     }
 
     // Each invalidation the store derived and has not written yet, with its State tombstone in one
@@ -1225,4 +1276,364 @@ fn factr_k_the_declaration_and_the_ledger_row_say_3_to_11() {
         .find(|line| line.starts_with("| | | | 11 |"))
         .expect("the ledger row of revision 11");
     assert!(row.contains("declares [3, 11]"), "{row}");
+}
+
+// Test 12 (fix round 1, review F3): a plan that holds at the publication's time and not at its
+// warning's writes nothing. At its bound the instance holds facts expired one and two days after
+// the base and 222 without an expiry; ten days after the base two new keys plan both, but their
+// warning is drafted eight days and a half after the base (the clock stepped back between the plan
+// and the warning), where the fact expired two days after the base lies less than the margin
+// before it: the publication is refused `fact_store_capacity_exceeded`, not fatal, the ledger's
+// head where it was, no warning, no invalidation (before the round, the first fact's invalidation
+// was written), both facts stored. Published again with its warning at the fixture's next
+// millisecond, the same plan holds and is written.
+#[test]
+fn factr_l_a_plan_that_no_longer_holds_at_its_warnings_time_writes_nothing() {
+    let mut store = Store::new();
+    let one = store.instance_id();
+    let a = instance("alias-a");
+    for days in [1, 2] {
+        let expiring = store.observation(
+            &a,
+            &keys(&format!("day{days}"), 0..1),
+            Some(BASE_MS + days * DAY_MS),
+            &[],
+        );
+        store.publish(expiring, &[one]).expect("an expiring fact");
+    }
+    let plain = store.observation(&a, &keys("plain", 0..MAX_INSTANCE_FACTS - 2), None, &[]);
+    store.publish(plain, &[one]).expect("A at its bound");
+    store.jump(LATER_MS);
+    let head = store.head();
+    let two = store.observation(&a, &keys("new", 0..2), None, &[]);
+    assert_full(
+        store.publish_with_warning_at(
+            two.clone(),
+            &[one],
+            Some(BASE_MS + 8 * DAY_MS + 12 * HOUR_MS),
+        ),
+        "a plan that does not hold at its warning's time",
+    );
+    assert_eq!(store.head(), head, "nothing is written");
+    assert!(store.events(EventType::RuntimeFailed).is_empty());
+    assert!(store.events(EventType::FactInvalidated).is_empty());
+    assert!(store.active(&a, "env.day1_000") && store.active(&a, "env.day2_000"));
+    assert_eq!(store.count(&a), MAX_INSTANCE_FACTS);
+
+    let plan = store
+        .publish(two, &[one])
+        .expect("the plan holds at its warning's time")
+        .expect("a reclamation");
+    assert_eq!(plan_keys(&plan), ["env.day1_000", "env.day2_000"]);
+    assert_eq!(store.events(EventType::RuntimeFailed).len(), 1);
+    assert_eq!(store.events(EventType::FactInvalidated).len(), 2);
+    assert_eq!(store.count(&a), MAX_INSTANCE_FACTS);
+    store.close();
+}
+
+// Test 13 (fix round 1, review F6): a server at its bound of 16, with facts expired two and one
+// days after the base (published in that order) and 14 without an expiry, takes a new key ten
+// days after the base in the room of the fact expired first; the warning names the server and its
+// bound, and the invalidation the fact in the server's scope at its expiry.
+#[test]
+fn factr_m_a_full_server_takes_a_new_key_in_the_room_of_its_longest_expired_fact() {
+    let mut store = Store::new();
+    let s = server("server-one");
+    for (name, days) in [("second", 2), ("first", 1)] {
+        let expiring = store.observation(&s, &keys(name, 0..1), Some(BASE_MS + days * DAY_MS), &[]);
+        store
+            .publish(expiring, &[])
+            .expect("an expiring fact of the server");
+    }
+    let plain = store.observation(&s, &keys("plain", 0..MAX_SERVER_FACTS - 2), None, &[]);
+    store.publish(plain, &[]).expect("the server at its bound");
+    assert_eq!(store.count(&s), MAX_SERVER_FACTS);
+    let first = "env.first_000";
+    let sequence = store.sequence(&s, first);
+
+    store.jump(LATER_MS);
+    let new_key = store.observation(&s, &keys("new", 0..1), None, &[]);
+    let plan = store
+        .publish(new_key, &[])
+        .expect("the server's new key")
+        .expect("a reclamation");
+    assert_eq!(plan.records(), [(first.to_owned(), sequence)].as_slice());
+    assert_eq!(plan.bound(), MAX_SERVER_FACTS);
+    assert_eq!(store.count(&s), MAX_SERVER_FACTS);
+    assert!(!store.active(&s, first));
+    assert!(store.active(&s, "env.second_000") && store.active(&s, "env.new_000"));
+    let warning = store
+        .events(EventType::RuntimeFailed)
+        .pop()
+        .expect("the warning");
+    let outcome = reclaimed(&warning).expect("the reclamation's warning");
+    assert_eq!(
+        outcome.value("server"),
+        Some(&serde_json::Value::from("server-one")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        outcome.value("limit_count"),
+        Some(&serde_json::Value::from(MAX_SERVER_FACTS)),
+        "{outcome:?}"
+    );
+    let reclaiming = store
+        .events(EventType::FactInvalidated)
+        .iter()
+        .map(invalidation)
+        .filter(|data| data.invalidated_by_event_id == *warning.event_id())
+        .collect::<Vec<_>>();
+    let [data] = reclaiming.as_slice() else {
+        panic!("one invalidation, {} found", reclaiming.len());
+    };
+    assert_eq!((data.scope.clone(), data.key.as_str()), (s.clone(), first));
+    assert_eq!(data.invalidated_at_unix_ms, BASE_MS + DAY_MS);
+    store.close();
+}
+
+// The fixture catalog of `version`; with `reads`, its task's feedback stop is a condition that
+// reads `READ_KEY` on the fixture's instance, else it is the fixture's own (no fact).
+fn catalog(version: u64, reads: bool) -> CatalogSources {
+    let mut sources = policy_sources(version);
+    if reads {
+        let mut tasks: serde_json::Value =
+            serde_json::from_slice(&sources.tasks.bytes).expect("the fixture's tasks");
+        tasks["tasks"][0]["feedback_stop"] = serde_json::json!({
+            "kind": "fact",
+            "scope": {"kind": "instance", "instance_id": POLICY_INSTANCE_ALIAS},
+            "fact_key": READ_KEY,
+            "comparison": "eq",
+            "value": {"type": "boolean", "value": true},
+            "max_age_ms": 900_000
+        });
+        sources.tasks.bytes = serde_json::to_vec_pretty(&tasks).expect("the tasks' bytes");
+    }
+    sources
+}
+
+// The host's manual clock moved on by `by_ms` from `now`; the new time.
+fn advance(clock: &ManualRuntimeClock, now: u64, by_ms: u64) -> u64 {
+    clock.advance(by_ms);
+    now + by_ms
+}
+
+// The records of `event_type` on `host`, in ledger order.
+fn host_events(host: &RuntimeHost, event_type: EventType) -> Vec<PersistedEvent> {
+    let mut events = host
+        .query_persisted_events_for_test(EventQuery {
+            event_type: Some(event_type),
+            ..EventQuery::default()
+        })
+        .expect("the records");
+    events.sort_by_key(PersistedEvent::sequence);
+    events
+}
+
+// For each reclamation's warning on `host`, in ledger order, the keys its invalidations name.
+fn host_reclamations(host: &RuntimeHost) -> Vec<Vec<String>> {
+    let invalidations = host_events(host, EventType::FactInvalidated);
+    host_events(host, EventType::RuntimeFailed)
+        .iter()
+        .filter(|event| reclaimed(event).is_some())
+        .map(|warning| {
+            invalidations
+                .iter()
+                .map(invalidation)
+                .filter(|data| data.invalidated_by_event_id == *warning.event_id())
+                .map(|data| data.key)
+                .collect()
+        })
+        .collect()
+}
+
+// The facts of `alias`'s own scope on `host`, as its snapshot holds them.
+fn instance_records(host: &RuntimeHost, alias: &str) -> Vec<FactRecord> {
+    host.instance_fact_snapshot(InstanceFactContext {
+        instance_id: alias.to_owned(),
+        server_id: "test".to_owned(),
+        game_id: "neutral".to_owned(),
+    })
+    .expect("the instance's facts")
+    .records
+    .into_iter()
+    .filter(|record| record.scope == instance(alias))
+    .collect()
+}
+
+fn holds(host: &RuntimeHost, alias: &str, key: &str) -> bool {
+    instance_records(host, alias)
+        .iter()
+        .any(|record| record.key == key)
+}
+
+// Test 14 (fix round 1, review F1): a key a condition of the active catalog reads is never
+// reclaimed, and a catalog that reads it no more lets it go. On a host on its manual clock, with
+// the fixture catalog whose task's feedback stop reads `READ_KEY` on the fixture's instance, the
+// instance holds `READ_KEY` expiring an hour after the start, `UNREAD_KEY` two hours after it, and
+// fills without an expiry up to its bound. Nine days later a new key reclaims `UNREAD_KEY`, not
+// the fact expired first; a second new key, with only `READ_KEY` left as a fact expired long ago,
+// is refused `fact_store_capacity_exceeded`, not fatal, nothing written, as before the slice. After
+// the activation of the catalog's next version, whose conditions read no such key, the same key is
+// published and reclaims `READ_KEY` under a second warning.
+#[test]
+fn factr_n_a_key_the_active_catalog_reads_is_kept_until_a_catalog_reads_it_no_more() {
+    let root = TempDir::new().expect("tempdir");
+    let clock = Arc::new(ManualRuntimeClock::new(
+        POLICY_NOW_UNIX_MS,
+        POLICY_NOW_UNIX_MS,
+    ));
+    let host = RuntimeHost::start(
+        config(&root).with_runtime_clock(clock.clone()),
+        Arc::new(FakeProvider::one(
+            POLICY_INSTANCE_ALIAS,
+            instance_id(),
+            Arc::new(FakeState::default()),
+        )),
+    )
+    .expect("runtime host");
+    host.activate_policy_catalog(&catalog(1, true))
+        .expect("the catalog whose condition reads the key");
+    let a = instance(POLICY_INSTANCE_ALIAS);
+    let mut now = POLICY_NOW_UNIX_MS;
+    for (key, lifetime) in [(READ_KEY, HOUR_MS), (UNREAD_KEY, 2 * HOUR_MS)] {
+        now = advance(&clock, now, 1);
+        host.publish_fact(record(
+            &a,
+            key,
+            now,
+            Some(now + lifetime),
+            &[],
+            &format!("snapshot:factr-n-{key}"),
+        ))
+        .expect("an expiring fact");
+    }
+    for index in own_facts(&host, POLICY_INSTANCE_ALIAS)..MAX_INSTANCE_FACTS {
+        now = advance(&clock, now, 1);
+        host.publish_fact(record(
+            &a,
+            &format!("session.example.fill_{index:03}"),
+            now,
+            None,
+            &[],
+            &format!("snapshot:factr-n-fill-{index:03}"),
+        ))
+        .expect("a fill without an expiry");
+    }
+    assert_eq!(own_facts(&host, POLICY_INSTANCE_ALIAS), MAX_INSTANCE_FACTS);
+
+    now = advance(&clock, now, 9 * DAY_MS);
+    let new_key = |key: &str, at: u64| {
+        record(
+            &a,
+            key,
+            at,
+            None,
+            &[],
+            &format!("snapshot:factr-n-new-{key}"),
+        )
+    };
+    host.publish_fact(new_key("session.example.new_000", now))
+        .expect("the first new key");
+    assert_eq!(host_reclamations(&host), [vec![UNREAD_KEY.to_owned()]]);
+    assert!(holds(&host, POLICY_INSTANCE_ALIAS, READ_KEY));
+    assert!(!holds(&host, POLICY_INSTANCE_ALIAS, UNREAD_KEY));
+    assert_eq!(own_facts(&host, POLICY_INSTANCE_ALIAS), MAX_INSTANCE_FACTS);
+
+    now = advance(&clock, now, 1);
+    let second = new_key("session.example.new_001", now);
+    let refused = host
+        .publish_fact(second.clone())
+        .expect_err("only a fact the catalog's condition reads is left");
+    assert_eq!(refused.code(), CAPACITY_EXCEEDED, "{refused:?}");
+    assert!(!refused.is_fatal(), "{refused:?}");
+    assert_eq!(host_reclamations(&host).len(), 1, "nothing is written");
+    assert!(holds(&host, POLICY_INSTANCE_ALIAS, READ_KEY));
+    assert!(!holds(
+        &host,
+        POLICY_INSTANCE_ALIAS,
+        "session.example.new_001"
+    ));
+
+    host.activate_policy_catalog(&catalog(2, false))
+        .expect("the catalog that reads the key no more");
+    host.publish_fact(second)
+        .expect("the second new key, after the activation");
+    assert_eq!(
+        host_reclamations(&host),
+        [vec![UNREAD_KEY.to_owned()], vec![READ_KEY.to_owned()]]
+    );
+    assert!(!holds(&host, POLICY_INSTANCE_ALIAS, READ_KEY));
+    assert!(holds(
+        &host,
+        POLICY_INSTANCE_ALIAS,
+        "session.example.new_001"
+    ));
+    assert_eq!(own_facts(&host, POLICY_INSTANCE_ALIAS), MAX_INSTANCE_FACTS);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
+}
+
+// One made-up fact of ALIAS, observed two days before `now` and expired one day before it, less
+// than the margin.
+fn recent_fill(index: usize, now: u64) -> FactRecord {
+    record(
+        &instance(ALIAS),
+        &format!("session.example.fill_{index:03}"),
+        now - 2 * DAY_MS,
+        Some(now - DAY_MS),
+        &[],
+        &format!("snapshot:factr-recent-fill-{index:03}"),
+    )
+}
+
+// Test 15 (fix round 1, review F6): on the S168-4 gate's host, the case of too few candidates on
+// the host's own path. A run whose new list meets its instance at its bound, filled with facts
+// expired one day before (none of them a candidate), is refused as before the slice:
+// `contained_task_resource_reading_rejected` with `read_members:fact_store_capacity_exceeded`; its
+// list is not published, no reclamation's warning (so no invalidation naming one) is written, and
+// the instance's facts are those of before.
+#[test]
+fn factr_o_a_runs_new_list_on_a_full_instance_without_candidates_is_refused_and_writes_nothing() {
+    let root = TempDir::new().expect("tempdir");
+    let first_list = write_package(&root, "list-a.zip", LIST_KEY);
+    let second_list = write_package(&root, "list-b.zip", OTHER_KEY);
+    let device = Device::new();
+    let host = start(&root, &[(ALIAS, &device)]);
+    device.shows(vec![list(0..6), detail()]);
+    let (receipt, _) = run(&host, ALIAS, &first_list);
+    completed(&host, &receipt);
+
+    let now = unix_ms_now().expect("wall clock");
+    let own = own_facts(&host, ALIAS);
+    for index in own..MAX_INSTANCE_FACTS {
+        host.publish_fact(recent_fill(index, now))
+            .expect("a fill expired one day before");
+    }
+    assert_eq!(own_facts(&host, ALIAS), MAX_INSTANCE_FACTS);
+    let before = instance_records(&host, ALIAS);
+
+    device.shows(vec![list(0..6), detail()]);
+    let (receipt, _) = run(&host, ALIAS, &second_list);
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Failed,
+        "{:?}",
+        receipt.outcome()
+    );
+    assert_eq!(
+        receipt.outcome().code().as_str(),
+        "contained_task_resource_reading_rejected",
+        "{:?}",
+        receipt.outcome()
+    );
+    assert_eq!(
+        host.failure_detail_for_test(receipt.request_id())
+            .expect("the failure's detail"),
+        Some("read_members:fact_store_capacity_exceeded".to_owned())
+    );
+    assert!(publications(&host, OTHER_KEY).is_empty());
+    assert!(host_reclamations(&host).is_empty());
+    assert_eq!(instance_records(&host, ALIAS), before);
+    assert!(host.fatal_error().expect("runtime health").is_none());
+    host.close().expect("close the host");
 }

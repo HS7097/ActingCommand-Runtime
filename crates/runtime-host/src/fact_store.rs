@@ -19,9 +19,10 @@ use actingcommand_ledger::{
     TransactionWorkError, instance_fact_state_key,
 };
 use actingcommand_policy::{
-    EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
-    FactValue as PolicyFactValue, InstanceSnapshot, MAX_ID_BYTES, MAX_PRIORITY_OFFSET_MILLI,
-    ObservedFact, PriorityOffsetOrigin, ScopeSelector,
+    CompiledCatalog, EvaluationFacts, EvaluationResources, FactComparand,
+    FactScalar as PolicyFactScalar, FactValue as PolicyFactValue, InstanceSnapshot, MAX_ID_BYTES,
+    MAX_PRIORITY_OFFSET_MILLI, ObservedFact, PoolSpec, PredicateSpec, PriorityOffsetOrigin,
+    ProjectionComparand, ScopeSelector,
 };
 use actingcommand_runtime_state::{
     FACT_TOMBSTONE_NAMESPACE, FactStateObservation, PreparedFactProjection, RuntimeStateStore,
@@ -195,6 +196,103 @@ pub(crate) struct ExpiryReclamation {
     /// The scope's records the reclamation's warning drops by the ordinary rule (they list
     /// `runtime.failed`).
     dropped: usize,
+    /// Fix round 1 (review F1): the keys the conditions of the active catalog read, as the plan
+    /// read them; the plan made again at the warning's time reads the same.
+    read_facts: Arc<CatalogReadFacts>,
+}
+
+/// Workflow #503 FACT-R fix round 1 (`contracts/instance-fact-store.md`, "Expiry reclamations";
+/// review F1): the facts, by scope and key, that a condition of one compiled catalog reads: the
+/// fact of every `fact`, `record_deadline` and `fact_time_reached` predicate of a task's trigger
+/// and feedback stop, the fact a `fact` predicate compares with, and the fact a
+/// `resource_projection` compares with, in its pool's scope. No reclamation takes one of them. The
+/// host keeps the set of the active catalog, made when a catalog becomes active and replaced then;
+/// without an active catalog it is empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CatalogReadFacts {
+    by_scope: BTreeMap<FactScope, BTreeSet<String>>,
+}
+
+impl CatalogReadFacts {
+    pub(crate) fn of(catalog: &CompiledCatalog) -> Self {
+        let bundle = catalog.catalog();
+        let mut read = Self::default();
+        for task in &bundle.tasks.tasks {
+            read.add_condition(&task.trigger, &bundle.pools.pools);
+            read.add_condition(&task.feedback_stop, &bundle.pools.pools);
+        }
+        read
+    }
+
+    /// The keys a condition reads in exactly `scope`.
+    fn keys(&self, scope: &FactScope) -> Option<&BTreeSet<String>> {
+        self.by_scope.get(scope)
+    }
+
+    fn insert(&mut self, scope: &ScopeSelector, key: &str) {
+        self.by_scope
+            .entry(store_scope(scope))
+            .or_default()
+            .insert(key.to_owned());
+    }
+
+    /// Every fact `predicate` reads, its nested predicates' included.
+    fn add_condition(&mut self, predicate: &PredicateSpec, pools: &[PoolSpec]) {
+        match predicate {
+            PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
+                for predicate in predicates {
+                    self.add_condition(predicate, pools);
+                }
+            }
+            PredicateSpec::Not { predicate } => self.add_condition(predicate, pools),
+            PredicateSpec::Fact {
+                scope,
+                fact_key,
+                value,
+                ..
+            } => {
+                self.insert(scope, fact_key);
+                if let FactComparand::Fact(reference) = value {
+                    self.insert(scope, &reference.fact_key);
+                }
+            }
+            PredicateSpec::RecordDeadline {
+                scope, fact_key, ..
+            }
+            | PredicateSpec::FactTimeReached {
+                scope, fact_key, ..
+            } => self.insert(scope, fact_key),
+            PredicateSpec::ResourceProjection {
+                pool_id,
+                value: ProjectionComparand::Fact(reference),
+                ..
+            } => {
+                if let Some(pool) = pools.iter().find(|pool| pool.id == *pool_id) {
+                    self.insert(&pool.scope, &reference.fact_key);
+                }
+            }
+            PredicateSpec::ResourceProjection { .. }
+            | PredicateSpec::Clock { .. }
+            | PredicateSpec::TimelineActive { .. }
+            | PredicateSpec::DependencyCompleted { .. }
+            | PredicateSpec::Outcome { .. } => {}
+        }
+    }
+}
+
+/// The store's scope a policy scope names (the reverse of [`policy_scope`]).
+fn store_scope(scope: &ScopeSelector) -> FactScope {
+    match scope {
+        ScopeSelector::Instance { instance_id } => FactScope::Instance {
+            instance_id: instance_id.clone(),
+        },
+        ScopeSelector::Server { server_id } => FactScope::Server {
+            server_id: server_id.clone(),
+        },
+        ScopeSelector::Game { game_id } => FactScope::Game {
+            game_id: game_id.clone(),
+        },
+    }
 }
 
 impl ExpiryReclamation {
@@ -1404,17 +1502,24 @@ impl InstanceFactStore {
     /// not hold and they would take the scope past its bound. The candidates are the scope's
     /// records whose expiry lies more than [`actingcommand_contract::FACT_RECLAIM_AFTER_EXPIRY_MS`]
     /// before `at_unix_ms`, but the observation's own keys, a record that lists `runtime.failed`
-    /// (the reclamation's warning drops it by the ordinary rule, so it counts as freed) and
-    /// [`RECLAIM_EXCLUDED_KEYS`]; the longest expired first, then the earlier publication, then the
-    /// key; exactly as many as the publication needs. `None` when it needs none, when the
+    /// (the reclamation's warning drops it by the ordinary rule, so it counts as freed),
+    /// [`RECLAIM_EXCLUDED_KEYS`] and (fix round 1, review F1) the keys of the scope a condition of
+    /// the active catalog reads, which `read_facts` gives ([`CatalogReadFacts`]; called only once
+    /// the publication needs room); the longest expired first, then the earlier publication, then
+    /// the key; exactly as many as the publication needs. `None` when it needs none, when the
     /// candidates do not cover what it needs (the publication is then refused as before), and when
-    /// the warning would drop the record of one of the observation's own keys.
+    /// the warning would drop the record of one of the observation's own keys. Only `read_facts`
+    /// fails.
     pub(crate) fn plan_expiry_reclamation(
         &self,
         observation: &actingcommand_contract::FactObservation,
         at_unix_ms: u64,
-    ) -> Option<ExpiryReclamation> {
-        let scope = &observation.records.first()?.scope;
+        read_facts: impl FnOnce() -> RuntimeHostResult<Arc<CatalogReadFacts>>,
+    ) -> RuntimeHostResult<Option<ExpiryReclamation>> {
+        let Some(first) = observation.records.first() else {
+            return Ok(None);
+        };
+        let scope = &first.scope;
         let keys = observation
             .records
             .iter()
@@ -1430,7 +1535,7 @@ impl InstanceFactStore {
             })
             .count();
         if new_identities == 0 {
-            return None;
+            return Ok(None);
         }
         let scoped = self
             .active
@@ -1439,9 +1544,12 @@ impl InstanceFactStore {
             .map(|(_, fact)| fact)
             .collect::<Vec<_>>();
         let bound = scope_fact_bound(scope);
-        let needed = (scoped.len() + new_identities)
+        let Some(needed) = (scoped.len() + new_identities)
             .checked_sub(bound)
-            .filter(|needed| *needed > 0)?;
+            .filter(|needed| *needed > 0)
+        else {
+            return Ok(None);
+        };
         let listed = scoped
             .iter()
             .filter(|fact| {
@@ -1454,12 +1562,17 @@ impl InstanceFactStore {
             .iter()
             .any(|fact| keys.contains(fact.record.key.as_str()))
         {
-            return None;
+            return Ok(None);
         }
         let dropped = listed.len();
-        let reclaimed = needed
+        let Some(reclaimed) = needed
             .checked_sub(dropped)
-            .filter(|reclaimed| *reclaimed > 0)?;
+            .filter(|reclaimed| *reclaimed > 0)
+        else {
+            return Ok(None);
+        };
+        let read_facts = read_facts()?;
+        let read_here = read_facts.keys(scope);
         let mut candidates = scoped
             .into_iter()
             .filter(|fact| {
@@ -1472,10 +1585,11 @@ impl InstanceFactStore {
                         .invalidate_on
                         .contains(&EventType::RuntimeFailed)
                     && !RECLAIM_EXCLUDED_KEYS.contains(&fact.record.key.as_str())
+                    && !read_here.is_some_and(|read| read.contains(fact.record.key.as_str()))
             })
             .collect::<Vec<_>>();
         if candidates.len() < reclaimed {
-            return None;
+            return Ok(None);
         }
         candidates.sort_by(|left, right| {
             left.record
@@ -1484,7 +1598,7 @@ impl InstanceFactStore {
                 .then(left.sequence.cmp(&right.sequence))
                 .then_with(|| left.record.key.cmp(&right.record.key))
         });
-        Some(ExpiryReclamation {
+        Ok(Some(ExpiryReclamation {
             scope: scope.clone(),
             bound,
             records: candidates
@@ -1493,15 +1607,42 @@ impl InstanceFactStore {
                 .map(|fact| (fact.record.key.clone(), fact.sequence))
                 .collect(),
             dropped,
-        })
+            read_facts,
+        }))
+    }
+
+    /// Workflow #503 FACT-R fix round 1 (review F3): `reclamation`, which the publication of
+    /// `observation` planned at its own time, planned again at `at_unix_ms`, the time of the warning
+    /// drafted for it before anything is written, on this store and with the keys the plan read.
+    /// The same plan: every record of it lies more than the margin before the warning, and the
+    /// records may be written. Another (the clock stepped back between the two): nothing is
+    /// written, and the publication is refused `fact_store_capacity_exceeded`, as one whose
+    /// candidates are too few.
+    pub(crate) fn confirm_expiry_reclamation(
+        &self,
+        observation: &actingcommand_contract::FactObservation,
+        reclamation: &ExpiryReclamation,
+        at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let again = self.plan_expiry_reclamation(observation, at_unix_ms, || {
+            Ok(Arc::clone(&reclamation.read_facts))
+        })?;
+        if again.as_ref() == Some(reclamation) {
+            return Ok(());
+        }
+        Err(fact_request(
+            HostCode::FactStoreCapacityExceeded,
+            ContractLocation::PublishFacts,
+        ))
     }
 
     /// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): the
     /// `fact.invalidated` that reclaims `key`'s record in `scope`, published at ledger sequence
     /// `published_sequence`, with its State tombstone: its trigger is the reclamation's warning
-    /// `trigger`, its time the record's own expiry. A record whose expiry no longer lies more than
-    /// the margin before the warning (the clock stepped back since the plan) is refused
-    /// `fact_store_capacity_exceeded`, as the publication would have been.
+    /// `trigger`, its time the record's own expiry. A record whose expiry does not lie more than
+    /// the margin before the warning is refused `fact_store_capacity_exceeded`, as the publication
+    /// would have been; after [`Self::confirm_expiry_reclamation`] passed at the warning's own
+    /// time none is (fix round 1), and the check stays the record's own.
     pub(crate) fn prepare_expiry_reclamation(
         &self,
         ledger: &GlobalLedger,

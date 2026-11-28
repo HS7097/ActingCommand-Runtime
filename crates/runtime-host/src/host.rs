@@ -2446,6 +2446,7 @@ impl RuntimeHost {
             stability_counter: Mutex::new(recovery_ladder::StabilityCounter::default()),
             unclassified_codes: Mutex::new(BTreeSet::new()),
             blackout_silence: Mutex::new(blackout_silence::BlackoutSilence::default()),
+            catalog_read_facts: Mutex::new(Arc::default()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
             #[cfg(test)]
@@ -2704,6 +2705,15 @@ impl RuntimeHost {
                 // policy runs; Workflow #429 R-2: the configuration's value in effect when it
                 // carries the key, this one otherwise.
                 policy.set_max_concurrent_runs(config.performance_control.max_concurrent_runs());
+                // Workflow #503 FACT-R fix round 1 (review F1): the facts the active catalog's
+                // conditions read, before any publication of this start can plan a reclamation;
+                // every catalog transition replaces them.
+                *lock(&shared.catalog_read_facts, HostLocation::LoadActiveCatalog)? = Arc::new(
+                    policy
+                        .active_loaded()
+                        .map(|active| crate::fact_store::CatalogReadFacts::of(active.compiled()))
+                        .unwrap_or_default(),
+                );
                 // ROUT-L RL-1b (model §3.4): in composer mode the procedures of the active
                 // composed generation are scheduled runs too, so a run a stop cut is told apart
                 // as the configured ones are.
@@ -7633,6 +7643,11 @@ struct HostShared {
     // Workflow #386 SR-4a3: the active catalog's `maintenance` events the host's own entries read
     // their blackouts from (a leaf lock).
     blackout_silence: Mutex<blackout_silence::BlackoutSilence>,
+    // Workflow #503 FACT-R fix round 1 (`contracts/instance-fact-store.md`, "Expiry reclamations"):
+    // the facts the conditions of the active catalog read, which no reclamation takes; set at the
+    // start and by every catalog transition under `policy`, read by a publication that plans a
+    // reclamation under `fact_write_gate` (a leaf lock; empty without an active catalog).
+    catalog_read_facts: Mutex<Arc<crate::fact_store::CatalogReadFacts>>,
     // Workflow #387 D1c, test only: holds every instance back from performance release (§3.7),
     // the stand-in for performance control's suspension.
     #[cfg(test)]
