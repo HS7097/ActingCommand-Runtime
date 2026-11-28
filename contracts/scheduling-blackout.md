@@ -348,9 +348,10 @@ failed n times in a row in its window, n of 2 or more (failures no condition set
 unpaused), waits `instance_task_failure_waiting` (`instance_id`, `task_id`, `decision_id`,
 `failure_code`, `observed_at_unix_ms`, `count`, `next_eligible_unix_ms`) until
 `scheduling.unavailable_probe`'s interval for n − 1 has passed since that failure's settlement, and
-one set aside for its window (its failures that came although another scheduled run succeeded on
-the instance reached its rule's `escalation_threshold`) waits `instance_task_failure_set_aside`
-(`count`, `limit_count`, `window_end_unix_ms`) until the window's end; each wakes at its end,
+one set aside for its window (its failures whose wait is the longest interval that came although
+another scheduled run succeeded on the instance reached its rule's `escalation_threshold`) waits
+`instance_task_failure_set_aside` (`count`, `limit_count`, `window_end_unix_ms`) until the
+window's end; each wakes at its end,
 neither holds past the window's end, and a fact refresh names the code as its `gate_code`. Every
 candidate of the pair waits, whatever makes it one; only that pair; a store update task never has
 such a pair. Admission does not judge it again, and a wait writes no record at an evaluation (the

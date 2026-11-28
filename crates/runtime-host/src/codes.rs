@@ -358,19 +358,21 @@ actingcommand_contract::outcome_codes! {
         InstanceTaskFailureWaiting => "instance_task_failure_waiting": info / none,
         /// Info (#503 PACE). The candidate's task is set aside on its instance until its activity
         /// window ends (`window_end_unix_ms`), when it wakes: in that window `count` of its
-        /// failures in a row came although another scheduled run had succeeded on the instance
-        /// since its previous one, reaching its rule's `escalation_threshold` (`limit_count`); its
-        /// latest `decision_id`, `failure_code`, `observed_at_unix_ms` (keys `instance_id`,
-        /// `task_id` as well). The fact refresh names it as its gate.
+        /// failures in a row, each setting `scheduling.unavailable_probe`'s longest interval as
+        /// its wait (fix round 2), came although another scheduled run had succeeded on the
+        /// instance since its previous one, reaching its rule's `escalation_threshold`
+        /// (`limit_count`); its latest `decision_id`, `failure_code`, `observed_at_unix_ms` (keys
+        /// `instance_id`, `task_id` as well). The fact refresh names it as its gate.
         InstanceTaskFailureSetAside => "instance_task_failure_set_aside": info / none,
         /// Warning (#503 PACE). A person is told, once per task, instance and window (and again
-        /// when it is set aside again after a catalogue's activation, a changed package or a
-        /// Runtime start cleared the counts), that a task is set aside on its instance until its
-        /// activity window ends (`window_end_unix_ms`): `count` of its failures in a row in that
-        /// window came although another scheduled run had succeeded on the instance since its
-        /// previous one, which reached its rule's `escalation_threshold` (`limit_count`); keys
-        /// `instance_id`, `task_id`, `decision_id`, `failure_code`, `observed_at_unix_ms` of the
-        /// failure that reached it.
+        /// when it is set aside again after a catalogue's activation, a changed package, a store
+        /// update task's success on the instance or a Runtime start cleared the counts), that a
+        /// task is set aside on its instance until its activity window ends
+        /// (`window_end_unix_ms`): `count` of its failures in a row in that window, each setting
+        /// the longest interval as its wait (fix round 2), came although another scheduled run had
+        /// succeeded on the instance since its previous one, which reached its rule's
+        /// `escalation_threshold` (`limit_count`); keys `instance_id`, `task_id`, `decision_id`,
+        /// `failure_code`, `observed_at_unix_ms` of the failure that reached it.
         InstanceTaskFailureSetAsideReported => "instance_task_failure_set_aside_reported": warning / none,
         // #503 PACE end
         // Workflow #387 D1c begin

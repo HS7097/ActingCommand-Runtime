@@ -1109,9 +1109,12 @@ while one is held, each check reads and composes again even when nothing changed
   same failure repeated. Every other failure is rerun only, never repeats, and the threshold never
   pauses for it: from its second failure in a row the pair waits a growing interval before it is
   dispatched again (one minute, doubling to thirty with the shipped values), and once its failures
-  that came although another rule's run succeeded on the instance reach `escalation_threshold` it
-  is set aside on that instance until its activity window ends ("A pair whose runs keep
-  failing"): there the threshold counts failures with evidence that the instance works. The
+  whose wait is the longest interval (the seventh in a row and every later one with the shipped
+  values; fix round 2 of #503 PACE) that came although another rule's run succeeded on the
+  instance reach `escalation_threshold` it is set aside on that instance until its activity window
+  ends ("A pair whose runs keep failing"): there the threshold counts failures that came after the
+  pair had waited through every shorter interval, with evidence that the instance works (with a
+  threshold of 2 or 3 about an hour or an hour and a half after its first failure). The
   no-progress guard ([scheduling/README.md](scheduling/README.md), "No-progress guard") covers
   successful runs only. A hint, never a refusal: the rule composes and runs as written. The resource side lowers the
   threshold to 2 or 3 in the same change that removes a rule's `daily_limit`. `standard-pack

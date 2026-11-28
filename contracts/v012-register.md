@@ -52434,7 +52434,8 @@ device), and the rerun is what mends it. Only a pair that has just failed again 
 likely the environment's (a network outage, a device), and setting pairs aside for the day then
 would lose the day's work for an outage of minutes; they keep trying at the longest interval
 instead. A pair that fails again and again while other runs succeed on its instance is broken in
-itself, and only then does a failure count against it.
+itself, and only then does a failure count against it. Fix round 2 (below, ruling 4) asks the
+evidence to be more than minutes old: only a failure whose wait is the longest interval counts.
 
 **What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
 - *What the settlement knows.* `record_policy_dispatch_outcome_under_gate` (`host/policy_outcome.rs`)
@@ -52479,6 +52480,17 @@ itself, and only then does a failure count against it.
 - *4, set aside.* A failure after the first counts against the pair when the instance's succeeded
   runs grew since the pair's previous failure and the record is not `performance_tax_exempt`; at
   the threshold, with the window known, the pair is set aside to the window's end.
+  - *Amended in fix round 2 (the review's F1 and F2):* the first build counted every failure from
+    the second on, so three or four failures in two or three minutes with any other run succeeding
+    between them (a reading of the screen counts) set a pair aside for the rest of its window, and
+    it wrote a wait's or a set-aside's record, naming an end already past, for a failure settled at
+    or after the end of the window it was admitted in; now a failure counts only when, besides the
+    above, the wait it sets is the longest interval (`sets_longest_wait`: `interval_ms(n)` no
+    longer than `interval_ms(n - 1)`, so `max_interval_ms` from the seventh failure with the shipped
+    values, and from the second when the longest interval is the first, a first interval at the cap
+    or a `factor` of 1), and a failure settled at or after its window's end is stored as the pair's
+    latest and one more in a row but counts nothing against it, sets nothing aside and writes no
+    record.
 - *5, its end.* A success of the pair, a pausing settlement, the window's end (the next failure is
   a first), a catalogue's activation (`policy_catalog.rs`) and the workbench's changed-package check
   (`standard_pack_schedule.rs`), each beside ENTRY-A's clearing, a store update task's success (its
@@ -52497,6 +52509,15 @@ itself, and only then does a failure count against it.
   clock-slot trace's classes) gains them as it gained ENTRY-A's; `HELD_CODES` and the chain
   handover's `successor_wait_codes` do not name them, as they do not name ENTRY-A's (a wait that
   ends by itself is no hold, and a successor that waits here does not go first).
+  - *Amended in fix round 2 (the review's F4 (a) to (c)):* the first build began each entry's
+    description with the slice's reference, so the generated index row said neither the result nor
+    the operation, promised in the handling that mending the package or the game root's data frees
+    the pair at once, and left a store update task's success out of what clears the counts the
+    report names; now each description begins with its result sentence, the handling names exactly
+    what frees a pair before its time (a success of the pair, a pausing settlement, the window's
+    end, an activation, the workbench's check finding a change among the files it compares, a store
+    update task's success, a restart) and says a file the check does not compare frees nothing, and
+    each entry says that a set-aside now means failures through the longest waits.
 - *8, unchanged.* The classification and every member of the execution record; the ledger and its
   replay; R22's rounds; ENTRY-A; the accumulating failures' pause and its lifting; every budget.
 
@@ -52527,23 +52548,31 @@ reads them.
 | `…::pace_p3_b_the_gate_holds_its_pair_alone_and_names_itself_to_a_fact_refresh` (3) | the gate alone: a fact refresh names the code as its gate with the wait's end; another task and another instance not held; a cut at the window's end; set aside with its values; an unknown window only waits |
 | `…::pace_p4_a_waiting_pair_wakes_the_cycle_at_its_end_writes_no_record_and_names_its_code_in_the_explanation` (4, 12) | the decision's and the evaluation's wake the wait's end; the not-running row names the code; four evaluations write no record of the policy and no `runtime.failed`; dispatched at the end |
 | `…::pace_p5_a_success_of_the_pair_makes_its_next_failure_a_first` (5) | the pair gone after its success; its next failure a first, rerun at once |
-| `…::pace_p6_a_failures_with_another_success_between_them_set_the_pair_aside_and_tell_a_person_once` (6, B) | threshold 2: one and two against it, set aside at the third; the second's wait record; one report in place of the third's; `instance_task_failure_set_aside` waking at the window's end; the other task dispatched |
+| `…::pace_p6_a_failures_with_another_success_between_them_set_the_pair_aside_and_tell_a_person_once` (6, B; rebuilt in fix round 2) | threshold 2, the other task succeeding before each failure from the second: nothing against it at the second to sixth, one at the seventh (the first whose wait is the longest), two and set aside at the eighth; the second to seventh's wait records; one report in place of the eighth's; `instance_task_failure_set_aside` waking at the window's end; the other task dispatched |
 | `…::pace_p6_b_failures_with_no_success_between_them_never_set_the_pair_aside` (6) | four failures in a row with nothing between: nothing against it, no report |
-| `…::pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_never_counts_against_it` (6) | the memory alone: an unknown window never, exempt failures never count, each wait after the first said |
-| `…::pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure_is_a_first` (7) | set aside to a millisecond before the window's end; nothing at the end; the next window's first failure a first |
+| `…::pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_never_counts_against_it` (6; rebuilt in fix round 2) | the memory alone, nine failures: an unknown window never, though the seventh to ninth count against it; exempt failures never count; each wait after the first said |
+| `…::pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure_is_a_first` (7; its set-aside rebuilt in fix round 2) | set aside at the eighth failure, to a millisecond before the window's end; nothing at the end; the next window's first failure a first |
 | `…::pace_p8_a_an_activation_and_a_restart_clear_every_pair` (8) | an activation clears the pair and the task runs before the old wait's end; a restart has none |
 | `…::pace_p8_b_a_changed_package_frees_the_pairs_at_the_workbenchs_check` (8) | composer mode: an unchanged check leaves a seeded pair, a changed control file frees it |
-| `…::pace_p8_c_p10_a_store_update_tasks_runs_wait_for_nothing_and_its_success_clears_its_instances_pairs` (8, 10) | the memory alone: no pair for a store update task's failures; its success clears its instance's pairs only and is no evidence |
+| `…::pace_p8_c_p10_a_store_update_tasks_runs_wait_for_nothing_and_its_success_clears_its_instances_pairs` (8, 10) | the memory alone: no pair for a store update task's failures; its success clears its instance's pairs only and is no evidence (fix round 2: the instance's succeeded runs a pair keeps stay none) |
 | `…::pace_p9_a_a_stop_and_a_condition_leave_the_pair_as_it_was_and_a_pausing_settlement_removes_it` (9) | a stop and a configured condition leave the pair; a severe failure (`paused_task`) removes it |
 | `…::pace_p9_b_a_failure_at_the_entry_leaves_the_pair_as_it_was_and_entry_a_counts_it_as_on_main` (9) | a failure at the entry: a condition of the instance, this slice's pair as it was, ENTRY-A's pair and block as on main |
 | `…::pace_p11_the_failures_records_are_mains_and_the_idle_plan_reads_the_wait_and_the_window_as_its_release` (11) | the waiting failures' records equal the first's but for their time and run; behind an instance pause the idle plan counts the task not due with the wait's end, then the window's end, as its release |
+| `…::pace_f1_a_the_second_to_sixth_failures_never_count_against_the_pair_whatever_its_threshold` (fix round 2, F1) | the memory alone, thresholds 2, 3 and 1000: the second to sixth failures, each after another task's success, nothing against the pair, never set aside, each a wait record |
+| `…::pace_f1_b_from_the_first_longest_wait_each_failure_counts_and_the_threshold_sets_it_aside` (fix round 2, F1) | the memory alone, thresholds 2 and 3: the seventh counts once, each later once more; set aside at the eighth or the ninth, said once in place of its wait record; the next writes none |
+| `…::pace_f1_c_a_configuration_whose_longest_interval_is_its_first_counts_from_the_second_failure` (fix round 2, F1) | the memory alone, a first interval at the cap and a `factor` of 1: the second counts and waits the first interval, the third sets the pair aside |
+| `…::pace_f2_a_failure_settled_at_or_after_its_windows_end_writes_no_record_and_sets_nothing_aside` (fix round 2, F2) | the memory alone: a failure settled at the window's end (it would reach the threshold) and one after it (it would set a wait) are the pair's latest, write no record, count nothing, set nothing aside; the next window's first failure a first |
 
 Adapted, the requirement (ruling 3) deliberately delaying the rerun after a second failure in a
 row: `gate_373_nav6::b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pair`
 and `gate_463_int1::int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_once`
 evaluate the third run once the second's wait (the shipped one minute) has passed; what they
 assert (no pause, the immediate rerun) is unchanged. No golden re-recorded; no test leaves the gate
-maps.
+maps. Fix round 2 rebuilt, on its ruling 1, the slice's own tests that reach a set-aside or count
+against a pair (`pace_p6_a` and `pace_p7` through their shared set-aside, now eight failures from
+07:00 to about 08:01:30 in the 06:00 to 23:30 window, and `pace_p6_c`), kept their names, and made
+`pace_p8_c_p10`'s "no evidence" visible in the instance count the pair keeps; it added the four
+`pace_f1_*` and `pace_f2_*` tests.
 
 **What is not changed.** The failure's classification and its execution record, byte for byte; the
 ledger, its event types and its replay (a ledger written while pairs waited is read by any build as
@@ -52556,11 +52585,13 @@ begins with none, and a rollback loses only the waits and set-asides in force. W
 `scheduling.unavailable_probe` a pair whose runs keep failing waits one minute after its second
 failure in a row, two after its third, then four, eight, sixteen and thirty minutes, never past its
 window's end; with another task succeeding between its failures and the recommended threshold 2 it
-is set aside at its third. An operator sees three codes: `instance_task_failure_waiting` (a
+is set aside at its eighth (fix round 2: the seventh is the first that counts, its wait the
+longest), about an hour after its first, and a failure settled after its window's end writes
+nothing. An operator sees three codes: `instance_task_failure_waiting` (a
 candidate's reason while the pair waits, and one `runtime.failed` record at each failure that sets
 a wait), `instance_task_failure_set_aside` (a candidate's reason until the window's end) and
 `instance_task_failure_set_aside_reported` (a warning record, once per pair and window). In the
-release notes' language: 新增：同一个任务在同一台实例上连续失败（不是靠条件结束、也没被暂停的失败）时，第一次失败照旧马上重跑；从第二次连续失败起，每次失败后都要等一段越来越长的时间才再派（出厂值一、二、四、八、十六分钟，之后每次三十分钟，不超过活动窗结束），每次等待在账本里留一条 `instance_task_failure_waiting`；同一窗口里别的任务在这台实例上成功过、它还接着失败，失败次数到它规则的 `escalation_threshold` 就这个窗口里不再派（`instance_task_failure_set_aside`），并告诉人一次（`instance_task_failure_set_aside_reported`）。任务本身不暂停，下一个窗口重新计；修好包、激活目录或放置新包立刻解除。只在内存里，重启就清零，不需要任何配置。
+release notes' language: 新增：同一个任务在同一台实例上连续失败（不是靠条件结束、也没被暂停的失败）时，第一次失败照旧马上重跑；从第二次连续失败起，每次失败后都要等一段越来越长的时间才再派（出厂值一、二、四、八、十六分钟，之后每次三十分钟，不超过活动窗结束），每次等待在账本里留一条 `instance_task_failure_waiting`；等待已到最长（出厂值从第七次连续失败起）之后，同一窗口里别的任务在这台实例上成功过、它还接着失败，这样的失败次数到它规则的 `escalation_threshold` 就这个窗口里不再派（`instance_task_failure_set_aside`），并告诉人一次（`instance_task_failure_set_aside_reported`），门槛 2 时约在第一次失败后一小时；几分钟的故障不会让任务停一整天。任务本身不暂停，下一个窗口重新计；激活目录、排程工作台查到包变了（放置新包）、商店更新任务成功或重启立刻解除，在原处改一个工作台不比对的文件不解除。活动窗结束后才结算的失败什么也不记。只在内存里，重启就清零，不需要任何配置。
 
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 

@@ -11,7 +11,10 @@
 //! owner's ruling on this slice: the situation has its code, which says the result and the
 //! operation that follows); once its failures that came although another scheduled run succeeded
 //! on the instance reach its rule's `escalation_threshold`, it is set aside for the window and a
-//! person is told once, in place of that record.
+//! person is told once, in place of that record. Fix round 2: only a failure whose wait is the
+//! longest interval (the seventh in a row and every later one with the shipped values) counts
+//! against the pair, and a failure settled at or after its window's end writes no record and sets
+//! nothing aside.
 //!
 //! The host-level tests run on `gate_372k2`'s fixture instance (the activity window 06:00 to
 //! 23:30 UTC, its interval 1 ms, the no-progress guard off, a manual Runtime clock) with tasks due
@@ -70,6 +73,9 @@ const WAITS_MS: [u64; 7] = [
     30 * MINUTE_MS,
     30 * MINUTE_MS,
 ];
+/// The shipped `scheduling.unavailable_probe.max_interval_ms`, the longest wait: the seventh failure
+/// in a row sets it first, and it is the first that can count against the pair (fix round 2).
+const LONGEST_MS: u64 = 30 * MINUTE_MS;
 const WAITING: HostCode = HostCode::InstanceTaskFailureWaiting;
 const SET_ASIDE: HostCode = HostCode::InstanceTaskFailureSetAside;
 const REPORTED: HostCode = HostCode::InstanceTaskFailureSetAsideReported;
@@ -438,40 +444,49 @@ fn timeless(record: &PolicyFailureRecord) -> Value {
     value
 }
 
-/// TASK (an `escalation_threshold` of 2) fails three times in a row, OTHER succeeding before its
-/// second and its third: the second counts once against it, the third twice, which sets it aside
-/// for its window. The third failure.
+/// TASK (an `escalation_threshold` of 2) fails eight times in a row from 07:00, each at the end of
+/// its wait, OTHER succeeding a second after each failure but the last (while TASK waits). Fix
+/// round 2: the second to sixth failures, whose waits (one to sixteen minutes) are shorter than
+/// the longest, count nothing against it; the seventh, whose wait is the longest (thirty minutes,
+/// settled at about 07:31:30), counts once; the eighth (about 08:01:30) twice, which sets it aside
+/// for its window. Each of the second to seventh writes the record of its wait; the eighth, in
+/// place of one, says it is set aside. The eighth failure.
 fn set_aside_by_evidence(pace: &mut Pace) -> Ran {
     let first = pace.fail(at(1, 7, 0), TASK);
-    let first_at = first.settled.observed_at_unix_ms;
-    pace.succeed(first_at + 1_000, OTHER);
-    let second = pace.fail(first_at + BACKOFF_MS, TASK);
-    let second_at = second.settled.observed_at_unix_ms;
-    let until = second_at + MINUTE_MS;
+    let mut latest_at = first.settled.observed_at_unix_ms;
+    let mut due_at = latest_at + BACKOFF_MS;
+    for (index, wait_ms) in WAITS_MS.iter().take(6).enumerate() {
+        let count = u32::try_from(index + 2).expect("a count");
+        pace.succeed(latest_at + 1_000, OTHER);
+        let ran = pace.fail(due_at, TASK);
+        latest_at = ran.settled.observed_at_unix_ms;
+        due_at = latest_at + *wait_ms;
+        let against = u32::from(*wait_ms == LONGEST_MS);
+        assert_eq!(
+            pace.pair(TASK),
+            Some((count, against, due_at, false)),
+            "{count}: only a failure whose wait is the longest counts against it"
+        );
+        assert_eq!(
+            wait_records(pace.host()).len(),
+            index + 1,
+            "{count}: the record of its wait"
+        );
+        assert!(set_aside_reports(pace.host()).is_empty(), "{count}");
+    }
+    pace.succeed(latest_at + 1_000, OTHER);
+    let eighth = pace.fail(due_at, TASK);
     assert_eq!(
         pace.pair(TASK),
-        Some((2, 1, until, false)),
-        "one against it, below the threshold"
-    );
-    assert_eq!(wait_records(pace.host()).len(), 1, "the second set a wait");
-    pace.succeed(second_at + 1_000, OTHER);
-    let third = pace.fail(until, TASK);
-    assert_eq!(
-        pace.pair(TASK),
-        Some((
-            3,
-            2,
-            third.settled.observed_at_unix_ms + 2 * MINUTE_MS,
-            true
-        )),
+        Some((8, 2, eighth.settled.observed_at_unix_ms + LONGEST_MS, true)),
         "set aside at the threshold"
     );
     assert_eq!(
         wait_records(pace.host()).len(),
-        1,
-        "the third says it is set aside in place of a wait"
+        6,
+        "the eighth says it is set aside in place of a wait"
     );
-    third
+    eighth
 }
 
 /// The shipped `scheduling.unavailable_probe`.
@@ -856,10 +871,12 @@ fn pace_p5_a_success_of_the_pair_makes_its_next_failure_a_first() {
     pace.close();
 }
 
-/// Test 6 (a): two tasks, `TASK`'s `escalation_threshold` 2. Its second and third failures in a
-/// row come after a success of `OTHER` each: they count once and twice against it, and the third
-/// sets it aside. The second writes the record of its wait; the third, in place of one, the one
-/// `instance_task_failure_set_aside_reported`, which names the instance, the task, the third run,
+/// Test 6 (a), rebuilt in fix round 2: two tasks, `TASK`'s `escalation_threshold` 2, each of its
+/// failures from the second on after a success of `OTHER` ([`set_aside_by_evidence`]). Its second
+/// to sixth failures in a row count nothing against it; the seventh, the first whose wait is the
+/// longest, counts once; the eighth twice, which sets it aside. The second to seventh write the
+/// records of their waits; the eighth, in place of one, the one
+/// `instance_task_failure_set_aside_reported`, which names the instance, the task, the eighth run,
 /// its failure and settlement, `count` 2, `limit_count` 2 and the window's end. An hour later `TASK`
 /// waits `instance_task_failure_set_aside` (its count, limit and window's end) and wakes at the
 /// window's end while `OTHER` is dispatched; nobody is told again.
@@ -870,7 +887,7 @@ fn pace_p6_a_failures_with_another_success_between_them_set_the_pair_aside_and_t
         &sources(&[due(TASK, 100), due(OTHER, 50)], 1, 2),
         at(1, 6, 0),
     );
-    let third = set_aside_by_evidence(&mut pace);
+    let eighth = set_aside_by_evidence(&mut pace);
     let reports = set_aside_reports(pace.host());
     let [report] = reports.as_slice() else {
         panic!("one person told: {reports:#?}");
@@ -879,28 +896,32 @@ fn pace_p6_a_failures_with_another_success_between_them_set_the_pair_aside_and_t
     assert_eq!(report.value("task_id"), Some(&json!(TASK)));
     assert_eq!(
         report.value("decision_id"),
-        Some(&json!(third.intent.decision_id.as_str()))
+        Some(&json!(eighth.intent.decision_id.as_str()))
     );
     assert_eq!(report.value("failure_code"), Some(&json!(FAILURE)));
     assert_eq!(
         report.value("observed_at_unix_ms"),
-        Some(&json!(third.settled.observed_at_unix_ms))
+        Some(&json!(eighth.settled.observed_at_unix_ms))
     );
     assert_eq!(report.value("count"), Some(&json!(2)));
     assert_eq!(report.value("limit_count"), Some(&json!(2)));
     assert_eq!(
         report.value("window_end_unix_ms"),
-        Some(&json!(third.window_end))
+        Some(&json!(eighth.window_end))
     );
-    let held = pace.evaluate(third.settled.observed_at_unix_ms + HOUR_MS);
+    let held = pace.evaluate(eighth.settled.observed_at_unix_ms + HOUR_MS);
     let (aside, wake) = deferred_by(&held, TASK, SET_ASIDE);
     assert_eq!(aside.value("count"), Some(&json!(2)));
     assert_eq!(aside.value("limit_count"), Some(&json!(2)));
     assert_eq!(
         aside.value("window_end_unix_ms"),
-        Some(&json!(third.window_end))
+        Some(&json!(eighth.window_end))
     );
-    assert_eq!(wake, Some(third.window_end), "it wakes at the window's end");
+    assert_eq!(
+        wake,
+        Some(eighth.window_end),
+        "it wakes at the window's end"
+    );
     assert!(dispatched(&held, OTHER), "the other task runs: {held:#?}");
     assert_eq!(set_aside_reports(pace.host()).len(), 1, "told once");
     pace.close();
@@ -930,10 +951,12 @@ fn pace_p6_b_failures_with_no_success_between_them_never_set_the_pair_aside() {
     pace.close();
 }
 
-/// Test 6 (c), the memory on its own (`escalation_threshold` 2): failures with a success of
-/// another task before each, in a window the policy does not know, count against the pair but never
-/// set it aside; the same in a known window with every failure's record `performance_tax_exempt`
-/// count nothing against it. Either way the pair waits after its latest failure.
+/// Test 6 (c), the memory on its own (`escalation_threshold` 2), rebuilt in fix round 2: nine
+/// failures in a row, an hour apart, with a success of another task before each. In a window the
+/// policy does not know, the seventh to ninth (whose waits are the longest) count against the pair,
+/// but it is never set aside; in a known window with every failure's record
+/// `performance_tax_exempt` nothing counts against it. Either way each wait after the first is
+/// said and the pair waits the longest interval after its latest failure.
 #[test]
 fn pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_never_counts_against_it()
  {
@@ -942,7 +965,7 @@ fn pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_nev
     for (window_end, exempt) in [(0, false), (at(1, 23, 30), true)] {
         let mut pairs = FailurePairs::default();
         let mut latest = start;
-        for step in 0..4_u64 {
+        for step in 0..9_u64 {
             latest = start + step * HOUR_MS;
             assert_eq!(
                 pairs.settle(
@@ -972,29 +995,30 @@ fn pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_nev
             );
         }
         let pair = pairs.pair(instance, TASK).expect("the pair");
+        // The seventh, eighth and ninth: the failures whose waits are the longest.
         let against = if exempt { 0 } else { 3 };
         assert_eq!(
             (pair.in_a_row, pair.against, pair.set_aside),
-            (4, against, false),
+            (9, against, false),
             "{window_end} {exempt}"
         );
-        assert_eq!(pair.until_unix_ms, latest + 4 * MINUTE_MS, "it still waits");
+        assert_eq!(pair.until_unix_ms, latest + LONGEST_MS, "it still waits");
     }
 }
 
-/// Test 7: two tasks, `TASK` set aside as in 6 (a). A millisecond before its window's end it is
-/// still set aside, waking at the end; at the end nothing of this slice holds it; its first failure
-/// of the next day's window is a first there (no wait, nothing against it). In the next window
-/// `OTHER`, which has waited since the day before, is ranked first by its age and runs first; `TASK`
-/// is dispatched after it.
+/// Test 7: two tasks, `TASK` set aside as in 6 (a) (at its eighth failure, fix round 2). A
+/// millisecond before its window's end it is still set aside, waking at the end; at the end
+/// nothing of this slice holds it; its first failure of the next day's window is a first there (no
+/// wait, nothing against it). In the next window `OTHER`, which has waited since the day before,
+/// is ranked first by its age and runs first; `TASK` is dispatched after it.
 #[test]
 fn pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure_is_a_first() {
     let mut pace = Pace::start(
         &sources(&[due(TASK, 100), due(OTHER, 50)], 1, 2),
         at(1, 6, 0),
     );
-    let third = set_aside_by_evidence(&mut pace);
-    let window_end = third.window_end;
+    let eighth = set_aside_by_evidence(&mut pace);
+    let window_end = eighth.window_end;
     let (_, wake) = deferred_by(&pace.evaluate(window_end - 1), TASK, SET_ASIDE);
     assert_eq!(wake, Some(window_end));
     let ended = pace.evaluate(window_end);
@@ -1158,8 +1182,9 @@ fn pace_p8_b_a_changed_package_frees_the_pairs_at_the_workbenchs_check() {
 
 /// Tests 8 (c) and 10, the memory on its own: a store update package's task's failures, however
 /// many, give it no pair (no wait, never set aside). Its success clears every pair of its instance
-/// and none of another, and it is no success the pairs count: after it the pair's second failure in
-/// a row counts nothing against it.
+/// and none of another, and it is no success the pairs count: after it the pair's count of the
+/// instance's succeeded runs is still none, and its second failure in a row counts nothing against
+/// it.
 #[test]
 fn pace_p8_c_p10_a_store_update_tasks_runs_wait_for_nothing_and_its_success_clears_its_instances_pairs()
  {
@@ -1240,9 +1265,11 @@ fn pace_p8_c_p10_a_store_update_tasks_runs_wait_for_nothing_and_its_success_clea
         );
     }
     let pair = pairs.pair(instance, TASK).expect("the pair");
+    // Fix round 2: a second failure never counts against a pair, so the store update task's success
+    // shows as no evidence in the instance's count of succeeded runs the pair kept: none.
     assert_eq!(
-        (pair.in_a_row, pair.against, pair.set_aside),
-        (2, 0, false),
+        (pair.in_a_row, pair.against, pair.succeeded, pair.set_aside),
+        (2, 0, 0, false),
         "a store update task's success is no evidence"
     );
 }
@@ -1410,4 +1437,277 @@ fn pace_p11_the_failures_records_are_mains_and_the_idle_plan_reads_the_wait_and_
         "the window's end is its release: {plan:?}"
     );
     pace.close();
+}
+
+/// The memory alone: `failures` failures in a row of `TASK` on `instance` under `under`, an hour
+/// apart from 07:00 of day 1 (inside the window ending 23:30 for up to sixteen of them), each after
+/// a success of `OTHER` there; what each failure's settlement told, in order. `probe` gives the
+/// intervals.
+fn fail_with_evidence(
+    pairs: &mut FailurePairs,
+    instance: InstanceId,
+    failures: u64,
+    under: PacingRule,
+    probe: UnavailableProbeConfig,
+) -> Vec<Option<PacedRecord>> {
+    (0..failures)
+        .map(|step| {
+            assert_eq!(
+                pairs.settle(instance, OTHER, PacedSettlement::Succeeded, under, probe),
+                None,
+                "a success writes nothing"
+            );
+            pairs.settle(
+                instance,
+                TASK,
+                failed(
+                    &format!("decision-{step}"),
+                    at(1, 7, 0) + step * HOUR_MS,
+                    false,
+                ),
+                under,
+                probe,
+            )
+        })
+        .collect()
+}
+
+/// Fix round 2 (F1), the memory alone: the second to sixth failures in a row, each after another
+/// task's success on the instance, whose waits (one to sixteen minutes with the shipped intervals)
+/// are shorter than the longest, count nothing against the pair and never set it aside, whatever
+/// its `escalation_threshold`; each writes the record of its wait, the first none.
+#[test]
+fn pace_f1_a_the_second_to_sixth_failures_never_count_against_the_pair_whatever_its_threshold() {
+    let instance = instance_id();
+    for threshold in [2, 3, 1_000] {
+        let mut pairs = FailurePairs::default();
+        let under = PacingRule {
+            threshold,
+            ..rule(at(1, 23, 30), false)
+        };
+        let told = fail_with_evidence(&mut pairs, instance, 6, under, shipped());
+        assert_eq!(told.len(), 6);
+        for (count, record) in (1_u32..).zip(&told) {
+            match record {
+                None if count == 1 => {}
+                Some(PacedRecord::Waits(pair)) if count > 1 => assert_eq!(
+                    (pair.in_a_row, pair.against, pair.set_aside),
+                    (count, 0, false),
+                    "{threshold}: failure {count}"
+                ),
+                other => panic!("{threshold}: failure {count}: {other:?}"),
+            }
+        }
+    }
+}
+
+/// Fix round 2 (F1), the memory alone: with a success of another task before each failure, the
+/// seventh failure in a row, the first whose wait is the longest (thirty minutes), counts once
+/// against the pair, and each later one once more; the failure whose count reaches the
+/// `escalation_threshold` (the eighth with a threshold of 2, the ninth with 3) sets the pair aside
+/// and says so in place of the record of its wait, once: the failure after it writes none and the
+/// pair stays set aside.
+#[test]
+fn pace_f1_b_from_the_first_longest_wait_each_failure_counts_and_the_threshold_sets_it_aside() {
+    let instance = instance_id();
+    for threshold in [2_u16, 3] {
+        let mut pairs = FailurePairs::default();
+        let under = PacingRule {
+            threshold,
+            ..rule(at(1, 23, 30), false)
+        };
+        let reaching = 6 + u32::from(threshold);
+        let told = fail_with_evidence(
+            &mut pairs,
+            instance,
+            u64::from(reaching) + 1,
+            under,
+            shipped(),
+        );
+        for (count, record) in (1_u32..).zip(&told) {
+            match record {
+                None if count == 1 || count > reaching => {}
+                Some(PacedRecord::Waits(pair)) if count < reaching => assert_eq!(
+                    (pair.in_a_row, pair.against, pair.set_aside),
+                    (count, count.saturating_sub(6), false),
+                    "{threshold}: failure {count}"
+                ),
+                Some(PacedRecord::SetAside(pair)) if count == reaching => assert_eq!(
+                    (
+                        pair.in_a_row,
+                        pair.against,
+                        pair.threshold,
+                        pair.set_aside,
+                        pair.until_unix_ms - pair.observed_at_unix_ms
+                    ),
+                    (count, u32::from(threshold), threshold, true, LONGEST_MS),
+                    "{threshold}: failure {count}"
+                ),
+                other => panic!("{threshold}: failure {count}: {other:?}"),
+            }
+        }
+        let pair = pairs.pair(instance, TASK).expect("the pair");
+        assert_eq!(
+            (pair.in_a_row, pair.against, pair.set_aside),
+            (reaching + 1, u32::from(threshold) + 1, true),
+            "{threshold}: still set aside, told once"
+        );
+    }
+}
+
+/// Fix round 2 (F1), the memory alone (`escalation_threshold` 2): when the longest interval is the
+/// first (a first interval at the cap, or a `factor` of 1), the second failure's wait is already
+/// the longest, so with another task's success before each failure the second counts once against
+/// the pair and the third sets it aside.
+#[test]
+fn pace_f1_c_a_configuration_whose_longest_interval_is_its_first_counts_from_the_second_failure() {
+    let instance = instance_id();
+    for probe in [
+        UnavailableProbeConfig {
+            first_interval_ms: LONGEST_MS,
+            ..shipped()
+        },
+        UnavailableProbeConfig {
+            factor: 1,
+            ..shipped()
+        },
+    ] {
+        let mut pairs = FailurePairs::default();
+        let told = fail_with_evidence(&mut pairs, instance, 3, rule(at(1, 23, 30), false), probe);
+        let [
+            None,
+            Some(PacedRecord::Waits(second)),
+            Some(PacedRecord::SetAside(third)),
+        ] = told.as_slice()
+        else {
+            panic!("{probe:?}: {told:#?}");
+        };
+        assert_eq!(
+            (
+                second.in_a_row,
+                second.against,
+                second.until_unix_ms - second.observed_at_unix_ms
+            ),
+            (2, 1, probe.first_interval_ms),
+            "{probe:?}: the second counts and waits the first interval"
+        );
+        assert_eq!(
+            (third.in_a_row, third.against, third.set_aside),
+            (3, 2, true),
+            "{probe:?}: the third sets it aside"
+        );
+    }
+}
+
+/// Fix round 2 (F2), the memory alone (`escalation_threshold` 2, the longest interval the first,
+/// so a failure after the first counts against the pair once another task succeeded before it). A
+/// failure settled at its window's end, which would reach the threshold, and one settled after it,
+/// which would set a wait, are each the pair's latest and one more in a row, but write no record,
+/// count nothing against the pair and set nothing aside. The pair's first failure of the next
+/// window is a first there.
+#[test]
+fn pace_f2_a_failure_settled_at_or_after_its_windows_end_writes_no_record_and_sets_nothing_aside() {
+    let instance = instance_id();
+    let window_end = at(1, 23, 30);
+    let probe = UnavailableProbeConfig {
+        first_interval_ms: LONGEST_MS,
+        ..shipped()
+    };
+    let in_window = rule(window_end, false);
+    let mut pairs = FailurePairs::default();
+    for (decision_id, unix_ms, waits) in [
+        ("decision-1", window_end - HOUR_MS, false),
+        ("decision-2", window_end - 10 * MINUTE_MS, true),
+    ] {
+        assert_eq!(
+            pairs.settle(
+                instance,
+                OTHER,
+                PacedSettlement::Succeeded,
+                in_window,
+                probe
+            ),
+            None
+        );
+        let told = pairs.settle(
+            instance,
+            TASK,
+            failed(decision_id, unix_ms, false),
+            in_window,
+            probe,
+        );
+        assert_eq!(
+            matches!(told, Some(PacedRecord::Waits(_))),
+            waits,
+            "{decision_id}"
+        );
+    }
+    let pair = pairs.pair(instance, TASK).expect("the pair");
+    assert_eq!(
+        (pair.in_a_row, pair.against, pair.set_aside),
+        (2, 1, false),
+        "one against it, below the threshold"
+    );
+    for (decision_id, unix_ms, in_a_row) in [
+        ("decision-at-the-end", window_end, 3),
+        ("decision-after-the-end", window_end + MINUTE_MS, 4),
+    ] {
+        assert_eq!(
+            pairs.settle(
+                instance,
+                OTHER,
+                PacedSettlement::Succeeded,
+                in_window,
+                probe
+            ),
+            None
+        );
+        assert_eq!(
+            pairs.settle(
+                instance,
+                TASK,
+                failed(decision_id, unix_ms, false),
+                in_window,
+                probe
+            ),
+            None,
+            "{decision_id}: no record"
+        );
+        let pair = pairs.pair(instance, TASK).expect("the pair");
+        assert_eq!(
+            (
+                pair.decision_id.as_str(),
+                pair.observed_at_unix_ms,
+                pair.in_a_row,
+                pair.against,
+                pair.set_aside
+            ),
+            (decision_id, unix_ms, in_a_row, 1, false),
+            "{decision_id}: its latest, nothing against it, nothing set aside"
+        );
+    }
+    let next_end = at(2, 23, 30);
+    assert_eq!(
+        pairs.settle(
+            instance,
+            TASK,
+            failed("decision-next", at(2, 7, 0), false),
+            rule(next_end, false),
+            probe
+        ),
+        None,
+        "a first writes none"
+    );
+    let pair = pairs.pair(instance, TASK).expect("the pair");
+    assert_eq!(
+        (
+            pair.window_end,
+            pair.in_a_row,
+            pair.against,
+            pair.until_unix_ms,
+            pair.set_aside
+        ),
+        (next_end, 1, 0, 0, false),
+        "the next window's first failure is a first"
+    );
 }

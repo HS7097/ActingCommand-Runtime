@@ -785,26 +785,42 @@ immediate as before (R22): only a pair that has just failed again waits.
   that orders tasks changes. It only ever delays: it never makes a pair a candidate, never renews
   an immediate-rerun round, and every budget, window, cooldown and round rule applies as before (a
   round that ends while the pair waits has ended).
-- *Set aside for the window.* A failure after the first in the row counts against the pair when a
-  scheduled run succeeded on that instance since the pair's previous failure (any task's run, a
-  fact refresh's included; not a store update task's, not a client's or the Lab's run) and its
-  record is not `performance_tax_exempt` (under performance pressure a failure is not held against
-  its task, as for escalation). When that count reaches the rule's `on_failure.escalation_threshold`
-  in the dispatch's catalog generation (never when the generation holds no such task) and the
-  window is known, the pair is not dispatched on that instance again until the window's end: its
-  candidates wait `instance_task_failure_set_aside` (info; the same values but `count` the failures
-  against it, `limit_count` the threshold and `window_end_unix_ms`), waking then. A pair whose
-  window the policy does not know is never set aside. Nothing else follows: no pause of the rule,
-  no change to its streak, nothing that outlives the window. Why the evidence: while nothing
-  succeeds on the instance the fault is most likely the environment's (a network outage, a device),
-  and setting pairs aside for the day then would lose the day's work for an outage of minutes; they
-  keep trying at the longest interval instead. A pair that fails again and again while other runs
-  succeed is broken in itself.
+- *Set aside for the window.* A failure counts against the pair when the wait it sets is
+  `scheduling.unavailable_probe`'s longest interval (fix round 2: `max_interval_ms`, so with the
+  shipped values the pair's seventh failure in a row and every later one; a configuration whose
+  longest interval is its first, a first interval at the cap or a `factor` of 1, counts from the
+  second failure), a scheduled run succeeded on that instance since the pair's previous failure
+  (any task's run, a fact refresh's included; not a store update task's, not a client's or the
+  Lab's run) and its record is not `performance_tax_exempt` (under performance pressure a failure
+  is not held against its task, as for escalation). Before that the pair only waits, each time
+  longer. When that count reaches the rule's `on_failure.escalation_threshold` in the dispatch's
+  catalog generation (never when the generation holds no such task) and the window is known, the
+  pair is not dispatched on that instance again until the window's end: its candidates wait
+  `instance_task_failure_set_aside` (info; the same values but `count` the failures against it,
+  `limit_count` the threshold and `window_end_unix_ms`), waking then. A pair whose window the
+  policy does not know is never set aside. Nothing else follows: no pause of the rule, no change to
+  its streak, nothing that outlives the window. Why the evidence: while nothing succeeds on the
+  instance the fault is most likely the environment's (a network outage, a device), and setting
+  pairs aside for the day then would lose the day's work for an outage of minutes; they keep trying
+  at the longest interval instead. Why the longest interval (fix round 2): a fault of a few minutes
+  can hit some tasks and not others (a server that refuses one kind of request, a notice over one
+  page) while other runs, a reading of the screen among them, succeed between their failures;
+  counted from the second failure, three or four failures in two or three minutes would set such a
+  pair aside until its window's end, most of a day away, with nobody awake to lift it. A pair that
+  still fails after it has waited through every interval up to the longest, while other runs
+  succeed, is broken in itself: with the shipped values and a threshold of 2 or 3 that takes about
+  an hour or an hour and a half.
+- *A failure after its window's end.* A failure settled at or after the end of the window it was
+  admitted in (a run that overran the end) is stored as the pair's latest and one more in a row,
+  but nothing follows from it, so nothing is said: it writes no record of a wait or of a set-aside,
+  counts nothing against the pair and sets nothing aside. The gate lets the pair through at that
+  end anyway, and the next window's first failure is a first (fix round 2).
 - *The records.* The owner's ruling: what follows a failure is said, not only kept. Each failure
-  that sets a wait (the second in a row and every later one) writes, at its settlement, one
-  `runtime.failed` record under the instance with `instance_task_failure_waiting` and the wait's
-  values, handed to the daemon's log too: the ledger reads, after each failed run from the second
-  on, the run's own execution record (unchanged) and then this record of what follows. The failure
+  that sets a wait (the second in a row and every later one, settled before its window's end)
+  writes, at its settlement, one `runtime.failed` record under the instance with
+  `instance_task_failure_waiting` and the wait's values, handed to the daemon's log too: the ledger
+  reads, after each failed run from the second on, the run's own execution record (unchanged) and
+  then this record of what follows. The failure
   that sets the pair aside writes, in its place, `instance_task_failure_set_aside_reported` (a
   warning, the set-aside's values), once per pair and window, and again when the pair is set aside
   again after its counts were cleared. The first failure writes none: its execution record already
@@ -813,9 +829,13 @@ immediate as before (R22): only a pair that has just failed again waits.
 - *Its end.* The pair starts from nothing when a scheduled run of it succeeds; when a settlement
   pauses it; when the window its failures were in has ended (its next failure is a first); when a
   catalogue becomes active and when the scheduler workbench's check finds a package of a game in
-  use changed (every pair, at the events that free ENTRY-A's pairs); when a store update task's
-  run succeeds on the instance (every pair of the instance: the game is another version; that
-  success is no run that counts against a pair); at a restart.
+  use changed (every pair, at the events that free ENTRY-A's pairs; composer mode only, by the
+  marks of `bundle.json`, of the game root's `pages.json`, `interrupts.json` and
+  `navigation.json` and of each package's `control.json` and `resources/operations/resources.json`,
+  which a placement of a package writes); when a store update task's run succeeds on the instance
+  (every pair of the instance: the game is another version; that success is no run that counts
+  against a pair); at a restart. Nothing else frees it: a file the check does not compare, mended
+  in place, frees nothing until one of these.
 - *Where in the order.* Position 4b of the order of the deferrals
   ([scheduling-blackout.md](scheduling-blackout.md)), right after ENTRY-A's pair waits: on an
   instance that is not blocked, a candidate ENTRY-A's pair gate does not hold is asked this one.
@@ -828,16 +848,17 @@ With the shipped `scheduling.unavailable_probe` (`first_interval_ms` 60 000, `fa
 `max_interval_ms` 1 800 000), what the Runtime does after each failure in a row of one pair in one
 window:
 
-| Failure in a row | What the Runtime does | Record after its execution record |
-|---|---|---|
-| 1st | reruns it as before: at once once its backoff has passed (`retry_limit` 1 or more), else as a candidate at the next evaluation by its trigger | none |
-| 2nd | not before 1 minute after its settlement, then tries again | `instance_task_failure_waiting` |
-| 3rd | not before 2 minutes after | `instance_task_failure_waiting` |
-| 4th | not before 4 minutes after | `instance_task_failure_waiting` |
-| 5th | not before 8 minutes after | `instance_task_failure_waiting` |
-| 6th | not before 16 minutes after | `instance_task_failure_waiting` |
-| 7th and every later one | not before 30 minutes after | `instance_task_failure_waiting` |
-| the one whose count against the pair reaches `escalation_threshold` (window known) | not again on that instance before the window's end | `instance_task_failure_set_aside_reported`, in place of the wait's |
+| Failure in a row | What the Runtime does | Counts against the pair | Record after its execution record |
+|---|---|---|---|
+| 1st | reruns it as before: at once once its backoff has passed (`retry_limit` 1 or more), else as a candidate at the next evaluation by its trigger | no | none |
+| 2nd | not before 1 minute after its settlement, then tries again | no | `instance_task_failure_waiting` |
+| 3rd | not before 2 minutes after | no | `instance_task_failure_waiting` |
+| 4th | not before 4 minutes after | no | `instance_task_failure_waiting` |
+| 5th | not before 8 minutes after | no | `instance_task_failure_waiting` |
+| 6th | not before 16 minutes after | no | `instance_task_failure_waiting` |
+| 7th and every later one | not before 30 minutes after | when another scheduled run succeeded on the instance since the previous failure | `instance_task_failure_waiting` |
+| the one whose count against the pair reaches `escalation_threshold` (window known; the 8th at the earliest with a threshold of 2) | not again on that instance before the window's end | yes | `instance_task_failure_set_aside_reported`, in place of the wait's |
+| any one settled at or after its window's end | nothing more (the window has ended) | no | none |
 
 No wait outlasts the window; a success of the pair clears the count. **The worst cases** (shipped
 values, runs short, a failure that does not accumulate each time):
@@ -848,9 +869,17 @@ values, runs short, a failure that does not accumulate each time):
   thirty-four runs in a window of fourteen hours, where before it was rerun about every thirty
   seconds until the day's counts were spent (some 1 700 runs in fourteen hours with none).
 - *A broken pair beside a healthy task.* The healthy task runs between the broken pair's failures,
-  so from its second failure on each counts against it: with the recommended `on_failure`
-  (threshold 2) it is set aside at its third failure, about a minute and a half after its first,
-  with a threshold of 1 at its second. The healthy task runs meanwhile.
+  but the second to sixth failures count nothing (fix round 2): the seventh, at about 31.5
+  minutes, is the first whose wait is the longest and counts once, so with the recommended
+  `on_failure` (threshold 2) the pair is set aside at its eighth failure, about 61.5 minutes after
+  its first, and with a threshold of 3 at its ninth, about 91.5 minutes after. (A threshold of 1
+  sets no pair aside: a failure not `performance_tax_exempt` already reaches it as its escalation
+  streak, which pauses the task, and an exempt one never counts against the pair.) The healthy
+  task runs meanwhile.
+- *A fault of a few minutes that hits one task and not others.* Its failures meanwhile only wait (1,
+  2, 4 minutes, …), so once the fault ends the task's next run succeeds and clears its count; with
+  a threshold of 2 it is set aside only if it is still failing at its eighth failure, about an hour
+  after its first.
 - *Every task failing for an hour* (an outage). Nothing succeeds, so nobody is set aside; each pair
   waits by its own count, at most thirty minutes, and once the outage ends each is dispatched at
   its wait's end at the latest, its first success clearing its count.

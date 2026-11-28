@@ -25,12 +25,18 @@
 //!   passed since that failure's settlement, never past the window's end
 //!   (`instance_task_failure_waiting`, the candidate's reason; the same code is the one record
 //!   under the instance that the settlement setting the wait writes, never an evaluation).
-//! - **Set aside.** A failure after the first in the row counts against the pair when a scheduled
-//!   run (not a store update task's) succeeded on the instance since the pair's previous failure
-//!   and its record is not `performance_tax_exempt`; once that count reaches the rule's
-//!   `escalation_threshold` and the window is known the pair waits until the window's end
+//! - **Set aside.** A failure counts against the pair when the wait it sets is
+//!   `scheduling.unavailable_probe`'s longest interval (fix round 2: the seventh failure in a row
+//!   and every later one with the shipped values, from the second when the longest interval is the
+//!   first), a scheduled run (not a store update task's) succeeded on the instance since the pair's
+//!   previous failure and its record is not `performance_tax_exempt`; once that count reaches the
+//!   rule's `escalation_threshold` and the window is known the pair waits until the window's end
 //!   (`instance_task_failure_set_aside`) and a person is told once
-//!   (`instance_task_failure_set_aside_reported`).
+//!   (`instance_task_failure_set_aside_reported`). A pair set aside so kept failing after it had
+//!   waited through every shorter interval while other runs succeeded: a fault of a few minutes
+//!   that hits some tasks and not others sets nothing aside. A failure settled at or after its
+//!   window's end (a run that overran it) is the pair's latest, but nothing follows from it: it
+//!   counts nothing against the pair, sets nothing aside and writes no record.
 //! - **Its end.** A success of the pair, a settlement that pauses it, the window's end, a
 //!   catalogue's activation, the scheduler workbench's changed package, a store update task's
 //!   success on the instance (every pair of it) and a restart (memory only).
@@ -124,7 +130,8 @@ pub(crate) struct FailurePair {
     pub(crate) in_a_row: u32,
     pub(crate) until_unix_ms: u64,
     /// The scheduled runs that had succeeded on its instance when the latest failure settled, and
-    /// the failures that came although that count had grown since the pair's previous one.
+    /// the failures that came although that count had grown since the pair's previous one, each
+    /// setting a wait of the longest interval and settled before the window's end.
     pub(crate) succeeded: u64,
     pub(crate) against: u32,
     /// The rule's `escalation_threshold`, and whether `against` reached it with the window known,
@@ -148,6 +155,14 @@ fn wait_end(until_unix_ms: u64, window_end: u64) -> u64 {
     } else {
         until_unix_ms
     }
+}
+
+/// Fix round 2 (F1): whether the wait the `in_a_row`-th failure in a row sets is `config`'s longest
+/// interval, one no later failure lengthens: `max_interval_ms`, reached at the seventh failure with
+/// the shipped values, or the first interval from the second failure on when that is the longest
+/// (a `factor` of 1, or a first interval not below the cap). The first failure sets no wait.
+fn sets_longest_wait(config: UnavailableProbeConfig, in_a_row: u32) -> bool {
+    in_a_row > 1 && config.interval_ms(in_a_row) <= config.interval_ms(in_a_row.saturating_sub(1))
 }
 
 /// What a settlement tells a person of its pair (the owner's ruling on this slice: the situation
@@ -214,20 +229,31 @@ impl FailurePairs {
                 exempt,
             } => {
                 let succeeded = self.succeeded.get(&instance_id).copied().unwrap_or(0);
-                let (in_a_row, against, was_set_aside) = self
+                // Fix round 2 (F2): a failure settled at or after the end of the window its
+                // admission was committed in (a run that overran the end) is the pair's latest and
+                // one more in a row, but nothing follows from it (the gate lets the pair through
+                // at that end): it counts nothing against the pair, sets nothing aside and writes
+                // no record.
+                let after_end = rule.window_end > 0 && observed_at_unix_ms >= rule.window_end;
+                let previous = self
                     .pairs
                     .get(&key)
-                    .filter(|pair| pair.window_end == rule.window_end)
-                    .map_or((1, 0, false), |pair| {
-                        (
-                            pair.in_a_row.saturating_add(1),
-                            pair.against
-                                .saturating_add(u32::from(!exempt && succeeded > pair.succeeded)),
-                            pair.set_aside,
-                        )
-                    });
-                let set_aside =
-                    rule.window_end > 0 && against > 0 && against >= u32::from(rule.threshold);
+                    .filter(|pair| pair.window_end == rule.window_end);
+                let in_a_row = previous.map_or(1, |pair| pair.in_a_row.saturating_add(1));
+                // Fix round 2 (F1): only a failure whose wait is the longest interval can count
+                // against the pair, so the evidence spans every shorter wait.
+                let counts = !exempt && !after_end && sets_longest_wait(config, in_a_row);
+                let (against, was_set_aside) = previous.map_or((0, false), |pair| {
+                    (
+                        pair.against
+                            .saturating_add(u32::from(counts && succeeded > pair.succeeded)),
+                        pair.set_aside,
+                    )
+                });
+                let set_aside = !after_end
+                    && rule.window_end > 0
+                    && against > 0
+                    && against >= u32::from(rule.threshold);
                 let until_unix_ms = if in_a_row > 1 {
                     observed_at_unix_ms
                         .saturating_add(config.interval_ms(in_a_row.saturating_sub(1)))
@@ -246,7 +272,9 @@ impl FailurePairs {
                     threshold: rule.threshold,
                     set_aside,
                 };
-                let record = if set_aside {
+                let record = if after_end {
+                    None
+                } else if set_aside {
                     // In place of the wait's record: a pair set aside waits for its window's end.
                     (!was_set_aside).then(|| PacedRecord::SetAside(pair.clone()))
                 } else {
