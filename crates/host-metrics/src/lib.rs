@@ -42,6 +42,29 @@ pub fn sample_physical_memory() -> Result<PhysicalMemorySample, Code> {
     }
 }
 
+/// #503 MEM (register §1.556): the host's commit as the operating system reports it, in bytes: the
+/// commit limit (physical memory and the page files as they are now) and the commit this process
+/// may still take, which without a job object is what the system has left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitSample {
+    pub limit_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// #503 MEM: reads the host's commit once, from the same platform memory observation as
+/// [`sample_physical_memory`] (on Windows `GlobalMemoryStatusEx`, its page-file members); a platform
+/// without it answers `performance_sampler_unsupported`.
+pub fn sample_commit() -> Result<CommitSample, Code> {
+    #[cfg(windows)]
+    {
+        windows::sample_commit()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(HostMetricsCode::PerformanceSamplerUnsupported.code())
+    }
+}
+
 /// #407 PERF-READ: this process's own memory counters, in bytes: its private bytes (the commit
 /// charge only it holds), its working set and its peak working set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -302,6 +302,18 @@
       "type": "integer",
       "description": "The budget, in bytes, a memory budget falls back to when its sample leaves less after the reserve (frame_store.floor_mem_bytes)."
     },
+    "commit_limit_bytes": {
+      "type": "integer",
+      "description": "The host's commit limit, in bytes, as a commit sample read it (#503 MEM)."
+    },
+    "commit_available_bytes": {
+      "type": "integer",
+      "description": "The commit the host still has available, in bytes, as a commit sample read it (#503 MEM)."
+    },
+    "commit_reserve_bytes": {
+      "type": "integer",
+      "description": "The available commit, in bytes, an automatic emulator start requires (emulator_control.start_commit_reserve_bytes, #503 MEM)."
+    },
     "carried_bytes": {
       "type": "integer",
       "description": "The size of the release an offline installer carries, in bytes."

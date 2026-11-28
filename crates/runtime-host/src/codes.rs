@@ -171,6 +171,24 @@ actingcommand_contract::outcome_codes! {
         /// with the failure pair under the claim and the claim releases its key (Workflow #369
         /// S6c, P3; keys `alias`, `elapsed_ms`). Also its report line.
         EmulatorAutostartNetworkUnready => "emulator_autostart_network_unready": error / environment_fault,
+        // #503 MEM begin: the start gate of the automatic emulator starts (register §1.556).
+        /// Warning (#503 MEM). Automatic emulator starts are held: the host's available commit is
+        /// below `emulator_control.start_commit_reserve_bytes`. Once per short episode, host-wide,
+        /// for the instance first in line (keys `alias`, `commit_available_bytes`,
+        /// `commit_limit_bytes`, `commit_reserve_bytes`, `idle_action` for an idle wake). A
+        /// `runtime.failed` record under the instance's links and its report line.
+        EmulatorAutostartCommitShort => "emulator_autostart_commit_short": warning / none,
+        /// Info (#503 MEM). The host's available commit is back at or above the reserve and the
+        /// held automatic start goes on (keys `alias`, `elapsed_ms` since the episode began,
+        /// `commit_available_bytes`, `commit_limit_bytes`, `commit_reserve_bytes`). A
+        /// `runtime.failed` record under the instance's links and its report line.
+        EmulatorAutostartCommitReady => "emulator_autostart_commit_ready": info / none,
+        /// Warning (#503 MEM). The host's commit could not be read; the automatic start goes on
+        /// without the headroom check. Once per failing streak (keys `alias`, `failure_code` the
+        /// read's code, `commit_reserve_bytes`). A `runtime.failed` record under the instance's
+        /// links and its report line.
+        EmulatorAutostartCommitUnknown => "emulator_autostart_commit_unknown": warning / none,
+        // #503 MEM end
         /// Info. A configured start was performed and the connection preparation after it passed
         /// (Workflow #369 S6c; keys `alias`). A report line.
         EmulatorAutostartStarted => "emulator_autostart_started": info / none,
