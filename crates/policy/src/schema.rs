@@ -145,8 +145,9 @@ pub enum CatalogDiagnosticCode {
     /// SS-2h fix 1 (register §1.289; a warning): a pool writes `stop_line` and `hard_line` but no
     /// declared valuation, so its lines change nothing.
     PoolLinesUnvalued,
-    /// SCHED-C1a (register §1.299): a task's `benefit_fixed_value_milli` beside a `produces` entry
-    /// on a pool whose valuation is declared or pending, or beside `benefit_realization: true`.
+    /// SCHED-C1a (register §1.299): a task's `benefit_fixed_value_milli` beside
+    /// `benefit_realization: true`. #503 FIXV (register §1.550): no longer beside a `produces` entry
+    /// on a pool whose valuation is declared or pending, which stands beside it.
     FixedValueConflict,
     /// SCHED-C1c (register §1.299; a warning): a valued pool's lines cannot spend it: every judged
     /// consumer's run consumes more than the pool's capacity less its hard line.
@@ -415,10 +416,12 @@ pub struct TaskSpec {
     /// of a judged task without the cost of the pools it consumes, in milli of the value unit its
     /// instance's valuations weigh in (`contracts/scheduling/README.md`, "Fixed values written in
     /// the pack"). With it the task's net benefit is `V` less the cost of what it consumes, and
-    /// its `produces` are not read by that benefit. The standard-pack composer writes it from the
-    /// `schedule.json` rule member `fixed_value_milli`; a V2 catalog may write it directly. The
-    /// compiler holds it to `1..=2^53−1` and `benefit_judged: true`, and refuses it beside a
-    /// priced product or `benefit_realization: true` (`fixed_value_conflict`). It is not
+    /// its `produces` are read by that benefit only for their goal terms (a goal's gap weight).
+    /// The standard-pack composer writes it from the `schedule.json` rule member
+    /// `fixed_value_milli`; a V2 catalog may write it directly. #503 FIXV (register §1.550): the
+    /// compiler holds it to `−(2^53−1)..=2^53−1`, 0 included, and to `benefit_judged: true`, and
+    /// refuses it beside `benefit_realization: true` (`fixed_value_conflict`); a priced or pending
+    /// product beside it stands, its base valuation not read by the benefit. It is not
     /// `value_milli`, the score stage's utility term. Absent, the member serializes as nothing at
     /// all, so a catalog without it keeps its hash; an explicit `null` is refused
     /// (`type_mismatch`).
@@ -1022,6 +1025,15 @@ pub const POOL_LINES_SUBSYSTEM: &str = "pool_lines";
 /// after the decision reason it enables, so its spelling is that code's, taken from the registry
 /// (a literal outside the registry would repeat a registered name).
 pub const BENEFIT_FIXED_VALUE_SUBSYSTEM: &str = PolicyCode::BenefitFixedValue.as_str();
+
+/// #503 FIXV (register §1.550; `contracts/standard-pack-schedule.md`, "`requires`"): the
+/// configuration-manifest subsystem of a Runtime that reads a task's `benefit_fixed_value_milli`
+/// of any sign and beside a production of a priced or pending pool; a `schedule.json` names it
+/// beside [`BENEFIT_FIXED_VALUE_SUBSYSTEM`] when a rule's `fixed_value_milli` is 0 or below, or when
+/// a rule with a fixed value writes a production of a pool whose `valuation` is written (a block or
+/// the pending marker). No Runtime before 0.12.101 names it, so every such Runtime refuses such a
+/// file (`schedule_requires_missing`) and keeps the game's last good rules.
+pub const FIXED_VALUE_ANY_SUBSYSTEM: &str = "fixed_value_any";
 
 /// SCHED-C1c (register §1.299): the configuration-manifest subsystem of a Runtime that reads a
 /// pool's `trigger_line`; a `schedule.json` whose pool writes it names it in `requires` (beside
@@ -2114,5 +2126,13 @@ mod tests {
         assert_eq!(continues_from["minItems"], 1);
         assert_eq!(continues_from["maxItems"], 8);
         assert_eq!(continues_from["maxItems"], MAX_CONTINUED_TASK_IDS);
+
+        // #503 FIXV (register §1.550): V2 alone carries a task's `benefit_fixed_value_milli`, an
+        // integer of either sign, and its bounds are the ones the compiler holds it to.
+        assert!(task(&v1).get("benefit_fixed_value_milli").is_none());
+        let fixed_value = &task(&v2)["benefit_fixed_value_milli"];
+        assert_eq!(fixed_value["type"], "integer");
+        assert_eq!(fixed_value["minimum"], MIN_CANONICAL_INTEGER);
+        assert_eq!(fixed_value["maximum"], MAX_CANONICAL_INTEGER);
     }
 }

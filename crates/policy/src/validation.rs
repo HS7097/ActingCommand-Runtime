@@ -403,14 +403,7 @@ fn validate_tasks(
             diagnostics,
         );
         validate_limited(task, &path, map, descriptor, diagnostics);
-        validate_fixed_value(
-            task,
-            &path,
-            map,
-            &bundle.pools.pools,
-            descriptor,
-            diagnostics,
-        );
+        validate_fixed_value(task, &path, map, descriptor, diagnostics);
         validate_queue_wait(task, &path, map, descriptor, diagnostics);
         // Workflow #500 SV-2 (register §1.511): the values a rule carries for its package's
         // variables.
@@ -561,18 +554,18 @@ fn validate_limited(
 
 /// SCHED-C1a (register §1.299; `contracts/scheduling/README.md`, "Fixed values written in the
 /// pack", "Refused at compile time"): a task's `benefit_fixed_value_milli`. It is a V2 member (a
-/// V1 document that names it is refused as an unknown member). Its value lies in
-/// `1..=MAX_CANONICAL_INTEGER` (`limit_exceeded` at the member; a value of 0 is no value); it
-/// requires `benefit_judged: true` (`missing_required_field` at `benefit_judged`). Beside it,
-/// each a `fixed_value_conflict` at the member, since the task would then have two values and
-/// neither may silently win: (a) a `produces` entry on a pool whose `valuation` is a declared
-/// block or the pending marker, (b) `benefit_realization: true`, whose zero tier reads a modelled
-/// value's rounding.
+/// V1 document that names it is refused as an unknown member). #503 FIXV (register §1.550): its
+/// value lies in `MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER`, of either sign, 0 included
+/// (`limit_exceeded` at the member outside it); it requires `benefit_judged: true`
+/// (`missing_required_field` at `benefit_judged`). Beside `benefit_realization: true`, whose zero
+/// tier reads a modelled value's rounding, it is a `fixed_value_conflict` at the member. A
+/// `produces` entry on a pool whose `valuation` is a declared block or the pending marker stands
+/// beside it: the task's base value is the fixed value alone, and its productions feed only its
+/// goal terms (the evaluator's benefit, "A fixed value").
 fn validate_fixed_value(
     task: &TaskSpec,
     path: &str,
     map: &SourceMap,
-    pools: &[PoolSpec],
     descriptor: Option<(&str, u64)>,
     diagnostics: &mut Vec<CatalogDiagnostic>,
 ) {
@@ -589,11 +582,14 @@ fn validate_fixed_value(
         ));
         return;
     }
-    if !(1..=MAX_CANONICAL_INTEGER).contains(&value) {
+    if !(MIN_CANONICAL_INTEGER..=MAX_CANONICAL_INTEGER).contains(&value) {
         diagnostics.push(map.diagnostic(
             CatalogDiagnosticCode::LimitExceeded,
             &member,
-            format!("benefit_fixed_value_milli must be within 1..={MAX_CANONICAL_INTEGER}"),
+            format!(
+                "benefit_fixed_value_milli must be within \
+                 {MIN_CANONICAL_INTEGER}..={MAX_CANONICAL_INTEGER}"
+            ),
             descriptor,
         ));
     }
@@ -602,22 +598,6 @@ fn validate_fixed_value(
             CatalogDiagnosticCode::MissingRequiredField,
             format!("{path}/benefit_judged"),
             "benefit_fixed_value_milli requires benefit_judged: true",
-            descriptor,
-        ));
-    }
-    if let Some(effect) = task.produces.iter().find(|effect| {
-        pools
-            .iter()
-            .any(|pool| pool.id == effect.pool_id && pool.valuation.is_some())
-    }) {
-        diagnostics.push(map.diagnostic(
-            CatalogDiagnosticCode::FixedValueConflict,
-            &member,
-            format!(
-                "benefit_fixed_value_milli beside a production of the priced pool `{}`: remove the \
-                 fixed value or the pool's valuation",
-                effect.pool_id
-            ),
             descriptor,
         ));
     }

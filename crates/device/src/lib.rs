@@ -65,7 +65,9 @@ pub use input::*;
 pub use link_watch::*;
 pub use maatouch::*;
 pub use minitouch::*;
-pub use mumu::MumuInstallSource;
+pub use mumu::{
+    MumuInstallSource, MumuInstanceImages, mumu_installation_root, mumu_instance_images,
+};
 pub use mumu_manager::{
     BoundedMumuManagerReads, DeviceProcessPresence, DiscoveredMumuInstance, EmulatorControlFailure,
     EmulatorControlOutcome, EmulatorControlResult, InstanceState, MAX_MUMU_INSTANCE_NAME_BYTES,
@@ -77,7 +79,7 @@ pub use mumu_manager::{
     ResolvedMumuManager, SystemMumuManagerReads, application_state_read_problem, control_instance,
     discover_mumu_installation, discover_mumu_instances, mumu_capability_profile, mumu_state_wait,
     parse_application_state, query_instances, query_version, read_application_state,
-    read_instance_state, resolve_mumu_manager,
+    read_instance_state, resolve_mumu_manager, resolve_mumu_manager_with,
 };
 pub use nemu_diagnostic::*;
 pub use replay::*;

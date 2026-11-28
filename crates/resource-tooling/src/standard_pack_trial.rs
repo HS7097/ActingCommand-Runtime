@@ -32,6 +32,14 @@
 //! status row both answer; [`content_hash_prefix_of`] is the one content identity the plan,
 //! adoption and the status row name a content by.
 //!
+//! Workflow #503 TRIAL (0.12.101; `contracts/standard-pack-trial.md`, "The irreversible mark"):
+//! the run no longer asks for an acknowledgement of a package the irreversible mark flags. The
+//! line has no `--irreversible`, the plan no `irreversible_acknowledged`, and [`check_trial_run`]
+//! refuses only a missing authorization (`trial_irreversible_unacknowledged` is retired). The mark
+//! is still judged over `--root` and shown; the record keeps its member
+//! `irreversible_acknowledged`, written `false`, so that the records of every build read in every
+//! build.
+//!
 //! - **One reading** (fix round 2). The package directory is read once, one bounded snapshot by
 //!   the containment crate's `snapshot_content_directory`, and every member of the plan but the
 //!   irreversible mark comes from those bytes: the content hash, the kernel's admission of them
@@ -55,7 +63,8 @@
 //!   value by, and must be taken exactly as given.
 //! - **The irreversible mark.** Judged only over a game root (`--root`), by the contract crate's
 //!   `IrreversiblePackages` over every package that root registers, the directory tried standing
-//!   for the package of its id; without a root it is `not_judged`. It is shown, never refused.
+//!   for the package of its id; without a root it is `not_judged`. It is shown, never refused,
+//!   by the plan and (since #503 TRIAL) by the run.
 //! - **The state directory** is never a repository's or an installed root's, nor inside one: a
 //!   directory along its path that holds `.git` is a repository's; one whose `install\state.json`
 //!   is a file is an installed root ([`installed_root_containing`]).
@@ -133,7 +142,7 @@ const VALUE_MISSING: &str = "value_missing";
 
 /// What one trial is to try: `actinglab standard-pack trial <instance> --package <dir>
 /// [--authorization <reference>] [--variable <name>=<json>]... [--expect <outcome_key>]
-/// [--irreversible] [--root <game root>] [--state-dir <dir>] --plan`.
+/// [--root <game root>] [--state-dir <dir>] --plan`. Workflow #503 TRIAL: no `--irreversible`.
 #[derive(Debug, Clone)]
 pub struct StandardPackTrialRequest {
     /// The package directory: `packs/<id>` of a checkout, or a placed pack.
@@ -146,8 +155,6 @@ pub struct StandardPackTrialRequest {
     pub variables: Vec<(String, Value)>,
     /// The outcome key the trial is expected to end with.
     pub expect: Option<String>,
-    /// `--irreversible`: the caller acknowledges a package the irreversible mark flags.
-    pub irreversible: bool,
     /// The game root the irreversible mark is judged over.
     pub root: Option<PathBuf>,
     /// The Lab's state directory, where the trial's record is kept.
@@ -192,12 +199,11 @@ pub struct TrialPlan {
     pub ends: Vec<TrialDeclaredEnd>,
     /// Every variable the package declares, in declaration order.
     pub variables: Vec<TrialVariable>,
+    /// The irreversible mark: information, which nothing refuses (Workflow #503 TRIAL).
     pub irreversible: TrialIrreversible,
     /// What the mark was judged over; absent when it was not judged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub irreversible_basis: Option<TrialIrreversibleBasis>,
-    /// Whether `--irreversible` was given.
-    pub irreversible_acknowledged: bool,
     /// The outcome key the trial is expected to end with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expect: Option<String>,
@@ -231,7 +237,11 @@ pub struct TrialRecordPlan {
     /// What the mark was judged over; absent when it was not judged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub irreversible_basis: Option<TrialIrreversibleBasis>,
-    /// Whether `--irreversible` was given.
+    /// Workflow #503 TRIAL (0.12.101): no acknowledgement exists since 0.12.101, and a record of
+    /// this build always writes `false`. The member stays, required, so that a record keeps the
+    /// shape of `actingcommand.pack-trial.v1`: a record of an earlier build (`true` when its
+    /// `--irreversible` was given) reads here as written, and a record of this build reads in an
+    /// earlier build.
     pub irreversible_acknowledged: bool,
     /// The outcome key the trial is expected to end with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,6 +257,7 @@ impl TryFrom<TrialPlan> for TrialRecordPlan {
     /// to the bounds the plan's own check holds it to, by calling that check: blank
     /// (`value_missing`), longer than [`MAX_AUTHORIZATION_BYTES`] (`out_of_range`) or with a
     /// control character (`not_recognised`), each `validation_failed` naming `--authorization`.
+    /// Workflow #503 TRIAL: `irreversible_acknowledged` is `false`.
     fn try_from(plan: TrialPlan) -> Result<Self, Self::Error> {
         let Some(authorization) = authorization(plan.authorization.as_deref())? else {
             return Err(LabError::usage(format!(
@@ -265,7 +276,7 @@ impl TryFrom<TrialPlan> for TrialRecordPlan {
             variables: plan.variables,
             irreversible: plan.irreversible,
             irreversible_basis: plan.irreversible_basis,
-            irreversible_acknowledged: plan.irreversible_acknowledged,
+            irreversible_acknowledged: false,
             expect: plan.expect,
         })
     }
@@ -417,7 +428,8 @@ struct TriedPackage {
 /// package's reading and admission, its variables, `--expect`, then `--root`'s own (a root that
 /// is no directory or names no game, a root file that cannot be read or is too large, a root file
 /// missing or refused). Fix round 2: nothing is refused for an authorization not given or for the
-/// irreversible mark; the plan shows both. It writes nothing.
+/// irreversible mark; the plan shows both. It writes nothing. Workflow #503 TRIAL: the plan has no
+/// member `irreversible_acknowledged`.
 pub fn plan_standard_pack_trial(
     request: &StandardPackTrialRequest,
 ) -> LabResult<StandardPackTrialAnswer> {
@@ -501,7 +513,6 @@ pub fn plan_standard_pack_trial(
             variables,
             irreversible,
             irreversible_basis,
-            irreversible_acknowledged: request.irreversible,
             expect: request.expect.clone(),
         },
         run_requires,
@@ -509,16 +520,17 @@ pub fn plan_standard_pack_trial(
     })
 }
 
-/// Workflow #463 S3-11 (`contracts/standard-pack-trial.md`, "The run"): the refusals only the run
+/// Workflow #463 S3-11 (`contracts/standard-pack-trial.md`, "The run"): the refusal only the run
 /// needs, after the plan `answer` that [`plan_standard_pack_trial`] gave (its refusals come
-/// first), in this order, each before anything is sent and before anything is written:
-/// - no authorization: `trial_authorization_missing`;
-/// - a package the irreversible mark flags (`marked`) and no `--irreversible`:
-///   `trial_irreversible_unacknowledged`; a mark not judged (no `--root`) refuses nothing, as the
-///   plan says.
+/// first), before anything is sent and before anything is written: no authorization,
+/// `trial_authorization_missing`.
 ///
-/// Workflow #463 S3-8, S3-9: a `--variable` refuses nothing any more (`trial_variables_not_carried`
-/// is retired): the run carries the values the plan shows as given.
+/// Workflow #503 TRIAL (0.12.101): the irreversible mark refuses nothing here any more
+/// (`trial_irreversible_unacknowledged` is retired): a package the mark flags (`marked`) is sent
+/// under its authorization alone, as one `unmarked` or `not_judged` is, and its record keeps the
+/// mark and its basis as the plan shows them. Workflow #463 S3-8, S3-9: a `--variable` refuses
+/// nothing either (`trial_variables_not_carried` is retired): the run carries the values the plan
+/// shows as given.
 ///
 /// Then the plan as the record keeps it ([`TrialRecordPlan`]), its variables with the values the
 /// run is sent with. It reads and writes nothing, and it judges no authorization: the reference is
@@ -533,17 +545,6 @@ pub fn check_trial_run(answer: &StandardPackTrialAnswer) -> LabResult<TrialRecor
                 "a trial of {} on a real application is sent only under the owner's \
                  authorization: give --authorization <reference> (the reference of the owner's \
                  word); a plan (--plan) needs none",
-                plan.package_id
-            ),
-        ));
-    }
-    if plan.irreversible == TrialIrreversible::Marked && !plan.irreversible_acknowledged {
-        return Err(refused(
-            Outcome::new(ResourceToolingCode::TrialIrreversibleUnacknowledged)
-                .package_id(&plan.package_id),
-            format!(
-                "the irreversible mark flags {} over the root given (see the plan's \
-                 irreversible_basis): its trial is sent only with --irreversible",
                 plan.package_id
             ),
         ));

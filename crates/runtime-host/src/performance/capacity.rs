@@ -22,7 +22,7 @@ use actingcommand_contract::{
     PerformancePressureEventData, PerformancePressureKind, PerformancePressureRecord,
     PerformancePressureSeverity, PerformancePressureValue, RuntimeErrorCode,
 };
-use actingcommand_host_metrics::{CapacityTarget, capacity_volume, sample_capacity};
+use actingcommand_host_metrics::{CapacityTarget, OwnedImages, capacity_volume, sample_capacity};
 use actingcommand_ledger::{GlobalLedger, PersistedEvent};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -311,13 +311,20 @@ impl PerformanceMonitor {
             .performance
             .as_ref()
             .map_or(Duration::from_secs(2), |config| config.sample_interval);
+        // #503 NOISE-A: the system sampler and the monitor share one handle of owned images,
+        // which the host fills once its provider is installed.
+        let owned_images = OwnedImages::default();
         let mut monitor = match config.performance {
             Some(config) => {
                 let gpu = config.gpu_aggregate();
-                Self::enabled(config, system_performance_sampler(gpu))?
+                Self::enabled(
+                    config,
+                    system_performance_sampler(gpu, owned_images.clone()),
+                )?
             }
             None => Self::disabled(),
         };
+        monitor.owned_images = owned_images;
         let projection = Arc::new(CapacityProjection {
             owner_epoch: roots.owner_epoch,
             targets: roots.targets,

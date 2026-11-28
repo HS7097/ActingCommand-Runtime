@@ -563,6 +563,52 @@ pub(crate) fn mumu_root_from_capture_dll(path: &Path) -> Option<PathBuf> {
     })
 }
 
+/// #503 NOISE-A: the vendor's front end, under the installation root's `nx_main`.
+const MUMU_FRONT_END_IMAGE: &str = "MuMuNxMain.exe";
+/// #503 NOISE-A: the vendor's device process, under `nx_device\<version>\shell` of the root
+/// (`discovery::is_mumu_device_process` names it too).
+const MUMU_DEVICE_IMAGE: &str = "MuMuNxDevice.exe";
+/// #503 NOISE-A: the vendor's virtual machine images. They run from the vendor's own hypervisor
+/// directory, which is not under the installation root and which nothing of this layer finds, so
+/// they are named by their executable name only.
+const MUMU_VIRTUAL_MACHINE_IMAGES: [&str; 2] = ["MuMuVMMHeadless.exe", "MuMuNxSVC.exe"];
+
+/// #503 NOISE-A (register §1.552): the executable images the vendor runs an emulator instance of
+/// one installation with, which the Runtime's performance monitor counts as its own processes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MumuInstanceImages {
+    /// Images at these full paths: the front end, `nx_main\MuMuNxMain.exe` under the root.
+    pub paths: Vec<PathBuf>,
+    /// Images under each directory with one directory level left open, then the rest of the
+    /// path: the device process of every version, `nx_device\<version>\shell\MuMuNxDevice.exe`
+    /// under the root (the version is not read from the disk, so an upgrade's new version is one
+    /// of them too).
+    pub open_level_paths: Vec<(PathBuf, PathBuf)>,
+    /// Images by executable name, wherever they lie: the virtual machine's.
+    pub names: Vec<&'static str>,
+}
+
+/// #503 NOISE-A: the images an instance of the installation `root` runs ([`MumuInstanceImages`]).
+/// Reads nothing from the disk: an image that does not exist is named all the same and matches
+/// no process.
+pub fn mumu_instance_images(root: &Path) -> MumuInstanceImages {
+    MumuInstanceImages {
+        paths: vec![root.join("nx_main").join(MUMU_FRONT_END_IMAGE)],
+        open_level_paths: vec![(
+            root.join("nx_device"),
+            Path::new("shell").join(MUMU_DEVICE_IMAGE),
+        )],
+        names: MUMU_VIRTUAL_MACHINE_IMAGES.to_vec(),
+    }
+}
+
+/// #503 NOISE-A: the installation root a path of the vendor's lies under, when the path shows
+/// one: a vendor tool, a debug bridge or a capture library under the root's `nx_main` or
+/// `nx_device`, or a capture library under a root's `shell\sdk`. Reads nothing from the disk.
+pub fn mumu_installation_root(path: &Path) -> Option<PathBuf> {
+    mumu_root_from_capture_dll(path)
+}
+
 pub(crate) fn same_mumu_install_root(left: &Path, right: &Path) -> bool {
     path_key(left) == path_key(right)
 }
