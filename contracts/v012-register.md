@@ -50986,8 +50986,8 @@ Addendum 1).
   offset, size kept, a sample's jitter shifting it), inside `instance_rect`; the layout declares
   its pool once in its own `identity_templates`, 1 to 128 entries (`MAX_LAYOUT_IDENTITY_TEMPLATES`);
   a slot's pool keeps 1 to 16. Of each template its image and its colour check are used; its own
-  region is not, and its own threshold decides nothing (it only picks the match a colour check is
-  read at, as for every relative check).
+  region is not, and its own threshold judges no entry (as first built this said it "decides
+  nothing"; it decides where a colour check is measured at all, which fix round 1 below takes up).
 - *2, two kinds of entry* (`CandidatePoolTemplate`, `key`). `{id, variant?, target_id}` and
   `{"other": true, target_id}`; at least one key entry, no target twice, an `other` entry names no
   `id` or `variant` and `other` is written only `true`; a slot's pool (`CandidateIdentityTemplate`,
@@ -51085,6 +51085,38 @@ never held 0 at every run once its card appears); a selection step or a scan tha
 a layout (refused, left open); an abbreviated count (a key's card whose count is abbreviated is
 unread, so such an item stays out of such a list); the cost of the evaluations (not measured: the
 first real package measures it); a row of a task diagnostic that names a pool (no member for it).
+
+**Fix round 1 (the independent review; the coordinator's).** The review found the judgement
+(`read_pool`), the place beside the projection, the declaration, revision 29 and every existing
+package's path as ruled, and two things that had to change.
+(1) *A colour that was not measured was counted as a failed check.* A colour check is measured only
+at a match that reaches the template's own threshold. The producer (`pool_score`) gave an entry
+whose template stayed below that threshold "the check failed", and the mapping then left the entry
+out of the comparison: a key just under its threshold no longer held an `other` picture to the
+margin, and the card was passed over (threshold 900, margin 50: a key at 880 and an `other` at
+910 read none of the keys, where ruling 3 reads them unread). Now such an entry was due no verdict
+and competes on its score; where the template did reach its threshold a verdict was due, and a
+colour that could not be read there did not hold. And so that an entry which declares a colour check can never be the
+read without its colour judged, admission holds the threshold of such a target (its own, else the
+pack's default) at or below the identity's `minimum_score_milli / 1000`
+(`validate_layout_pool`; refused at the entry's `target_id`). Tests:
+`list_b_a_colour_that_was_not_measured_is_no_failed_check` (a card of the `other` picture: neither
+key's colour was measured, none counts as failed, the best key is one of them, the card is none of
+the keys) and one more refusal in the declaration's test (a colour-checked entry whose template
+asks 0.95 against the identity's 900).
+(2) *The risk of a colour check was not told to the author.* Entries that share a drawing are told
+apart by their colour checks alone; a card whose own entry fails its check by a little while
+another entry of the drawing passes is read with confidence as that other entry: a wrong key, or,
+where the other is an `other` picture, a zero that nothing corrects. The contracts now say it and
+what the author and the acceptance owe ([business-identity-consensus.md](business-identity-consensus.md),
+"What a colour check risks"; [resource-readings.md](resource-readings.md), "The cost").
+Also said now: a deadline that falls inside a pool fails the run and publishes no list, and
+admission does not count a template's time. Left as found: a `region` smaller than a pool's
+template is refused at the run and not at admission; the observation of a page projects a pool
+without a sample deadline. Not proven by a test: a colour-checked key just under its threshold
+beside an `other` within the margin, on a frame (the mapping's table holds the case on scores);
+the deadline inside a pool; the host's record of a pool's timing; a sealed file without the
+members byte for byte.
 
 **At deploy.** Nothing to configure, and nothing changes until a package declares the members: none
 in production does. A package with them is adopted only once this build is live; a rollback below

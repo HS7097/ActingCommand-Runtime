@@ -4589,6 +4589,7 @@ tests = [
     "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_b::list_b_a_layout_pool_is_admitted_and_each_wrong_declaration_is_refused_at_its_pointer",
     "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_b::list_b_a_pool_of_128_over_64_instances_projects_within_the_projections_limits",
     "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_b::list_b_pictures_of_one_drawing_in_two_colours_are_told_apart_by_their_colour_checks",
+    "actingcommand-recognition-pack::lib::candidate_layout::gate_503_list_b::list_b_a_colour_that_was_not_measured_is_no_failed_check",
     "actingcommand-execution-kernel::lib::contained_task::gate_503_list_b::list_b_eighty_cards_over_thirteen_viewports_give_the_six_keys_shown_and_a_whole_list",
     "actingcommand-execution-kernel::lib::contained_task::gate_503_list_b::list_b_a_card_no_picture_recognises_leaves_the_list_unread",
     "actingcommand-execution-kernel::lib::contained_task::gate_503_list_b::list_b_a_card_read_as_a_key_on_one_viewport_and_as_other_on_another_is_unread",

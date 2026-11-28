@@ -97,7 +97,8 @@ impl CandidatePoolTemplate {
 /// Workflow #503 LIST-B: what the projection read of one entry of a layout's pool on one
 /// instance, as the mapping takes it: the entry's template score in normalized integer milli and,
 /// for a target that declares a colour check, whether the check held where the template matched
-/// (`None` for a target without one). The mapping decides what both mean
+/// (`None` for a target without one, and, fix round 1, for one whose colour was not measured: its
+/// template did not reach the target's own threshold here). The mapping decides what both mean
 /// ([`CandidateIdentityDeclaration::read_pool`]); the producer only hands them over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CandidatePoolScore {

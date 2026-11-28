@@ -875,7 +875,9 @@ entries).
   by at least `minimum_margin_milli`; its feature is Unknown `out_of_domain`, the reason that says
   the read names something outside the identity's domain (a text read none of the keys keeps
   `low_confidence`, the reason its mapping gave it before LIST-A). An entry whose colour check
-  failed does not compete. The scan of a run and the dry run ask one function of the layout for a
+  failed does not compete; one whose colour was not measured (its template did not reach its
+  target's own threshold on the card) competes on its score and holds the others to the margin
+  (fix round 1). The scan of a run and the dry run ask one function of the layout for a
   position's mark, for a text identity and a picture identity alike (`CandidateLayout::name_mark`);
   no reader compares scores.
 - **No rule "far below every key".** A card that no picture of the pool recognises is unread,
@@ -900,10 +902,22 @@ entries).
   that key 0 at every run and nothing corrects it: the offline check shows it ("Offline" below),
   and the person who accepts such a package compares frames for every key the account holds.
   Pictures that differ only in colour (the grades of one item) are told apart only by their
-  targets' colour checks. Nothing of the Runtime is paused, held or lowered on a reading of zero.
+  targets' colour checks, and there a second wrong zero stands (fix round 1, the review): a card
+  whose own entry fails its colour check by a little (a highlight on the selected card, a badge
+  over the patch the check reads) while an `other` entry of the same drawing passes is passed
+  over with confidence, and its key reads 0; where the entry that passes is a key, the card is
+  read as that key. So the colour checks of entries that share a drawing accept disjoint colours
+  in every state a card can show, and the acceptance of such a package compares frames of each
+  state against the offline check
+  ([business-identity-consensus.md](business-identity-consensus.md), "What a colour check
+  risks"). Nothing of the Runtime is paused, held or lowered on a reading of zero.
 - **The bound.** At most 128 templates, each scored once over each of at most 64 instances on a
   viewport (8192 evaluations), bounded only by the step's deadline (its scan's `max_ms`, checked
   before each evaluation); no budget of the projection counts them, and the cost was not measured.
+  A deadline that falls inside a pool fails the run (`candidate_sample_deadline_exceeded`, at the
+  list reading), and no list is published; admission does not count a template's time, so a pool
+  too slow for its step is admitted and then fails at every run, which the first run on a device
+  shows.
 - **Not built.** A selection step or a scan that selects over such a layout is refused in this
   release ([selection-graph.md](selection-graph.md), "Rules"); it is left open, not closed off.
   An abbreviated count (ten thousand and more) is not read as a number: a key's card whose count

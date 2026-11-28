@@ -355,6 +355,13 @@ fn list_b_the_mapping_judges_a_key_none_of_the_keys_and_unread_from_the_pool() {
             CandidateNameMark::Unread,
             CandidateUnknownReason::LowConfidence,
         ),
+        // Fix round 1 (the review): a key just under the threshold holds an `other` above it to
+        // the margin.
+        (
+            [880, 200, 910, 100],
+            CandidateNameMark::Unread,
+            CandidateUnknownReason::LowConfidence,
+        ),
     ] {
         let (feature, reading) = identity.read_pool(&pool, &scored(&scores));
         assert_eq!(feature, unknown(reason), "{scores:?}");
@@ -539,6 +546,22 @@ fn list_b_a_layout_pool_is_admitted_and_each_wrong_declaration_is_refused_at_its
         vec![fixed_check],
         &format!(
             "{pool_pointer}/0/target_id: template 'card/pic_fixed' of a layout's pool may declare only a template_relative color_check"
+        ),
+    );
+    // Fix round 1 (the review): a colour is measured only where the template reaches its own
+    // threshold, so an entry that declares a colour check may not ask more of its template than
+    // the identity asks (0.95 against the identity's 900).
+    let mut strict = picture_target(
+        "card/pic_strict",
+        3,
+        Some(square_check("card/pic_strict", RED)),
+    );
+    strict["threshold"] = json!(0.95);
+    refused(
+        vec![key("member-00", "card/pic_strict")],
+        vec![strict],
+        &format!(
+            "{pool_pointer}/0/target_id: template 'card/pic_strict' of a layout's pool declares a color_check, so its threshold may not exceed the identity's minimum_score_milli"
         ),
     );
 
@@ -799,6 +822,55 @@ fn list_b_pictures_of_one_drawing_in_two_colours_are_told_apart_by_their_colour_
     assert_eq!(read.mark, CandidateNameMark::Unread);
     assert_eq!(read.colour_failed, 2);
     assert_eq!(read.best_key, None, "no key competed");
+}
+
+// Fix round 1 (the review): a colour is measured only where the template reaches its target's own
+// threshold, and a colour that was not measured is no failed check. The pool is test 5's: two keys
+// of one picture (kind 0), one checking a red square and one a blue, and the `other` picture of
+// kind 1. A card shows the picture of kind 1 beside a red square: neither key's template reaches
+// its threshold there, so neither colour was measured; both keys compete on their scores (no check
+// failed, and the best key is one of them), the `other` picture is clear of them by the margin,
+// and the card is none of the keys.
+#[test]
+fn list_b_a_colour_that_was_not_measured_is_no_failed_check() {
+    let pack = cards_pack(
+        vec![
+            picture_target("card/red", 0, Some(square_check("card/red", RED))),
+            picture_target("card/blue", 0, Some(square_check("card/blue", BLUE))),
+            picture_target("card/pic_001", 1, None),
+        ],
+        vec![member(&keys(2))],
+        vec![
+            key("member-00", "card/red"),
+            key("member-01", "card/blue"),
+            other("card/pic_001"),
+        ],
+    );
+    let evaluator = admitted(&pack, 0..2).unwrap_or_else(|error| panic!("{}", error.message()));
+    let frame = scene(&[Card {
+        index: 0,
+        kind: 1,
+        square: Some(RED),
+    }]);
+    let (projection, _, judged) = evaluator
+        .scene_context(&frame)
+        .project_candidates_judged(LAYOUT)
+        .unwrap_or_else(|failure| panic!("the projection: {failure}"));
+    assert_eq!(projection.candidates().len(), 1);
+    let candidate = &projection.candidates()[0];
+    let [read] = judged.samples(&candidate.id, "member") else {
+        panic!("one judged read");
+    };
+    assert_eq!(read.mark, CandidateNameMark::NoneOfTheKeys);
+    assert_eq!(
+        read.colour_failed, 0,
+        "no colour was measured, so none failed"
+    );
+    assert!(read.best_key.is_some(), "the keys competed on their scores");
+    assert_eq!(
+        read.best_other.as_ref().map(|best| best.target_id.as_str()),
+        Some("card/pic_001")
+    );
 }
 
 // An uncompressed RGB PNG.

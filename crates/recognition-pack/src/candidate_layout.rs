@@ -2429,7 +2429,15 @@ fn diagnostic_sample(
 
 /// Workflow #503 LIST-B: what the mapping takes of one evaluation of the pool entry `target_id`:
 /// its template score in normalized integer milli, and, for a target that declares a colour check,
-/// whether the check held where the template matched (the colour evaluation's own verdict).
+/// whether the check held where the template matched (the colour evaluation's own verdict). Fix
+/// round 1 (the review): a colour is measured only where the template reaches its target's own
+/// threshold, so an entry whose score stays below it was due no verdict (`None`, as a target
+/// without a check has) and competes on its score; counting it as a failed check took it out of
+/// the comparison, and a key just under its threshold no longer held an `other` picture to the
+/// margin. Where the template did reach its threshold a verdict was due: the colour held, or it
+/// did not (a colour that could not be read there did not hold). Admission keeps that threshold at
+/// or below the identity's ([`validate_layout_pool`]), so a score that could win has had its colour
+/// judged.
 fn pool_score(
     evaluator: &RecognitionEvaluator,
     target_id: &str,
@@ -2448,9 +2456,13 @@ fn pool_score(
         evaluator.target(target_id),
         Ok(RecognitionTarget::Template(template)) if template.color_check.is_some()
     );
+    let reached = evaluation
+        .template
+        .as_ref()
+        .is_some_and(|template| template.score >= template.threshold);
     Ok(CandidatePoolScore {
         score_milli,
-        colour_held: checked.then(|| {
+        colour_held: (checked && reached).then(|| {
             evaluation
                 .color
                 .as_ref()
@@ -4398,6 +4410,21 @@ fn validate_layout_pool(
                 {
                     errors.push(format!(
                         "{target_pointer}: template '{}' of a layout's pool may declare only a template_relative color_check",
+                        entry.target_id
+                    ));
+                }
+                // Fix round 1 (the review): a colour is measured only where the template reaches
+                // its own threshold, so that threshold may not pass the identity's: a score that
+                // could win has then had its colour judged.
+                if let CandidateIdentityRecognition::IconTemplates {
+                    minimum_score_milli,
+                    ..
+                } = identity.recognition
+                    && template.color_check.is_some()
+                    && pack.template_threshold(template) > f32::from(minimum_score_milli) / 1000.0
+                {
+                    errors.push(format!(
+                        "{target_pointer}: template '{}' of a layout's pool declares a color_check, so its threshold may not exceed the identity's minimum_score_milli",
                         entry.target_id
                     ));
                 }

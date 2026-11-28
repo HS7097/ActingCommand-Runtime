@@ -65,10 +65,12 @@ slot's): 1 to 128 entries, of two kinds:
 The pool holds at least one key entry and names no target twice. Every entry's target is a raw
 `template` target without `mask`, `scales`, `unique` or `luma_floor`, whose `color_check`, when it
 declares one, is `template_relative`. Of the target the pool uses its image and its colour check;
-its own region (its search region) is not used, and its own threshold decides nothing (for a target
-with a colour check it only decides which match the check is read at, as a template with a relative
-check always takes the best match that passes both); the identity's `minimum_score_milli` and
-`minimum_margin_milli` judge. Each refusal names its pointer
+its own region (its search region) is not used. Its own threshold judges no entry, the identity's
+`minimum_score_milli` and `minimum_margin_milli` do; but (fix round 1, the review) for a target
+with a colour check it decides where the colour is measured at all: only at a match that reaches
+it. So a target of the pool that declares a colour check keeps its own threshold (its own, else
+the pack's default) at or below `minimum_score_milli / 1000`: a score that could win has then had
+its colour judged. Each refusal names its pointer
 (`/candidate_layouts/<i>/identity_templates/<feature>/<n>/…`, `…/features/<j>/region`).
 
 **The judgement, one place.** On each actionable instance every entry is scored in the feature's
@@ -79,7 +81,12 @@ identity mapping judges the read once, with every score
 - an entry whose target declares a colour check that failed where the template matched does not
   compete at all: it is neither the best key nor the best `other`, so two entries of one drawing in
   two colours are told apart by their colour checks, and the margin is judged among the entries
-  that remain;
+  that remain. A colour that was not measured (the template did not reach its target's own
+  threshold on this instance) is no failed check: the entry competes on its score, which by the
+  rule above is below `minimum_score_milli`, so it cannot be the read but still holds every other
+  entry to the margin (fix round 1: counting it as failed let an `other` picture pass over a card
+  whose key stood just under its threshold). Where the template did reach its threshold a verdict
+  was due, and a colour that could not be read there did not hold;
 - **a key**: the key entries that compete judged as a slot's pool is (the best at
   `minimum_score_milli` or above and clear of every other key by `minimum_margin_milli`), with the
   best `other` entry counted as one more competitor of a different identity for the margin;
@@ -93,6 +100,19 @@ identity mapping judges the read once, with every score
 A pool without an `other` entry whose entries all compete answers the feature a slot's pool answers
 over the same scores. There is no rule that passes over a card whose every score is low: a card no
 picture recognises is unread.
+
+**What a colour check risks, for the author** (fix round 1, the review). Entries that share one
+drawing are told apart by their colour checks alone: the margin cannot separate them, their scores
+are equal. If a card's own entry fails its colour check by a little (a highlight on the selected
+card, a badge over the patch the check reads) while another entry of the same drawing passes, the
+card is read, with confidence, as that other entry: as a wrong key, or, when the other entry is an
+`other` picture, as none of the keys, which reads its key 0 and is corrected by nothing. The
+tolerance is the `max_distance` (and the `alternatives`) the target's `color_check` declares. So
+the colour checks of entries that share a drawing accept disjoint colours, each in every state a
+card can show (selected, marked, dimmed); the patch a check reads lies where no overlay falls; and
+whoever accepts such a package compares frames of every state against the offline check's answer
+(`package list-check`: the best key, the best `other` entry and the count of entries whose colour
+failed, [resource-readings.md](resource-readings.md), "Offline").
 
 **Beside the projection.** The full scores go nowhere else: not into the projection, not into a
 hash, not into a record. The projection carries the mapped feature (the known key, or Unknown with
