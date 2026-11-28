@@ -117,6 +117,18 @@ is declared by the packages that write the list, which the reader does not see. 
 another kind never equals a position: the computation then takes the position as not known
 (`goal_records_position_unknown`, "What is computed").
 
+**A truth value in a list** (Workflow #455 RR3a, since 0.12.96; [v012-register.md](v012-register.md)
+§1.539). A list's column may hold a truth value: whether a mark is on the card (a `passed` column of
+a list reading, [resource-readings.md](resource-readings.md), "List readings"). The computation
+reads it as a whole number, false as 0 and true as 1, so a position may count marks: a rank that a
+card shows as one badge or another, or as none, is two such columns, and the three ranks are three
+of the four pairs `[0, 0]`, `[1, 0]`, `[0, 1]`, `[1, 1]`, whichever the package's two columns make
+them. The file still writes whole numbers only (a truth value in a position stays `malformed`). A
+pair no position holds is a position not known, as any reading that equals none. What a `false`
+means is the list package's: a mark that was not recognised reads as not there, so the package that
+writes such a column answers for its templates telling the mark from its absence on every card, and
+its acceptance compares each card with its frame.
+
 ### Prerequisites
 
 Fix round 1 states what a prerequisite `{column, at_least, from?}` of a column, the *requiring*
@@ -365,8 +377,9 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   one, whose reading has not covered the character, which a later reading may); a row of the key
   without the reading column (`goal_records_reading_missing`: the package that reads the list does
   not write the column this file names, which no later reading of that package mends); readings
-  that form no position, a value of another kind or a
-  tuple equal to none (`goal_records_position_unknown`). Known, the need is the sum of the steps from
+  that form no position, a value of another kind than a whole number or (since 0.12.96, read as 0
+  or 1) a truth value, or a tuple equal to none (`goal_records_position_unknown`). Known, the need
+  is the sum of the steps from
   the current position to the target in the order of `positions` (a key's override of its class's
   step taken instead, a step's `@<role>` the key's own item); a target at or behind the current
   position asks nothing.

@@ -2788,7 +2788,7 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.95",
-      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a record's column reads a position its ladder does not hold: a reading that is no whole number, or a tuple of readings equal member for member to no position of the ladder (or a reading column no list of the table gives). Pending: that column adds nothing. Its text lists them (entry/key/column, a sub as column/sub). On every candidate of the instance.",
+      "description": "Scheduling decision reason (Workflow #455 RR3, register section 1.538): a record's column reads a position its ladder does not hold: a reading that is neither a whole number nor a truth value (since 0.12.96, Workflow #455 RR3a, a truth value reads as 0 or 1), or a tuple of readings equal member for member to no position of the ladder (or a reading column no list of the table gives). Pending: that column adds nothing. Its text lists them (entry/key/column, a sub as column/sub). On every candidate of the instance.",
       "common_causes": "The table's ladder does not list a grade the account's character stands at, or the list's reading is wrong.",
       "handling": "The resource side adds the position to the ladder, or the reading package is corrected."
     },

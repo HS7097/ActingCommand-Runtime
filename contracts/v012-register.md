@@ -51499,6 +51499,51 @@ v2 policy with needs have no test; the computation is not in the cycle's timing 
 **At deploy.** Nothing to configure, and nothing changes for an instance until records are set on
 it. In the release notes' language: 新增：存了“练谁、练到哪”记录的实例，调度器每轮评估前按根的 `goal-tables.json`、进度列表和库存算出各池还缺多少，按 `max(0, 需求 + 囤货 − 持有)` 叠在已存的目标上（不存盘，目标页照旧显示人设的值），产出所缺物品的任务得到加权；读不到的部分不加，原因写在候选的理由里（`goal_records_*`）。
 
+### 1.539 Slice #455 RR3a (0.12.96): a truth value a progress list holds reads as a whole number in a record's walk, false 0 and true 1, so a ladder's position may count marks a card shows (board #455; the coordinator's ruling of 11-28, on what the resource side found on a roster's cards; written by the coordinator; on main `5ee6ed18`, which holds §1.538)
+
+It ships in 0.12.96. [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("A truth value in
+a list"; "What is computed", the walk) is the contract; the text of the policy fragment's
+`goal_records_position_unknown` follows it.
+
+**What it is for.** §1.538 reads a character's current position from the reading columns of the
+table's progress lists, and took a whole number only. A roster's card may show a rank as a badge:
+one badge for the first rank, another for the second, and nothing at all for none, where the card
+shows whatever lies behind. A list reading has three kinds of column ([resource-readings.md](resource-readings.md),
+"List readings"): a truth value (`passed`: a target is on the card or is not), a whole number read
+as digits, and an identity. A badge is none of the last two, and "nothing there" has no picture of
+its own to recognise, so the rank is two `passed` columns. The walk could not read them: a truth
+value was a reading of another kind, the position not known, and a table whose ladder begins with
+such a rank pushed nothing.
+
+**The ruling, as built.** In the walk's one reader of a current position
+(`crates/runtime-host/src/goal_needs.rs`, `read_current`), a truth value reads as 0 for false and 1
+for true; every other rule is as it was. A table writes whole numbers only, as before: its
+positions name the pairs its package's two columns make (three ranks are three of the four pairs),
+and a pair no position holds is a position not known, said as any other
+(`goal_records_position_unknown`). No list reading changes, and no file's format: the tables'
+reader, the goal edit's check of a target and the stored records are untouched, so there is no
+interface revision. A build before 0.12.96 reads such a column's position as not known and adds
+nothing for it, which is the lower bound it always gave.
+
+**Not built, on purpose.** A list column that reads a picture as a whole number, with a declared
+value for "none of them", was the other way, and is not built: it is a slice of the size of §1.536
+for what two `passed` columns already say. "Not recognised reads as not there" is what a `passed`
+column has always meant, so this slice opens no new way to misread; what it leaves to the package is
+stated in the contract: its templates must tell the mark from its absence on every card, and its
+acceptance compares each card with its frame. A misread that takes a present badge for an absent
+one makes the need larger, not smaller, for as long as it lasts; that is the package's to rule out.
+
+**Tests** (incident `#455 RR3a`; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `rr3a_p1_a_truth_value_in_a_list_reads_as_zero_or_one` (host, pure) | a rank ladder over two truth-value columns with positions `[0,0]`, `[1,0]`, `[0,1]` and a record to the last: 300, 200 and nothing asked, no note; `[1,1]` and a text in a column are `goal_records_position_unknown` and add nothing |
+
+**Nothing moved.** A table whose reading columns hold whole numbers is read as before: §1.538's
+tests stand unchanged.
+
+**At deploy.** Nothing to configure. In the release notes' language: 新增：规则表的读数列读到“有／没有”（列表的 `passed` 列）时按 1／0 读，所以一条梯的位置可以用卡上有没有某个标记来定（比如两种徽标各一列）。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

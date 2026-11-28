@@ -556,6 +556,10 @@ impl Walk<'_, '_, '_> {
             };
             match row.get(reading) {
                 Some(FactScalar::Integer(value)) => position.push(*value),
+                // Workflow #455 RR3a (0.12.96): a truth value reads as a whole number, false 0 and
+                // true 1. A list's `passed` column says whether a mark is on the card (a badge that
+                // is there or is not), and a ladder's position may count such marks.
+                Some(FactScalar::Boolean(marked)) => position.push(i64::from(*marked)),
                 None => {
                     self.notes.push(RecordNeedsNote::ReadingMissing {
                         record: self.record.clone(),
