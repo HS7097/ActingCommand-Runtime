@@ -22,6 +22,11 @@
 //!   `trigger_line` `T` in the same two forms, read with them; without it `T` is the capacity. The
 //!   lines read must then hold `0 ≤ H < S ≤ T ≤ cap` (`lines_invalid`, with `trigger_line`).
 //!   Below `T`, while no episode is under way, the pool is below the cap for the rules above.
+//!   #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "Below a pool's trigger
+//!   line"): there, on an asleep instance, [`plan`] also gives each candidate the earliest time a
+//!   regenerating pool it consumes whose lines read reaches its trigger line
+//!   ([`Lines::trigger_at`], from the same read as the reading), and the benefit gate defers a
+//!   consumer that would pass until then; on every other instance nothing changes.
 //! - **The capped state.** At `r ≥ T` (at the start too; SCHED-C1c: `T` where SS-2h read the cap)
 //!   the pool enters a capped episode on the instance; it ends once `r ≤ S` and `r < T`
 //!   ([`Lines::at_trigger`], [`Lines::spent`]). A round lists the judged consumers of the
@@ -429,10 +434,13 @@ pub(super) enum Disposition {
     /// would pass (its hard line, or another consumer's capped order). #455 B1 ruling 9 (register
     /// §1.518): `below_trigger` when a regenerating pool it consumes is below its trigger line (the
     /// capacity without a written one), or its lines give no value, with no episode under way, so
-    /// the gate judges whether it may spend without its goal terms.
+    /// the gate judges whether it may spend without its goal terms. #503 WAKE (register §1.549): on
+    /// an asleep instance, `trigger_at` when such a pool's lines read, the earliest time one of them
+    /// reaches its line ([`Lines::trigger_at`]); `None` on every other instance.
     Normal {
         hold: Option<DecisionReason>,
         below_trigger: bool,
+        trigger_at: Option<TriggerAt>,
     },
     /// A capped order holds it back this round.
     Held(DecisionReason),
@@ -441,6 +449,19 @@ pub(super) enum Disposition {
         benefit: KnownBenefit,
         slot: Box<CappedSlot>,
     },
+}
+
+/// #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "An asleep instance", "Below a
+/// pool's trigger line"): when a regenerating pool a candidate of an asleep instance consumes reaches
+/// its trigger line, with what the reason that waits for it names: the pool, its reading and its
+/// trigger line as read now, and where its lines come from.
+#[derive(Debug, Clone)]
+pub(super) struct TriggerAt {
+    pub(super) unix_ms: u64,
+    pub(super) pool_id: String,
+    pub(super) reading: i64,
+    pub(super) trigger: u64,
+    pub(super) source: LinesSource,
 }
 
 /// SS-2h: a candidate's place in a capped round's block: the pool, its place among the block's
@@ -533,9 +554,45 @@ struct Lines {
     trigger_line: Option<u64>,
     /// SCHED-C1e: where the lines come from: the instance's own set, the catalog or the defaults.
     source: LinesSource,
+    /// #503 WAKE (register §1.549): what `reading` was projected from at this same read, when the
+    /// pool regenerates; `None` for a pool that does not, or whose snapshot is above a capacity read
+    /// from its fact (it does not regenerate).
+    rise: Option<Rise>,
+}
+
+/// #503 WAKE (register §1.549): a regenerating pool's reading as [`lines`] read it: its snapshot's
+/// value `v` and time `t0`, its regeneration of `amount` every `per_ms`, and the consumption the
+/// reading does not show yet `u`.
+#[derive(Debug, Clone, Copy)]
+struct Rise {
+    value: u64,
+    observed_at_unix_ms: u64,
+    amount: u64,
+    per_ms: u64,
+    unshown: i128,
 }
 
 impl Lines {
+    /// #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "Below a pool's trigger
+    /// line"): when the pool's projection less the consumption its reading does not show yet
+    /// reaches the trigger line `T` as read now: `r(t) = min(v + ⌊(t − t0) ÷ p⌋·a, cap) − u` is at
+    /// least `T` from `t_T = t0 + p·⌈(T + u − v) ÷ a⌉`, a step of the projection. `None` when it
+    /// never gets there: the pool does not regenerate ([`Self::rise`]), it gains nothing a step, or
+    /// `T + u` is above the capacity; and when the time lies past the integer range.
+    fn trigger_at(&self) -> Option<u64> {
+        let rise = self.rise?;
+        let target = i128::from(self.trigger()) + rise.unshown;
+        if rise.amount == 0 || rise.per_ms == 0 || target > i128::from(self.capacity) {
+            return None;
+        }
+        let missing = u128::try_from(target - i128::from(rise.value)).unwrap_or(0);
+        let steps = missing.div_ceil(u128::from(rise.amount));
+        steps
+            .checked_mul(u128::from(rise.per_ms))
+            .and_then(|offset| offset.checked_add(u128::from(rise.observed_at_unix_ms)))
+            .and_then(|at| u64::try_from(at).ok())
+    }
+
     /// SCHED-C1c (register §1.299): the trigger line `T`, the capacity without one. The episode's
     /// rule reads it where SS-2h read the cap: it begins at `r ≥ T` and is spent at `r ≤ S`,
     /// `r < T`.
@@ -746,8 +803,23 @@ pub(super) fn plan(
                 // a regenerating pool (its capacity without a written one), the gate judges whether
                 // a candidate may spend without its goal terms.
                 let below_trigger = regenerates && !lines.at_trigger();
+                // #503 WAKE (register §1.549): on an asleep instance, when the pool reaches its
+                // trigger line, from what these lines were read from; nothing on any other.
+                let trigger_at = lines
+                    .trigger_at()
+                    .filter(|_| below_trigger && context.asleep.contains(&instance.instance_id))
+                    .map(|unix_ms| TriggerAt {
+                        unix_ms,
+                        pool_id: pool.id.clone(),
+                        reading: record_integer(lines.reading),
+                        trigger: lines.trigger(),
+                        source: lines.source,
+                    });
                 for (&task_id, (index, _, term)) in &candidates {
                     decided[*index].below_trigger |= below_trigger;
+                    if let Some(at) = &trigger_at {
+                        decided[*index].reaches(at);
+                    }
                     let after = lines.reading - i128::from(units(term.consumed_milli)?);
                     if after < i128::from(lines.hard) {
                         decided[*index].normal_hold(&for_task(
@@ -838,6 +910,9 @@ struct Decided {
     hold: Option<DecisionReason>,
     member: Option<(KnownBenefit, CappedSlot)>,
     below_trigger: bool,
+    /// #503 WAKE (register §1.549): on an asleep instance, the earliest time a regenerating pool it
+    /// consumes whose lines read reaches its trigger line, with no episode under way.
+    trigger_at: Option<TriggerAt>,
 }
 
 impl Decided {
@@ -853,8 +928,20 @@ impl Decided {
         }
     }
 
+    /// #503 WAKE: keeps the earlier of the trigger times, the first in pool order on a tie.
+    fn reaches(&mut self, at: &TriggerAt) {
+        if self
+            .trigger_at
+            .as_ref()
+            .is_none_or(|known| at.unix_ms < known.unix_ms)
+        {
+            self.trigger_at = Some(at.clone());
+        }
+    }
+
     fn disposition(self) -> Disposition {
         let below_trigger = self.below_trigger;
+        let trigger_at = self.trigger_at;
         match (self.held, self.hold, self.member) {
             (Some(held), _, _) => Disposition::Held(held),
             (None, Some(hold), Some(_)) => Disposition::Held(hold),
@@ -865,6 +952,7 @@ impl Decided {
             (None, hold, None) => Disposition::Normal {
                 hold,
                 below_trigger,
+                trigger_at,
             },
         }
     }
@@ -1007,6 +1095,20 @@ fn lines(
             )?);
         }
     }
+    // #503 WAKE (register §1.549): what the reading is projected from, at this same read, for the
+    // time it reaches the trigger line ([`Lines::trigger_at`]).
+    let rise = match &pool.projection {
+        PoolProjection::Regenerating(projection) if reading.snapshot.value <= capacity => {
+            Some(Rise {
+                value: reading.snapshot.value,
+                observed_at_unix_ms: reading.snapshot.observed_at_unix_ms,
+                amount: projection.amount,
+                per_ms: projection.per_ms,
+                unshown,
+            })
+        }
+        _ => None,
+    };
     let reading = i128::from(projected) - unshown;
     let (stop, hard) = match (stop_line, hard_line) {
         (None, None) => (i128::from(capacity), 0),
@@ -1052,6 +1154,7 @@ fn lines(
             .transpose()
             .map_err(|_| PolicyEvaluationError::overflow("a trigger line"))?,
         source,
+        rise,
     }))
 }
 

@@ -201,9 +201,9 @@ crate::outcome_vocabulary! {
         CatalogGroupTitleDiffers => "catalog_group_title_differs",
         /// Workflow #477 CV-1 (since 0.12.79): a business part of a version 2 `pack-catalog.json`
         /// (or an item of the values file `standard-pack catalog --values` reads) writes a fixed
-        /// value beside a second value of the same run, which the compiler refuses beside a
-        /// rule's: the realization mark, or a production of a pool whose valuation
-        /// `schedule.json` declares or leaves pending (an error).
+        /// value beside the realization mark, which the compiler refuses beside a rule's (an
+        /// error). #503 FIXV (since 0.12.101): not beside a production of a pool whose valuation
+        /// `schedule.json` declares or leaves pending, which a value stands beside.
         CatalogValueConflict => "catalog_value_conflict",
         /// CV-1: a per-rule business part of a version 2 `pack-catalog.json` (or an item of the
         /// values file) names a `rule_id` that is no rule of `schedule.json` running the entry's
@@ -285,7 +285,8 @@ crate::outcome_vocabulary! {
         /// G-R1: a `resource` entry's pool is not a pool of the composed schedule.
         GoalPoolUnknown => "goal_pool_unknown",
         /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap` and (#455
-        /// B3-P), as a pool without a valuation, no `target_defaults` with both numbers.
+        /// B3-P), as a pool without a valuation, no `target_defaults` with both numbers, nor (#455
+        /// SL2) `spend_line`, on which the goal is the pool's line.
         GoalPoolUnvalued => "goal_pool_unvalued",
         /// G-R1: a governed package is not a package of `bundle.json`; Workflow #463 V1: the
         /// package a governed rule runs, or one that declares a placed variable, is not.
@@ -407,7 +408,8 @@ crate::outcome_vocabulary! {
         /// RR1: an item's pool is no pool of the composed `schedule.json`, at its `pool`.
         TablePoolUnknown => "table_pool_unknown",
         /// RR1: the pool of an item without a recipe (the one a need lands on) gives a goal no
-        /// step and importance, as `goal_pool_unvalued` judges a pool, at its `pool`.
+        /// step and importance, as `goal_pool_unvalued` judges a pool, at its `pool`; #455 SL2: a
+        /// pool that writes `spend_line` gives none either, though a `resource` entry governs it.
         TablePoolUnvalued => "table_pool_unvalued",
         /// RR1 fix round 1: an item names a pool an earlier item of `goal-tables.json` names (a
         /// holding has one name in the file), at the later item's `pool`.
