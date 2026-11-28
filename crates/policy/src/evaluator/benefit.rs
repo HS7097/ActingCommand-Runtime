@@ -28,6 +28,15 @@
 //!   makes `B` unknown: the candidate is not dispatched (`benefit_unknown`), and the known part
 //!   is never added up. An unknown reading also asks the fact refresh for it. A known `B ≤ 0` is
 //!   not dispatched either (`policy_benefit_nonpositive`).
+//! - **A declared 0** (#455 SL1, register §1.540; `contracts/scheduling/README.md`, "A pool whose
+//!   spending a line governs"). A pool that writes `spend_line` (it writes no valuation) and that
+//!   the task consumes is no gap: while no line is set its consumption adds no term to `B` and no
+//!   share to `ε`, whatever its amount, and its item `<pool>:-0` stands at its place among the
+//!   consumption's. The pool says its spending is governed by a line and no line is set; this is
+//!   not an unknown read as 0. A pending amount on it stays `entry_pending`; a production of it is
+//!   read as any pool's without a valuation; its reading is not read here. A task without a fixed
+//!   value whose only effect is such a consumption has `S = ε = 0`: a sum without a rounding bound
+//!   is exact, so it is not within the band and its known `B = 0` is `policy_benefit_nonpositive`.
 //! - **The one-way rule.** Nothing here writes a pool weight: the weights are read from the
 //!   resource layer's own term, which reads no task state.
 //! - **The zero band** (SS-2d, register §1.235; Alice's ruling 127, the review's version; design
@@ -178,7 +187,8 @@ enum Judgement {
         /// SS-2d: a pool it produces is weighed above 0 on the instance (a model price or a
         /// goal's shortfall gives it a use).
         downstream: bool,
-        /// SS-2h: the term of each pool it consumes, in declaration order (each pool once).
+        /// SS-2h: the term of each pool it consumes, in declaration order (each pool once); #455
+        /// SL1: a pool whose spending a line governs has none (it has no valuation and no lines).
         consumed: Vec<ConsumedTerm>,
         /// #455 B1 ruling 9 (register §1.518): for a task with a fixed value and at least one
         /// goal term, its judgement without them, which the gate reads below the trigger line of
@@ -292,6 +302,11 @@ impl ExactSum {
         self.numerator = sum / reduce;
         self.denominator = product / reduce;
         Some(())
+    }
+
+    /// #455 SL1 (register §1.540): whether the sum is 0.
+    fn is_zero(&self) -> bool {
+        self.numerator == 0
     }
 
     /// The floor of the sum.
@@ -419,6 +434,20 @@ fn valued_pool<'a>(
     }
 }
 
+/// #455 SL1 (register §1.540; `contracts/scheduling/README.md`, "A pool whose spending a line
+/// governs"): whether `pool_id` is a pool of the instance that writes `spend_line`. A judged task's
+/// consumption of it is no gap and, while no line is set, costs nothing (module doc, "A declared
+/// 0"); its production is read as any pool's without a valuation.
+fn spend_line_pool(
+    pool_id: &str,
+    instance: &InstanceSnapshot,
+    context: &PlacementContext<'_>,
+) -> bool {
+    context.pool_specs.get(pool_id).is_some_and(|pool| {
+        pool.spend_line.is_some() && scope_matches_instance(&pool.scope, instance)
+    })
+}
+
 /// The candidate's net benefit (module doc). `weight` is the resource layer's effective weight
 /// `W(k,p)` of a pool the task produces, with its step, when its term holds one; otherwise the
 /// pool's base weight is `W`.
@@ -428,7 +457,8 @@ fn valued_pool<'a>(
 /// (register §1.518): of its `produces` only the pools its term weighs above 0 are read, each a
 /// production term at its term's step `Q` (a goal's `scale`), with its share of `ε` and its item;
 /// no other produced pool is looked up, so neither its valuation nor an entry's pending amount
-/// makes `B` unknown.
+/// makes `B` unknown. #455 SL1 (register §1.540): a consumed pool that writes `spend_line` needs no
+/// valuation and adds no term, no share of `ε` and no consumed term, only its item `<pool>:-0`.
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
@@ -449,10 +479,14 @@ fn judge(
     if fixed_value.is_none() && task.produces.is_empty() && task.consumes.is_empty() {
         return Ok(unknown(Gap::NoEffects));
     }
-    // Every entry and every pool it touches, in declaration order, produces first.
-    for effect in checked.iter().chain(&task.consumes) {
+    // Every entry and every pool it touches, in declaration order, produces first. #455 SL1: a
+    // pool that writes `spend_line` and that it consumes is no gap, its pending amount aside.
+    for (index, effect) in checked.iter().chain(&task.consumes).enumerate() {
         if effect.is_pending() {
             return Ok(unknown(Gap::EntryPending(effect.pool_id.clone())));
+        }
+        if index >= checked.len() && spend_line_pool(&effect.pool_id, instance, context) {
+            continue;
         }
         if let Err(gap) = valued_pool(&effect.pool_id, instance, context) {
             return Ok(unknown(gap));
@@ -555,6 +589,13 @@ fn judge(
             continue;
         }
         seen.push(effect.pool_id.as_str());
+        // #455 SL1 (register §1.540): a pool whose spending a line governs, with no line set,
+        // costs nothing whatever the amount: no term of `S`, no share of `ε`, no consumed term
+        // (it has no valuation, so no lines and no capped order); its item says it was read.
+        if spend_line_pool(&effect.pool_id, instance, context) {
+            items.push(format!("{}:-0", effect.pool_id));
+            continue;
+        }
         let (pool, valuation) = valued_pool(&effect.pool_id, instance, context)
             .map_err(|_| PolicyEvaluationError::invalid("a judged pool lost its valuation"))?;
         // SS-2g: in thousandths, so an expected consumption costs exactly its share; an integer
@@ -849,13 +890,16 @@ pub(super) fn gate(
                     _ => (&sum, &tolerance, items.as_slice(), ""),
                 };
                 let gated_milli = saturating_milli(gated_sum.floor());
-                // SS-2d: within its rounding error the sign is not trusted (module doc).
+                // SS-2d: within its rounding error the sign is not trusted (module doc). #455 SL1
+                // (register §1.540): a sum without a rounding bound is exact, so its sign is: the
+                // only such known `B` that is not positive is a task without a fixed value whose
+                // only effects consume pools whose spending a line governs, `S = ε = 0`.
                 let within = gated_sum.within(gated_tolerance).ok_or_else(|| {
                     PolicyEvaluationError::invalid(format!(
                         "task '{}' net benefit tolerance is negative on instance '{}'",
                         task.id, instance.instance_id
                     ))
-                })?;
+                })? && !gated_tolerance.is_zero();
                 // SCHED-C1a: the `B` the decision reads, with the goal terms once it passes, else the
                 // one judged (ruling 11).
                 let passes = !within && gated_milli > 0;

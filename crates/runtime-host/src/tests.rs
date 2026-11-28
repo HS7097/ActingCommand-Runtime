@@ -312,6 +312,9 @@ mod gate_477_ck2;
 // #455 B3-P (0.12.82; register §1.522): the goal page sets a goal by `{at_least}` alone on a pool
 // that writes `target_defaults` instead of a valuation.
 mod gate_455_b3p;
+// #455 SL1 (0.12.97; register §1.540): the goal page offers no goal by `{at_least}` on a pool whose
+// spending a line governs, and refuses one by its pool id as on any pool without a valuation.
+mod gate_455_sl1;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

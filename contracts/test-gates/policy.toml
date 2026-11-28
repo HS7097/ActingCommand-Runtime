@@ -1709,3 +1709,19 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_rr3::rr3_t3_the_computed_set_is_in_the_decision_identity_and_an_instance_without_needs_is_as_before",
 ]
 incident = ["#455 RR3"]
+
+# #455 SL1 (0.12.97; register §1.540; brief rd-1123/brief-455-sl1.md; contracts/scheduling/README.md, "A pool whose spending a line governs" and "Net benefit within a tier"; contracts/standard-pack-schedule.md, "`requires`"): a pool that declares no valuation may declare spend_line, and a judged task's consumption of it costs nothing while no line is set, no clock read. The reader: on the neutral example's pool the three numbers compile, round-trip and recompile to the same identity, the largest and the least bounds taken; in a V1 document unknown_field at the member, each number missing missing_required_field naming it, a price or a scale of 0 or 2^53 and an income floor of 2^53 limit_exceeded at the number, another member unknown_field naming it, beside a valuation block, the pending marker or target_defaults type_mismatch at the member (t1); the composer carries the member with pool_spend_line in requires, refuses it without as schedule_invalid at /pools/0/spend_line, and a Runtime whose manifest does not name the subsystem refuses the file schedule_requires_missing at /requires/0 (t1); the V2 pools schema lists the member with the compiler's bounds and not beside a valuation or target_defaults, the V1 schema not at all (t1). The judgement, one instance, the pool read at 500 and a valued pool (W 1000, Q 1) at 5000: V 500 consuming 120 of the pool is B 500 and dispatched, its rank_breakdown naming B and V, and without the member benefit_unknown valuation_missing on the pool (t2); beside 30 of the valued pool V 50 000 is B 20 000 and dispatched, V 30 010 benefit_within_tolerance with sum 10/1, tolerance 15/1 and the items pool.currency:-0,pool.neutral:-30000 (t2); without a fixed value a production of 2 of the valued pool is B 2000 and dispatched (t2); a pending amount on the pool entry_pending, a producer of it without a fixed value valuation_missing, a lone consumer of it without a fixed value policy_benefit_nonpositive with benefit_milli 0 and the item pool.currency:-0, not within tolerance (t2). Ruling 4: a consumer reserving 10 of the pool read at 100 passes the benefit gate with B 500 and is held resource_reserve_insufficient with amount_after -20, read at 200 dispatched (t3). The neutral example catalog keeps its V1 and V2 golden identities and the member changes the V2 one (t4)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t1_the_reader_takes_the_three_numbers_and_refuses_each_fault_at_its_pointer",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t1_the_composer_requires_pool_spend_line_and_an_older_runtime_refuses_the_file",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t1_the_v2_pools_schema_lists_the_member_with_the_compiler_s_bounds",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t2_a_fixed_value_consumer_is_judged_at_its_value_and_without_the_member_as_today",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t2_beside_a_valued_pool_only_the_valued_one_costs_and_bounds",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t2_without_a_fixed_value_the_benefit_is_the_production_term",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t2_a_pending_amount_a_producer_and_a_lone_consumer_are_judged_as_ruled",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t3_the_reserve_gate_holds_a_consumer_whose_reading_is_short_as_for_any_pool",
+    "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t4_a_catalogue_without_the_member_keeps_its_golden_identity",
+]
+incident = ["#455 SL1"]

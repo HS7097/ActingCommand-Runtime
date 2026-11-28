@@ -3122,3 +3122,12 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_455_rr1::rr1_a_bundle_below_28_with_either_file_is_refused_in_the_plan",
 ]
 incident = ["#455 RR1"]
+
+# #455 SL1 (0.12.97; register §1.540; brief rd-1123/brief-455-sl1.md, ruling 6 and tests 1 and 6; contracts/standard-pack-schedule.md, "`requires`"; contracts/actingd-check-config.md, the row pool_spend_line): this build's assembled configuration manifest names pool_spend_line, enabled, beside standard_pack_schedule, and the composer given those subsystems composes a schedule.json whose pool writes spend_line (33333, 6000, 71429) and lists the subsystem in requires, the composed catalog's pool holding the three numbers; on the fake host of fixture.rs, a rollback to a build whose check-config names pool_lines and pool_target_defaults but not pool_spend_line, while the game root in use requires pool_lines and pool_spend_line, is refused interface_edge, its one failed row requires next_names_required and requires_missing naming the game, its schedule.json and pool_spend_line
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_455_sl1::sl1_this_runtime_names_pool_spend_line_and_composes_a_file_that_requires_it",
+    "actingcommand-lab-rescue::lib::install::gate_429_rb1::sl1_a_rollback_below_this_build_is_refused_while_a_root_requires_pool_spend_line",
+]
+incident = ["#455 SL1"]

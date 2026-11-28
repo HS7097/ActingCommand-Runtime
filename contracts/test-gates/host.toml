@@ -4994,3 +4994,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr3::rr3a_p1_a_truth_value_in_a_list_reads_as_zero_or_one",
 ]
 incident = ["#455 RR3a"]
+
+# #455 SL1 (0.12.97; register §1.540; brief rd-1123/brief-455-sl1.md, ruling 5 and test 5), the host half, on the goal page's pure check over the targetable list the policy crate gives for a catalogue of one task producing a pool that writes spend_line and a valued pool (step 5, gap weight 700), no clock read: the list gives the first no step and no importance and requires both, the valued one its valuation's; {at_least: 40} on the resource entry of the first is pool_unvalued with its pool, so is a target by its pool id, and the same value on the valued pool's entry is SetTarget as today (test 5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least",
+]
+incident = ["#455 SL1"]

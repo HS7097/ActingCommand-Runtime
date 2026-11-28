@@ -394,6 +394,15 @@ The members of `report`:
       writes it requires it, so it is composed only by a Runtime that names
       this row, and the installer's plan refuses a rollback below 0.12.82 while
       an installed or kept schedule requires it.
+    - `pool_spend_line` (#455 SL1, since 0.12.97, register §1.540): always on
+      (`config_subsystem_always_on`). The Runtime reads a pool's `spend_line`,
+      which says a line governs the pool's spending, and judges a task that
+      consumes such a pool with that consumption costing nothing while no line
+      is set ([scheduling/README.md](scheduling/README.md), "A pool whose
+      spending a line governs"); a `schedule.json` whose pool writes it requires
+      it, so it is composed only by a Runtime that names this row, and the
+      installer's plan refuses a rollback below 0.12.97 while an installed or
+      kept schedule requires it.
     - `catalog_business` (#477 CV-2, since 0.12.80, register §1.508): always
       on (`config_subsystem_always_on`). The composer takes a game root's
       business part (each rule's effects, fixed value and marks) from its

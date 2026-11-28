@@ -452,3 +452,17 @@ of its own. Refused, each at its pointer: in a V1 document `unknown_field` at th
 pool valued. A `schedule.json` whose pool writes it names `pool_target_defaults` in `requires`,
 which a Runtime names from 0.12.82 on. A pool without it serializes, hashes and decides exactly as
 before.
+
+#455 SL1 (since 0.12.97; register §1.540; `../README.md`, "A pool whose spending a line governs"),
+V2 only: a pool that writes neither a `valuation` nor `target_defaults` may write `spend_line`,
+`{"price_milli": P, "scale": S, "income_floor_milli_per_day": F}`, all three required, `P` and `S`
+in `1..=9007199254740991` and `F` in `0..=9007199254740991`: a line a person may set governs the
+pool's spending, and while none is set a judged task's consumption of the pool costs nothing (no
+term of its net benefit, no share of its rounding bound, the item `<pool>:-0`). Nothing computes
+with the three numbers yet. Refused, each at its pointer: in a V1 document `unknown_field` at the
+member; beside a `valuation` block, the pending marker or `target_defaults` `type_mismatch` at the
+member; a number out of its range `limit_exceeded` at it; a missing member
+`missing_required_field`, any other member `unknown_field`, a member of another type
+`type_mismatch` (the reader). A `schedule.json` whose pool writes it names `pool_spend_line` in
+`requires`, which a Runtime names from 0.12.97 on. A pool without it serializes, hashes and decides
+exactly as before.

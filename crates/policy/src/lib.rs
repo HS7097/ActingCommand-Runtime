@@ -227,6 +227,11 @@ mod tests {
     // stored goals and enter each candidate's decision identity.
     mod gate_455_rr3;
 
+    // #455 SL1 (0.12.97; register §1.540): a pool that declares no valuation may declare that a
+    // line governs its spending (`spend_line`), and its consumption costs nothing while no line is
+    // set.
+    mod gate_455_sl1;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.
