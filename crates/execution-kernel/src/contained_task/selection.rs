@@ -60,9 +60,9 @@ use actingcommand_pack_containment::LoadedBundle;
 use actingcommand_recognition::Scene;
 use actingcommand_recognition_pack::{
     CandidateFeatureValue, CandidateIdentityDeclaration, CandidateIdentityRecognition,
-    CandidateLayout, CandidateNameRead, CandidateProjectionFailure, MAX_IDENTITY_TEMPLATES,
-    PackPoint, PackRegion, RecognitionEvaluator, RecognitionTarget, TargetKind,
-    UnknownIdentityHandling,
+    CandidateLayout, CandidateNameRead, CandidatePoolJudgements, CandidateProjectionFailure,
+    JudgedProjection, MAX_IDENTITY_TEMPLATES, PackPoint, PackRegion, RecognitionEvaluator,
+    RecognitionTarget, TargetKind, UnknownIdentityHandling,
 };
 use actingcommand_selection_policy::{
     Candidate, CandidateStatus, CandidateVerdict, DecisionReason, GateUnknownHandling,
@@ -401,6 +401,15 @@ pub(super) fn prepare_select_steps(
                     "layout={} belongs to page {}, the step runs from {}",
                     layout.id, layout.page_id, operation.from
                 ),
+            ));
+        }
+        // Workflow #503 LIST-B (`contracts/selection-graph.md`, "Rules"): no select step, with a
+        // scan or without, chooses over a `repeated_anchor` layout whose identity is read from
+        // pictures in this release; left open, not closed off.
+        if layout.reads_pictures() {
+            return Err(failure(
+                SELECT_INVALID,
+                format!("select/layout_id layout={} identity=pictures", layout.id),
             ));
         }
         let path = format!("operations/{task_id}/{}", select.policy.path);
@@ -926,21 +935,32 @@ fn project(
     scene: &Scene,
     layout_id: &str,
 ) -> Result<CandidateProjection, ContainedTaskError> {
-    project_placed(evaluator, scene, layout_id).map(|(projection, _)| projection)
+    project_placed(evaluator, scene, layout_id).map(|(projection, _, _)| projection)
 }
 
 /// Workflow #404 FS-3: the layout's candidate projection on one scene with each candidate's
 /// origin, in candidate order (the anchor match's top-left corner of a `repeated_anchor`
-/// instance); a projection failure keeps its code.
+/// instance); a projection failure keeps its code. Workflow #503 LIST-B: and what the identity
+/// mapping judged of the layout's picture pool beside it.
 fn project_placed(
     evaluator: &RecognitionEvaluator,
     scene: &Scene,
     layout_id: &str,
-) -> Result<(CandidateProjection, Vec<PackPoint>), ContainedTaskError> {
+) -> Result<JudgedProjection, ContainedTaskError> {
     evaluator
         .scene_context(scene)
-        .project_candidates_placed(layout_id)
+        .project_candidates_judged(layout_id)
         .map_err(projection_error)
+}
+
+/// Workflow #503 LIST-B: a step's projection ([`PreparedContainedTask::project_transaction_judged`]):
+/// the projection, each candidate's origin, what the identity mapping judged of the layout's
+/// picture pool beside it, and the last frame the transaction sampled, if any.
+pub(super) struct TransactionProjection {
+    pub(super) projection: CandidateProjection,
+    pub(super) origins: Vec<PackPoint>,
+    pub(super) judged: CandidatePoolJudgements,
+    pub(super) last: Option<PageObservation>,
 }
 
 /// A projection's failure as a select step's error, its code kept (Workflow #463 SEL-GRID G2: one
@@ -1270,7 +1290,9 @@ struct Evaluated<'a> {
 impl PreparedContainedTask {
     /// The layout's projection on `first` as a select step takes it: candidate sampling and
     /// its budget against `deadline`, every candidate evaluation recorded. A scan session
-    /// (Workflow #308 SEL-L3) projects each viewport frame with it.
+    /// (Workflow #308 SEL-L3) projects each viewport frame with it; Workflow #503 LIST-B: through
+    /// [`Self::project_transaction_judged`], so this form is the tests' alone.
+    #[cfg(test)]
     pub(super) fn project_transaction<R: ContainedTaskRuntime>(
         &self,
         runtime: &mut R,
@@ -1301,11 +1323,39 @@ impl PreparedContainedTask {
         (CandidateProjection, Vec<PackPoint>, Option<PageObservation>),
         ContainedTaskRunError<R::Error>,
     > {
+        self.project_transaction_judged(runtime, operation, first, layout, timing, deadline)
+            .map(|taken| (taken.projection, taken.origins, taken.last))
+    }
+
+    /// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool"):
+    /// [`Self::project_transaction_placed`] with what the identity mapping judged of each read of
+    /// the layout's picture pool beside the projection, which a list reading's scan hands to
+    /// [`CandidateLayout::name_mark`] and keeps no longer than its viewport (its dry run keeps
+    /// the readings). Each pool's template evaluations count in the run's timing in aggregate,
+    /// one evaluation of the pool's time for each projection that read it
+    /// (`ContainedTaskRuntime::record_candidate_pool`); no row is written for a template that
+    /// was evaluated, and a template whose evaluation failed is recorded as any failed
+    /// evaluation is.
+    pub(super) fn project_transaction_judged<R: ContainedTaskRuntime>(
+        &self,
+        runtime: &mut R,
+        operation: &TaskOperation,
+        first: &PageObservation,
+        layout: &CandidateLayout,
+        timing: ContainedTaskTimingContext,
+        deadline: Instant,
+    ) -> Result<TransactionProjection, ContainedTaskRunError<R::Error>> {
         // Workflow #448 SBUD-1 (register §1.333): which layouts are sampled and checked, and the
         // need the check below compares, are the rule admission compares with the step's limit.
         let Some(provider_ms) = candidate_provider_need_ms(layout, &self.evaluator) else {
-            let (projection, origins) = project_placed(&self.evaluator, &first.scene, &layout.id)?;
-            return Ok((projection, origins, None));
+            let (projection, origins, judged) =
+                project_placed(&self.evaluator, &first.scene, &layout.id)?;
+            return Ok(TransactionProjection {
+                projection,
+                origins,
+                judged,
+                last: None,
+            });
         };
         // Workflow #386 SR-1 (scheduling model §2.1): the deadline is compared on the
         // observation clock; past it the candidate sampling timed out. #385 P-k (performance
@@ -1410,7 +1460,7 @@ impl PreparedContainedTask {
         // #385 P-k: the recognition pack compares its sample deadline with the wall clock, so it
         // is handed the wall instant the budget deadline falls on.
         let pack_deadline = super::wall_deadline_now(runtime, pace, deadline);
-        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(pack_deadline).project_candidates_placed_with_samples(
+        let projection = self.evaluator.scene_context(scenes[scenes.len() - 1]).with_sample_deadline(pack_deadline).project_candidates_judged_with_samples(
             &layout.id, &scenes, &mut |target, result, started, ended| {
                 let measured = super::ContainedTaskEvaluationTiming {
                     elapsed_us: super::observe_instant_span(started, ended), budget_before: timing.budget_at(started),
@@ -1434,7 +1484,7 @@ impl PreparedContainedTask {
             )
             .into());
         }
-        let (projection, origins) = projection.map_err(|failure| {
+        let (projection, origins, judged) = projection.map_err(|failure| {
             ContainedTaskError::with_detail(failure.code(), failure.detail())
                 .with_ppocr_diagnostics(
                     failure
@@ -1443,8 +1493,29 @@ impl PreparedContainedTask {
                         .unwrap_or_default(),
                 )
         })?;
+        // Workflow #503 LIST-B: each pool's evaluations of this projection, in aggregate.
+        for pool in judged.timings() {
+            runtime
+                .record_candidate_pool(
+                    &pool.feature,
+                    super::ContainedTaskEvaluationTiming {
+                        elapsed_us: super::observe_instant_span(
+                            pool.started,
+                            pool.started + pool.elapsed,
+                        ),
+                        budget_before: timing.budget_at(pool.started),
+                        result: actingcommand_contract::TaskTimingResult::Ok,
+                    },
+                )
+                .map_err(ContainedTaskRunError::Boundary)?;
+        }
         check_deadline(super::budget_observation_now(runtime, pace))?;
-        Ok((projection, origins, frames.pop()))
+        Ok(TransactionProjection {
+            projection,
+            origins,
+            judged,
+            last: frames.pop(),
+        })
     }
 
     /// One attempt of a select step on its step frame `observation`. A failure before the

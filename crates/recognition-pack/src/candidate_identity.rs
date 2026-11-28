@@ -14,6 +14,10 @@ pub const MAX_IDENTITY_ENTRIES: usize = 1_024;
 pub const MAX_IDENTITY_ALIASES: usize = 8;
 pub const MAX_IDENTITY_TEXT_CHARS: usize = 128;
 pub const MAX_IDENTITY_TEMPLATES: usize = 16;
+/// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool"): the most
+/// entries the pool of a `repeated_anchor` layout's picture identity holds; a slot's pool keeps
+/// [`MAX_IDENTITY_TEMPLATES`].
+pub const MAX_LAYOUT_IDENTITY_TEMPLATES: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +60,91 @@ pub struct CandidateIdentityTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
     pub target_id: String,
+}
+
+/// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool"): one entry
+/// of the pool a `repeated_anchor` layout declares for a picture identity feature, for every
+/// instance: `{id, variant?, target_id}`, the picture of a key, or `{"other": true, target_id}`,
+/// the picture of a known card that is none of the keys, which names no `id` and no `variant`. A
+/// slot's pool keeps [`CandidateIdentityTemplate`], which takes no `other`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidatePoolTemplate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub other: bool,
+    pub target_id: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl CandidatePoolTemplate {
+    /// The key a key entry names, its `id` and `variant`; `None` for an `other` entry (and for an
+    /// entry that names no `id`, which admission refuses). Named `keyed`, not `key`: the outcome
+    /// guard keeps the getter name `key` for typed codes (fix round 1, the first build).
+    pub fn keyed(&self) -> Option<(&str, Option<&str>)> {
+        if self.other {
+            return None;
+        }
+        self.id.as_deref().map(|id| (id, self.variant.as_deref()))
+    }
+}
+
+/// Workflow #503 LIST-B: what the projection read of one entry of a layout's pool on one
+/// instance, as the mapping takes it: the entry's template score in normalized integer milli and,
+/// for a target that declares a colour check, whether the check held where the template matched
+/// (`None` for a target without one, and, fix round 1, for one whose colour was not measured: its
+/// template did not reach the target's own threshold here). The mapping decides what both mean
+/// ([`CandidateIdentityDeclaration::read_pool`]); the producer only hands them over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CandidatePoolScore {
+    pub score_milli: u16,
+    pub colour_held: Option<bool>,
+}
+
+/// Workflow #503 LIST-B (`contracts/resource-readings.md`, "Offline"): the best key entry of one
+/// read of a layout's pool: its key, its variant, its target and its score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidatePictureKey {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+    pub target_id: String,
+    pub score_milli: u16,
+}
+
+/// Workflow #503 LIST-B: the best `other` entry of one read of a layout's pool, by its target, and
+/// its score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidatePictureOther {
+    pub target_id: String,
+    pub score_milli: u16,
+}
+
+/// Workflow #503 LIST-B (`contracts/resource-readings.md`, "List readings", "Offline"): one read of
+/// a layout's pool on one instance with what the mapping judged of it, the evidence the dry run of
+/// a list reading and the Lab's `package list-check` answer: the mark, why it names no key (`None`
+/// for a known key), the best key entry and the best `other` entry among the entries that
+/// competed, the threshold and the margin it was judged by, and how many entries did not compete
+/// because their target's colour check failed. Judged once, beside the projection; it enters no
+/// hash and no record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidatePictureReading {
+    pub mark: CandidateNameMark,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unread_cause: Option<CandidateUnreadCause>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_key: Option<CandidatePictureKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_other: Option<CandidatePictureOther>,
+    pub minimum_score_milli: u16,
+    pub minimum_margin_milli: u16,
+    pub colour_failed: u32,
 }
 
 impl CandidateIdentityDeclaration {
@@ -344,6 +433,140 @@ impl CandidateIdentityDeclaration {
         )
     }
 
+    /// Workflow #503 LIST-B (`contracts/business-identity-consensus.md`, "A layout's pool";
+    /// `contracts/resource-readings.md`, "A list of the wanted keys only"): the one judgement of a
+    /// read of a `repeated_anchor` layout's pool on one instance, from every entry's score, in
+    /// the pool's order, and the feature it gives the projection. An entry whose target's colour
+    /// check failed does not compete at all (it is neither the best key nor the best `other`);
+    /// the others are judged:
+    ///
+    /// - **a key** as [`Self::map_icons`] judges the key entries that compete (the best above
+    ///   `minimum_score_milli` and clear by `minimum_margin_milli` of every other key), with the
+    ///   best `other` entry counted as one more competitor of a different identity for the margin:
+    ///   a key within the margin of it is `ambiguous`;
+    /// - **none of the keys** only when the best `other` entry's score is at least
+    ///   `minimum_score_milli` and exceeds the best key entry's score by at least
+    ///   `minimum_margin_milli`; its feature is Unknown `out_of_domain`, the reason that says the
+    ///   read names something outside the identity's domain;
+    /// - **unread** in every other case, with the keys' own reason (`low_confidence` when no key
+    ///   entry reached the threshold or none competed, `ambiguous` for two keys within the margin).
+    ///
+    /// A pool without an `other` entry whose entries all compete answers the feature
+    /// [`Self::map_icons`] answers over the same scores. An identity that reads no picture, a pool
+    /// of another length than its scores, an empty pool, one above
+    /// [`MAX_LAYOUT_IDENTITY_TEMPLATES`] and a score above 1000 are unread `out_of_domain`.
+    pub fn read_pool(
+        &self,
+        pool: &[CandidatePoolTemplate],
+        scores: &[CandidatePoolScore],
+    ) -> (CandidateFeature, CandidatePictureReading) {
+        let (minimum_score_milli, minimum_margin_milli) = match self.recognition {
+            CandidateIdentityRecognition::IconTemplates {
+                minimum_score_milli,
+                minimum_margin_milli,
+            } => (minimum_score_milli, minimum_margin_milli),
+            CandidateIdentityRecognition::OcrAliases { .. } => (0, 0),
+        };
+        let unread = |feature: CandidateFeature, colour_failed: u32| {
+            let reading = CandidatePictureReading {
+                mark: CandidateNameMark::Unread,
+                unread_cause: unread_cause(&feature),
+                best_key: None,
+                best_other: None,
+                minimum_score_milli,
+                minimum_margin_milli,
+                colour_failed,
+            };
+            (feature, reading)
+        };
+        if !matches!(
+            self.recognition,
+            CandidateIdentityRecognition::IconTemplates { .. }
+        ) || pool.len() != scores.len()
+            || pool.is_empty()
+            || pool.len() > MAX_LAYOUT_IDENTITY_TEMPLATES
+            || scores.iter().any(|score| score.score_milli > 1000)
+        {
+            return unread(self.unknown(CandidateUnknownReason::OutOfDomain), 0);
+        }
+        let colour_failed = u32::try_from(
+            scores
+                .iter()
+                .filter(|score| score.colour_held == Some(false))
+                .count(),
+        )
+        .unwrap_or(u32::MAX);
+        let mut keys = Vec::new();
+        let mut best_key: Option<(&CandidatePoolTemplate, u16)> = None;
+        let mut best_other: Option<(&CandidatePoolTemplate, u16)> = None;
+        for (entry, score) in pool
+            .iter()
+            .zip(scores)
+            .filter(|(_, score)| score.colour_held != Some(false))
+        {
+            let milli = score.score_milli;
+            let best = match entry.keyed() {
+                Some((id, variant)) => {
+                    keys.push((id, variant, 1000 - milli));
+                    &mut best_key
+                }
+                None => &mut best_other,
+            };
+            if (*best).is_none_or(|(_, kept)| milli > kept) {
+                *best = Some((entry, milli));
+            }
+        }
+        let keys_feature = if keys.is_empty() {
+            self.unknown(CandidateUnknownReason::LowConfidence)
+        } else {
+            self.choose(
+                &keys,
+                1000 - minimum_score_milli,
+                minimum_margin_milli,
+                best_key.map(|(_, milli)| i64::from(milli)),
+            )
+        };
+        let key_score = u32::from(best_key.map_or(0, |(_, milli)| milli));
+        let margin = u32::from(minimum_margin_milli);
+        let known = matches!(keys_feature, CandidateFeature::Identity { .. });
+        let (mark, feature) = match best_other {
+            Some((_, other))
+                if other >= minimum_score_milli && u32::from(other) >= key_score + margin =>
+            {
+                (
+                    CandidateNameMark::NoneOfTheKeys,
+                    self.unknown(CandidateUnknownReason::OutOfDomain),
+                )
+            }
+            Some((_, other)) if known && key_score < u32::from(other) + margin => (
+                CandidateNameMark::Unread,
+                self.unknown(CandidateUnknownReason::Ambiguous),
+            ),
+            _ if known => (CandidateNameMark::Known, keys_feature),
+            _ => (CandidateNameMark::Unread, keys_feature),
+        };
+        let reading = CandidatePictureReading {
+            mark,
+            unread_cause: unread_cause(&feature),
+            best_key: best_key.and_then(|(entry, milli)| {
+                entry.keyed().map(|(key, variant)| CandidatePictureKey {
+                    key: key.to_owned(),
+                    variant: variant.map(str::to_owned),
+                    target_id: entry.target_id.clone(),
+                    score_milli: milli,
+                })
+            }),
+            best_other: best_other.map(|(entry, milli)| CandidatePictureOther {
+                target_id: entry.target_id.clone(),
+                score_milli: milli,
+            }),
+            minimum_score_milli,
+            minimum_margin_milli,
+            colour_failed,
+        };
+        (feature, reading)
+    }
+
     fn choose(
         &self,
         rows: &[(&str, Option<&str>, u16)],
@@ -443,6 +666,15 @@ impl CandidateUnreadCause {
     }
 }
 
+/// Workflow #503 LIST-B: why the feature `feature` names no key, its Unknown reason; `None` for an
+/// identity.
+fn unread_cause(feature: &CandidateFeature) -> Option<CandidateUnreadCause> {
+    match feature {
+        CandidateFeature::Unknown { reason, .. } => Some(CandidateUnreadCause::of(*reason)),
+        _ => None,
+    }
+}
+
 /// Workflow #503 LIST-A (`contracts/resource-readings.md`, "List readings", "A list of the wanted
 /// keys only"): what one read of a name is to a reading that wants only the keys its identity
 /// declares, the mark the mapping gives ([`CandidateIdentityDeclaration::mark_ocr`]) beside the
@@ -451,7 +683,8 @@ impl CandidateUnreadCause {
 /// a closed vocabulary of the ledger's records, which this slice does not move). Readers take the
 /// mark; none sorts the feature's reasons itself.
 /// Workflow #503 LIST-A3: the mark serializes as `known`, `unread` or `none_of_the_keys`, for the
-/// dry run of a list reading that shows it.
+/// dry run of a list reading that shows it. Workflow #503 LIST-B: a read of a `repeated_anchor`
+/// layout's picture pool gets the same three marks ([`CandidateIdentityDeclaration::read_pool`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateNameMark {

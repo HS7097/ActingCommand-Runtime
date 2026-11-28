@@ -2974,6 +2974,10 @@ fn derive_candidate_layouts(
                     generated["target"] = target.clone();
                     generated["offset"] = required_field(feature, "offset")?.clone();
                 }
+                // Workflow #503 LIST-B: where a picture identity's pool is scored.
+                if let Some(region) = feature.get("region") {
+                    generated["region"] = canonical_ocr_rect(region, "candidate feature region")?;
+                }
                 for key in ["identity", "consensus", "integer"] {
                     if let Some(value) = feature.get(key) {
                         generated[key] = value.clone();
@@ -3026,6 +3030,29 @@ fn derive_candidate_layouts(
                 // Workflow #463 SEL-2L: the shared read, last, as a `fixed_slots` layout's.
                 if let Some(shared) = derived_shared_ocr(layout)? {
                     derived["shared_ocr"] = shared;
+                }
+                // Workflow #503 LIST-B: the pools of its picture identity features, as declared,
+                // after the shared read; each entry's target a template of the pack.
+                if let Some(pools) = layout.get("identity_templates") {
+                    for template in pools
+                        .as_object()
+                        .into_iter()
+                        .flat_map(|pools| pools.values())
+                        .flat_map(|pool| pool.as_array().into_iter().flatten())
+                    {
+                        let target = required_string(template, "target_id")?;
+                        if targets
+                            .get(&target)
+                            .and_then(|target| target["type"].as_str())
+                            != Some("template")
+                        {
+                            return Err(refuse(
+                                "identity_templates",
+                                &format!("picture target '{target}' is not a declared template"),
+                            ));
+                        }
+                    }
+                    derived["identity_templates"] = pools.clone();
                 }
                 keep_candidate_layout(&mut layouts, derived, &id, refuse)?;
                 continue;

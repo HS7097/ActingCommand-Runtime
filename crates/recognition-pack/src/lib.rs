@@ -89,6 +89,12 @@ pub use candidate_identity::CandidateNameMark;
 // Workflow #503 LIST-A3: the nearest wanted name of a read of a name, and the read with what the
 // mapping says of it, for the dry run of a list reading.
 pub use candidate_identity::{CandidateNameReading, CandidateNearestName};
+// Workflow #503 LIST-B: a `repeated_anchor` layout's picture pool, its two kinds of entry, and the
+// judgement of one read of it.
+pub use candidate_identity::{
+    CandidatePictureKey, CandidatePictureOther, CandidatePictureReading, CandidatePoolScore,
+    CandidatePoolTemplate, MAX_LAYOUT_IDENTITY_TEMPLATES,
+};
 
 pub use codes::{
     RecognitionPackCode, RecognitionPackLocation, TargetMatchKind, TextReadBudget, ValueOp,
@@ -103,6 +109,8 @@ pub use candidate_layout::{
 };
 // Workflow #463 SEL-GRID G2: the lines of a shared read's name boxes, and what a name's read saw.
 pub use candidate_layout::{CandidateNameBlock, CandidateNameRead, CandidateSharedLines};
+// Workflow #503 LIST-B: what the mapping judged of a layout's pool beside a projection.
+pub use candidate_layout::{CandidatePoolJudgements, CandidatePoolTiming, JudgedProjection};
 
 pub type RecognitionPackResult<T> = Result<T, RecognitionPackError>;
 

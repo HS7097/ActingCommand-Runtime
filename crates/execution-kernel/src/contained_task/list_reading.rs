@@ -54,7 +54,7 @@ use actingcommand_contract::{
 };
 use actingcommand_recognition_pack::{
     CandidateFeatureValue, CandidateIdentityDeclaration, CandidateNameMark, CandidateNameReading,
-    RecognitionEvaluator, UnknownIdentityHandling,
+    CandidatePictureReading, RecognitionEvaluator, UnknownIdentityHandling,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -303,11 +303,19 @@ pub enum ListPositionAnswer {
 /// reading of each OCR sample the projection mapped it from (`CandidateLayout::name_readings`: the
 /// text as read, its confidence, why it names no key, the nearest wanted key and alias, the
 /// distance and the limit it had to exceed).
+///
+/// Workflow #503 LIST-B (`contracts/resource-readings.md`, "Offline"): a picture identity read
+/// from the layout's pool reads no text, so `samples` is empty and `pictures` holds what the
+/// mapping judged of each sample beside the projection (the best key and its score, the best
+/// `other` entry by its target and its score, the threshold, the margin and the mark); a text
+/// identity's `pictures` is empty and left out of the answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ListPositionRead {
     pub viewport: u32,
     pub mark: CandidateNameMark,
     pub samples: Vec<CandidateNameReading>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<CandidatePictureReading>,
 }
 
 /// Workflow #503 LIST-A3: one position a list reading read, as its dry run answers it. Where it
@@ -613,6 +621,15 @@ pub(super) fn prepare_list_readings(
             || read.key_feature != read.scan.identity_feature()
         {
             return Err(refuse(&member("key_feature")));
+        }
+        // Workflow #503 LIST-B (`contracts/resource-readings.md`, "A list of the wanted keys
+        // only"): over a picture identity read from the layout's pool, a card is passed over only
+        // when an `other` entry recognises it, so a pool without one could never pass over.
+        let pool = feature(&read.key_feature).and_then(|key| layout.layout_pool(key));
+        if read.others == Some(TaskListOthers::PassOver)
+            && pool.is_some_and(|(_, entries)| !entries.iter().any(|entry| entry.other))
+        {
+            return Err(refuse(&member("others")));
         }
         if !list_reading_column_valid(&read.key_column) {
             return Err(refuse(&member("key_column")));

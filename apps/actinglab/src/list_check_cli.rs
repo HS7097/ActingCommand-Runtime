@@ -240,7 +240,9 @@ pub(crate) fn for_people(invocation: &crate::OwnInvocation) -> bool {
 /// the check (on a failure its code and message first), then for each step a line of how it
 /// ended, the wanted keys a card showed and those none showed, and each position with a line of
 /// what it gives the list and one for each of its reads (the mark, the text as read in quotes, its
-/// confidence, why it names no key, the nearest wanted key and alias, the distance and the limit).
+/// confidence, why it names no key, the nearest wanted key and alias, the distance and the limit;
+/// Workflow #503 LIST-B: for a picture, the best key and the best `other` entry with their targets
+/// and scores, the threshold and the margin, [`picture_text`]).
 /// `None` for a line that holds no checked step (a usage refusal), which prints as every own
 /// command's does.
 pub(crate) fn people(exit: &Exit) -> Option<String> {
@@ -327,8 +329,59 @@ fn step_lines(step: &Value, lines: &mut Vec<String>) {
                     sample_text(sample)
                 ));
             }
+            // Workflow #503 LIST-B: a read of the layout's picture pool.
+            for picture in items(read.get("pictures")) {
+                lines.push(format!(
+                    "    viewport {}: {}",
+                    shown(read.get("viewport")),
+                    picture_text(picture)
+                ));
+            }
         }
     }
+}
+
+/// Workflow #503 LIST-B: one judged read of a layout's picture pool: its mark, why it names no
+/// key, the best key with its target and score, the best `other` entry by its target with its
+/// score, the threshold and the margin, and how many entries' colour checks failed.
+fn picture_text(picture: &Value) -> String {
+    let mut text = format!("{} picture", shown(picture.get("mark")));
+    if let Some(cause) = picture.get("unread_cause") {
+        text.push_str(&format!(", {}", shown(Some(cause))));
+    }
+    match picture.get("best_key") {
+        Some(best) => text.push_str(&format!(
+            ", best key {} ({}) at {}",
+            shown(best.get("key")),
+            shown(best.get("target_id")),
+            shown(best.get("score_milli"))
+        )),
+        None => text.push_str(", no key competed"),
+    }
+    match picture.get("best_other") {
+        Some(best) => text.push_str(&format!(
+            ", best other {} at {}",
+            shown(best.get("target_id")),
+            shown(best.get("score_milli"))
+        )),
+        None => text.push_str(", no other competed"),
+    }
+    text.push_str(&format!(
+        ", threshold {}, margin {}",
+        shown(picture.get("minimum_score_milli")),
+        shown(picture.get("minimum_margin_milli"))
+    ));
+    if picture
+        .get("colour_failed")
+        .and_then(Value::as_u64)
+        .is_some_and(|failed| failed > 0)
+    {
+        text.push_str(&format!(
+            ", {} without their colour",
+            shown(picture.get("colour_failed"))
+        ));
+    }
+    text
 }
 
 /// The counts of a step's summary: positions read, passed over and unread.
