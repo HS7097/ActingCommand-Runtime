@@ -52263,6 +52263,136 @@ the `package` edge, a placed one is refused at every admission), so the rollback
 no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
 `"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
 
+### 1.553 Slice #503 NOISE-B (0.12.102): every listing of the system's processes has a bound, and `resource validate` reads a resource root's `goals.json`, `goal-tables.json` and `pack-catalog.json` (board #503; the owner approved the direction of both on 11-28; the rulings 1 to 4 are the coordinator's of the same day, taken from the read-only study `rd-1123/study-host-noise-1128.md`, its rulings R3.1 to R3.3 and R4.1 to R4.4; coordinator work order `rd-1123/brief-503-noise-b.md`; on main `cdc3e0b4`, v0.12.99)
+
+It ships in 0.12.102. [emulator-control.md](emulator-control.md) ("Offline instance discovery",
+what it runs) and [resource-declarations.md](resource-declarations.md) (three rows of its table)
+are the contract. No interface revision, record shape, configuration key, outcome code or word
+moves; the outcome index does not change.
+
+**The problems** (the work order's, in neutral words).
+1. *A listing without a bound.* The device layer lists the system's processes by starting
+   PowerShell (`Get-CimInstance Win32_Process`) and reading its output. One of its two paths
+   (`discovery::system_processes`) waited for PowerShell with no limit. The start's discovery and
+   check-config reach it when no emulator folder is configured, and so do an on-demand discovery
+   and the resolvers of the debug bridge (no `adb_path`) and of the capture (neither
+   `nemu_folder` nor `nemu_ipc_dll`). On a production host one start of PowerShell was seen to
+   hang for forty minutes; a start that met such a hang would have held the provider's assembly
+   as long, never ready and saying nothing. The other path (`system_processes_within`: `actingd
+   discover` and a Stop, 10 s) and the watchdog's and the installer's own queries (60 s) had
+   bounds.
+2. *Three files nobody validated.* `actinglab resource validate` mapped no reader to a
+   repository root's `goals.json`, `goal-tables.json` and `pack-catalog.json`, though the readers
+   exist and `resource verify`'s bundle step runs them: each was refused as an unmapped family
+   ("program declaration family has no mapped parser"; on removal "no mapped current-reference
+   check"), whatever it held, and no root file can be covered by `declaration-exclusions.json`
+   (a declared directory is never empty), so a repository's CI had to keep the three out of its
+   changed paths. `resource verify --base` over a diff that changed one of them failed its
+   declarations step the same way (inferred from the code, as the study inferred it).
+
+**Superseded.** §1.346's statements that check-config and a start "still list without a bound of
+their own (`system_processes`)" and that check-config's `resolve_mumu_manager` lists "unbounded as
+before" (S10-4 and "What it can run") hold no more: every listing has a bound.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *Ending the listing leaves nothing that is waited on.* The bounded runner
+  (`adb::run_raw_with_boundary`) ends only the child it started (`stop_child`: a kill, then at
+  most 500 ms to see it exit), then gives its two pipe readers at most what is left of 500 ms; a
+  reader still open then is left (its thread and handle forgotten, the failure's quiescence
+  `unconfirmed`), never waited on. The listing's script starts no process; WMI answers from its
+  own service, not a child of the listing (inferred, not measured).
+- *No caller is stopped by a failed listing beyond its own handling.* The start's discovery is
+  `instance_discovery_unavailable`, tried again up to `startup_discovery.attempts` (25 by
+  default, 10 s apart) before the existing Provider startup failure, as for an emulator not
+  started yet; check-config reports `mumu_root: null` with its note; an on-demand discovery is
+  refused (`command.rejected` and the request's `runtime.failed`); the debug bridge's resolver
+  falls back to an adb on `PATH` with its warning, else fails; a capture open fails as a
+  resolution failure, an instance's.
+- *The catalog check agrees with `resource verify` on the file alone.* The catalog's reader
+  (`read_catalog`) judges a package id only with a registry, a pool only with the schedule's
+  pools, a rule and a valued production only with the schedule's facts; every other error is
+  the same with or without them. `resource verify` reads the file with them
+  (`parse_standard_pack_catalog_with`); both leave the display's defects warnings.
+
+**The rulings, as built.**
+- *1, one bound* (`crates/device/src/discovery.rs`, `SYSTEM_PROCESS_LISTING_TIMEOUT`, 60 s, the
+  watchdog's and the installer's bound of the same query). `system_processes` lists through
+  `system_processes_within` with it: at the bound only the PowerShell process the listing started
+  is ended, and the listing fails as a device failure. Both run one function
+  (`processes_listed_within`) of the listing's spawn profile: no console window
+  (`CREATE_NO_WINDOW`) and the null device as standard input, which `Command::output`, the
+  unbounded path's wait, gave it (`CommandProgram::null_stdin`, `crates/device/src/adb.rs`; only
+  the listing sets it). `actingd discover` and a Stop keep their 10 s.
+- *2, the failure is seen by the code and values it already has.* A listing past its bound is the
+  untyped device error `powershell <arguments> timed out after 60s`. The start records each
+  attempt but the last as `instance_discovery_retried` caused by `instance_discovery_unavailable`
+  and `provider_native_failed` with `device_category` `protocol` (discovery's own category for a
+  failure that names none) and the device's text as its `foreign_other_error` link, and the last
+  as the Provider startup failure (`instance_discovery_unavailable`) whose native failure is the
+  same `provider_native_failed`; check-config's note is `provider_native_failed` without a category,
+  with the same link; an on-demand discovery's `runtime.failed` keeps the text as its native
+  detail; the debug bridge's warning and a capture open's failure carry it in their text. No value
+  tells a listing that ran out of time from one that could not start or exited non-zero: the text
+  does, with the bound. Nothing is added for it.
+- *3, the three root files* (`apps/actinglab/src/resource_declarations.rs`,
+  `DeclarationReader::validate` and `removal`). At the repository root only: `goals.json` by
+  `parse_standard_pack_goals` (family `standard_pack_goals`), `goal-tables.json` by
+  `parse_standard_pack_goal_tables` (`standard_pack_goal_tables`), `pack-catalog.json` by the
+  contract crate's new `parse_standard_pack_catalog_alone`, of version 1 or 2, with no registry
+  and no schedule (`standard_pack_catalog`), each for the `game` of the root's `pages.json`, read
+  as the `interrupts.json` family reads it (a root without it refused naming `pages.json`). A
+  refusal is `resource_declaration_invalid` with `declaration_file`, the first issue's
+  `standard_pack_problem` and `json_pointer`, and every issue in the message (the loading
+  family's `loading_refusal`). A Git `D` of each is a removal
+  (`current_local_declaration_dependencies`, no declaration checked), as `privacy-zones.json`'s
+  is.
+- *4, unchanged*: every other family of `resource validate`, the exclusion rules, the answer's
+  schema `actinglab.resource-declarations.v1` but for the three `family` words; `resource
+  verify`'s selection without `--base` (`ROOT_DECLARATIONS`); the cross-file checks, which stay
+  `resource verify`'s bundle step's and `standard-pack build`'s (goals and their tables against
+  the composed packs, the catalog's package ids against the bundle's registry, its references to
+  `schedule.json`); every listing's result when PowerShell answers in time.
+
+**Decided here.** The listing's null standard input (ruling 1: a bounded run would otherwise have
+inherited the caller's); the seams of the tests: `DiscoverySpec::discover_with` (the start's
+discovery over given reads; `discover` is it with the system's), a public
+`resolve_mumu_manager_with`, and check-config's `mumu_root_report` taking its reads; the catalog
+check's name.
+
+**Tests** (apps gate map row "#503 NOISE-B"; no clock read in a gate file: the listing's test is
+the device crate's own unit test, which measures the time).
+
+| Test | What it shows |
+|---|---|
+| `discovery::tests::noise_b_a_listing_that_never_answers_fails_at_its_bound_and_ends_only_its_own_process` (1) | on Windows, the listing's one run of a PowerShell that sleeps 600 s, bound 2 s: it fails `timed out after 2s` after at least 2 s and within 3 s more, with no resource close cause and its quiescence confirmed, while a PowerShell the test started runs on; the listing that named no bound lists within 60 s |
+| `config::gate_390_disc1::noise_b_a_start_whose_listing_runs_past_its_bound_is_retried_then_ends_in_the_existing_fatal` (1, 2) | no folder named, every listing past its bound (injected reads, the provider's own classification): three `instance_discovery_unavailable`, two warnings with their daemon lines, the existing fatal; each warning and the failure carry `provider_native_failed` (`protocol`, no `mumu_root`) and the text `timed out after 60s`; three listings, no read of the vendor tool |
+| `config::gate_390_disc1::noise_b_check_config_reports_a_listing_past_its_bound_as_an_unresolved_root` (2) | `mumu_root` `null`, the note `provider_native_failed` without a category and with the same text; one listing |
+| `gate_503_noise_b::noise_b_each_root_file_well_formed_is_valid_in_its_family` (3) | the three files valid in their families, `pages.json` read; a catalog of version 1 naming a package and a pool nothing here declares, and one of version 2 |
+| `gate_503_noise_b::noise_b_each_root_file_its_reader_refuses_is_refused_with_its_problem_and_pointer` (3) | `game_mismatch` at `/game` then `goal_name_duplicate`; `table_class_unknown`; `catalog_value_conflict` at `/packs/0/value` then `catalog_duplicate`: the first in the details, each in the message |
+| `gate_503_noise_b::noise_b_a_root_without_its_page_list_refuses_each_file_naming_the_page_list` (3) | each refused naming `pages.json` |
+| `gate_503_noise_b::noise_b_a_git_deletion_of_each_root_file_is_a_removal` (3) | each `removed`, the local scope, nothing checked, on an empty root |
+| `gate_503_noise_b::noise_b_the_same_names_outside_the_root_are_still_unmapped` (3, 4) | under `drafts/` each still "no mapped parser" |
+| `gate_503_noise_b::noise_b_resource_verify_takes_a_diff_that_adds_and_removes_goals_json` (3) | `resource verify --base`: the declarations step passes over a diff that adds `goals.json` (2 selected, 2 valid) and over one that removes it (1 deleted, 1 valid) |
+
+No existing test is adapted; no golden is re-recorded; no test leaves the gate maps.
+
+**What is not changed.** The listing's script, its parsing and its result when PowerShell answers
+in time; `actingd discover`'s and a Stop's 10 s; the watchdog's and the installer's own listings
+(no second way without WMI, the study's option); every caller's handling of a failed listing;
+the other families of `resource validate` and its exclusions; `resource verify`'s bundle step
+and selection; the ledger, `runtime-client`, `actingd-config`, `runtime-outcomes`, `package`;
+every code, word and setting.
+
+**At deploy.** Nothing to migrate or configure. A host that names its emulator folder lists none of
+these ways; one that does not, where PowerShell does not answer within 60 s, records
+`instance_discovery_retried` at its start (the text `timed out after 60s` in its link) instead of
+waiting. A resource repository's CI may hand the three root files to `resource validate`. In the
+release notes' language: 修复：没有配模拟器目录时，启动、check-config、按需发现和 adb、截图的路径解析要列系统进程，原来等 PowerShell 没有上限，现在最多等 60 秒；到点只结束它自己起的那个 PowerShell，按各处原有的失败处理（启动照常重试），也不再弹控制台窗口。新增：`resource validate` 读资源仓根目录的 `goals.json`、`goal-tables.json`、`pack-catalog.json`（两个版本都认），删除这三个文件也接受。
+
+**Rollback.** An older build lists without a bound again where these paths list, and its
+`resource validate` refuses the three files as unmapped again. Nothing is written that it cannot
+read.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

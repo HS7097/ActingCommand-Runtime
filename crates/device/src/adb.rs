@@ -929,6 +929,10 @@ pub(crate) struct CommandProgram {
     /// Diagnostic stage attached to the bound-expiry error so a caller can tell an expired
     /// bound from a spawn or poll failure; `None` leaves that error untyped (the `adb` default).
     pub(crate) timeout_stage: Option<actingcommand_contract::outcome::Location>,
+    /// Workflow #503 NOISE-B: the child's standard input is the null device, as
+    /// `Command::output` gives it (the process listing, which waited through `output` before);
+    /// `false` leaves it inherited (the `adb` default).
+    pub(crate) null_stdin: bool,
 }
 
 pub(crate) const ADB_PROGRAM: CommandProgram = CommandProgram {
@@ -937,6 +941,7 @@ pub(crate) const ADB_PROGRAM: CommandProgram = CommandProgram {
     stderr_reader: "adb_stderr",
     windows_creation_flags: 0,
     timeout_stage: None,
+    null_stdin: false,
 };
 
 pub fn run_text_with_timeout(
@@ -1096,6 +1101,9 @@ fn run_raw_with_boundary(
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if program.null_stdin {
+        command.stdin(Stdio::null());
+    }
     #[cfg(windows)]
     if program.windows_creation_flags != 0 {
         command.creation_flags(program.windows_creation_flags);

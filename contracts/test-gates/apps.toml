@@ -3140,3 +3140,19 @@ tests = [
     "actingcommand-lab-rescue::lib::install::gate_429_rb1::rr3b_a_rollback_below_this_build_is_refused_while_a_root_requires_pool_goal_tiers",
 ]
 incident = ["#455 RR3b"]
+
+# #503 NOISE-B (0.12.102; register §1.553; brief rd-1123/brief-503-noise-b.md, the tests of the study rd-1123/study-host-noise-1128.md, section 5, changes 3 and 4; contracts/emulator-control.md, "Offline instance discovery"; contracts/resource-declarations.md, the rows goals.json, goal-tables.json and pack-catalog.json). The listing: on Windows the listing's one run of a PowerShell that never answers fails at its bound of 2 s and within 3 s more, timed out after 2s, no resource close cause and its quiescence confirmed, while a PowerShell the listing did not start runs on; the listing that named no bound lists within 60 s (1); with no folder named and the provider's own classification over injected reads, a start whose listing runs past its bound at every attempt is instance_discovery_unavailable three times, tried again twice (instance_discovery_retried, its daemon lines), then the existing fatal, each warning and the provider startup failure caused by provider_native_failed (device_category protocol, no mumu_root) whose foreign_other_error link holds the listing's text, timed out after 60s; listed three times, the vendor tool never (2); check-config's report of the installation over the same reads is mumu_root null and the note provider_native_failed without device_category, the same text, listed once (3). resource validate, on neutral roots: a root goals.json, goal-tables.json and pack-catalog.json of version 1 (naming a package and a pool nothing here declares) valid in the families standard_pack_goals, standard_pack_goal_tables and standard_pack_catalog with pages.json read, one of version 2 valid (4); each its reader refuses resource_declaration_invalid naming it with the first issue's standard_pack_problem and json_pointer and every issue in the message: game_mismatch at /game then goal_name_duplicate at /entries/1/name, table_class_unknown at /tables/0/keys/hero_a/class, catalog_value_conflict at /packs/0/value then catalog_duplicate at /packs/1/package_id (5); a root without pages.json refuses each naming pages.json (6); a Git D of each removed, current_local_declaration_dependencies, no declaration checked (7); the same names under drafts/ still unmapped (8); resource verify --base over a diff that adds goals.json beside pages.json passes its declarations step (selected 2, valid 2), and over the next, which removes it (selected 2, deleted 1, valid 1) (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-device::lib::discovery::tests::noise_b_a_listing_that_never_answers_fails_at_its_bound_and_ends_only_its_own_process",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_390_disc1::noise_b_a_start_whose_listing_runs_past_its_bound_is_retried_then_ends_in_the_existing_fatal",
+    "actingcommand-actingd::bin:actingcommand-actingd::config::gate_390_disc1::noise_b_check_config_reports_a_listing_past_its_bound_as_an_unresolved_root",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_noise_b::noise_b_each_root_file_well_formed_is_valid_in_its_family",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_noise_b::noise_b_each_root_file_its_reader_refuses_is_refused_with_its_problem_and_pointer",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_noise_b::noise_b_a_root_without_its_page_list_refuses_each_file_naming_the_page_list",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_noise_b::noise_b_a_git_deletion_of_each_root_file_is_a_removal",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_noise_b::noise_b_the_same_names_outside_the_root_are_still_unmapped",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_503_noise_b::noise_b_resource_verify_takes_a_diff_that_adds_and_removes_goals_json",
+]
+incident = ["#503 NOISE-B"]
