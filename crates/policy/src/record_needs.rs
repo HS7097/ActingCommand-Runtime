@@ -189,7 +189,8 @@ pub enum RecordNeedsNote {
         reading: String,
     },
     /// `goal_records_position_unknown`: the column's readings form no position of its ladder (a
-    /// reading of another kind than a whole number, or a tuple equal to no position).
+    /// reading of another kind than a whole number or a truth value, or a tuple equal to no
+    /// position).
     PositionUnknown { record: RecordRef, column: String },
     /// `goal_records_holding_unknown`: the holding of an item with a recipe is not known (`reason`
     /// the observation's, none when its pool names no pool of the instance), so nothing below it

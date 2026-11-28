@@ -4986,3 +4986,11 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr3::rr3_h2_an_intent_is_stale_once_a_progress_list_the_records_or_the_tables_change",
 ]
 incident = ["#455 RR3"]
+
+# Workflow #455 RR3a (0.12.96; register §1.539; contracts/standard-pack-goal-tables.md, "A truth value in a list"): a truth value a list's column holds reads as a whole number in the walk of a record, false 0 and true 1. Pure, over a made-up table whose rank ladder is read from two columns that say whether each of two badges is on the card, with positions no badge, the first, the second, and a record to the second: no badge walks both steps (300), the first badge the second step (200), the second badge is the target and asks nothing, each without a note; both badges at once, which is no position of the ladder, and a text in a badge's column are goal_records_position_unknown and add nothing (p1).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3::rr3a_p1_a_truth_value_in_a_list_reads_as_zero_or_one",
+]
+incident = ["#455 RR3a"]

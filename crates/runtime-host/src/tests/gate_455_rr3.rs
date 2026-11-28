@@ -714,6 +714,87 @@ fn rr3_p4_two_instances_of_one_root_compute_apart() {
     assert_ne!(first.identity(), second.identity());
 }
 
+/// The tables of the badges: a class's rank ladder read from two columns that hold truth values,
+/// whether each of two badges is on the card; no badge, the first, the second (100 and 200 `gold`).
+fn badge_tables() -> Value {
+    json!({
+        "schema_version": "actingcommand.goal-tables.v1",
+        "game": TABLES_GAME,
+        "items": {"gold": {"pool": "pool.gold"}},
+        "tables": [{
+            "name": TABLE,
+            "progress": [{"fact_key": ROSTER, "key_column": "unit", "held_by": true, "columns": ["badge_one", "badge_two"]}],
+            "columns": [{"name": "rank", "read": ["badge_one", "badge_two"], "per": "class"}],
+            "classes": {"all": {"rank": {"positions": [[0, 0], [1, 0], [0, 1]], "steps": [{"gold": 100}, {"gold": 200}]}}},
+            "keys": {"unit_a": {"class": "all"}}
+        }]
+    })
+}
+
+// Workflow #455 RR3a (0.12.96; register §1.539). A truth value in a list reads as a whole number,
+// false 0 and true 1: a rank a card shows as one badge, another or none is two `passed` columns,
+// and the ladder's positions are their pairs. With a record to the second badge: no badge walks
+// both steps (300 `gold`), the first badge the second step (200), the second badge is the target
+// and asks nothing. Both badges at once is no position of the ladder, and a text in a badge's
+// column is no number: each is `goal_records_position_unknown` and adds nothing.
+#[test]
+fn rr3a_p1_a_truth_value_in_a_list_reads_as_zero_or_one() {
+    let badges = |one: FactScalar, two: FactScalar| {
+        list(
+            ROSTER,
+            vec![BTreeMap::from([
+                ("unit".to_owned(), text("unit_a")),
+                ("badge_one".to_owned(), one),
+                ("badge_two".to_owned(), two),
+            ])],
+        )
+    };
+    let needs_of = |one: FactScalar, two: FactScalar| {
+        let sources = Sources {
+            lists: BTreeMap::from([(ROSTER.to_owned(), badges(one, two))]),
+            holdings: BTreeMap::new(),
+        };
+        instance_needs(
+            &stored(ALIAS, &[(ENTRY, "unit_a", r#"{"rank":[0,1]}"#)]),
+            NOW,
+            Some(&root(tables(&badge_tables()), SHA)),
+            &sources,
+        )
+        .expect("an instance with records has needs")
+    };
+    let (no, yes) = (FactScalar::Boolean(false), FactScalar::Boolean(true));
+    let walked = [
+        (no.clone(), no.clone(), Some(300)),
+        (yes.clone(), no.clone(), Some(200)),
+        (no.clone(), yes.clone(), None),
+    ];
+    for (one, two, gold) in walked {
+        let needs = needs_of(one.clone(), two.clone());
+        let expected = gold.map_or_else(BTreeMap::new, |gold| {
+            pools(&[("pool.gold", gold, PoolNeedKind::Lands)])
+        });
+        assert_eq!(needs.pools(), &expected, "{one:?} {two:?}");
+        assert!(
+            needs.notes().is_empty(),
+            "{one:?} {two:?}: {:?}",
+            needs.notes()
+        );
+    }
+    let unknown = [RecordNeedsNote::PositionUnknown {
+        record: record("unit_a"),
+        column: "rank".to_owned(),
+    }];
+    for (one, two) in [(yes.clone(), yes), (text("x"), no)] {
+        let needs = needs_of(one.clone(), two.clone());
+        assert!(
+            needs.pools().is_empty(),
+            "{one:?} {two:?}: {:?}",
+            needs.pools()
+        );
+        assert_eq!(needs.notes(), unknown, "{one:?} {two:?}");
+    }
+}
+
 // ---- The host
 
 /// The pool the host fixture's need lands on, read from rows of [`LIST_KEY`].

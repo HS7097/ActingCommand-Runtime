@@ -400,8 +400,8 @@ actingcommand_contract::outcome_codes! {
         /// the same package mends (key `fact_key`); that column adds nothing.
         GoalRecordsReadingMissing => "goal_records_reading_missing": info / none,
         /// Info. A record's column reads a position its ladder does not hold (a reading that is
-        /// no whole number, or a tuple equal to no position); that column adds nothing (no
-        /// keys).
+        /// neither a whole number nor, since 0.12.96, a truth value, which reads as 0 or 1; or a
+        /// tuple equal to no position); that column adds nothing (no keys).
         GoalRecordsPositionUnknown => "goal_records_position_unknown": info / none,
         /// Info. The holding of an item with a recipe is not known (key `pool_id` its pool;
         /// `unknown_reason` the observation's, absent when the pool names no pool of the
