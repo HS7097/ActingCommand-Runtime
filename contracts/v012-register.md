@@ -52263,6 +52263,169 @@ the `package` edge, a placed one is refused at every admission), so the rollback
 no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
 `"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
 
+### 1.545 Slice #503 PACE (0.12.100): a pair whose scheduled runs keep failing waits a growing interval between its dispatches from its second failure in a row on, says so in one record per wait, and is set aside for its activity window when it keeps failing although its instance lets other runs succeed (board #503; rulings 1 to 8 the coordinator's of 11-28, the owner's ruling of 11-28 on this slice added to them; on main `cdc3e0b4`, v0.12.99)
+
+It ships in 0.12.100. [policy-suspension.md](policy-suspension.md) ("A pair whose runs keep
+failing", new; pointers in "Immediate rerun (R22)", "Which failures accumulate" and "Known
+limitations"), [scheduling-blackout.md](scheduling-blackout.md) ("Order of the deferrals", position
+4b; "The idle plan behind a hold"), [standard-pack-schedule.md](standard-pack-schedule.md)
+("Failure escalation without a daily bound", corrected), [scheduling/README.md](scheduling/README.md)
+(the failure handling's paragraph), [runtime-config.md](runtime-config.md)
+(`scheduling.unavailable_probe`), [runtime-interface.md](runtime-interface.md) (the not-running
+row's entry-block line) and the host's outcome codes with their index are the contract. No
+interface revision moves: `package`, `ledger`, `runtime-client` and `actingd-config` stay.
+
+**The problem** (the work order's, in neutral words). Only a few failures of a scheduled run can
+repeat an identity: the main package's own steps not matching the screen, a refusal of the
+prerequisite chain, the navigation and interrupt failures. Every other failure is rerun only: its
+identity's `F` is unique, so `consecutive_same_error` is 1 every time. That covers device and backend
+errors, the task timeout, recognition errors, the gate and the layers for every class but the
+entry's own, a failure in the restart segment and the environment's interrupts. On main, for such a
+pair: with `retry_limit` 1 or more every failure schedules a retry again, offered as
+`failure_retry_immediate` once its backoff has passed (the backoff never longer than
+`next_run_clamp_ms`; a minute in catalogues in use), whatever the trigger and the cooldown say; with
+`retry_limit` 0, `continue` and no cooldown the pair is a candidate again at the next evaluation
+while its trigger holds; `escalation_threshold` never applies, and `pause` is never reached with
+`retry_limit` 1 or more. Only the counts of its rule and its activity bound it, and the resource
+side is taking the daily counts out of the rules (dispatch follows live state). With a backoff of
+30 s and no daily count, one broken pair is run about 1 700 times in a window of fourteen hours.
+
+**Why the first rerun stays immediate.** The owner's ruling R22 stands: a failed task is rerun at
+once and does not wait for its next occurrence. One failure is weak evidence (a dialog, a slow
+device), and the rerun is what mends it. Only a pair that has just failed again waits.
+
+**Why the set-aside asks for evidence.** While nothing succeeds on the instance the fault is most
+likely the environment's (a network outage, a device), and setting pairs aside for the day then
+would lose the day's work for an outage of minutes; they keep trying at the longest interval
+instead. A pair that fails again and again while other runs succeed on its instance is broken in
+itself, and only then does a failure count against it.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *What the settlement knows.* `record_policy_dispatch_outcome_under_gate` (`host/policy_outcome.rs`)
+  holds the policy while it settles: the window's end is `PolicyHost::dispatch_window_end`, read
+  before the record is committed (the dispatch has no record yet; the admission record carries the
+  end since §1.529); the threshold in the dispatch's generation is
+  `PolicyHost::dispatch_escalation_threshold`; a store update task is `PolicyHost::is_store_task`,
+  as ENTRY-A reads both; the scheduled runs that succeeded on the instance are counted by this
+  slice's own memory at the same settlements. No record member, no interface revision.
+- *A deferral reaches no admission and writes nothing.* The deferral is the eligibility closure's
+  answer at position 4b, so the candidate is never an intent. The immediate rerun's withdrawal
+  (`policy_retry_round_ended`) is written only when an admission refuses an intent, so a waiting
+  immediate rerun writes nothing; its round ends at its window's end or its budgets as before. The
+  clock-slot trace classes every host code a queue wait and writes for it only once the pair's
+  window has closed, when this gate no longer holds; the held records (`HELD_CODES`) do not name
+  the codes, as they do not name ENTRY-A's.
+- *The wake.* The deferral names its end as its wake, so the evaluation after a failed run (actingd
+  evaluates again after a cycle in which a run failed) takes the wait's end as its wake, and a
+  cycle with nothing else due wakes then and not before.
+- *Nothing another run needs is held.* The gate holds only the pair's own candidates, never a
+  ladder, a startup package, a client's or the Lab's run, the store update task or another pair.
+- *ENTRY-A is untouched.* Its rules, state and tests are as on main; one private helper,
+  `settled_instance`, is made visible to the host module.
+
+**The rulings, as built.**
+- *1, which settlements count* (`crate::failure_pacing::PacedSettlement::of`). The live settlement
+  of a scheduled run whose record is a failure with no `condition` and a disposition other than
+  `paused_task`. A stop and a condition (configured, or at the entry) leave the pair as it is; the
+  interrupted settlement (`complete_scheduled_policy_interruption`) is marked by its caller
+  (`SettledBy::Interruption`) and leaves it as it is; reconciliations never reach this path. A
+  store update task's runs are neither counted nor held.
+- *2, the memory* (`crate::failure_pacing::FailurePairs`, kept by the host in
+  `host/failure_pairs.rs`, a leaf lock beside ENTRY-A's `entry_blocks`). Per (instance, catalog
+  task): the window's end, the failures in a row, the wait's end, the latest failure's dispatch,
+  code and settlement, the instance's succeeded runs at it, the failures against the pair and
+  whether it is set aside; per instance the scheduled runs that succeeded. Memory only.
+- *3, the count in a row and the wait.* One more in a row when the previous failure was in the same
+  window (the same end), else the first; after the n-th, n ≥ 2, the wait ends
+  `unavailable_probe.interval_ms(n - 1)` after the settlement (shipped one minute, two, four,
+  eight, sixteen, thirty, thirty, …), cut at the window's end where the gate reads it
+  (`FailurePair::wait_end`, one function for the gate and the record).
+- *4, set aside.* A failure after the first counts against the pair when the instance's succeeded
+  runs grew since the pair's previous failure and the record is not `performance_tax_exempt`; at
+  the threshold, with the window known, the pair is set aside to the window's end.
+- *5, its end.* A success of the pair, a pausing settlement, the window's end (the next failure is
+  a first), a catalogue's activation (`policy_catalog.rs`) and the workbench's changed-package check
+  (`standard_pack_schedule.rs`), each beside ENTRY-A's clearing, a store update task's success (its
+  instance's pairs), a restart.
+- *6, where in the order* (`policy_host.rs`, `evaluate`). In the eligibility closure right after
+  ENTRY-A's `pair_deferral`, and in the idle plan's look ahead right after ENTRY-A's pair, both
+  through the one gate, `FailurePacingGates::deferral`. The look ahead stays the second walk it is
+  (§1.488); this slice adds its position there as ENTRY-A did, and the gate is one function both
+  call.
+- *7, the codes* (beside ENTRY-A's in the host's catalogue, `codes.rs`):
+  `instance_task_failure_waiting` (info), `instance_task_failure_set_aside` (info),
+  `instance_task_failure_set_aside_reported` (warning); and the operation
+  `instance_task_failure_pacing`. The lists that name `instance_entry_task_waiting`: position 4b of
+  the order, the look ahead's paragraph, the policy-suspension and scheduling contracts and the
+  not-running row's line in runtime-interface.md each gain the new codes; `HostCode::ALL` (the
+  clock-slot trace's classes) gains them as it gained ENTRY-A's; `HELD_CODES` and the chain
+  handover's `successor_wait_codes` do not name them, as they do not name ENTRY-A's (a wait that
+  ends by itself is no hold, and a successor that waits here does not go first).
+- *8, unchanged.* The classification and every member of the execution record; the ledger and its
+  replay; R22's rounds; ENTRY-A; the accumulating failures' pause and its lifting; every budget.
+
+**The owner's ruling on this slice** (11-28, added to the work order after it was given): the
+situation gets a code of its own, the code states the result and the operation that follows. So
+(A) the three codes' catalogue entries say plainly the result (the pair's runs failed `count` times
+in a row; the latest failure's code and time) and the operation (not dispatched before
+`next_eligible_unix_ms`, then tried again, a success clearing the count; not dispatched before
+`window_end_unix_ms`; what a person can do), and the contract carries the table of what follows
+each failure in a row; (B) each failure that sets a wait writes one record of it under the
+instance at its settlement, by the way ENTRY-A's set-aside report is written: a `runtime.failed`
+record handed to the daemon's log. *Decided here:* the record is `instance_task_failure_waiting`
+itself, the code the deferral names (one cause, one code, as `policy_rerun_waiting` is both a
+reason and a record), its category info, which this record type carries (as AVAIL-1's
+`instance_unavailable_probe_passed`); the failure that sets the pair aside writes
+`instance_task_failure_set_aside_reported` in place of the wait's record (a pair set aside waits
+for its window's end, not for an interval); both name the instance by its alias, as the
+candidates' reasons do. The first failure writes none, no evaluation writes either, and no replay
+reads them.
+
+**Tests** (host gate map row "#503 PACE"; no clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_pace::pace_p1_the_first_failure_is_rerun_as_on_main_with_a_retry_and_without_one` (1) | `retry_limit` 1: the record `retry_scheduled`, retry one backoff later, offered as `failure_retry_immediate` and dispatched then; `retry_limit` 0: `continue`, dispatched at the next evaluation; neither paced, no record of a wait |
+| `…::pace_p2_from_its_second_failure_in_a_row_the_pair_waits_one_two_four_minutes_to_the_longest_and_never_past_its_window` (2, B) | the 2nd to 8th failures: the wait's code and values, its end 1, 2, 4, 8, 16, 30 and 30 minutes after each settlement, still waiting a millisecond before; one wait record each, with the same values, none at an evaluation; a seeded wait past the window's end cut there; nothing at the end |
+| `…::pace_p3_a_every_way_to_be_a_candidate_waits_and_the_instances_other_task_runs` (3) | the trigger and `failure_retry_immediate` held while the other task is dispatched; a configured condition leaves the pair; an owed rerun (`policy_rerun_owed`) of a waiting pair held |
+| `…::pace_p3_b_the_gate_holds_its_pair_alone_and_names_itself_to_a_fact_refresh` (3) | the gate alone: a fact refresh names the code as its gate with the wait's end; another task and another instance not held; a cut at the window's end; set aside with its values; an unknown window only waits |
+| `…::pace_p4_a_waiting_pair_wakes_the_cycle_at_its_end_writes_no_record_and_names_its_code_in_the_explanation` (4, 12) | the decision's and the evaluation's wake the wait's end; the not-running row names the code; four evaluations write no record of the policy and no `runtime.failed`; dispatched at the end |
+| `…::pace_p5_a_success_of_the_pair_makes_its_next_failure_a_first` (5) | the pair gone after its success; its next failure a first, rerun at once |
+| `…::pace_p6_a_failures_with_another_success_between_them_set_the_pair_aside_and_tell_a_person_once` (6, B) | threshold 2: one and two against it, set aside at the third; the second's wait record; one report in place of the third's; `instance_task_failure_set_aside` waking at the window's end; the other task dispatched |
+| `…::pace_p6_b_failures_with_no_success_between_them_never_set_the_pair_aside` (6) | four failures in a row with nothing between: nothing against it, no report |
+| `…::pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_never_counts_against_it` (6) | the memory alone: an unknown window never, exempt failures never count, each wait after the first said |
+| `…::pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure_is_a_first` (7) | set aside to a millisecond before the window's end; nothing at the end; the next window's first failure a first |
+| `…::pace_p8_a_an_activation_and_a_restart_clear_every_pair` (8) | an activation clears the pair and the task runs before the old wait's end; a restart has none |
+| `…::pace_p8_b_a_changed_package_frees_the_pairs_at_the_workbenchs_check` (8) | composer mode: an unchanged check leaves a seeded pair, a changed control file frees it |
+| `…::pace_p8_c_p10_a_store_update_tasks_runs_wait_for_nothing_and_its_success_clears_its_instances_pairs` (8, 10) | the memory alone: no pair for a store update task's failures; its success clears its instance's pairs only and is no evidence |
+| `…::pace_p9_a_a_stop_and_a_condition_leave_the_pair_as_it_was_and_a_pausing_settlement_removes_it` (9) | a stop and a configured condition leave the pair; a severe failure (`paused_task`) removes it |
+| `…::pace_p9_b_a_failure_at_the_entry_leaves_the_pair_as_it_was_and_entry_a_counts_it_as_on_main` (9) | a failure at the entry: a condition of the instance, this slice's pair as it was, ENTRY-A's pair and block as on main |
+| `…::pace_p11_the_failures_records_are_mains_and_the_idle_plan_reads_the_wait_and_the_window_as_its_release` (11) | the waiting failures' records equal the first's but for their time and run; behind an instance pause the idle plan counts the task not due with the wait's end, then the window's end, as its release |
+
+Adapted, the requirement (ruling 3) deliberately delaying the rerun after a second failure in a
+row: `gate_373_nav6::b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pair`
+and `gate_463_int1::int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_once`
+evaluate the third run once the second's wait (the shipped one minute) has passed; what they
+assert (no pause, the immediate rerun) is unchanged. No golden re-recorded; no test leaves the gate
+maps.
+
+**What is not changed.** The failure's classification and its execution record, byte for byte; the
+ledger, its event types and its replay (a ledger written while pairs waited is read by any build as
+before; the new records are `runtime.failed` with a new code); R22's rounds and their withdrawal;
+ENTRY-A's rules, state, codes and tests; the accumulating failures' pause and its lifting; every
+budget, window and cooldown; every configuration key; the order of tasks.
+
+**At deploy.** Nothing to configure and nothing to migrate: the pairs live in memory only, a start
+begins with none, and a rollback loses only the waits and set-asides in force. With the shipped
+`scheduling.unavailable_probe` a pair whose runs keep failing waits one minute after its second
+failure in a row, two after its third, then four, eight, sixteen and thirty minutes, never past its
+window's end; with another task succeeding between its failures and the recommended threshold 2 it
+is set aside at its third. An operator sees three codes: `instance_task_failure_waiting` (a
+candidate's reason while the pair waits, and one `runtime.failed` record at each failure that sets
+a wait), `instance_task_failure_set_aside` (a candidate's reason until the window's end) and
+`instance_task_failure_set_aside_reported` (a warning record, once per pair and window). In the
+release notes' language: 新增：同一个任务在同一台实例上连续失败（不是靠条件结束、也没被暂停的失败）时，第一次失败照旧马上重跑；从第二次连续失败起，每次失败后都要等一段越来越长的时间才再派（出厂值一、二、四、八、十六分钟，之后每次三十分钟，不超过活动窗结束），每次等待在账本里留一条 `instance_task_failure_waiting`；同一窗口里别的任务在这台实例上成功过、它还接着失败，失败次数到它规则的 `escalation_threshold` 就这个窗口里不再派（`instance_task_failure_set_aside`），并告诉人一次（`instance_task_failure_set_aside_reported`）。任务本身不暂停，下一个窗口重新计；修好包、激活目录或放置新包立刻解除。只在内存里，重启就清零，不需要任何配置。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
