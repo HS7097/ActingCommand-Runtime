@@ -53456,7 +53456,609 @@ there was one each time a run's cost regenerated.
 consumer due again and wakes the instance at once, as before. Nothing it reads was written in a new
 form.
 
-### 1.559 Slice #455 SL3 (0.12.104): below its line a pool's spenders are charged for the units they take from below it, the more for each unit the farther below, and say so (`spend_line_pressed`) (board #455; the owner's words of 11-28, in neutral words below; the rulings 1 to 9 the coordinator's of 11-29; coordinator work order `rd-1123/brief-455-sl3.md` after the read-only study `rd-1123/study-spend-line.md`; on main `b5e9102e`, v0.12.101)
+### 1.553 Slice #503 NOISE-B (0.12.102): every listing of the system's processes has a bound, and `resource validate` reads a resource root's `goals.json`, `goal-tables.json` and `pack-catalog.json` (board #503; the owner approved the direction of both on 11-28; the rulings 1 to 4 are the coordinator's of the same day, taken from the read-only study `rd-1123/study-host-noise-1128.md`, its rulings R3.1 to R3.3 and R4.1 to R4.4; coordinator work order `rd-1123/brief-503-noise-b.md`; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546, a slice of the same days, before this one)
+
+It ships in 0.12.102. [emulator-control.md](emulator-control.md) ("Offline instance discovery",
+what it runs) and [resource-declarations.md](resource-declarations.md) (three rows of its table)
+are the contract. No interface revision, record shape, configuration key, outcome code or word
+moves; the outcome index does not change.
+
+**The problems** (the work order's, in neutral words).
+1. *A listing without a bound.* The device layer lists the system's processes by starting
+   PowerShell (`Get-CimInstance Win32_Process`) and reading its output. One of its two paths
+   (`discovery::system_processes`) waited for PowerShell with no limit. The start's discovery and
+   check-config reach it when no emulator folder is configured, and so do an on-demand discovery
+   and the resolvers of the debug bridge (no `adb_path`) and of the capture (neither
+   `nemu_folder` nor `nemu_ipc_dll`). On a production host one start of PowerShell was seen to
+   hang for forty minutes; a start that met such a hang would have held the provider's assembly
+   as long, never ready and saying nothing. The other path (`system_processes_within`: `actingd
+   discover` and a Stop, 10 s) and the watchdog's and the installer's own queries (60 s) had
+   bounds.
+2. *Three files nobody validated.* `actinglab resource validate` mapped no reader to a
+   repository root's `goals.json`, `goal-tables.json` and `pack-catalog.json`, though the readers
+   exist and `resource verify`'s bundle step runs them: each was refused as an unmapped family
+   ("program declaration family has no mapped parser"; on removal "no mapped current-reference
+   check"), whatever it held, and no root file can be covered by `declaration-exclusions.json`
+   (a declared directory is never empty), so a repository's CI had to keep the three out of its
+   changed paths. `resource verify --base` over a diff that changed one of them failed its
+   declarations step the same way (inferred from the code, as the study inferred it).
+
+**Superseded.** §1.346's statements that check-config and a start "still list without a bound of
+their own (`system_processes`)" and that check-config's `resolve_mumu_manager` lists "unbounded as
+before" (S10-4 and "What it can run") hold no more: every listing has a bound.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *Ending the listing leaves nothing that is waited on.* The bounded runner
+  (`adb::run_raw_with_boundary`) ends only the child it started (`stop_child`: a kill, then at
+  most 500 ms to see it exit), then gives its two pipe readers at most what is left of 500 ms; a
+  reader still open then is left (its thread and handle forgotten, the failure's quiescence
+  `unconfirmed`), never waited on. The listing's script starts no process; WMI answers from its
+  own service, not a child of the listing (inferred, not measured).
+- *No caller is stopped by a failed listing beyond its own handling.* The start's discovery is
+  `instance_discovery_unavailable`, tried again up to `startup_discovery.attempts` (25 by
+  default, 10 s apart) before the existing Provider startup failure, as for an emulator not
+  started yet; check-config reports `mumu_root: null` with its note; an on-demand discovery is
+  refused (`command.rejected` and the request's `runtime.failed`); the debug bridge's resolver
+  falls back to an adb on `PATH` with its warning, else fails; a capture open fails as a
+  resolution failure, an instance's.
+- *The catalog check agrees with `resource verify` on the file alone.* The catalog's reader
+  (`read_catalog`) judges a package id only with a registry, a pool only with the schedule's
+  pools, a rule and a valued production only with the schedule's facts; every other error is
+  the same with or without them. `resource verify` reads the file with them
+  (`parse_standard_pack_catalog_with`); both leave the display's defects warnings.
+
+**The rulings, as built.**
+- *1, one bound* (`crates/device/src/discovery.rs`, `SYSTEM_PROCESS_LISTING_TIMEOUT`, 60 s, the
+  watchdog's and the installer's bound of the same query). `system_processes` lists through
+  `system_processes_within` with it: at the bound only the PowerShell process the listing started
+  is ended, and the listing fails as a device failure. Both run one function
+  (`processes_listed_within`) of the listing's spawn profile: no console window
+  (`CREATE_NO_WINDOW`) and the null device as standard input, which `Command::output`, the
+  unbounded path's wait, gave it (`CommandProgram::null_stdin`, `crates/device/src/adb.rs`; only
+  the listing sets it). `actingd discover` and a Stop keep their 10 s.
+- *2, the failure is seen by the code and values it already has.* A listing past its bound is the
+  untyped device error `powershell <arguments> timed out after 60s`. The start records each
+  attempt but the last as `instance_discovery_retried` caused by `instance_discovery_unavailable`
+  and `provider_native_failed` with `device_category` `protocol` (discovery's own category for a
+  failure that names none) and the device's text as its `foreign_other_error` link, and the last
+  as the Provider startup failure (`instance_discovery_unavailable`) whose native failure is the
+  same `provider_native_failed`; check-config's note is `provider_native_failed` without a category,
+  with the same link; an on-demand discovery's `runtime.failed` keeps the text as its native
+  detail; the debug bridge's warning and a capture open's failure carry it in their text. No value
+  tells a listing that ran out of time from one that could not start or exited non-zero: the text
+  does, with the bound. Nothing is added for it.
+- *3, the three root files* (`apps/actinglab/src/resource_declarations.rs`,
+  `DeclarationReader::validate` and `removal`). At the repository root only: `goals.json` by
+  `parse_standard_pack_goals` (family `standard_pack_goals`), `goal-tables.json` by
+  `parse_standard_pack_goal_tables` (`standard_pack_goal_tables`), `pack-catalog.json` by the
+  contract crate's new `parse_standard_pack_catalog_alone`, of version 1 or 2, with no registry
+  and no schedule (`standard_pack_catalog`), each for the `game` of the root's `pages.json`, read
+  as the `interrupts.json` family reads it (a root without it refused naming `pages.json`). A
+  refusal is `resource_declaration_invalid` with `declaration_file`, the first issue's
+  `standard_pack_problem` and `json_pointer`, and every issue in the message (the loading
+  family's `loading_refusal`). A Git `D` of each is a removal
+  (`current_local_declaration_dependencies`, no declaration checked), as `privacy-zones.json`'s
+  is.
+- *4, unchanged*: every other family of `resource validate`, the exclusion rules, the answer's
+  schema `actinglab.resource-declarations.v1` but for the three `family` words; `resource
+  verify`'s selection without `--base` (`ROOT_DECLARATIONS`); the cross-file checks, which stay
+  `resource verify`'s bundle step's and `standard-pack build`'s (goals and their tables against
+  the composed packs, the catalog's package ids against the bundle's registry, its references to
+  `schedule.json`); every listing's result when PowerShell answers in time.
+
+**Decided here.** The listing's null standard input (ruling 1: a bounded run would otherwise have
+inherited the caller's); the seams of the tests: `DiscoverySpec::discover_with` (the start's
+discovery over given reads; `discover` is it with the system's), a public
+`resolve_mumu_manager_with`, and check-config's `mumu_root_report` taking its reads; the catalog
+check's name.
+
+**Tests** (apps gate map row "#503 NOISE-B"; no clock read in a gate file: the listing's test is
+the device crate's own unit test, which measures the time).
+
+| Test | What it shows |
+|---|---|
+| `discovery::tests::noise_b_a_listing_that_never_answers_fails_at_its_bound_and_ends_only_its_own_process` (1) | on Windows, the listing's one run of a PowerShell that sleeps 600 s, bound 2 s: it fails `timed out after 2s` after at least 2 s and within 3 s more, with no resource close cause and its quiescence confirmed, while a PowerShell the test started runs on; the listing that named no bound lists within 60 s |
+| `config::gate_390_disc1::noise_b_a_start_whose_listing_runs_past_its_bound_is_retried_then_ends_in_the_existing_fatal` (1, 2) | no folder named, every listing past its bound (injected reads, the provider's own classification): three `instance_discovery_unavailable`, two warnings with their daemon lines, the existing fatal; each warning and the failure carry `provider_native_failed` (`protocol`, no `mumu_root`) and the text `timed out after 60s`; three listings, no read of the vendor tool |
+| `config::gate_390_disc1::noise_b_check_config_reports_a_listing_past_its_bound_as_an_unresolved_root` (2) | `mumu_root` `null`, the note `provider_native_failed` without a category and with the same text; one listing |
+| `gate_503_noise_b::noise_b_each_root_file_well_formed_is_valid_in_its_family` (3) | the three files valid in their families, `pages.json` read; a catalog of version 1 naming a package and a pool nothing here declares, and one of version 2 |
+| `gate_503_noise_b::noise_b_each_root_file_its_reader_refuses_is_refused_with_its_problem_and_pointer` (3) | `game_mismatch` at `/game` then `goal_name_duplicate`; `table_class_unknown`; `catalog_value_conflict` at `/packs/0/value` then `catalog_duplicate`: the first in the details, each in the message |
+| `gate_503_noise_b::noise_b_a_root_without_its_page_list_refuses_each_file_naming_the_page_list` (3) | each refused naming `pages.json` |
+| `gate_503_noise_b::noise_b_a_git_deletion_of_each_root_file_is_a_removal` (3) | each `removed`, the local scope, nothing checked, on an empty root |
+| `gate_503_noise_b::noise_b_the_same_names_outside_the_root_are_still_unmapped` (3, 4) | under `drafts/` each still "no mapped parser" |
+| `gate_503_noise_b::noise_b_resource_verify_takes_a_diff_that_adds_and_removes_goals_json` (3) | `resource verify --base`: the declarations step passes over a diff that adds `goals.json` (2 selected, 2 valid) and over one that removes it (1 deleted, 1 valid) |
+
+No existing test is adapted; no golden is re-recorded; no test leaves the gate maps.
+
+**What is not changed.** The listing's script, its parsing and its result when PowerShell answers
+in time; `actingd discover`'s and a Stop's 10 s; the watchdog's and the installer's own listings
+(no second way without WMI, the study's option); every caller's handling of a failed listing;
+the other families of `resource validate` and its exclusions; `resource verify`'s bundle step
+and selection; the ledger, `runtime-client`, `actingd-config`, `runtime-outcomes`, `package`;
+every code, word and setting.
+
+**At deploy.** Nothing to migrate or configure. A host that names its emulator folder lists none of
+these ways; one that does not, where PowerShell does not answer within 60 s, records
+`instance_discovery_retried` at its start (the text `timed out after 60s` in its link) instead of
+waiting. A resource repository's CI may hand the three root files to `resource validate`. In the
+release notes' language: 修复：没有配模拟器目录时，启动、check-config、按需发现和 adb、截图的路径解析要列系统进程，原来等 PowerShell 没有上限，现在最多等 60 秒；到点只结束它自己起的那个 PowerShell，按各处原有的失败处理（启动照常重试），也不再弹控制台窗口。新增：`resource validate` 读资源仓根目录的 `goals.json`、`goal-tables.json`、`pack-catalog.json`（两个版本都认），删除这三个文件也接受。
+
+**Rollback.** An older build lists without a bound again where these paths list, and its
+`resource validate` refuses the three files as unmapped again. Nothing is written that it cannot
+read.
+
+### 1.552 Slice #503 NOISE-A (0.12.102): the performance monitor counts the Runtime's own emulator and debug-bridge processes as its own, and no longer takes an application step's completion for a failed pairing (board #503; the owner approved the direction on 11-28; the rulings 1 to 5 are the coordinator's of the same day, taken from a read-only study of the tree with its open fact decided; coordinator work order `rd-1123/brief-503-noise-a.md`; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546, a slice of the same days, before this one)
+
+[performance-control.md](performance-control.md) (a new paragraph, "What is the Runtime's own and
+what is outside load") and [performance-timing-signals.md](performance-timing-signals.md)
+("Pipeline observation": the application step) are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). On a production host the
+ledger shows a warning that outside load presses the host every thirty to forty seconds while the
+emulators work, and about six degraded-monitor records an hour. Both come from the monitor's own
+rules:
+- *The monitor owned only the daemon's process.* `PerformanceMonitor::enabled` put the Runtime's
+  own process id in the registry of owned processes, and nothing else ever did
+  (`with_owned_process` has one caller, a unit test). So the emulators the Runtime starts and
+  manages and its debug-bridge server were outside load, and one of them at or above the process
+  thresholds was a `third_party` pressure. That pressure raises no level of the balance controller
+  (P22-0), but it slowed the Runtime's own work through the pacing pressure floor (every step
+  stretched to at least 1.25 times, an extra wait round), stopped the baselines from learning,
+  exempted recoverable failures from the escalation, and woke the policy driver at its start and
+  end and at each pacing change it caused.
+- *An application step's completion was taken for a failed pairing.* By
+  [application-lifecycle.md](application-lifecycle.md) an application launch, stop or restart
+  writes `task.effect_completed` and no `task.effect_intent`. The monitor took a completion
+  without a pending intent for `performance_pipeline_start_missing`, so each such step wrote a
+  warning `perf.monitor_degraded` and, at the next pipeline event, a `perf.monitor_recovered`.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *No persisted member and no setting carries the list.* The host computes it in memory from what
+  the provider's registry resolves for each instance (its configuration's debug bridges, its
+  configured installation root and capture library, the vendor tool of its discovery binding) and
+  hands it to the sampler through a shared handle; the monitor is built before the provider, so
+  until the handover only the Runtime and its children are owned. No discovery rebinding changes
+  an instance's installation in this tree (a rebinding changes the port only), so a start hands
+  it over once.
+- *No privilege beyond what the sampler already has.* The parent comes from the Toolhelp entry
+  the sampler already enumerates; a name from the same entry; a full image path is read with the
+  handle the sampler already opened for the process's times and counters, which carries the
+  limited query `QueryFullProcessImageNameW` needs. A process the sampler cannot open is not
+  sampled at all, as before (it counts in the coverage), and one whose path cannot be read stays
+  outside load.
+- *The bound is not reached in a way that invalidates a sample.* A host with six emulator
+  instances runs the Runtime, six device processes, up to six front ends, six virtual machine
+  processes, one hypervisor service, one debug-bridge server and a few short-lived children of
+  the Runtime: about 22 to 26. And the owned list is cut at 32 before the sample is checked, so a
+  larger set cannot make it invalid.
+
+**The rulings, as built.**
+- *1, the rule* (`crates/host-metrics/src/windows.rs`, `record_ownership`, `own_runtime_children`;
+  `crates/host-metrics/src/lib.rs`, `OwnedImageSet`). A process that is not the Runtime is owned
+  when the registry of owned process ids names it (as before), when its Toolhelp parent is the
+  Runtime and it was created at or after the Runtime (a parent id the Runtime took over from an
+  exited process names no child of it), or when its image is one the host handed over. An image is
+  a full path, a path with one directory level left open, or an executable name; paths and names
+  compare ignoring ASCII case, `/` and `\` alike and a leading `\\?\` left out. A path is read only
+  for a process whose executable name is that of an image handed over by path. Every other process
+  is `third_party` exactly as before.
+- *1, the list* (`crates/device/src/mumu.rs`, `mumu_instance_images` and `mumu_installation_root`;
+  `crates/runtime-host/src/performance.rs`, `owned_process_images`). The host hands over each
+  registered device instance's debug-bridge executables (its input's and its capture's), and for
+  each emulator instance (no handset) whose installation root is known the images the device layer
+  names for it: the front end `nx_main\MuMuNxMain.exe` at its path, and the device process
+  `nx_device\<version>\shell\MuMuNxDevice.exe` with the version left open, so no directory is read
+  and an upgrade's new version is one of them. The vendor's virtual machine images,
+  `MuMuVMMHeadless.exe` and `MuMuNxSVC.exe`, run from the vendor's own hypervisor directory, which
+  is not under the installation root and which this tree has no way to find: they are owned **by
+  their image name**, when at least one emulator instance's installation is known. An image the
+  list names that does not exist matches no process and changes nothing.
+- *2, the bound and the order* (`split_processes`). A sample's `owned_processes` holds at most 32
+  entries (`MAX_PROCESS_SUMMARIES`, which `validate_raw_sample` and the contract enforce), the
+  Runtime first, then by CPU descending and pid ascending. Owned processes beyond 32 are left out of
+  the list and are never `third_party`. Only the registry of owned process ids makes the process
+  metrics unavailable when one of its processes is missing; an image-owned process that exits
+  changes nothing.
+- *3, an application step* (`PerformanceMonitor::observe_pipeline_event`, the `task.effect_completed`
+  arm). A completion whose action has no pending intent records no pipeline sample and no failure;
+  the host then counts the event as accepted (`record_pipeline_success`), as any other. A pending
+  intent of another instance (`performance_pipeline_identity_conflict`) and the pairing of capture
+  and recognition events (`performance_pipeline_start_missing`) are judged as before.
+- *4, what replaces the protection* is said in the contract: outside load is still every other
+  process at the same thresholds, and the emulators' own weight on the host is still caught by host
+  responsiveness and by the whole-machine CPU, RAM, GPU and disk-I/O pressure kinds, all kinds of
+  the pacing floor.
+- *5, not this slice*: ownership by the process id of each instance (so that an instance of the
+  same installation the Runtime does not manage stays outside load); any threshold, severity or
+  rule of the pacing floor.
+
+**Decided here.** The device process's version directory is left open in the image rather than
+listed from the disk, so the list is read from nothing and cannot fail (a directory read that
+failed would have needed a new code); the parent rule takes the Runtime's creation time from the
+sample's own record of the Runtime; a handset contributes its debug bridge, since the server it
+starts is the Runtime's own, and no emulator image; the summary's owned list now begins with the
+Runtime instead of being ordered by pid.
+
+**Tests** (host gate map row "#503 NOISE-A"; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `host-metrics` `windows::gate_503_noise_a::noise_a_an_owned_image_is_a_handed_over_path_one_open_level_or_a_name` (1) | a handed-over path in another case, with `/` or `\\?\`; any one version level and not none, two or another directory; a name deciding alone and an unrelated name reading no path; the same file name elsewhere and an unreadable path owning nothing; the empty set owning nothing; the handle's clones reading the set put last |
+| `…::noise_a_a_child_an_image_and_an_unrelated_heavy_process_only_the_third_is_third_party` (2) | a child of the Runtime, a process at a handed-over path and one at an unrelated path, all at 5 000 bp: the owned list holds the Runtime, the child and the image process, the third-party list the third alone; a process created before the Runtime whose parent id is the Runtime's stays third-party |
+| `…::noise_a_more_than_32_owned_processes_list_32_the_runtime_first_and_none_is_third_party` (2) | the Runtime and 39 heavy owned processes beside one heavy third-party one: 32 listed, the Runtime first, then by CPU descending and pid ascending; the third-party list holds the third-party one alone |
+| `…::noise_a_an_empty_handle_owns_only_the_runtime_and_its_children` (1) | before the handover a process at an image path and one of a vendor name are third-party; the Runtime is the Runtime and its child owned |
+| `runtime-host` `performance::gate_503_noise_a::noise_a_a_heavy_owned_process_raises_no_pressure_and_paces_as_a_calm_host` (1, 4) | three samples whose only heavy process is owned: no pressure, `third_party_pressure_basis_points` 0, and after it exits still 0 with nothing degraded; the shipped pacing gives S0, 1 000 and no extra round, as a calm host's; three samples of one third-party process at 5 000 bp start one elevated `third_party` pressure and S1, 1 250, one extra round |
+| `…::noise_a_an_application_steps_completion_keeps_the_monitor_healthy_and_a_capture_one_degrades` (3) | a completion no intent named: no events, the health and a failure count of 0 kept, no latency in the context; a completion of another instance's intent `performance_pipeline_identity_conflict`; a capture completion without its request `performance_pipeline_start_missing` and a `perf.monitor_degraded` |
+| `…::noise_a_the_host_hands_over_each_instances_bridges_and_its_installations_images` (1) | a discovery-bound emulator instance (root from its vendor tool, written with `\\?\`), one with a configured root and a bridge outside it, a handset and a fixture simulation: the three device instances' bridges, both installations' front end and device process of any version, the virtual machine images by name; nothing of the handset's installation, the fixture or another root; no vendor image without an emulator instance |
+| `runtime-host` `tests::gate_503_noise_a::noise_a_an_application_step_writes_no_degraded_or_recovered_monitor_record` (3) | a person's run of a package whose one step restarts the application, on a fake device with the monitor on and calm scripted samples: completed, one `task.effect_completed`, no `task.effect_intent`, no `perf.monitor_degraded` and no `perf.monitor_recovered` (until 0.12.102 one of each) |
+
+Adapted: `host-metrics` `windows::tests::live_windows_scan_reports_explicit_coverage` (not in a gate
+map) passes the scan's new argument, the empty set of owned images, and takes the scan out of the
+answer's pair; what it asserts is unchanged. No other test changes, none leaves the gate maps and no
+golden is re-recorded: the gate tests of the monitor and the sampler (host gate 37, the P22-0 gate,
+the coverage tests) pin nothing this slice moves; `pipeline_monitor_failure_is_explicitly_degraded_and_related_to_the_trigger`
+still meets a capture completion without its request, and
+`typed_pipeline_events_collect_capture_recognition_and_effect_latency` an intent and its completion.
+
+**What is not changed.** The pressure kinds and `performance.pacing.pressure_floor.kinds`; every
+threshold, streak, severity and the top-5 cut of the third-party list; P22-0; the evaluator's
+contention formula; every record shape and outcome code (no code is added, none changes its
+severity; `performance_pipeline_start_missing` keeps its category); the registry of owned process
+ids, `with_owned_process` and its test; the kernel's and the host's application chain; no setting,
+no interface revision (`package`, `ledger`, `runtime-client`, `actingd-config`).
+
+**At deploy.** Nothing to migrate or configure. Clients see fewer `perf.pressure_started` and
+`perf.pressure_ended` of kind `third_party`, fewer `perf.pacing_changed` with cause `pressure`, fewer
+`performance_tax_exempt` failures, and no `perf.monitor_degraded` / `perf.monitor_recovered` pair for
+an application step; `perf.summary.owned_processes` gains rows with ownership `owned` and
+`third_party_high_load` loses them. In the release notes' language: 性能监视不再把 Runtime 自己管的模拟器进程和调试桥进程当成外部负载，所以模拟器干活时不再每半分钟报一次外部压力、不再因此放慢步子；应用启动、停止、重启那一步也不再写一对“监视降级／恢复”的记录。别的程序的负载照旧按原来的线算外部压力；模拟器自己压得太重，仍由主机响应和整机的 CPU、内存、GPU、磁盘压力管住。
+
+**Rollback.** Nothing new is persisted: an older build reads `owned` rows (an existing value) and
+classes those processes as outside load again, and degrades again on each application step.
+
+### 1.554 Slice #503 ISO-A (0.12.102): one instance's worker no longer takes the whole Runtime down: its payload's error is contained against its instance, a panic that poisons the instance's own locks fences that instance, a second panic fences it too, and the Runtime's own availability record of an instance is never refused as not newer (board #503, after board #419's instance isolation and its open remainder, board #496; the owner's rule of 10-24; the rulings are the coordinator's of 11-28, taken from a read-only study of the worker's isolation, its open point R-A1-5 decided on the owner's rule; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546)
+
+It ships in 0.12.102. [runtime-outcomes.md](runtime-outcomes.md) ("Failure scope": the worker's row
+of the boundaries, "A lock of one instance alone", the new "The instance worker"),
+[scheduling/README.md](scheduling/README.md) ("An unavailable instance is probed again": the probe's
+end and "The device's locks after a panic"; the handed runs' "Failures"),
+[instance-fact-store.md](instance-fact-store.md) ("Backend self-check availability": the
+withdrawal's time and the new "The observation time") and the catalog's text of
+`instance_lock_poisoned` (and of `panic_caught`'s handling and `panic_unrecovered`'s causes, which
+named the second panic's old end) are the contract. No interface revision, record shape,
+configuration key or outcome code moves; `instance_lock_poisoned` (since 0.12.12) is written for the
+first time.
+
+**The three holes** (read at `cdc3e0b4`, in neutral words; what each did to the host).
+- *A payload's error ended its worker.* A payload of an instance's worker (a host claim's work, a
+  handed scheduled run) that ended with an error that is not of the whole was given to the fatal
+  state's mark, which refuses an error that is not fatal before it records anything: nothing was
+  recorded, and the worker's thread ended. The next job posted to that instance found no worker and
+  answered `instance_worker_unavailable`, which latched the whole Runtime. An error that was fatal
+  latched the Runtime whatever it concerned, an instance's included: the worker, listed as a
+  boundary, contained nothing.
+- *A panic poisoned the instance's locks for everyone.* A payload that panicked while it held its
+  device's admission guard or queue-order lock left the lock poisoned. Every taker of those locks
+  goes through the host's shared lock helper, which reads a poisoned lock as a poisoned Runtime
+  state (`runtime_state_poisoned`, of the whole): the next toucher (the emulator watch, the idle
+  check, the sweep's lease expiry when the panicked payload's key lapsed, a later run or observation)
+  stopped the host, at the latest within one key's TTL. A second panic of a worker before it finished
+  a payload latched `runtime_restart_required`.
+- *The availability record could be refused as not newer.* The Runtime's own
+  `session.instance.available` record of an instance was stamped with the bare wall clock. Two of
+  its writes in one millisecond (a preparation's withdrawal and its restore), or a write after the
+  wall clock stepped back, were refused `fact_observation_not_newer`: on a worker that ended the
+  worker (the first hole); on a person's self-check the refusal was made fatal and latched the host;
+  at a start it failed the start.
+
+**The owner's rule** (10-24, board #419): a fault of one emulator or instance must not stop the
+whole Runtime; only a fault of the whole (the ledger's integrity, an invalid configuration, the
+owner lock) may.
+
+**The rulings, as built.**
+- *R-A1-1, the worker contains* (`host/host_claims.rs`, `instance_worker_loop`,
+  `contain_worker_failure`, `WorkerJob::instance`). A payload's error goes to `contain_failure` with
+  the payload's own instance (its key's for a host claim, its lease's for a handed run) and the links
+  its panic is recorded under. A failure of the whole latches as before and ends the worker; one of
+  the instance fences it, with the fence's own record (`instance_resources_fenced` caused by it); one
+  of the operation is recorded once, a `runtime.failed` of its own code at stage `operation_cleanup`
+  (nothing more when its path recorded it). The classification is the existing scope rule's: an
+  untagged fatal failure stays of the whole, a tagged one is its instance's, a request failure the
+  operation's. A payload that ended with an error is a finished one, and the worker goes on.
+- *R-A1-2, the ends of its kind.* After a contained error the ends a panic runs for the payload's
+  kind run too: a handed run's lane is ended and the driver told the run was dropped; a probe of an
+  unavailable instance ends its probes and tells a person with the error's own code as
+  `failure_code` (`end_panicked_unavailable_probe` takes the cause, `panic_caught` after a panic); a
+  recovery ladder an entry block waits for is noted ended with `worker_failed` (fix round 1, below;
+  nothing climbs again in that block, a person is told; the error's own record names the error).
+- *R-A1-3, the panic's locks* (`host/failure_scope.rs`, `clear_instance_lock_poison`). At a panic,
+  first of all, the poison is cleared on the payload's instance's admission guard and queue-order
+  lock, each tested and cleared on the lock itself, without locking or waiting for it. After the
+  panic's ends and its `panic_caught` record, an instance whose lock was poisoned is fenced, the
+  fence caused by `instance_lock_poisoned`. A panic that poisoned nothing records only `panic_caught`.
+- *R-A1-4, unchanged*: the `panic_caught` record (thread, boundary, raw text; written byte for byte
+  as before), the payload dropped and not retried, its key lapsing at its TTL, the ends of a panicked
+  probe and ladder, `instance_worker_unavailable` (now only a worker that ended on a failure of the
+  whole), the Global list, a poisoned shared lock staying of the whole, `contain_failure` and the
+  request door.
+- *R-A1-5, decided* (the owner's rule of 10-24, and the isolation model's question as it was settled
+  then on the owner's words: an instance that fails twice in a row stops only that instance). A
+  second panic before the rebuilt worker finished a payload fences the payload's instance, the fence
+  caused by that panic's `panic_caught` with its values, instead of asking for a restart of the whole
+  Runtime; the worker goes on. The whole Runtime is asked to stop only for a fault of the whole.
+- *R-A2-1 to R-A2-3, the availability record's time* (`host/facts.rs`,
+  `publish_policy_instance_availability`, `FactPublicationPurpose::RuntimeAvailability`,
+  `observed_after_stored`; `fact_store.rs`, `latest_observed_unix_ms`). All five of the Runtime's
+  availability publishers stamp the later of the host clock and one millisecond after the latest
+  observation the store holds for the key (its active record's, else the key's latest, which an
+  invalidation keeps), read and published in one hold of `fact_write_gate`; a record of the active
+  record's own source snapshot is not raised (the store replays or refuses it as before). The store's
+  rules and every fact a client publishes are unchanged.
+
+**What the code proved of the design.** The design stamped the record ahead of the clock (its R-A2-3:
+"stamped 1 ms ahead"), but the fact store also refuses a record observed after the clock its
+publication samples (`fact_observation_in_future`), so the raised record alone would have been
+refused in every case it was for. The smallest change that keeps the design: under the same hold of
+the gate the Runtime's own availability record is judged at its own observation when that is later
+than the clock (the purpose above); neither of the store's rules changes, and a client's publication
+is judged at the clock as before. Read and written in one hold of the gate every fact writer takes,
+the raise cannot be raced by any writer of the key, the Runtime's or a client's.
+
+**Why the poison may be cleared.** Both locks are `Mutex<()>`: they guard no data, so nothing is left
+half written behind them. When the panicking payload held one, no other thread was inside it; a
+taker that met the poison before the clear failed at once and holds nothing (the shared helper drops
+the poisoned guard). What the panic left half done is the device's (a device step, a step of the
+device's queue), and the fence holds the instance until a passing preparation proves it again. A
+lock every instance shares that the panic held is poisoned itself and stays of the whole. Clearing
+locks nothing: the worker's root holds no lock at that point, and the order of the admission guard,
+the queue-order lock and the scheduler is not met.
+
+**Decided here.** The test seams live in the worker's own module: a test-only payload a test posts to
+an instance's worker (end, fail, panic, panic holding the instance's two locks or the scheduler's) and
+a failure the next host claim of a device ends with, its key released first; neither exists outside
+test builds. A device group of several shares the cleared locks; the payload's instance alone is
+fenced, as a member's own fault is fenced today.
+
+**Tests** (host gate map row "#503 ISO-A"; manual clocks; no clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_iso_a::iso_a_h1_one_instances_worker_failures_and_panics_hold_only_that_instance` | X's worker: an instance's error fences X (caused by it); an operation's error is one `runtime.failed` of its code under X, nothing fenced; a panic holding X's two locks is recorded, then fences X (`instance_lock_poisoned`), both locks no longer poisoned; a second panic fences X (`panic_caught`); after each step a payload posted to each worker runs, a person's self-check, which takes X's admission guard, lifts X's fence, and nothing latches |
+| `…::iso_a_h2_a_probe_whose_payload_fails_tells_a_person_with_the_failures_code` | a probe's payload ends with an operation's error: one record of it, a person told at once (`failure_code` that code, `attempts` 1, no next probe), no probe however far the clock runs, the worker goes on |
+| `…::iso_a_h3_a_payload_failure_of_the_whole_latches_the_runtime` | a payload's ledger failure latches the Runtime as before; nothing fenced |
+| `…::iso_a_h4_a_panic_holding_a_shared_lock_latches_at_the_next_touch` | a panic holding the scheduler's lock latches `runtime_state_poisoned` at the next touch; nothing fenced |
+| `…::iso_a_h5_two_availability_writes_in_one_millisecond_are_both_taken` | on a clock that does not move, the start's withdrawal and restore and a person's self-check's, each one millisecond after the one before; nothing latches |
+| `…::iso_a_h6_writes_after_a_clock_step_back_are_taken_and_a_fence_completes` | the clock a second back: a person's self-check's withdrawal and restore after the stored record, a fence's withdrawal one millisecond after it and the fence complete, the next passing self-check lifts it |
+| `…::iso_a_h7_an_entry_recovery_whose_payload_fails_ends_worker_failed_and_climbs_no_more` | (fix round 1, on `gate_490_entry_a`'s replay) an entry block's held recovery whose ladder's payload ends with an operation's error its worker contains: the error's one record, one `instance_entry_blocked_recovery_failed` with `worker_failed` and no next climb, the block holding nothing, no climb then or two hours later, the worker going on, nothing stopped |
+
+Every existing test passes unchanged; none moves. The worker's own (`instance_workers`' panic before
+any lock: recorded, nothing fenced, the next payload runs), the panicked probe's and the panicked
+ladder's (AVAIL-1's T7, ENTRY-A's R5 b) and the isolation core's (`gate_419_iso1`, `gate_437_g1`'s
+shared lock) take the paths they took; the two tests written around the same-millisecond refusal
+(`gate_hs5`'s application rung, `gate_486_asleep`'s check of a stopped emulator) move their clocks
+and meet no raise; `gate_382_h4`'s refusal is a client's, unchanged. No golden re-recorded; no test
+leaves the gate maps.
+
+**What is not changed, and what is left.** The Global list; a poisoned shared lock staying of the
+whole; the `panic_caught` record; the payload dropped and not retried; the key lapsing at its TTL; the
+request door; the fact store's rules and every client's fact. Left for a later slice: the sites that
+take the two locks still take them through the shared helper (converting them to `lock_instance`,
+with containment at the sweep's, the watch's and the policy admission's touch, closes the moment
+between the unwind and the clear); the memory gate before an emulator start is another slice.
+
+**Fix round 1** (the coordinator's work order of 11-29 after the first CI round; one code, one
+cause). The finding: after a payload's error its worker contained, the end of an entry block's
+recovery ladder was written `worker_panicked`, so `instance_entry_blocked_recovery_failed` told a
+person that the worker which climbed the ladder panicked when nothing had. The vocabulary
+`entry_recovery_end` gains one word, `worker_failed` (`EntryRecoveryEnd::WorkerFailed`, since
+0.12.102): the work that climbed the ladder ended with an error its worker contained, the error's
+own record under the same links saying which; `contain_worker_failure` writes it, and the panic
+path keeps `worker_panicked`. Every reader of the word decides for it exactly as for
+`worker_panicked` (`host/entry_blocks.rs`: the match of `EntryBlocks::recovery_ended`, which sets
+the block's flag, still named `panicked` and now said to hold for both, and lets its held
+recovery go; `worker_ended`, which `note_entry_recovery_failed` and `block_instance_entry` read to
+leave such a climb out of the stretch's count; the update dialog's test is false for both). No other
+word, record shape, key or interface revision moves: an outcome's values reach every reader as a
+map of text, which spells a word it does not know and refuses none (the `ledger` rows of
+[component-interfaces.md](component-interfaces.md): codes and value words the reader only spells;
+the precedent of a word added to an existing value vocabulary, §1.511's `rule` of
+`variable_source`), and nothing parses this vocabulary back into its enum, so an older build reads
+the new word as a word. The catalog's entry of the word and the texts of the code and the
+vocabulary say it; the index was regenerated and checked current. One test more, h7 in the table
+above, built on `gate_490_entry_a`'s replay, whose helpers it calls are made `pub(super)` for it
+(nothing else of that file changes); ENTRY-A's R5 (b), a panicked worker's `worker_panicked`,
+passes unchanged.
+
+**At deploy.** Nothing to configure or migrate: no record, setting or revision moves.
+
+**Rollback.** An older build reads every record this one writes (both codes of the fence exist since
+0.12.12; a raised availability record is an ordinary fact record). It stops the host again in these
+cases: a payload's error, a panic holding an instance's lock, a second panic, and an availability
+write in the same millisecond or after a clock step back.
+
+### 1.556 Slice #503 MEM (0.12.102): an automatic emulator start waits for commit headroom and keeps a minimum distance from the previous start; both numbers are configuration keys with defaults (board #503; the rulings are the coordinator's of 11-29, taken from a read-only study of the tree with its open point decided, not the owner's words; coordinator work order `rd-1123/brief-503-mem.md` and its correction of the same day; on #503 NOISE-A's head, which holds main `924f4034`)
+
+[emulator-control.md](emulator-control.md) ("Configured start at daemon start", the bullet "Commit
+headroom and spacing") and [runtime-config.md](runtime-config.md) ("The `emulator_control`
+section") are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). Each emulator the Runtime
+starts commits seven to eight gibibytes. The host's commit limit is finite and other programs hold
+part of it. At a day change several instances are due within the same minutes; the Runtime starts
+them one after another, knowing nothing of memory, and a production host has been seen within a few
+gibibytes of its limit. A host that reaches the limit fails allocations in every program on it,
+the Runtime included. Read in the tree: the host's memory sample kept only physical memory, no
+start path read commit, and nothing put a minimum time between two starts (the automatic starts
+were already serialised by the start turn, which is not the same: the turn has no interval and
+knows nothing of memory, and a person's control and the ladder's rung run outside it).
+
+**What it rests on** (read on this tree; none of the stop conditions holds).
+- *The interface.* `actingd-config` 35 is #489 AVAIL-1's (row 35), so this slice takes the next
+  free revision, **36** (the work order said 35; its correction of the same day says 36; no open
+  branch raises it). This build declares [5, 36]; the installed console declares [5, 32]; the
+  installer is this build's `actingctl` ([5, 36]) or the installed build's ([5, 35]). The edge
+  `installer_ui_next_common` asks that the three ranges meet: they meet in [5, 32] either way, as
+  before, so nothing the console or the installer does changes. The console sets keys only of the
+  `daily` and `advanced` tiers and these two are `hidden`; a root's file that names neither key
+  passes `installer_knows_keys` unchanged.
+- *An older build and the keys.* A configuration file that names either key is refused by a build
+  before this one (`EmulatorControlFile` denies unknown members, `config_decode_failed`), at its
+  start and in its check-config. An instruction that set
+  either key (a `host.config_overrides` row) is not a stop: an older build's restore finds no row of
+  the key (`EffectiveConfig::restore`, `setting_position`) and drops the value with
+  `config_override_dropped`; the start goes on (below, "Rollback").
+- *The wait holds nothing a person's control needs.* It keeps the start turn (a word in memory, no
+  lock held across a tick) and its claim's key; an emulator control queued on the same instance
+  ends the wait at the next tick (`emulator_autostart_superseded`, as today), and every other
+  instance's control takes neither.
+- *No existing test reads the clock or the commit through the gate.* A test build without the
+  commit seam consults no gate and stamps no Start (below, "Decided here"), so every test written
+  before this slice starts its emulators as it did, and none depends on the CI host's memory.
+
+**The rulings, as built.**
+- *1, the read* (`crates/host-metrics/src/lib.rs`, `CommitSample`, `sample_commit`; `windows.rs`,
+  `sample_commit`). `GlobalMemoryStatusEx`'s `ullTotalPageFile` (the limit) and `ullAvailPageFile`
+  (what the process may still commit: without a job object, and the tree creates none, the
+  system's available commit); off Windows `performance_sampler_unsupported`. The physical sample
+  is unchanged.
+- *1, where* (`crates/runtime-host/src/host/emulator_autostart.rs`, `hold_autostart_claim`,
+  `start_gate_open`). The gate is asked only by an automatic start's claim (the daemon start's
+  configured start, the emulator watch's restart, an idle wake after `stop_emulator`), at every
+  tick, after the network wait and once it holds the start turn, before the last checks and the
+  Start. Held, it keeps the turn and its key and ticks on (500 ms; the commit read at once and then
+  every 5 s, as the network read): whatever ends a hold today ends the wait (a drain or a shutdown,
+  an emulator control waiting on the instance, the instance's or the global pause, `start_emulator`
+  turned off), and there is no deadline. The gate's memory lives with the turn (`AutostartTurn`,
+  `StartGateMemory`): the latest Start's time, the open short episode, the failing streak; memory
+  only.
+- *1, the stamp* (`emulator_instance.rs`, `perform_control_phase`; `note_emulator_start_returned`).
+  Every emulator Start meets the provider in that one place: the time it returned is stamped
+  there, whatever its result, for a Start of any kind.
+- *2, the numbers are keys* (`crates/runtime-config/src/emulator_control.rs`, the two rows and
+  `EmulatorStartGateConfig`; `effective.rs`, `emulator_start_gate`, also in the section's whole
+  check; `crates/runtime-host/src/host/runtime_config.rs`, `emulator_start_gate_settings`). A Start
+  goes on when the available commit is at or above the reserve and the spacing has passed since the
+  latest Start returned.
+- *3, a wait is told* (the codes below; each a `runtime.failed` record under the instance's links,
+  fresh system links and not the claim's request, so a start a pause holds afterwards still records
+  no `command.*` and no `runtime.failed` of its own as PG-1 requires; its severity the code's
+  category; and the same report line, which actingd writes as a daemon line).
+  The network wait is shown today only in the claim's report lines (`emulator_autostart_network_ready`,
+  `_status_unknown`) and the refusal's records: no member of an instance's state in the status or
+  the overview, no not-run explanation and no other report names it (the status shows the claim's
+  lease as `lease_active` and a pause lists `automatic_start` in its way, for any automatic start,
+  waiting or not). So the commit wait is shown the same way, as report lines and records, and
+  nothing is added to the status, the overview or the schedule's explanation.
+- *4, a read that fails* lets the start go on, once told per failing streak.
+- *5, unchanged*: every start with the gate off or with headroom and spacing satisfied, but for the
+  stamp; every explicit control, every stop, the ladder, the turn's order and every existing record.
+  A file that names neither key reads as the defaults.
+
+**What is never held, and why.** A person's, an agent's or the Lab's emulator control (start, stop,
+restart: an explicit act of a person is not held by an automatic guard, as PAUSE-AUTO's "an explicit
+emulator control never asks"); any Stop (it frees commit); the recovery ladder's emulator-restart
+rung (a broken instance's recovery, whose own Stop frees what its Start takes, with its own bounds;
+holding it is a possible later ruling, not this slice); a recognition (it launches nothing); a
+startup package and an application start (no virtual machine). Their Starts only stamp the spacing,
+so they delay the next automatic start, which they never wait for.
+
+**Keys** (`actingd-config` 36; settable, read at every tick of the waiting claim, so an instruction
+applies at the next tick without a restart; no per-instance form; console tier `hidden`):
+
+| Key | Range | Default |
+|---|---|---|
+| `emulator_control.start_commit_reserve_bytes` | integer `0..=1099511627776`; `0` checks nothing and reads nothing | `17179869184` (16 GiB) |
+| `emulator_control.start_spacing_ms` | milliseconds `0..=600000`; `0` spaces nothing | `30000` |
+
+With a commit limit of about 103 GiB the defaults let automatic starts go on until about 87 GiB are
+committed. Both defaults are the study's inference (twice the top of the measured seven to eight
+gibibytes a start commits; whether a machine's commit is all in when its Start returns could not be
+read): a trace of the limit and the available commit around one start on the production host
+settles them, and a later commit raises the spacing.
+
+**Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
+class `none`, so no trigger matches them and no decision reads them). Three outcome keys are added
+to the key table (`commit_limit_bytes`, `commit_available_bytes`, `commit_reserve_bytes`): the
+study's `limit_bytes`, `free_bytes` and `memory_reserve_bytes` mean a length limit, a volume's free
+space and the frame stores' reserve, and a key keeps one meaning. No location is added.
+
+| Code | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `emulator_autostart_commit_short` | automatic starts are held: the available commit (`commit_available_bytes`, of `commit_limit_bytes`) is below the reserve (`commit_reserve_bytes`); `alias` the instance first in line, `idle_action` for an idle wake; once per short episode for the whole host, from the first short read until a start passes the gate again | warns | none: no request answers it |
+| `emulator_autostart_commit_ready` | the start that ends the episode passes the gate (`elapsed_ms` since the episode began, the read, the reserve) | info | none |
+| `emulator_autostart_commit_unknown` | the commit could not be read (`failure_code` the read's code); the start goes on without the headroom check; once per failing streak, until a read succeeds | warns | none |
+
+The catalogue's text of each says the result (what holds, how much is available, the limit, the
+reserve, who is first in line) and the operation: the Runtime starts the instance as soon as the
+headroom is back, which happens when another emulator stops or another program frees memory; a
+person may start an emulator by hand at any time, which is not held; the reserve is
+`emulator_control.start_commit_reserve_bytes`.
+
+**Interfaces.** `actingd-config` [5, 35] → [5, 36] ([component-interfaces.md](component-interfaces.md),
+row 36): the two members of `emulator_control`. `ledger` does not move: the three codes travel as
+text in `runtime.failed` records, which every revision reads; `runtime-client` and `package` do not
+move.
+
+**Decided here.** The revision is 36, not the work order's 35 (above). A test build without the
+commit seam (`RuntimeHostConfig::with_commit_sample_for_test`) consults no gate at all, spacing
+included, and stamps nothing: with the default 30 s spacing, every existing test that starts two
+emulators within 30 s on the system clock would otherwise wait, and on a manual clock never go on;
+the study's "ample" without the seam covers only the headroom. The spacing wait alone records
+nothing: it ends by itself within `start_spacing_ms` (at most ten minutes), the claim's lease shows
+meanwhile, and the work order names only the three codes. A failed read, or the reserve turned to
+`0` by an instruction, ends an open episode without a ready line. The new keys follow AVAIL-1's
+places (the last slice that added a settable key and raised `actingd-config`): the configuration
+crate, the section's whole check (which actingd's check-config runs), the defaults file, the
+contract and the two interface tables; the console's tiers need no row (`hidden` is every key the
+table does not list).
+
+**Tests** (`crates/runtime-host/src/tests/gate_503_mem.rs`, host gate map row "#503 MEM"; the commit
+seam, the Runtime's manual clock and the scripted emulators; the spacing read from the Runtime's own
+stamp of the latest Start, so a start the gate let through early would leave an earlier stamp; no
+clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `mem_1_a_day_change_holds_the_one_in_line_and_those_behind_it_with_one_short_for_the_episode` | three instances due at once: the first starts on ample headroom; the next, first in line, holds the turn and its key with one `…_short` (its alias, 8 GiB of 100 GiB, the 16 GiB reserve) while the third waits behind it, neither started at 5 s; the headroom back at 10 s, it still waits out the spacing and starts at 30 s with one `…_ready` (`elapsed_ms` 30 000); the third starts at 60 s; both lines are records under the instance in line, warning and info |
+| `mem_2_the_spacing_holds_an_automatic_start_after_a_persons_start_for_its_length` | with ample headroom an automatic start right after a person's start is held at 29 999 ms and starts at 30 000 ms; no gate line or record |
+| `mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_headroom_short` | while an automatic start waits for headroom, a person's stop and start of another instance and a device drill of its ladder's emulator-restart rung are driven at once and stamp the spacing; a person's start of the waiting instance is driven and the claim yields (`emulator_autostart_superseded`) |
+| `mem_4_a_pause_and_a_shutdown_end_the_wait_as_they_end_a_hold_today` | an instance pause ends the wait (`emulator_autostart_skipped`, `instance_paused`), the next in line waits in the same episode with no second short line, and the host's close ends that wait (`emulator_autostart_interrupted`); nothing started |
+| `mem_5_start_emulator_turned_off_ends_the_wait` | `start_emulator` set off by an instruction ends the wait (`start_emulator_off`); nothing started |
+| `mem_6_the_reserve_0_never_holds_and_reads_nothing` | the file's reserve `0`: with a short scripted headroom the start goes on, no read, no line |
+| `mem_7_a_configuration_without_the_keys_holds_at_the_defaults` | a file naming neither key: 16 GiB less one byte is short, exactly 16 GiB goes on, and the next start is held at 29 999 ms after it and starts at 30 000 ms |
+| `mem_8_both_keys_set_by_an_instruction_take_effect_at_the_next_tick` | `ConfigureSettings` of the reserve (4 GiB) lets the waiting start go on with the read it has, its ready line naming 4 GiB; of the spacing (`0`) lets the next one go on at once |
+| `mem_9_a_failing_read_starts_and_says_so_once` | failing reads: the first start goes on with one `…_unknown` (its code, under its instance, warning), the next reads fail again with no second line, and the spacing still holds it to 30 s |
+
+Adapted (1), the requirement moving what it pins: `tools/actinglab-architecture/tests/component_interfaces.rs`
+(`V0120`: `actingd-config` [5, 36]). No other test pins the range (the rescue module's fixtures
+declare their own, and the readers of the shipped declaration pin `runtime-client` and `package`).
+No other existing test changes, none leaves the gate maps and no golden is re-recorded. The
+existing autostart, idle and watch gates (`gate_369_s6c`, `gate_r3`, `gate_pause_auto`,
+`gate_idle1p`, `gate_480_pg1`, `gate_emu_bind`, `gate_emu_watch`, `gate_486_asleep`, the autostart
+tests of `instance_workers`) set no commit seam, so the gate is not consulted there.
+
+**What is not changed.** The network wait and its codes; the turn, its order and its contenders;
+the pauses' holds and their records; `start_emulator`; the watch's bound; the idle plan's wake
+leads (staggering them is a separate decision); the ladder and its rungs; every explicit control
+and its records; the physical memory sample and every use of it; a page file that could grow is
+not counted. No game, package or alias is named in code.
+
+**At deploy.** Nothing to configure: the two keys take their defaults from the new build's defaults
+file, and the update leaves the root's configuration file as it is. The installed console and the
+installer meet this build as before (above). On the production host, after the first automatic
+starts, read the daemon's lines and the ledger for `emulator_autostart_commit_*`; a short episode at
+a day change shows one `…_short` and later one `…_ready`. In the release notes' language:
+运行时自动启动模拟器之前先看主机还剩多少可提交内存，不够 16 GiB 就先等，等到别的模拟器停了或者别的程序放出内存再启动；两次启动之间至少隔 30 秒（人手动启动、停止和恢复阶梯的重启都不拦，只计时）。两个数都是新配置键 `emulator_control.start_commit_reserve_bytes`、`emulator_control.start_spacing_ms`，运行中可改。等待时记一条 `emulator_autostart_commit_short`，放行时一条 `emulator_autostart_commit_ready`，读不到内存时照常启动并记一条 `emulator_autostart_commit_unknown`。`actingd-config` 升到 36。
+
+**Rollback.** A build before this one reads the root's configuration file as before, since the
+update writes neither key there. A file into which a person wrote either key is refused by it
+(`config_decode_failed`, at its start and in its check-config), so such a file is put back first.
+An instruction that set either key is dropped by its restore with
+`config_override_dropped` and the start goes on, naming the key among the instructions it dropped;
+a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It reads the three new
+codes in the records as text it does not know. The gate's memory was memory only and is gone; the
+older build starts automatic emulators with no gate, as before.
+
+### 1.559 Slice #455 SL3 (0.12.104): below its line a pool's spenders are charged for the units they take from below it, the more for each unit the farther below, and say so (`spend_line_pressed`) (board #455; the owner's words of 11-28, in neutral words below; the rulings 1 to 9 the coordinator's of 11-29; coordinator work order `rd-1123/brief-455-sl3.md` after the read-only study `rd-1123/study-spend-line.md`; on main `b5e9102e`, v0.12.101, merged with main `cec07ec4`, which holds §1.552 to §1.554 and §1.556, slices of the same days, before this one)
 
 This section takes 1.559 (§1.552 to §1.558 are slices built beside it; whichever merges later keeps
 the sections in order). It ships in 0.12.104. [scheduling/README.md](scheduling/README.md) ("A pool

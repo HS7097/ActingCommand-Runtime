@@ -3604,21 +3604,28 @@ schedules nothing for the window's end. Two instances stayed unavailable for 15 
   probe, so **nothing probes the instance again in that unavailability**, whether or not the panic
   poisoned anything; a person is told at once (below); the climbing mark comes off whatever state
   the entry is in; and a failure of this clean-up is returned only after the panic's own record
-  and the fatal mark a second panic of the worker owes. The instance leaves that state as it
+  and the fence the panic owes (below), and stops the Runtime. The instance leaves that state as it
   leaves the set: a decision of the gate that no longer holds it (a person's self-check or resume
   whose self-check passes, any other preparation that passes, a fence, a device link or state, the
   configuration), or a restart (the set is memory). A person's self-check that fails keeps it
-  there. The panicked payload's key lapses at its TTL, as every panicked payload's does.
-- **A fact this slice does not change** (verified in fix round 2; board issue #496). A panic
-  inside the preparation unwinds through the guard of the device's admission lock
+  there. The panicked payload's key lapses at its TTL, as every panicked payload's does. #503
+  ISO-A (Runtime 0.12.102): a probe whose payload ends with an error its worker contains (an
+  operation's error, recorded once; an instance's, which fences the instance) ends the same way,
+  the person told with the error's own code as `failure_code`; without it the probe would stay
+  queued or running and nothing would probe the instance again, silently.
+- **The device's locks after a panic** (#503 ISO-A, Runtime 0.12.102; until then board issue
+  #496). A panic inside the preparation unwinds through the guard of the device's admission lock
   (`HostShared::instance_guard`, an `Arc<Mutex<()>>` per device key, held by the probe's
-  `run_unavailable_probe` across `prepare_recovery_connection`) and poisons it. The next lock of it
-  answers `runtime_state_poisoned` (the host's `lock` maps a poisoned lock to that fatal code,
-  `runtime_halted`, a global shared-lock failure) and stops the Runtime: the emulator watch's poll
-  of a discovery-bound instance (its `try_lock` maps `Poisoned` to the same code), or a later
-  preparation, run or observation of that device. Two panics of one worker without a finished
-  payload between them are `runtime_restart_required`. So a panic inside the preparation still
-  stops the whole Runtime at the next touch of that device; the probes no longer add a touch.
+  `run_unavailable_probe` across `prepare_recovery_connection`) and poisons it. The worker's root
+  clears that poison, and the queue-order lock's, first of all and without waiting, and after the
+  panic's record fences the payload's instance (`instance_lock_poisoned`), so the next lock of
+  either (the emulator watch's poll, the sweep's lease expiry when the panicked key lapses, a later
+  preparation, run or observation of that device) takes it as before and the Runtime goes on; the
+  fence holds the instance until it is lifted as any fence is. Two panics of one worker without a
+  finished payload between them fence the payload's instance (`panic_caught`), and the worker goes
+  on. The locks' sites still take them through the shared `lock`, so a touch in the moment between
+  the unwind and the clear still answers `runtime_state_poisoned` ([runtime-outcomes.md](../runtime-outcomes.md),
+  "Failure scope").
 - **When** (`scheduling.unavailable_probe.*`, [runtime-config.md](../runtime-config.md)):
   `first_interval_ms` after the instance became one, then after each failed probe the interval
   times `factor`, at most `max_interval_ms`; an interval counts from the latest of the probe before,
@@ -4032,7 +4039,10 @@ finishes and is settled there whatever the switch says afterwards.
 - **Failures (#419).** The run's failures go through the instance's failure containment: an
   instance-level failure fences that instance and the other lanes go on; only a global fault
   stops the Runtime. A worker panic drops the run (not retried, its lease lapses at its TTL);
-  its registration stays, marked abandoned, so the instance stays occupied. A run whose
+  its registration stays, marked abandoned, so the instance stays occupied. Since #503 ISO-A
+  (Runtime 0.12.102) a run whose worker contained its error at the worker's root (a failure of
+  its settlement that fenced its instance) is dropped the same way and the driver told so; only a
+  failure of the whole still ends the worker. A run whose
   settlement failed without stopping the Runtime is left the same way. Once such a run's lease
   ended, the reconciliation settles it by the start's rule (fix 1, review M1): as at start, a
   lease that already ended without a run-linked release (its expiry, a release without run

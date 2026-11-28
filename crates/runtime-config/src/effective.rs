@@ -545,6 +545,14 @@ impl EffectiveConfig {
         emulator_control::EmulatorWatchConfig::parse(&|key: &str| self.value_or_shipped(key))
     }
 
+    /// #503 MEM: the automatic emulator starts' gate keys of the `emulator_control` section in
+    /// effect (`start_commit_reserve_bytes`, `start_spacing_ms`).
+    pub fn emulator_start_gate(
+        &self,
+    ) -> Result<emulator_control::EmulatorStartGateConfig, ConfigFailure> {
+        emulator_control::EmulatorStartGateConfig::parse(&|key: &str| self.value_or_shipped(key))
+    }
+
     /// Workflow #385 P-c: the `performance` section in effect, checked whole (PERF §4.1,
     /// §10.4).
     pub fn check_performance(&self) -> Result<(), ConfigFailure> {
@@ -1119,6 +1127,7 @@ impl EffectiveConfig {
         if sections.contains(emulator_control::SECTION) {
             self.restart_exit_wait_ms()?;
             self.emulator_watch()?;
+            self.emulator_start_gate()?;
         }
         if sections.contains(execution::SECTION) {
             self.capture_cadence()?;

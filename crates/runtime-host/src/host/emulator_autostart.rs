@@ -118,6 +118,21 @@
 //! releases the key and starts nothing (`emulator_autostart_skipped`, `skip_reason`
 //! `start_emulator_off`; an idle wake's is spent, not owed again, and the watch's request leaves
 //! its bound). A change of the key starts and stops nothing by itself.
+//!
+//! #503 MEM (0.12.102; `contracts/emulator-control.md`, "Commit headroom and spacing"; register
+//! §1.556): the start gate. With the turn in hand, before the last checks and the Start, the claim
+//! asks the gate (`start_gate_open`) at every tick: the host's available commit
+//! (`actingcommand_host_metrics::sample_commit`, read at once and every 5 s) must be at or above
+//! `emulator_control.start_commit_reserve_bytes`, and `emulator_control.start_spacing_ms` must have
+//! passed since the latest emulator Start of any kind returned (`note_emulator_start_returned`,
+//! stamped where every Start meets the provider). Held, the claim keeps the turn and its key and
+//! ticks on, so whatever ends a hold today ends the wait; there is no deadline. The first short read
+//! of an episode is `emulator_autostart_commit_short`, once for the whole host; the start that
+//! passes the gate again `emulator_autostart_commit_ready`; a read that fails lets the start go on
+//! and is `emulator_autostart_commit_unknown`, once per failing streak. A person's, an agent's or
+//! the Lab's emulator control, any stop and the ladder's restart rung never ask the gate: their
+//! Starts only stamp the time the spacing counts from. A test build without the commit seam
+//! (`RuntimeHostConfig::with_commit_sample_for_test`) consults no gate and stamps nothing.
 
 use super::emulator_watch::{SkippedStart, WatchKind, WatchSkipReason, start_skip_outcome};
 use super::host_claims::{HostClaimWork, HostKey};
@@ -126,7 +141,9 @@ use super::resource_close::RecognitionPreparation;
 use super::*;
 use crate::InstanceState;
 use crate::codes::{HostCode, HostLocation};
-use actingcommand_host_metrics::NetworkConnectivity;
+use actingcommand_contract::outcome::Code;
+use actingcommand_host_metrics::{CommitSample, NetworkConnectivity};
+use actingcommand_runtime_config::{EmulatorStartGateConfig, IdleAction};
 
 /// How often a granted claim checks its hold (H-5: the wait ticks every 500 ms).
 const AUTOSTART_TICK: Duration = Duration::from_millis(500);
@@ -134,6 +151,9 @@ const AUTOSTART_TICK: Duration = Duration::from_millis(500);
 const NETWORK_WAIT_MS: u64 = 600_000;
 /// How often the operating system's connectivity status is read during that wait (P3).
 const NETWORK_READ_INTERVAL_MS: u64 = 5_000;
+/// #503 MEM: how often the claim that holds the start turn reads the host's commit while the start
+/// gate holds it, as the network read.
+const COMMIT_READ_INTERVAL_MS: u64 = 5_000;
 /// The key's TTL at its grant and at every renewal while the claim waits (H-5, review M-4).
 const AUTOSTART_HOLD_TTL_MS: u64 = 120_000;
 /// A waiting claim renews its key whenever less than this is left (H-5, review M-4).
@@ -209,6 +229,106 @@ impl EmulatorAutostartReports {
 pub(super) struct AutostartTurn {
     holder: Option<usize>,
     contenders: BTreeSet<usize>,
+    /// #503 MEM: the start gate's memory, which the turn's holders share.
+    gate: StartGateMemory,
+}
+
+/// #503 MEM (register §1.556): the start gate's memory, host-wide: when the latest emulator Start
+/// of any kind returned (on the Runtime's monotonic clock), when the open short episode began, and
+/// whether the commit reads are failing. Memory only.
+#[derive(Default)]
+struct StartGateMemory {
+    last_start_returned_ms: Option<u64>,
+    short_since_ms: Option<u64>,
+    reads_failing: bool,
+}
+
+/// #503 MEM: one read of the host's commit by the claim that holds the turn.
+#[derive(Clone, Copy)]
+enum CommitRead {
+    Sample(CommitSample),
+    Failed(Code),
+}
+
+/// #503 MEM: the commit reads of one claim while it holds the turn: when it reads next (`None`:
+/// at once) and what it read last.
+#[derive(Default)]
+struct CommitReads {
+    next_read_ms: Option<u64>,
+    latest: Option<CommitRead>,
+}
+
+/// #503 MEM: what the start gate tells a person at one tick (at most one thing).
+enum GateNote {
+    /// The episode's first short read.
+    Short(CommitSample),
+    /// The start that ends the episode passes the gate with this read, `elapsed_ms` after the
+    /// episode began.
+    Ready {
+        elapsed_ms: u64,
+        sample: CommitSample,
+    },
+    /// The first failed read of a streak: its code.
+    Unknown(Code),
+}
+
+impl StartGateMemory {
+    /// The gate's decision at `now_ms` for the claim that holds the turn, `true` when its Start may
+    /// go on, and what to tell a person. `read` is the claim's latest commit read (none while the
+    /// reserve is 0), `fresh` whether it was taken at this tick. The headroom holds while the read
+    /// is a sample below the reserve; a failed read holds nothing. The spacing holds until
+    /// `spacing_ms` after the latest Start returned.
+    fn decide(
+        &mut self,
+        now_ms: u64,
+        settings: EmulatorStartGateConfig,
+        read: Option<CommitRead>,
+        fresh: bool,
+    ) -> (bool, Option<GateNote>) {
+        let mut note = None;
+        if fresh {
+            match read {
+                Some(CommitRead::Failed(code)) if !self.reads_failing => {
+                    self.reads_failing = true;
+                    note = Some(GateNote::Unknown(code));
+                }
+                Some(CommitRead::Sample(_)) => self.reads_failing = false,
+                Some(CommitRead::Failed(_)) | None => {}
+            }
+        }
+        let short = match read {
+            Some(CommitRead::Sample(sample))
+                if sample.available_bytes < settings.commit_reserve_bytes =>
+            {
+                Some(sample)
+            }
+            _ => None,
+        };
+        if let Some(sample) = short
+            && self.short_since_ms.is_none()
+        {
+            self.short_since_ms = Some(now_ms);
+            note = Some(GateNote::Short(sample));
+        }
+        let spaced = settings.spacing_ms == 0
+            || self
+                .last_start_returned_ms
+                .is_none_or(|returned| now_ms >= returned.saturating_add(settings.spacing_ms));
+        if short.is_some() || !spaced {
+            return (false, note);
+        }
+        // The start passes: the episode ends, told with the read that passed (a failed read or a
+        // reserve turned to 0 ends it without one).
+        if let Some(since) = self.short_since_ms.take()
+            && let Some(CommitRead::Sample(sample)) = read
+        {
+            note = Some(GateNote::Ready {
+                elapsed_ms: now_ms.saturating_sub(since),
+                sample,
+            });
+        }
+        (true, note)
+    }
 }
 
 impl AutostartTurn {
@@ -737,6 +857,8 @@ impl HostShared {
         let mut network = NetworkWait::Reading {
             next_read_ms: granted_ms,
         };
+        // #503 MEM: the start gate's commit reads of this claim once it holds the turn.
+        let mut commit_reads = CommitReads::default();
         loop {
             if let Some(end) = self.autostart_hold_ends(pending, &mut key)? {
                 return self.end_autostart_hold(pending, &key, end);
@@ -776,12 +898,14 @@ impl HostShared {
             }
             // Workflow #386 SR-4a3: a claim granted before a blackout that now covers its
             // instance does not start the emulator inside it, and leaves the turn to the others:
-            // it holds on, renewing its key, until the blackout's end.
+            // it holds on, renewing its key, until the blackout's end. #503 MEM: with the turn,
+            // the start gate; held, the claim keeps the turn and its key and ticks on.
             if matches!(network, NetworkWait::Ready)
                 && self
                     .blackout_covering(pending.instance_id, &pending.instance_alias)?
                     .is_none()
                 && self.autostart_turn(|turn| turn.take(pending.position))?
+                && self.start_gate_open(pending, &mut commit_reads)?
             {
                 // The final checks just before the Start; emu-watch: the watch's claim reads the
                 // emulator status once more.
@@ -1493,5 +1617,137 @@ impl HostShared {
             return read();
         }
         actingcommand_host_metrics::network_connectivity()
+    }
+
+    /// #503 MEM (register §1.556): the start gate, asked at every tick by the claim that holds the
+    /// start turn, before the last checks and the Start; `true` when the Start may go on. It reads
+    /// `emulator_control.start_commit_reserve_bytes` and `.start_spacing_ms` in effect, and the
+    /// host's commit at once and then every 5 s (none while the reserve is 0). Held, the claim keeps
+    /// the turn and its key and the caller ticks on; what the gate tells a person is recorded here.
+    /// A test build without the commit seam consults no gate.
+    fn start_gate_open(
+        &self,
+        pending: &PendingAutostart,
+        reads: &mut CommitReads,
+    ) -> RuntimeHostResult<bool> {
+        #[cfg(test)]
+        if self.commit_sample_for_test.is_none() {
+            return Ok(true);
+        }
+        let settings = self.emulator_start_gate_settings()?;
+        let now_ms = self.monotonic_ms()?;
+        let mut fresh = false;
+        if settings.commit_reserve_bytes == 0 {
+            *reads = CommitReads::default();
+        } else if reads.next_read_ms.is_none_or(|next| now_ms >= next) {
+            reads.next_read_ms = Some(now_ms.saturating_add(COMMIT_READ_INTERVAL_MS));
+            reads.latest = Some(match self.read_commit() {
+                Ok(sample) => CommitRead::Sample(sample),
+                Err(code) => CommitRead::Failed(code),
+            });
+            fresh = true;
+        }
+        let latest = reads.latest;
+        let (open, note) =
+            self.autostart_turn(|turn| turn.gate.decide(now_ms, settings, latest, fresh))?;
+        if let Some(note) = note {
+            self.record_start_gate(pending, settings, note)?;
+        }
+        Ok(open)
+    }
+
+    /// #503 MEM: what the start gate tells a person, as a `runtime.failed` record under the
+    /// instance's links (fresh system links, not the claim's request: the gate's record is no
+    /// record of the start, so a start a pause then holds still records none of its own; its
+    /// severity the code's category) and the same report line.
+    fn record_start_gate(
+        &self,
+        pending: &PendingAutostart,
+        settings: EmulatorStartGateConfig,
+        note: GateNote,
+    ) -> RuntimeHostResult<()> {
+        let alias = pending.instance_alias.as_str();
+        let reserve_bytes = settings.commit_reserve_bytes;
+        let (severity, outcome) = match note {
+            GateNote::Short(sample) => {
+                let outcome = Outcome::new(HostCode::EmulatorAutostartCommitShort)
+                    .alias(alias)
+                    .commit_available_bytes(sample.available_bytes)
+                    .commit_limit_bytes(sample.limit_bytes)
+                    .commit_reserve_bytes(reserve_bytes);
+                let outcome = if pending.idle_wake {
+                    outcome.idle_action(IdleAction::StopEmulator.as_str())
+                } else {
+                    outcome
+                };
+                (EventSeverity::Warning, outcome)
+            }
+            GateNote::Ready { elapsed_ms, sample } => (
+                EventSeverity::Info,
+                Outcome::new(HostCode::EmulatorAutostartCommitReady)
+                    .alias(alias)
+                    .elapsed_ms(elapsed_ms)
+                    .commit_available_bytes(sample.available_bytes)
+                    .commit_limit_bytes(sample.limit_bytes)
+                    .commit_reserve_bytes(reserve_bytes),
+            ),
+            GateNote::Unknown(code) => (
+                EventSeverity::Warning,
+                Outcome::new(HostCode::EmulatorAutostartCommitUnknown)
+                    .alias(alias)
+                    .failure_code(code)
+                    .commit_reserve_bytes(reserve_bytes),
+            ),
+        };
+        let at = HostLocation::RunEmulatorAutostart;
+        let links = self.events.system_links()?.with_instance_id(
+            self.events
+                .issuer()
+                .issue_registered_instance(pending.instance_id),
+        );
+        self.append_event_raw(
+            severity,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            links,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome.clone(),
+                DiagnosticDetailDraft::new("emulator_autostart", at, "runtime_host", at.as_str()),
+                AuditInput::new(),
+            ),
+        )?;
+        self.report_emulator_autostart(outcome)
+    }
+
+    /// #503 MEM: the host's commit, read once (a test build reads its seam).
+    fn read_commit(&self) -> Result<CommitSample, Code> {
+        #[cfg(test)]
+        if let Some(read) = &self.commit_sample_for_test {
+            return read();
+        }
+        actingcommand_host_metrics::sample_commit()
+    }
+
+    /// #503 MEM: an emulator Start of any kind (an automatic start's, a person's, an agent's or the
+    /// Lab's, a restart's Start phase, the ladder's restart rung) returned from the provider now:
+    /// the automatic starts' spacing counts from here. Called where every Start meets the provider
+    /// (`perform_control_phase`), whatever the Start's result. A test build without the commit seam
+    /// stamps nothing.
+    pub(super) fn note_emulator_start_returned(&self) -> RuntimeHostResult<()> {
+        #[cfg(test)]
+        if self.commit_sample_for_test.is_none() {
+            return Ok(());
+        }
+        let now_ms = self.monotonic_ms()?;
+        self.autostart_turn(|turn| turn.gate.last_start_returned_ms = Some(now_ms))
+    }
+
+    /// #503 MEM, test builds: when the latest emulator Start returned, as the spacing reads it.
+    #[cfg(test)]
+    pub(super) fn emulator_start_returned_ms(&self) -> RuntimeHostResult<Option<u64>> {
+        self.autostart_turn(|turn| turn.gate.last_start_returned_ms)
     }
 }

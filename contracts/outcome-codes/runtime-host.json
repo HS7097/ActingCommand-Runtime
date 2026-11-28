@@ -1101,9 +1101,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.77",
-      "description": "One of an entry-blocked instance's own recoveries ended without recovering (Workflow #490 ENTRY-A): entry_recovery_end says how (its recovery ladder ended exhausted, the game's update dialog ended a rung's run, or the worker that climbed it panicked) and trigger_rule names the recovery_ladder trigger item it was admitted under (absent for a ladder no item admitted). The block's own recoveries are the ladders of the runs whose failures at the entry blocked the instance and the recoveries the block held, took over or admitted; another trigger's ladder raises nothing here, and a climb a holding interruption ended (a pause, business capacity, a drain or a shutdown) is no such end: it is held again. The instance stays blocked and its candidates stay deferred with instance_entry_blocked. After exhausted the block climbs again by itself, from the first rung that restarts the application, once the wait scheduling.unavailable_probe gives the n-th climb of the instance's stretch of blocks (first_interval_ms, times factor, at most max_interval_ms) has passed from that climb's end and the instance's cool-down window has ended: next_occurrence_unix_ms is that climb's earliest time; after update_dialog nothing climbs again in the stretch (the store update task passes the block, and its success ends it), and after worker_panicked nothing climbs again in that block, next_occurrence_unix_ms absent for both. task_id, decision_id, failure_code and observed_at_unix_ms as on instance_entry_blocked. Recorded once per block as a runtime.failed record under the instance's links and handed to the daemon's log; a run's own recovery that ended so before the run's settlement raises it with the block that settlement sets. A block may also raise instance_entry_blocked_awaiting_person, before or after this one.",
-      "common_causes": "The game is on a screen neither the return-home package nor a restart of the application or the emulator brings back from (a dialog of an outage that has not ended, an update the game asks for), or the instance's ladder cannot run its rungs (no recovery package, no startup package, no emulator control), or the ladder's worker panicked.",
-      "handling": "Look at the instance. After exhausted the Runtime tries again by itself on a growing interval; after update_dialog the game's client must be updated (the store update task does it where the catalogue has one); after worker_panicked it has stopped trying, and the worker's panic_caught record names the panic. Bring the game to a known screen, then run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance. A run that succeeds, a recovery that succeeds, a resume or a restart ends the block."
+      "description": "One of an entry-blocked instance's own recoveries ended without recovering (Workflow #490 ENTRY-A): entry_recovery_end says how (its recovery ladder ended exhausted, the game's update dialog ended a rung's run, the worker that climbed it panicked, or, since 0.12.102, the work that climbed it ended with an error its worker contained) and trigger_rule names the recovery_ladder trigger item it was admitted under (absent for a ladder no item admitted). The block's own recoveries are the ladders of the runs whose failures at the entry blocked the instance and the recoveries the block held, took over or admitted; another trigger's ladder raises nothing here, and a climb a holding interruption ended (a pause, business capacity, a drain or a shutdown) is no such end: it is held again. The instance stays blocked and its candidates stay deferred with instance_entry_blocked. After exhausted the block climbs again by itself, from the first rung that restarts the application, once the wait scheduling.unavailable_probe gives the n-th climb of the instance's stretch of blocks (first_interval_ms, times factor, at most max_interval_ms) has passed from that climb's end and the instance's cool-down window has ended: next_occurrence_unix_ms is that climb's earliest time; after update_dialog nothing climbs again in the stretch (the store update task passes the block, and its success ends it), and after worker_panicked or worker_failed nothing climbs again in that block, next_occurrence_unix_ms absent for these. task_id, decision_id, failure_code and observed_at_unix_ms as on instance_entry_blocked. Recorded once per block as a runtime.failed record under the instance's links and handed to the daemon's log; a run's own recovery that ended so before the run's settlement raises it with the block that settlement sets. A block may also raise instance_entry_blocked_awaiting_person, before or after this one.",
+      "common_causes": "The game is on a screen neither the return-home package nor a restart of the application or the emulator brings back from (a dialog of an outage that has not ended, an update the game asks for), or the instance's ladder cannot run its rungs (no recovery package, no startup package, no emulator control), or the ladder's worker panicked or its work ended with an error the worker contained.",
+      "handling": "Look at the instance. After exhausted the Runtime tries again by itself on a growing interval; after update_dialog the game's client must be updated (the store update task does it where the catalogue has one); after worker_panicked it has stopped trying, and the worker's panic_caught record names the panic; after worker_failed likewise, and the error's own record under the same links names it. Bring the game to a known screen, then run a task on the instance (actingctl task-run, the Lab), or pause and resume the instance. A run that succeeds, a recovery that succeeds, a resume or a restart ends the block."
     },
     "instance_entry_task_waiting": {
       "category": "info",
@@ -8776,9 +8776,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). Its poison is cleared, the work that met it fails, and the boundary of that work fences the instance; every other instance keeps dispatching and executing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A worker of this instance panicked while it held one of the instance's own locks, its device's admission guard or its queue-order lock, and left it poisoned (ISO-M #419, R8; written since 0.12.102, #503 ISO-A). The locks guard no data: the worker cleared the poison, without waiting, and fenced the instance with this code as the cause of its instance_resources_fenced record, after the panic's own panic_caught record. The other instances keep dispatching and executing, and the Runtime does not stop.",
+      "common_causes": "A defect in the Runtime's code that panicked in the middle of a device step of the instance (its preparation, a probe, a ladder's rung, an emulator control, an idle action) or of a step of its queue. What the device was doing when the panic came is not known, which is why the instance is fenced.",
+      "handling": "Nothing is needed for the other instances. The instance stays fenced until its fence is lifted as any fence is: by the recovery ladder when the instance's stuck recovery is on, else by a person (status shows the fence awaiting a person): bring the device back to a known state and run actingctl selfcheck or actingctl resume for the instance; a passing self-check lifts the fence. Report the panic_caught record (its raw_text, thread and boundary) with the build as a Runtime defect."
     },
     "instance_not_running": {
       "category": "error",
@@ -23063,6 +23063,79 @@
       "description": "No internet access was reported within 600 s (Workflow #369 S6c, P3): the configured start is refused with command.rejected and runtime.failed under the autostart claim, and the claim releases its key; elapsed_ms is the wait. Also its report line. The instance stays stopped.",
       "common_causes": "The host had no network, or only local access, while actingd started.",
       "handling": "Start the instance with emulator control once the network is up."
+    },
+    "emulator_autostart_commit_short": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "commit_available_bytes": "required",
+        "commit_limit_bytes": "required",
+        "commit_reserve_bytes": "required",
+        "idle_action": "optional",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.102",
+      "description": "Automatic emulator starts are being held (#503 MEM): the host's available commit (commit_available_bytes, of the commit limit commit_limit_bytes) is below the reserve an automatic start requires (commit_reserve_bytes, emulator_control.start_commit_reserve_bytes). alias is the instance first in line: its claim (the daemon start's configured start, the emulator watch's restart, or with idle_action stop_emulator an idle wake) holds the start turn and its key and waits; the automatic starts behind it wait for the turn. Written once per short episode for the whole host, from the first short read until an automatic start passes the gate again, as a runtime.failed record under the instance's links and its report line. The claim reads the commit at once and every 5 s and has no deadline; a drain, a shutdown, a pause, an emulator control waiting on the instance and start_emulator turned off end the wait as they end any hold of the claim. A person's, an agent's or the Lab's emulator control, any stop and the recovery ladder's restart rung are never held.",
+      "common_causes": "Several emulators already run and other programs hold the rest of the commit, for example at a day change when several instances are due within the same minutes.",
+      "handling": "Nothing is needed: the Runtime starts the instance as soon as the headroom is back, which happens when another emulator stops (an idle action stops one) or another program frees memory. A person may start an emulator by hand at any time; that start is not held. The reserve is the configuration key emulator_control.start_commit_reserve_bytes (0 turns the check off)."
+    },
+    "emulator_autostart_commit_ready": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "elapsed_ms": "required",
+        "commit_available_bytes": "required",
+        "commit_limit_bytes": "required",
+        "commit_reserve_bytes": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.102",
+      "description": "The host's available commit is back at or above the reserve and a held automatic emulator start goes on (#503 MEM): the short episode emulator_autostart_commit_short began ends here. alias is the instance whose start now goes on, elapsed_ms how long the episode lasted, commit_available_bytes and commit_limit_bytes the read that passed, commit_reserve_bytes the reserve in effect. A runtime.failed record under the instance's links and its report line; the start's own records follow under its claim.",
+      "common_causes": "Another emulator stopped, or another program freed memory.",
+      "handling": "Nothing to do."
+    },
+    "emulator_autostart_commit_unknown": {
+      "category": "warning",
+      "ladder_class": "none",
+      "owner": "runtime-host",
+      "layer": "host",
+      "uncertain": false,
+      "values": {
+        "alias": "required",
+        "failure_code": "required",
+        "commit_reserve_bytes": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.102",
+      "description": "The host's commit could not be read for an automatic emulator start's gate (#503 MEM): failure_code is the read's code. The start goes on without the headroom check (a guard that cannot see does not stop the starts); the spacing still applies. Written once per failing streak for the whole host, from the first failed read until a read succeeds again, as a runtime.failed record under the instance's links and its report line. alias is the instance whose claim read; commit_reserve_bytes the reserve in effect.",
+      "common_causes": "The operating system's memory status query failed, or the platform has none.",
+      "handling": "Nothing is needed for the start itself. While the reads fail the Runtime cannot hold starts for memory; watch the host's memory, or set emulator_control.start_commit_reserve_bytes to 0 to stop the reads."
     },
     "emulator_autostart_started": {
       "category": "info",

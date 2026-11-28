@@ -888,6 +888,24 @@ impl HostShared {
             })
     }
 
+    /// #503 MEM (register §1.556): the automatic starts' gate keys of the `emulator_control`
+    /// section in effect (`start_commit_reserve_bytes`, `start_spacing_ms`), read at every tick of
+    /// the claim that holds the start turn, so an instruction applies from the next tick.
+    pub(super) fn emulator_start_gate_settings(
+        &self,
+    ) -> RuntimeHostResult<actingcommand_runtime_config::EmulatorStartGateConfig> {
+        lock(&self.runtime_config, ConfigHostLocation::ReadRuntimeConfig)?
+            .emulator_start_gate()
+            .map_err(|failure| {
+                RuntimeHostError::fatal(
+                    failure.failure_code(),
+                    ConfigHostLocation::ReadRuntimeConfig,
+                    RuntimeErrorCode::RuntimeHalted,
+                )
+                .with_outcome_values(|outcome| failure.with_values(outcome))
+            })
+    }
+
     /// IDLE-1: the idle keys in effect for the instance `instance_id` (its own
     /// `instance.<id>.idle.*`, else the `idle` section's), read at every idle check; `None` for an
     /// instance the configuration in effect does not name (a host started without actingd's

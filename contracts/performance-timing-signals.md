@@ -86,6 +86,19 @@ recorded summary carries both the monitor context of that moment
 and the capacity admission fact. Its context is `PerformanceContext::unavailable`
 only when counters are disabled or the window holds no data.
 
+An application step (#503 NOISE-A, since 0.12.102; [v012-register.md](v012-register.md)
+§1.552): by [application-lifecycle.md](application-lifecycle.md) the step writes
+`task.effect_completed` and no `task.effect_intent`, so the monitor takes a
+`task.effect_completed` whose action has no pending intent for that effect without
+an input. It records no pipeline sample (no `action_effect_latency_ms`) and no
+failure, and the event counts as accepted, as any other. A completion of a pending
+intent is measured as before; one of an intent another instance recorded is still
+`performance_pipeline_identity_conflict`; and an unpaired capture or recognition
+completion is still `performance_pipeline_start_missing`, recorded as a
+`perf.monitor_degraded`. Until 0.12.102 every application step wrote a
+`perf.monitor_degraded` (`performance_pipeline_start_missing`) and then a
+`perf.monitor_recovered`.
+
 What follows a record (#503 CYC-2, 0.12.85; [v012-register.md](v012-register.md)
 §1.528, ruling 3; [scheduling/README.md](scheduling/README.md), "What of the
 performance thread wakes the driver"): a `perf.summary` wakes the policy driver

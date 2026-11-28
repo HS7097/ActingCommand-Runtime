@@ -302,6 +302,18 @@
       "type": "integer",
       "description": "The budget, in bytes, a memory budget falls back to when its sample leaves less after the reserve (frame_store.floor_mem_bytes)."
     },
+    "commit_limit_bytes": {
+      "type": "integer",
+      "description": "The host's commit limit, in bytes, as a commit sample read it (#503 MEM)."
+    },
+    "commit_available_bytes": {
+      "type": "integer",
+      "description": "The commit the host still has available, in bytes, as a commit sample read it (#503 MEM)."
+    },
+    "commit_reserve_bytes": {
+      "type": "integer",
+      "description": "The available commit, in bytes, an automatic emulator start requires (emulator_control.start_commit_reserve_bytes, #503 MEM)."
+    },
     "carried_bytes": {
       "type": "integer",
       "description": "The size of the release an offline installer carries, in bytes."
@@ -11163,7 +11175,7 @@
       }
     },
     "entry_recovery_end": {
-      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Every way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after update_dialog nothing climbs again in the instance's stretch of blocks, after worker_panicked nothing climbs again in that block.",
+      "description": "How an entry-blocked instance's own recovery ended without recovering, the value entry_recovery_end of instance_entry_blocked_recovery_failed (Workflow #490 ENTRY-A, contracts/policy-suspension.md \"A failure at the entry\", since 0.12.77). Every way the instance stays blocked; after exhausted the block climbs again by itself after a wait, after update_dialog nothing climbs again in the instance's stretch of blocks, after worker_panicked or worker_failed nothing climbs again in that block.",
       "review": "pending",
       "source": {
         "file": "crates/runtime-host/src/codes.rs",
@@ -11178,6 +11190,9 @@
         },
         "worker_panicked": {
           "description": "The instance worker that climbed the recovery ladder panicked; the ladder ended there (the worker's panic_caught record names the panic), and nothing climbs again in that block."
+        },
+        "worker_failed": {
+          "description": "The result: the instance's own recovery ended because the work that climbed its ladder failed with an error its instance worker contained (no panic); the ladder ended there, and the instance is fenced or the error recorded, as that error's own record under the same links says (a runtime.failed of its code, or the fence's instance_resources_fenced caused by it, a fence that also ends the block). The operation, as after worker_panicked: the entry block stands and nothing climbs again in that block; the instance's next recovery is by its ladder, a person's self-check or resume, or a run that succeeds; read the error's own record first (#503 ISO-A fix round 1, since 0.12.102)."
         }
       }
     },

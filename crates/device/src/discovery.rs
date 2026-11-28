@@ -6,8 +6,6 @@ use crate::{
     NemuResolutionReason,
 };
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::process::Command;
 
 const MUMU_BASE_ADB_PORT: u16 = 16_384;
 const MUMU_PORT_STEP: u16 = 32;
@@ -419,19 +417,22 @@ fn powershell_executable() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("powershell.exe"))
 }
 
-/// One process listing without a bound of its own (the start's discovery and check-config's
-/// resolver; Workflow #453 S10 fix 1: `actingd discover` lists through
-/// [`system_processes_within`] instead).
+/// Workflow #503 NOISE-B: the bound of a process listing that names none of its own (the start's
+/// discovery, check-config's resolver, an on-demand discovery and the debug bridge's and the
+/// capture's resolvers), the watchdog's and the installer's bound of the same query.
+#[cfg(windows)]
+const SYSTEM_PROCESS_LISTING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One process listing within [`SYSTEM_PROCESS_LISTING_TIMEOUT`] (the start's discovery,
+/// check-config's resolver, an on-demand discovery and the debug bridge's and the capture's
+/// resolvers; Workflow #453 S10 fix 1: `actingd discover` and a Stop list within their own 10 s).
+/// Workflow #503 NOISE-B: before 0.12.102 it waited for PowerShell without a bound; it now lists
+/// as [`system_processes_within`] does: at the bound only the PowerShell process it started is
+/// ended and the listing fails, and it opens no console window.
 #[cfg(windows)]
 pub(crate) fn system_processes() -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
     // Discovery is process-metadata only because mixed ADB servers can disturb MuMu instances.
-    let output = Command::new(powershell_executable())
-        .args(PROCESS_LISTING_ARGS)
-        .output()
-        .map_err(|err| {
-            DeviceError::fatal(format!("failed to enumerate Windows processes: {err}"))
-        })?;
-    process_rows_from_output(output.status, output.stdout, &output.stderr)
+    system_processes_within(SYSTEM_PROCESS_LISTING_TIMEOUT)
 }
 
 #[cfg(windows)]
@@ -461,6 +462,8 @@ const POWERSHELL_PROGRAM: crate::adb::CommandProgram = crate::adb::CommandProgra
     stderr_reader: "powershell_stderr",
     windows_creation_flags: 0x0800_0000,
     timeout_stage: None,
+    // Workflow #503 NOISE-B: as the listing that waited through `Command::output` had it.
+    null_stdin: true,
 };
 
 /// Workflow #381 B F2 (review M2): one process listing, the same metadata as discovery, that
@@ -477,12 +480,19 @@ pub(crate) fn system_processes_within(
             powershell.display()
         ))
     })?;
-    let output = crate::adb::run_raw_with_timeout(
-        POWERSHELL_PROGRAM,
-        program,
-        &PROCESS_LISTING_ARGS,
-        bound,
-    )?;
+    processes_listed_within(program, &PROCESS_LISTING_ARGS, bound)
+}
+
+/// Workflow #503 NOISE-B: the one run both listings make, `program` with `args` as the PowerShell
+/// listing runs (its spawn profile, its bound), its output read as process rows (a test runs a
+/// program that never answers).
+#[cfg(windows)]
+fn processes_listed_within(
+    program: &str,
+    args: &[&str],
+    bound: std::time::Duration,
+) -> DeviceResult<Vec<DeviceDiscoveryProcess>> {
+    let output = crate::adb::run_raw_with_timeout(POWERSHELL_PROGRAM, program, args, bound)?;
     process_rows_from_output(output.status, output.stdout, &output.stderr)
 }
 
@@ -925,6 +935,69 @@ mod tests {
             Some(Path::new(
                 r"D:\BST\MuMuPlayer\nx_device\13.7\shell\MuMuNxDevice.exe"
             ))
+        );
+    }
+
+    // Workflow #503 NOISE-B: the listing's one run (`processes_listed_within`, the PowerShell
+    // listing's spawn profile and runner) of a PowerShell that never answers fails at its bound,
+    // within the runner's two close waits of 500 ms and the spawn, with the process it started
+    // ended and its pipes closed (nothing is left for a caller to wait on); a process of the same
+    // program that the listing did not start runs on. The listing without a bound of its own
+    // lists within 60 s.
+    #[cfg(windows)]
+    #[test]
+    fn noise_b_a_listing_that_never_answers_fails_at_its_bound_and_ends_only_its_own_process() {
+        let powershell = powershell_executable();
+        let program = powershell.to_str().expect("a UTF-8 PowerShell path");
+        let never_answers = [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 600",
+        ];
+        let mut other = std::process::Command::new(&powershell)
+            .args(never_answers)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("a process the listing does not start");
+        let bound = std::time::Duration::from_secs(2);
+
+        let started = std::time::Instant::now();
+        let listed = processes_listed_within(program, &never_answers, bound);
+        let elapsed = started.elapsed();
+        let other_running = other.try_wait();
+        other.kill().expect("end the other process");
+        other.wait().expect("reap the other process");
+
+        let error = listed.expect_err("a listing that never answers fails");
+        assert!(
+            error.message().contains("timed out after 2s"),
+            "{}",
+            error.message()
+        );
+        assert!(elapsed >= bound, "{elapsed:?}");
+        assert!(
+            elapsed < bound + std::time::Duration::from_secs(3),
+            "within the bound and a small margin: {elapsed:?}"
+        );
+        assert!(
+            error.resource_close_causes().is_empty(),
+            "its process ended and its pipes closed: {:?}",
+            error.resource_close_causes()
+        );
+        assert_eq!(
+            error.resource_quiescence(),
+            Some(crate::DeviceResourceQuiescence::Confirmed)
+        );
+        assert!(
+            matches!(other_running, Ok(None)),
+            "the other process runs on: {other_running:?}"
+        );
+        assert_eq!(
+            SYSTEM_PROCESS_LISTING_TIMEOUT,
+            std::time::Duration::from_secs(60)
         );
     }
 
