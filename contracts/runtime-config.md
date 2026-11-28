@@ -544,7 +544,13 @@ is the cap; `factor` 1 keeps every interval the first), counted from the latest 
 the probe before, the instance's latest recorded self-check or dropped self-check facts (a run's,
 a rung's or a preparation's opens touched the device), and the latest sweep tick at which a claim
 held or waited for the instance's key. `attention_after_ms` is how long such an instance stays unavailable before a person
-is told, once per unavailability. No cross-key rule refuses a value.
+is told, once per unavailability. No cross-key rule refuses a value. The same intervals pace a
+pair that keeps failing at its entry (Workflow #490 ENTRY-A, [policy-suspension.md](policy-suspension.md),
+"A pair that keeps failing at its entry") and, since 0.12.100 (#503 PACE, register §1.545), a pair
+whose scheduled runs keep failing otherwise: after its n-th failure in a row, n of 2 or more, it is
+not dispatched on its instance before the interval for n − 1 has passed since that failure's
+settlement ([policy-suspension.md](policy-suspension.md), "A pair whose runs keep failing"), read
+at that settlement; no key is added for either.
 
 The section is checked whole at start, in `check-config` and after every instruction: a code
 list entry the catalog does not list is `config_value_invalid` with `code_unknown`, a retired

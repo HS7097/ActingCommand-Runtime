@@ -311,6 +311,10 @@ mod gate_503_mem;
 // #503 NOISE-A (0.12.102; register §1.552): an application step's completion, which has no intent,
 // writes no degraded or recovered monitor record.
 mod gate_503_noise_a;
+// #503 PACE (0.12.100; register §1.545): a pair whose scheduled runs keep failing waits a growing
+// interval between its dispatches from its second failure in a row on, and is set aside for its
+// window when it keeps failing while its instance lets other runs succeed.
+mod gate_503_pace;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.

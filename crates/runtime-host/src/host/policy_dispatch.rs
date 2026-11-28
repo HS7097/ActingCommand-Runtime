@@ -2035,6 +2035,7 @@ impl HostShared {
             dispatches_read,
             queue_wait_starts,
             entry_blocked,
+            failure_paced,
             projection_micros,
         ) = {
             let _outcome_gate = lock_waited(
@@ -2046,6 +2047,9 @@ impl HostShared {
             // blocks its instance under, so no evaluation sees a run's settlement without its
             // block.
             let entry_blocked = self.entry_block_gates()?;
+            // #503 PACE (register §1.545): the pairs whose scheduled runs keep failing, read under
+            // the same gate a settlement counts them under.
+            let failure_paced = self.failure_pacing_gates()?;
             let mut policy = lock_waited(
                 self.policy()?,
                 HostLocation::ReadPolicyOutcomeKeys,
@@ -2145,6 +2149,7 @@ impl HostShared {
                 dispatches_read,
                 queue_wait_starts,
                 entry_blocked,
+                failure_paced,
                 projection_micros,
             )
         };
@@ -2359,6 +2364,7 @@ impl HostShared {
                     asleep: &asleep,
                     idle_sleepers: &idle_sleepers,
                     entry_blocked: &entry_blocked,
+                    failure_paced: &failure_paced,
                 },
             )?;
             let returned = crate::policy_host::lap_instant();

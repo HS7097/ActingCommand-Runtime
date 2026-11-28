@@ -34,6 +34,8 @@ mod fact_refresh;
 mod fact_refresh_transitions;
 mod fact_store;
 mod failure_identity;
+// #503 PACE: a pair whose scheduled runs keep failing waits between its dispatches.
+mod failure_pacing;
 // Workflow #455 RR3: what an instance's stored records still need, computed before each
 // evaluation, pure.
 mod goal_needs;
