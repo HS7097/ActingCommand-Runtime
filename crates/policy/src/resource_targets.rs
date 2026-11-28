@@ -1095,6 +1095,27 @@ pub(crate) fn observe_target(
     }
 }
 
+/// #455 RR3c (register §1.543): `observed`, an evaluation's observation of `pool` as a target's
+/// inventory, unless a run told enough turns to close a goal's gap on the pool has left it unread
+/// (`unread`, [`crate::evaluator::produced_unread`], the judgement the evaluation's pool values
+/// read): a reading that would be known is then pending with the reason a stale reading gives
+/// (`expired`), so the target weighs nothing and its gap is unknown (no goal term of `run_cap`, no
+/// `gap_remaining`). A pending observation keeps its own reason.
+fn unless_unread(
+    observed: TargetObservation,
+    pool: &PoolSpec,
+    unread: &BTreeSet<String>,
+) -> TargetObservation {
+    match observed {
+        TargetObservation::Known { .. } if unread.contains(&pool.id) => {
+            TargetObservation::Pending {
+                reason: pending_reason(UnknownReason::FactStale),
+            }
+        }
+        observed => observed,
+    }
+}
+
 /// #455 P2: [`observe_target`] of a pool read from rows of a list, from the reading the host gave
 /// it: unknown with its reason (`missing` without one, `low_confidence`, `invalid_value`), expired
 /// past the list's expiry, else known, the number projected by the pool's regeneration rule as a
@@ -2822,7 +2843,8 @@ struct TargetGap {
     /// The named tasks that map; `None` covers every producing candidate.
     named: Option<BTreeSet<String>>,
     /// The gap while it is known: open (applied) or 0 (met); `None` while the inventory is
-    /// pending or the target's weight does not resolve.
+    /// pending or the target's weight does not resolve. #455 RR3b ruling 4: on a pool that writes
+    /// `goal_tiers`, the need's part while it is open, else the stock's ([`GapTiers::run_gap`]).
     gap: Option<u64>,
 }
 
@@ -2849,7 +2871,8 @@ struct ResolvedTargetV2<'a> {
 /// What a resolved v2 target contributes this evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TargetStatus {
-    /// Step and importance resolved and the gap is open: `Γ = min(⌊I·g/S⌋, 1e6)`.
+    /// Step and importance resolved and the gap is open: `Γ = min(⌊I·g/S⌋, 1e6)`; #455 RR3b, on a
+    /// pool that writes `goal_tiers`, the sum of its two parts ([`gap_weight`]).
     Applied {
         current: i64,
         gap: u64,
@@ -2858,6 +2881,9 @@ enum TargetStatus {
         gap_weight_milli: u64,
         capped: bool,
         inventory_expires_at_unix_ms: Option<u64>,
+        /// #455 RR3b: the two parts of the gap on a pool that writes `goal_tiers`; `None` on any
+        /// other pool, whose whole gap is weighed by one importance as before.
+        tiers: Option<GapTiers>,
     },
     Satisfied {
         current: i64,
@@ -2869,6 +2895,81 @@ enum TargetStatus {
     Unresolved {
         why: &'static str,
     },
+}
+
+/// #455 RR3b (register §1.542; `contracts/resource-targets.md`, "Resource weights (v2)"): an open
+/// gap on a pool that writes `goal_tiers`, in its two parts, each with its weight over the target's
+/// one step `S`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GapTiers {
+    /// `g_n = max(0, N − c)`: what the recorded characters need and the holding does not cover.
+    need_gap: u64,
+    /// `I_n`, the pool's `goal_tiers.need_importance_milli`.
+    need_importance_milli: u64,
+    /// `Γ_n = min(⌊I_n·g_n/S⌋, 1 000 000)`.
+    need_weight_milli: u64,
+    /// `g_s = max(0, T − max(0, c − N))`: what the stored goal asks beyond that, on what the
+    /// characters leave of the holding.
+    stock_gap: u64,
+    /// `Γ_s = min(⌊I·g_s/S⌋, C)`.
+    stock_weight_milli: u64,
+    /// `C`, the pool's `goal_tiers.stock_cap_milli`.
+    stock_cap_milli: u64,
+}
+
+impl GapTiers {
+    /// Ruling 4: the gap a dispatch reads (`gap_remaining` and the goal term of `run_cap`): the
+    /// need's part while it is open, else the stock's.
+    fn run_gap(self) -> u64 {
+        if self.need_gap > 0 {
+            self.need_gap
+        } else {
+            self.stock_gap
+        }
+    }
+}
+
+/// #455 RR3b (register §1.542; `contracts/resource-targets.md`, "Resource weights (v2)"): the gap
+/// weight `Γ` of an open gap `gap = max(0, at_least − held) ≥ 1` on `pool` at the step `step` and the
+/// importance `importance_milli` the target resolved to, whether the bound 1 000 000 applied, and,
+/// on a pool that writes `goal_tiers`, its two parts. `need` is the need the records stack on the
+/// pool at this evaluation (0 without), so the stored target itself asks `T = at_least − need`
+/// (the stacking added `need` to it; 0 for a target the needs alone gave the pool). Without the
+/// member, `Γ = min(⌊I·g/S⌋, 1 000 000)` as before; with it, `g_n = max(0, need − held)` and
+/// `g_s = max(0, T − max(0, held − need))` (the holding goes to the characters first, `g_n + g_s =
+/// gap`), `Γ = min(min(⌊I_n·g_n/S⌋, 1 000 000) + min(⌊I·g_s/S⌋, C), 1 000 000)`. The one place a
+/// v2 target's gap weight is computed from its gap (a v1 policy keeps its own task scores);
+/// `None` for a step of 0.
+fn gap_weight(
+    pool: &PoolSpec,
+    (gap, at_least, held, need): (u64, u64, u64, u64),
+    step: u64,
+    importance_milli: u64,
+) -> Option<(u64, bool, Option<GapTiers>)> {
+    let Some(declared) = pool.goal_tiers else {
+        let (weight_milli, capped) = task_target_milli(gap, importance_milli, step, 1, 1)?;
+        return Some((weight_milli, capped, None));
+    };
+    let stock = at_least.saturating_sub(need);
+    let need_gap = need.saturating_sub(held);
+    let stock_gap = stock.saturating_sub(held.saturating_sub(need));
+    let (need_weight_milli, need_capped) =
+        task_target_milli(need_gap, declared.need_importance_milli, step, 1, 1)?;
+    let (stock_full_milli, _) = task_target_milli(stock_gap, importance_milli, step, 1, 1)?;
+    let stock_weight_milli = stock_full_milli.min(declared.stock_cap_milli);
+    let total = need_weight_milli.saturating_add(stock_weight_milli);
+    Some((
+        total.min(MAX_RESOURCE_TARGET_MILLI),
+        need_capped || total > MAX_RESOURCE_TARGET_MILLI,
+        Some(GapTiers {
+            need_gap,
+            need_importance_milli: declared.need_importance_milli,
+            need_weight_milli,
+            stock_gap,
+            stock_weight_milli,
+            stock_cap_milli: declared.stock_cap_milli,
+        }),
+    ))
 }
 
 impl ResolvedTargetV2<'_> {
@@ -2906,7 +3007,8 @@ impl ResolvedTargetV2<'_> {
         }
     }
 
-    /// The target's `resource_targets` item.
+    /// The target's `resource_targets` item; #455 RR3b: an applied one on a pool that writes
+    /// `goal_tiers` names its two parts after it, `gap` and `gap_weight` staying the totals.
     fn item(&self) -> String {
         let (id, pool) = (&self.target.id, &self.pool.id);
         let TargetCondition::AtLeast { amount: at_least } = self.target.condition;
@@ -2918,11 +3020,26 @@ impl ResolvedTargetV2<'_> {
                 importance_milli,
                 gap_weight_milli,
                 capped,
+                tiers,
                 ..
-            } => format!(
-                "{id}@{pool}:applied current={current} at_least={at_least} gap={gap} step={step} importance={importance_milli} gap_weight={gap_weight_milli}{}",
-                if capped { " capped" } else { "" }
-            ),
+            } => {
+                let applied = format!(
+                    "{id}@{pool}:applied current={current} at_least={at_least} gap={gap} step={step} importance={importance_milli} gap_weight={gap_weight_milli}{}",
+                    if capped { " capped" } else { "" }
+                );
+                match tiers {
+                    None => applied,
+                    Some(parts) => format!(
+                        "{applied} need_gap={} need_importance={} need_weight={} stock_gap={} stock_weight={} stock_cap={}",
+                        parts.need_gap,
+                        parts.need_importance_milli,
+                        parts.need_weight_milli,
+                        parts.stock_gap,
+                        parts.stock_weight_milli,
+                        parts.stock_cap_milli
+                    ),
+                }
+            }
             TargetStatus::Satisfied { current } => format!(
                 "{id}@{pool}:satisfied current={current} at_least={at_least} gap=0 gap_weight=0"
             ),
@@ -2943,6 +3060,9 @@ struct TargetContext<'a> {
     projected_facts: &'a EvaluationFacts,
     /// #455 P2: the readings given to the pools read from rows of a list, as the resets leave them.
     given: &'a GivenPoolReadings,
+    /// #455 RR3c (register §1.543): the pools a run told enough turns to close a goal's gap on left
+    /// unread ([`crate::evaluator::produced_unread`]).
+    unread: &'a BTreeSet<String>,
     instance: &'a InstanceSnapshot,
     time: EvaluationTime,
     policy_sha256: &'a str,
@@ -2954,11 +3074,14 @@ struct TargetContext<'a> {
 
 /// Resolves `policy` for `instance`: each target's pool once, each named task once, and the
 /// inventory once per target in `projected_facts` (#455 P2: a pool read from rows of a list, in
-/// `given`, as the resets leave it). The error names a state only a bug reaches.
+/// `given`, as the resets leave it; #455 RR3c, register §1.543: pending, as a stale reading is,
+/// while its pool is one of `unread`, [`unless_unread`]). The error names a state only a bug
+/// reaches.
 pub(crate) fn resolve_instance_targets(
     catalog: &CompiledCatalog,
     projected_facts: &EvaluationFacts,
     given: &GivenPoolReadings,
+    unread: &BTreeSet<String>,
     instance: &InstanceSnapshot,
     policy: &InstanceTargetPolicy,
     time: EvaluationTime,
@@ -2990,6 +3113,7 @@ pub(crate) fn resolve_instance_targets(
                 catalog,
                 projected_facts,
                 given,
+                unread,
                 instance,
                 time,
                 policy_sha256,
@@ -3028,6 +3152,7 @@ pub(crate) fn resolve_instance_targets(
                 catalog,
                 projected_facts,
                 given,
+                unread,
                 instance,
                 time,
                 policy_sha256,
@@ -3265,6 +3390,7 @@ fn resolve_v2(
         catalog,
         projected_facts,
         given,
+        unread,
         instance,
         time,
         ..
@@ -3354,7 +3480,11 @@ fn resolve_v2(
                 },
             },
             Ok((step, importance_milli)) => {
-                match observe_target(projected_facts, given, instance, pool, &fact_key, time) {
+                match unless_unread(
+                    observe_target(projected_facts, given, instance, pool, &fact_key, time),
+                    pool,
+                    unread,
+                ) {
                     TargetObservation::Pending { reason } => TargetStatus::Pending { reason },
                     TargetObservation::Known {
                         current,
@@ -3362,13 +3492,23 @@ fn resolve_v2(
                         ..
                     } => {
                         let TargetCondition::AtLeast { amount } = target.condition;
-                        let gap = amount.saturating_sub(current.unsigned_abs());
+                        let held = current.unsigned_abs();
+                        let gap = amount.saturating_sub(held);
                         if gap == 0 {
                             TargetStatus::Satisfied { current }
                         } else {
-                            let (gap_weight_milli, capped) =
-                                task_target_milli(gap, importance_milli, step, 1, 1)
-                                    .ok_or("resource target gap step is zero")?;
+                            // #455 RR3b: the need the records stacked on the target's pool, which
+                            // splits the gap on a pool that writes `goal_tiers`.
+                            let stacked_need = stacked
+                                .and_then(|computed| computed.needs.pools().get(&target.resource))
+                                .map_or(0, |pool_need| pool_need.need);
+                            let (gap_weight_milli, capped, tiers) = gap_weight(
+                                pool,
+                                (gap, amount, held, stacked_need),
+                                step,
+                                importance_milli,
+                            )
+                            .ok_or("resource target gap step is zero")?;
                             TargetStatus::Applied {
                                 current,
                                 gap,
@@ -3377,6 +3517,7 @@ fn resolve_v2(
                                 gap_weight_milli,
                                 capped,
                                 inventory_expires_at_unix_ms: fresh_until_unix_ms,
+                                tiers,
                             }
                         }
                     }
@@ -3472,8 +3613,12 @@ fn resolve_v2(
                 .named
                 .as_ref()
                 .map(|named| named.iter().map(|task| (*task).to_owned()).collect()),
+            // #455 RR3b ruling 4: on a pool that writes `goal_tiers`, the need's part while it is
+            // open, else the stock's.
             gap: match target.status {
-                TargetStatus::Applied { gap, .. } => Some(gap),
+                TargetStatus::Applied { gap, tiers, .. } => {
+                    Some(tiers.map_or(gap, GapTiers::run_gap))
+                }
                 TargetStatus::Satisfied { .. } => Some(0),
                 TargetStatus::Pending { .. } | TargetStatus::Unresolved { .. } => None,
             },
@@ -3502,6 +3647,7 @@ fn target_effects(
         catalog,
         projected_facts,
         given,
+        unread,
         instance,
         time,
         ..
@@ -3560,27 +3706,30 @@ fn target_effects(
         return Ok(());
     }
     let TargetCondition::AtLeast { amount: at_least } = target.condition;
-    let (current, inventory_expires_at_unix_ms) =
-        match observe_target(projected_facts, given, instance, pool, &fact_key, time) {
-            TargetObservation::Pending { reason } => {
-                for (task, _) in mapped {
-                    effects.insert(
-                        task.clone(),
-                        TargetEffect::Pending {
-                            id: target.id.clone(),
-                            fact_key: fact_key.clone(),
-                            reason,
-                        },
-                    );
-                }
-                return Ok(());
+    let (current, inventory_expires_at_unix_ms) = match unless_unread(
+        observe_target(projected_facts, given, instance, pool, &fact_key, time),
+        pool,
+        unread,
+    ) {
+        TargetObservation::Pending { reason } => {
+            for (task, _) in mapped {
+                effects.insert(
+                    task.clone(),
+                    TargetEffect::Pending {
+                        id: target.id.clone(),
+                        fact_key: fact_key.clone(),
+                        reason,
+                    },
+                );
             }
-            TargetObservation::Known {
-                current,
-                fresh_until_unix_ms,
-                ..
-            } => (current, fresh_until_unix_ms),
-        };
+            return Ok(());
+        }
+        TargetObservation::Known {
+            current,
+            fresh_until_unix_ms,
+            ..
+        } => (current, fresh_until_unix_ms),
+    };
     let gap = at_least.saturating_sub(current.unsigned_abs());
     if gap == 0 {
         for (task, _) in mapped {
@@ -3659,7 +3808,9 @@ impl InstanceTargets {
     }
 
     /// SS-6 (register §1.218): the gap, in the pool's real units, of the active goal on
-    /// `pool_id` that covers `task` on this instance; 0 when the goal is met. `None` without an
+    /// `pool_id` that covers `task` on this instance; 0 when the goal is met; #455 RR3b ruling 4,
+    /// on a pool that writes `goal_tiers`, the need's part while it is open, else the stock's, so
+    /// `gap_remaining` and the goal term of `run_cap` read one number. `None` without an
     /// active goal there (no policy, or a withdrawn, expired or unreadable one) and while the
     /// gap is unknown (the inventory is pending, or the goal's weight does not resolve): absent
     /// means unknown. Under a v2 policy the goal covers the task as its shortfall weight does;
@@ -4687,20 +4838,31 @@ fn goal_runs(
         let Some(gap) = gap(effect.pool_id.as_str()).filter(|gap| *gap > 0) else {
             continue;
         };
-        let runs = match declared_amount(&task.produces, &effect.pool_id) {
-            Some(per_run) => gap.div_ceil(per_run),
-            None => {
-                let expected_milli = per_run_yield(&task.produces, &effect.pool_id);
-                if expected_milli == 0 {
-                    continue;
-                }
-                u64::try_from((u128::from(gap) * 1_000).div_ceil(expected_milli))
-                    .unwrap_or(u64::MAX)
-                    .max(1)
-            }
-        };
+        // #455 RR3c (register §1.543): the production per run in thousandths, read by the one
+        // function the judgement of a run told enough to close a gap reads; for an integer
+        // production ⌈gap·1000 / (amount·1000)⌉ is the ⌈gap / amount⌉ of before.
+        let per_run_milli = production_milli(&task.produces, &effect.pool_id);
+        if per_run_milli == 0 {
+            continue;
+        }
+        let runs = u64::try_from((u128::from(gap) * 1_000).div_ceil(per_run_milli))
+            .unwrap_or(u64::MAX)
+            .max(1);
         needed = needed.max(runs);
     }
     (needed > 0).then_some(needed)
+}
+
+/// #455 RR3c (register §1.543): the task's production of `pool_id` per run in thousandths, as the
+/// goal term of `run_cap` divides a gap by it ([`goal_runs`]; #455 B1 ruling 10): the sum of its
+/// integer `amount`s on the pool times 1000 when every entry declares one ([`declared_amount`]),
+/// else its expected yield ([`per_run_yield`]); 0 when it yields nothing per run (its amount
+/// pending). The judgement of whether a run was told enough turns to close a gap reads it too
+/// (`crate::HandedRuns`).
+pub(crate) fn production_milli(produces: &[ResourceEffectSpec], pool_id: &str) -> u128 {
+    declared_amount(produces, pool_id).map_or_else(
+        || per_run_yield(produces, pool_id),
+        |per_run| u128::from(per_run) * 1_000,
+    )
 }
 // ---- SS-6: end ----

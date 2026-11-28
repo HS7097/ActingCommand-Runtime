@@ -267,7 +267,8 @@ pub struct EvaluationFacts {
 /// is left out for its pool's instance with them.
 ///
 /// #477 LF-1 (register §1.509): also the pairs whose latest scheduled dispatch carried a
-/// `run_cap`, with when that run ended ([`LeftOutFacts::give_handed_runs`], [`HandedRuns`]).
+/// `run_cap`, with when that run ended ([`LeftOutFacts::give_handed_runs`], [`HandedRuns`]); #455
+/// RR3c (register §1.543): or `gaps_remaining`, with what it was told.
 ///
 /// Workflow #455 RR3 (register §1.538; `contracts/resource-targets.md`, "Needs computed from the
 /// records"): also what the host computed, for each instance that holds stored records, of what
@@ -295,15 +296,63 @@ pub struct LeftOutFacts {
 /// unknown (`fact_stale`) for every reader of the evaluation ([`PoolValues`]). The host notes them
 /// from the dispatches' recorded reasons ([`HandedRuns::note_dispatch`]) and gives them beside the
 /// left-out facts. Memory only: none of it enters a snapshot or decision identity.
+///
+/// #455 RR3c (register §1.543; `contracts/scheduling/README.md`, "Pool lines"): also the pairs
+/// whose latest scheduled dispatch carried `gaps_remaining`, each with the turns it was told (its
+/// `run_cap`, 1 without one) and the gaps it was handed. A pool such a run produced for a goal,
+/// and was told enough turns to close the gap on ([`HandedRun::closes`]), is not believed either
+/// until it is read after that run's end: for every reader of the evaluation, a resource target's
+/// observation of its pool and the holdings of the needs computed from the records
+/// ([`produced_unread`], the one judgement they read).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HandedRuns {
-    runs: BTreeMap<String, BTreeMap<String, Option<u64>>>,
+    runs: BTreeMap<String, BTreeMap<String, HandedRun>>,
+}
+
+/// One dispatch [`HandedRuns`] notes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HandedRun {
+    /// When its run ended, `None` while it has not.
+    ended_at_unix_ms: Option<u64>,
+    /// #477 LF-1: it carried a `run_cap`.
+    capped: bool,
+    /// #455 RR3c: the turns it was told: its `run_cap`, 1 without one.
+    turns: u64,
+    /// #455 RR3c: its `gaps_remaining` records of a gap of at least 1, `(effect_index, gap)`.
+    gaps: Vec<(usize, u64)>,
+}
+
+impl HandedRun {
+    /// #455 RR3c ruling 1 (register §1.543): whether this run, of `task` as the catalogue in force
+    /// declares it, was told enough turns to close a gap it was handed on `pool_id`: for one of its
+    /// records `{effect_index: j, gap_remaining: g}` whose entry `j` of the task's `produces` is on
+    /// the pool, `n·y ≥ g·1000`, `n` the turns it was told and `y` the task's production of the
+    /// pool per run in thousandths, read as the goal term of `run_cap` reads it
+    /// ([`crate::resource_targets::production_milli`]). Checked: an overflow counts as enough. An
+    /// entry the task no longer has, and a production of 0 (its amount pending), are passed over.
+    fn closes(&self, task: &TaskSpec, pool_id: &str) -> bool {
+        self.gaps.iter().any(|&(index, gap)| {
+            if task
+                .produces
+                .get(index)
+                .is_none_or(|effect| effect.pool_id != pool_id)
+            {
+                return false;
+            }
+            let produced = crate::resource_targets::production_milli(&task.produces, pool_id);
+            produced > 0
+                && u128::from(self.turns)
+                    .checked_mul(produced)
+                    .is_none_or(|told| told >= u128::from(gap) * 1_000)
+        })
+    }
 }
 
 impl HandedRuns {
     /// Notes the latest scheduled dispatch of `task_id` on `instance_id`, which ended at
     /// `ended_at_unix_ms` (`None` while it runs), when its recorded `reasons` carry a `run_cap` on
-    /// `policy_dispatch_parameters`; any other dispatch is not noted.
+    /// `policy_dispatch_parameters`, or (#455 RR3c) `gaps_remaining` there with a gap of at least
+    /// 1; any other dispatch is not noted.
     pub fn note_dispatch<'r>(
         &mut self,
         task_id: &str,
@@ -311,33 +360,89 @@ impl HandedRuns {
         ended_at_unix_ms: Option<u64>,
         reasons: impl IntoIterator<Item = &'r Outcome>,
     ) {
-        let carried = reasons.into_iter().any(|reason| {
-            reason.is(PolicyCode::PolicyDispatchParameters) && reason.value("run_cap").is_some()
-        });
-        if carried {
-            self.runs
-                .entry(instance_id.to_owned())
-                .or_default()
-                .insert(task_id.to_owned(), ended_at_unix_ms);
+        let mut run_cap = None;
+        let mut gaps = Vec::new();
+        for reason in reasons {
+            if !reason.is(PolicyCode::PolicyDispatchParameters) {
+                continue;
+            }
+            run_cap =
+                run_cap.or_else(|| reason.value("run_cap").map(|cap| cap.as_u64().unwrap_or(1)));
+            gaps.extend(
+                reason
+                    .value("gaps_remaining")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|record| {
+                        let index = usize::try_from(record.get("effect_index")?.as_u64()?).ok()?;
+                        let gap = record.get("gap_remaining")?.as_u64()?;
+                        (gap >= 1).then_some((index, gap))
+                    }),
+            );
         }
+        if run_cap.is_none() && gaps.is_empty() {
+            return;
+        }
+        self.runs.entry(instance_id.to_owned()).or_default().insert(
+            task_id.to_owned(),
+            HandedRun {
+                ended_at_unix_ms,
+                capped: run_cap.is_some(),
+                turns: run_cap.unwrap_or(1),
+                gaps,
+            },
+        );
     }
 
-    /// Whether a reading of `pool_id` observed at `observed_at_unix_ms` misses a noted run of a
-    /// task of `tasks` that consumes the pool: one that has not ended, or ended after it.
-    fn unshown(&self, tasks: &[TaskSpec], pool_id: &str, observed_at_unix_ms: u64) -> bool {
-        self.runs.values().flatten().any(|(task_id, &ended)| {
-            ended.is_none_or(|ended| ended > observed_at_unix_ms)
-                && tasks.iter().any(|task| {
-                    task.id == *task_id
-                        && task.consumes.iter().any(|effect| effect.pool_id == pool_id)
-                })
+    /// #477 LF-1: whether a reading of `pool_id` observed at `observed_at_unix_ms` misses a noted
+    /// run that carried a `run_cap`, of a task of `tasks` that consumes the pool.
+    fn consumed_unshown(
+        &self,
+        tasks: &[TaskSpec],
+        pool_id: &str,
+        observed_at_unix_ms: u64,
+    ) -> bool {
+        self.misses(tasks, observed_at_unix_ms, |task, run| {
+            run.capped && task.consumes.iter().any(|effect| effect.pool_id == pool_id)
+        })
+    }
+
+    /// #455 RR3c: whether a reading of `pool_id` observed at `observed_at_unix_ms` misses a noted
+    /// run, of a task of `tasks`, that was told enough turns to close a gap it was handed on the
+    /// pool ([`HandedRun::closes`]).
+    fn produced_unshown(
+        &self,
+        tasks: &[TaskSpec],
+        pool_id: &str,
+        observed_at_unix_ms: u64,
+    ) -> bool {
+        self.misses(tasks, observed_at_unix_ms, |task, run| {
+            run.closes(task, pool_id)
+        })
+    }
+
+    /// Whether a reading observed at `observed_at_unix_ms` misses a noted run, one that has not
+    /// ended or ended after it, of a task of `tasks` for which `leaves` holds.
+    fn misses(
+        &self,
+        tasks: &[TaskSpec],
+        observed_at_unix_ms: u64,
+        leaves: impl Fn(&TaskSpec, &HandedRun) -> bool,
+    ) -> bool {
+        self.runs.values().flatten().any(|(task_id, run)| {
+            run.ended_at_unix_ms
+                .is_none_or(|ended| ended > observed_at_unix_ms)
+                && tasks
+                    .iter()
+                    .any(|task| task.id == *task_id && leaves(task, run))
         })
     }
 }
 
 impl LeftOutFacts {
     /// #477 LF-1 (register §1.509): gives the evaluation the pairs whose latest scheduled dispatch
-    /// carried a `run_cap`.
+    /// carried a `run_cap` (#455 RR3c, register §1.543: or `gaps_remaining`).
     pub fn give_handed_runs(&mut self, runs: HandedRuns) {
         self.handed_runs = runs;
     }
@@ -1445,8 +1550,12 @@ pub(crate) struct PoolValues<'a> {
     values: BTreeMap<&'a str, PoolReading<'a>>,
     given: &'a GivenPoolReadings,
     /// #477 LF-1 (register §1.509): the pools whose current reading a run handed a `run_cap` does
-    /// not show ([`HandedRuns`]): unknown, `fact_stale`.
+    /// not show ([`HandedRuns`]): unknown, `fact_stale`. #455 RR3c (register §1.543): and those a
+    /// run told enough turns to close a goal's gap on left unread.
     unread: BTreeSet<&'a str>,
+    /// #455 RR3c: the pools a run told enough turns to close a goal's gap on left unread
+    /// ([`produced_unread`]), which a resource target's observation of its pool reads too.
+    produced: BTreeSet<String>,
 }
 
 impl<'a> PoolValues<'a> {
@@ -1487,6 +1596,12 @@ impl<'a> PoolValues<'a> {
     pub(crate) fn given(&self) -> &'a GivenPoolReadings {
         self.given
     }
+
+    /// #455 RR3c (register §1.543): the pools a run told enough turns to close a goal's gap on
+    /// left unread, by pool id ([`produced_unread`]).
+    pub(crate) fn produced(&self) -> &BTreeSet<String> {
+        &self.produced
+    }
 }
 
 /// The pool values an evaluation reads: a static pool's, or a live pool's while the record it
@@ -1521,6 +1636,7 @@ fn evaluation_pool_values<'a>(
         values,
         given,
         unread: BTreeSet::new(),
+        produced: BTreeSet::new(),
     }
 }
 
@@ -1530,7 +1646,9 @@ impl<'a> PoolValues<'a> {
     /// current reading misses a run that was handed a `run_cap` (`handed`, of a task of `tasks`
     /// that consumes the pool: not ended, or ended after the reading was observed). Such a pool is
     /// unknown, `fact_stale`, for every reader of the evaluation ([`Self::unknown_reason`]), until
-    /// a reading observed at or after that run's end.
+    /// a reading observed at or after that run's end. #455 RR3c (register §1.543): less every pool
+    /// a run told enough turns to close a goal's gap on left unread ([`produced_unread`], kept as
+    /// [`Self::produced`]); a pool both name is unread once.
     fn without_unshown(
         mut self,
         pool_specs: &BTreeMap<&str, &PoolSpec>,
@@ -1538,28 +1656,70 @@ impl<'a> PoolValues<'a> {
         tasks: &[TaskSpec],
         handed: &HandedRuns,
     ) -> Self {
+        let produced = produced_unread(
+            pool_specs.values().copied(),
+            facts,
+            self.given,
+            tasks,
+            handed,
+        );
         let unshown = self
             .values
             .keys()
             .copied()
             .filter(|pool_id| {
-                pool_specs.get(pool_id).is_some_and(|pool| {
-                    !pool.value_source.is_static()
-                        && matches!(
-                            pool.observation,
-                            ObservationRef::Fact { .. } | ObservationRef::ListRows { .. }
-                        )
-                        && pool_record_times(pool, facts, self.given)
-                            .is_some_and(|(observed, _)| handed.unshown(tasks, &pool.id, observed))
-                })
+                produced.contains(*pool_id)
+                    || pool_specs.get(pool_id).is_some_and(|pool| {
+                        read_pool(pool)
+                            && pool_record_times(pool, facts, self.given).is_some_and(
+                                |(observed, _)| handed.consumed_unshown(tasks, &pool.id, observed),
+                            )
+                    })
             })
             .collect::<Vec<_>>();
         for pool_id in unshown {
             self.values.remove(pool_id);
             self.unread.insert(pool_id);
         }
+        self.produced = produced;
         self
     }
+}
+
+/// #477 LF-1 and #455 RR3c: whether `pool` is read from a fact or from rows of a list, not a
+/// static value: the pools a run can leave unread.
+fn read_pool(pool: &PoolSpec) -> bool {
+    !pool.value_source.is_static()
+        && matches!(
+            pool.observation,
+            ObservationRef::Fact { .. } | ObservationRef::ListRows { .. }
+        )
+}
+
+/// #455 RR3c (register §1.543; `contracts/scheduling/README.md`, "Pool lines", "At each
+/// evaluation"): the pools of `pools` read from a fact or from rows of a list whose current
+/// reading, in `facts` and `given` as an evaluation projects them, misses a run noted in `handed`
+/// that was told enough turns to close a goal's gap on the pool (one that has not ended, or ended
+/// after the reading was observed), by pool id. The one judgement its readers take: the
+/// evaluation's pool values ([`PoolValues::without_unshown`]), a resource target's observation of
+/// its pool (`crate::resource_targets::resolve_instance_targets`) and the holdings of the needs
+/// computed from the records ([`crate::NeedsProjection`]).
+pub(crate) fn produced_unread<'p>(
+    pools: impl IntoIterator<Item = &'p PoolSpec>,
+    facts: &EvaluationFacts,
+    given: &GivenPoolReadings,
+    tasks: &[TaskSpec],
+    handed: &HandedRuns,
+) -> BTreeSet<String> {
+    pools
+        .into_iter()
+        .filter(|pool| {
+            read_pool(pool)
+                && pool_record_times(pool, facts, given)
+                    .is_some_and(|(observed, _)| handed.produced_unshown(tasks, &pool.id, observed))
+        })
+        .map(|pool| pool.id.clone())
+        .collect()
 }
 
 /// #486 ASLEEP-2 (register §1.506, ruling 7): the next projection step of each regenerating pool
@@ -2467,7 +2627,9 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         .map(|pool| (pool.id.as_str(), pool))
         .collect();
     // #477 LF-1 (register §1.509): a pool whose reading misses a run that was handed a `run_cap`
-    // is unknown for every reader of the evaluation.
+    // is unknown for every reader of the evaluation. #455 RR3c (register §1.543): so is one a run
+    // told enough turns to close a goal's gap on produced into, a resource target's observation
+    // of it included (`PoolValues::produced`).
     let pool_values = evaluation_pool_values(&pool_specs, resources, facts, &given, time)
         .without_unshown(
             &pool_specs,
@@ -5182,6 +5344,7 @@ fn apply_priority_selection(
             catalog,
             facts,
             context.pool_values.given(),
+            context.pool_values.produced(),
             instance,
             target_policy,
             time,
@@ -5236,6 +5399,7 @@ fn apply_priority_selection(
             catalog,
             facts,
             context.pool_values.given(),
+            context.pool_values.produced(),
             instance,
             &without_record,
             time,
@@ -10842,6 +11006,7 @@ pub(crate) mod tests {
                     &expected,
                     &observed,
                     &crate::GivenPoolReadings::default(),
+                    &std::collections::BTreeSet::new(),
                     &observed.instances[0],
                     &policies["fixture-instance-a"],
                     time,
@@ -11885,6 +12050,7 @@ pub(crate) mod tests {
                 values: BTreeMap::new(),
                 given: &GivenPoolReadings::default(),
                 unread: BTreeSet::new(),
+                produced: BTreeSet::new(),
             },
             r7_time(now),
             &BTreeMap::new(),

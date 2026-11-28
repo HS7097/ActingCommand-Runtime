@@ -403,6 +403,15 @@ The members of `report`:
       it, so it is composed only by a Runtime that names this row, and the
       installer's plan refuses a rollback below 0.12.97 while an installed or
       kept schedule requires it.
+    - `pool_goal_tiers` (#455 RR3b, since 0.12.98, register §1.542): always on
+      (`config_subsystem_always_on`). The Runtime reads a pool's `goal_tiers`,
+      which weighs the part of a goal's gap the recorded characters need by its
+      own importance and caps the part a stored goal asks beyond it
+      ([scheduling/README.md](scheduling/README.md), "A goal's gap in two
+      parts"); a `schedule.json` whose pool writes it requires it, so it is
+      composed only by a Runtime that names this row, and the installer's plan
+      refuses a rollback below 0.12.98 while an installed or kept schedule
+      requires it.
     - `catalog_business` (#477 CV-2, since 0.12.80, register §1.508): always
       on (`config_subsystem_always_on`). The composer takes a game root's
       business part (each rule's effects, fixed value and marks) from its

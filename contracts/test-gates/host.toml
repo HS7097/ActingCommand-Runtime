@@ -5002,3 +5002,12 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least",
 ]
 incident = ["#455 SL1"]
+
+# #455 RR3c (0.12.98; register §1.543; brief rd-1123/brief-455-rr3c.md; contracts/scheduling/README.md, "Pool lines" and "Needs computed from the records"; contracts/standard-pack-goal-tables.md, "What is computed"), the host's half, no clock read. Pure: a holding a run left unread adds nothing below its item (10 of an item with a recipe Unsplit on its pool, nothing of what it is made from, the one note HoldingUnread), where a known holding of 4 takes it apart (4 covered, 24 and 1800 landing). Through the real admission and settlement path on catalog-a declared V2 (a pool read from rows of a list, 1400; the records needing 3000 of it; the task producing 2000 a run handed gap_remaining 1600 and no run_cap): after the run's end the next evaluation, the list not read again, holds the task (fact_stale suggestion of the list's key, no intent); the same at two evaluations after a start of the host on the same state root, the journal rebuilt from the ledger; a list read after the run's end releases the pool.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3c::rr3c_p1_an_unread_holding_adds_nothing_below_its_item",
+    "actingcommand-runtime-host::lib::tests::gate_455_rr3c::rr3c_h1_a_run_told_enough_to_close_its_gap_leaves_its_pool_unread_across_a_start",
+]
+incident = ["#455 RR3c"]

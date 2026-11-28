@@ -901,6 +901,12 @@ target t (at most one per pool) of pool p:
   scope(t) = t.tasks; without tasks every candidate of i with r(k,p) > 0
   with a known inventory c and g = max(T - c, 0) >= 1:
       Γ_t = min(floor(I * g / S), 1_000_000)          ("capped" at the bound)
+    #455 RR3b, on a pool p that writes goal_tiers {I_n, C} instead, with N the need
+    the records stack on p (0 without) and T_s = T - N what the stored target asks:
+      g_n = max(N - c, 0)                             what the characters need
+      g_s = max(T_s - max(c - N, 0), 0)               the stock, on what they leave
+      Γ_t = min(min(floor(I_n * g_n / S), 1_000_000) + min(floor(I * g_s / S), C), 1_000_000)
+                                                      (g_n + g_s = g; "capped" at 1_000_000)
   otherwise (satisfied, pending, unresolved): Γ_t = 0
 W(k,p) = B_p + (k in scope(t) ? Γ_t : 0)             effective resource weight, <= 2_000_000
 Q_p    = p.valuation.scale, else t.scale, else p.target_defaults.scale (#455 B3-P)
@@ -908,6 +914,20 @@ T(k,p) = floor(r(k,p) * W(k,p) / Q_p)
 F(k,p) = fractional remainder of r(k,p) * W(k,p) / Q_p for pools with an explicit expected effect; 0 otherwise
 R(k)   = min(sum of T(k,p) + floor(sum of F(k,p)), 1_000_000) ("capped" at the bound)
 ```
+
+**Two parts of one gap** (#455 RR3b, since 0.12.98; register §1.542; the owner's ruling of 11-28
+that what the characters in training lack is pushed hard and what a standing stock lacks gently,
+the rulings the coordinator's). On a pool that writes `goal_tiers`
+([scheduling/README.md](scheduling/README.md), "A goal's gap in two parts") a target's gap is weighed
+in the two parts above, over its one step `S`: what the recorded characters need by the pool's
+`I_n`, enough for one missing unit to put a rule first that a character's need should send; what
+the stored target asks beyond it by the target's own `I`, at most the pool's `C`, enough to choose
+among rules about worth running anyway and never enough to outrank a need. Every reader of `Γ`
+(this section's `W`, a fixed value's goal term, the capped spending order, the score stage) reads
+the one sum; none computes its own. With a need of 30, a stock of 200, `S` 10, `I` 1000, `I_n`
+100 000 and `C` 40: held 50, `g_n` 0 and `g_s` 180, `Γ = min(18 000, 40) = 40`; held 10, `g_n` 20
+and `g_s` 200, `Γ = 200 000 + 40 = 200 040`; the pool without the member, `Γ` 18 000 and 22 000. A
+pool without the member weighs the whole gap as before, byte for byte.
 
 A pool takes part for `k` when `r(k,p) > 0` and it declares a valuation or a target covering
 `k` names it. `W` belongs to the resource; a target's scope only decides who gets the
@@ -966,7 +986,7 @@ projections run the same evaluator and include the resource term.
 | Code | Detail |
 | --- | --- |
 | policy level (as v1, at most one) | `resource_target_policy_ignored`, `resource_target_policy_unreadable` or `resource_target_tasks_unevaluable` (items in target order, `<target>/<task>:<why>` for a named task as v1 and `<id>@<pool>:<unknown_resource\|resource_not_observable\|resource_out_of_scope\|no_producing_task>` for a lapsed target without `tasks`, joined by `,`, at most 1010 bytes, the rest as `+<n>more`), on every candidate of the instance (a candidate whose task carried the irreversible mark included since G-R2x, 0.12.77; under G-R2s it carried `resource_target_package_irreversible` instead, retired) but one of a game whose root cannot be composed ("A game whose root cannot be composed" above, `resource_target_root_uncomposed` instead); after expiry `resource_target_policy_expired` on every candidate the policy would weigh |
-| `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]`, `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
+| `resource_targets` | the targets covering the candidate in document order, joined by `; `, each `<id>@<pool>:applied current=<c> at_least=<T> gap=<g> step=<S> importance=<I> gap_weight=<Γ>[ capped]` (#455 RR3b, since 0.12.98: on a pool that writes `goal_tiers`, and only there, followed by ` need_gap=<g_n> need_importance=<I_n> need_weight=<Γ_n> stock_gap=<g_s> stock_weight=<Γ_s> stock_cap=<C>`, `gap` and `gap_weight` staying the totals), `<id>@<pool>:satisfied current=<c> at_least=<T> gap=0 gap_weight=0`, `<id>@<pool>:pending reason=<missing\|expired\|low_confidence\|invalid_value> gap_weight=pending` or `<id>@<pool>:unresolved why=<valuation_missing\|gap_missing> gap_weight=0` |
 | `resource_target_unmapped` | as v1, for a task a target names explicitly |
 | `resource_target_override` | `superseded score=<s\|none>; offset=<o> kept (manual_offset=keep); utility kept` or `superseded score=<s\|none> offset=<o> (manual_offset=supersede); utility kept` |
 | `resource_weights` | `policy=<sha>@<applied_at> term=<R>[ capped] items=<pool>:r=<r>,per=<Q>,base=<B>,gap=<Γ>,effective=<W>,term=<T>;…`, items by `T` descending then pool id; only for a candidate with at least one item. On an instance that is not enabled (SS-1), and for a candidate of a game whose root cannot be composed on any instance (G-R2s round 2; until G-R2x, 0.12.77, also a candidate whose task carried the irreversible mark), the base term alone, `policy=none` and every `gap=0`, after the reasons of its record (of no record for the candidate left out) |
@@ -1013,8 +1033,10 @@ score-stage term `R`. Ruling 9 (a goal chooses which task spends a pool, the poo
 when): below the trigger line of a regenerating pool such a stage consumes (its capacity without a
 written `trigger_line`), whether it may spend is judged without its goal terms, as before; at the
 line, in the capped spending order, and for a pool that does not regenerate, they count
-([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"). `R` and every
-reason above are unchanged, and so is `gap_remaining`.
+([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"). #455 RR3b ruling
+A1 (since 0.12.98): a goal term of a pool that writes `goal_tiers`, whose `Γ` is bounded, counts
+below that line too; only the goal terms of pools without the member are left out there. `R` and
+every reason above are unchanged, and so is `gap_remaining`.
 
 **A goal never takes `run_cap` away** (#455 B1 ruling 10, since 0.12.82; register §1.518). The
 goal term of `run_cap` ([remedies.md](remedies.md), section 4, "Spend values") of a produced pool
@@ -1028,6 +1050,27 @@ pool takes part, one's reading or line is unknown, a consumed amount per run tha
 An integer yield is bounded as before, and a task with no goal on what it produces is handed the
 `run_cap` of before. A target needs nothing new: its pool is observed by a fact under `inventory.`
 or `resource.` (or rows of a list), as every target's.
+
+**The gap a run is told** (#455 RR3b ruling 4, since 0.12.98). On a pool that writes `goal_tiers`,
+the gap `gap_remaining` hands and the goal term of `run_cap` divides is `g_n` while it is above 0,
+and `g_s` once it is 0: a rule that goes first because a character lacks two units is told two
+units' worth of runs, not the stock's hundred and fifty, and the stock is asked for by a dispatch of
+its own, judged with the stock's part alone. Both read the one number. A pool without the member is
+told its whole gap as before.
+
+**A pool a run was told enough to close the gap on** (#455 RR3c, since 0.12.98; register §1.543;
+the coordinator's rulings of 11-28). A dispatch handed `gap_remaining` `g` on a pool whose turns
+could close it (the `run_cap` it carried, 1 without one, times the task's production of the pool
+per run in thousandths, at least `g·1000`; [scheduling/README.md](scheduling/README.md), "Pool
+lines") leaves the pool's reading unbelieved until one observed at or after that run's end. Till
+then a target on the pool, on every instance its scope covers, is pending as a stale reading makes
+it (`<id>@<pool>:pending reason=expired gap_weight=pending`): `Γ = 0`, so it weighs nothing in `W`,
+the goal terms of a fixed value and the capped order, and its gap is unknown, so no goal term of
+`run_cap` and no `gap_remaining` come from it. The one judgement the evaluation's pool values read
+decides it; an observation pending for its own reason keeps that reason. A run told fewer turns
+than its gap needs (a stock gap of 150 at three turns of one unit) leaves the pool read, as before.
+A stale reading would otherwise keep a need of two looking open after the run that met it, and send
+a rule of a negative value of its own first again and again until some scheduled reading came.
 
 ## Needs computed from the records
 
@@ -1044,7 +1087,11 @@ records"). The evaluator stacks it on the instance's stored record for that eval
 - **The gap.** On a pool, `max(0, need + stock − held)`: what is in hand goes to the characters
   first, and the stock a person asked for is counted on what is left. With a need of 30, a stock of
   200 and 50 held the gap is 180 (30 of the 50 go to the characters, 20 count for the stock); with
-  10 held it is 220.
+  10 held it is 220. #455 RR3b (since 0.12.98): it has two parts, the need's `max(0, need − held)`
+  and the stock's `max(0, stock − max(0, held − need))`, the holding filling the need's first (held
+  50: 0 and 180; held 10: 20 and 200); on a pool that writes `goal_tiers` each part is weighed by
+  its own strength ("Resource weights (v2)", "Two parts of one gap"), on any other pool the sum is
+  weighed whole as before.
 - **A pool with a stored goal** (a v2 record's target, a v3 record's live target) keeps that goal's
   step, importance, mode and coverage and is judged as if it asked `stock + need`.
 - **A pool without one**, on which a need lands (the pool of an item without a recipe), is judged
@@ -1076,6 +1123,15 @@ records"). The evaluator stacks it on the instance's stored record for that eval
   `goal_records_holding_unknown` (`pool_id`, `unknown_reason` when the observation gives one),
   `goal_records_item_unweighed` and `goal_records_condition`, each listing its records, columns or
   items. Nothing goes to a log.
+- **A holding a run left unread** (#455 RR3c, since 0.12.98; register §1.543). The needs read a
+  holding through the judgement the evaluation reads ("Resource weights (v2)", "A pool a run was
+  told enough to close the gap on"): the host hands their computation the handed runs the
+  evaluation is given, the one list, read once. While a run told enough turns to close a goal's gap
+  on the pool of an item with a recipe has not been followed by a reading observed at or after its
+  end, that holding is not known: the item's whole need is its pool's, nothing below it is taken
+  apart, and the note is `goal_records_holding_unknown` with `unknown_reason` `fact_stale` (the
+  lower bound RR3 keeps). The goal a need of an item without a recipe gives its pool is pending
+  then, as every target on the pool is.
 - **Identity, freshness, wakes.** The computed set's identity is hashed into the decision identity
   of every candidate of the instance, and into the instance's view at admission
   ([scheduling/README.md](scheduling/README.md)), so an intent evaluated on other progress, other
@@ -1119,6 +1175,14 @@ evaluation, with nothing set again. Where none of the three gives a number the t
 value beside its production is taken, a judged task that consumes it or produces it without a fixed
 value still has an unknown benefit (`valuation_missing`), its lines take no part, and a pool without
 the member reads, hashes and decides exactly as before.
+
+**The need's importance and the stock's cap** (#455 RR3b, since 0.12.98; register §1.542). On a
+pool that writes `goal_tiers` the target's `S` and `I`, from the three sources above, weigh both
+parts and the stock's part; the need's importance `I_n` and the stock's cap `C` come from one place
+only, the pool's `goal_tiers`, read from the catalogue in force at each evaluation by the one
+function that computes a v2 target's `Γ` (`gap_weight`, in the policy crate). A target carries no
+`I_n` and no `C` of its own, and nothing of them is copied into a stored goal: a later catalogue's
+numbers weigh every goal already set at the next evaluation, with nothing set again.
 
 ## Choosing scale and importance
 
@@ -1176,6 +1240,16 @@ urgency or value (`Δ = 5000` plus the aging difference in seconds):
 The flip gap is 501 (`c <= 9499`) at equal aging, 507 (`c <= 9493`) when the competitor waited
 60 s longer and 861 (`c <= 9139`) after one hour. The example document's `importance_milli`
 of 100000 is sized this way; 1000 would weigh like a single priority level.
+
+**A pool with `goal_tiers`** (#455 RR3b, since 0.12.98). One missing unit the characters need adds
+`r·I_n/(1000·S²)` milli to the net benefit of a rule that produces `r` thousandths of a unit a run,
+so choose `I_n` so that this already outweighs what the worst rule that should still be sent for a
+need lacks to be worth running (with `S` 10 and one unit a run, `I_n` 100 000 gives 1000 a unit
+against a rule of −100 of its own). The stock adds at most `r·C/(1000·S)`, so choose `C` so that
+this stays below what the best rule that should not be sent for a stock lacks (with `S` 10 and one
+unit a run, `C` 40 gives at most 4: a rule of −2 of its own is sent for the stock, one of −100 is
+not). Keep `C` below `I_n/S`, the weight of one missing unit, so that no stock outranks a
+character's need.
 
 ## Choosing valuation and target values (v2)
 

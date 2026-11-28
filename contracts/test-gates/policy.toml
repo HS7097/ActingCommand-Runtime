@@ -1725,3 +1725,38 @@ tests = [
     "actingcommand-policy::lib::tests::gate_455_sl1::sl1_t4_a_catalogue_without_the_member_keeps_its_golden_identity",
 ]
 incident = ["#455 SL1"]
+
+# #455 RR3b (0.12.98; register §1.542; brief rd-1123/brief-455-rr3b.md with its addendum 1; contracts/resource-targets.md, "Resource weights (v2)"; contracts/scheduling/README.md, "A goal's gap in two parts" and "Fixed values written in the pack"; contracts/standard-pack-schedule.md, "`requires`"): a pool may write goal_tiers {need_importance_milli, stock_cap_milli}, and a goal's gap on it is weighed in two parts over one step, no clock read; S 10 and I 1000 from target_defaults, I_n 100 000 and C 40, a need of 30 and a stock of 200. The reader: on the neutral example's pool both numbers compile, round-trip and recompile to the same identity, the largest bounds and the least (a cap of 0) taken, beside a valuation and beside target_defaults taken; in a V1 document unknown_field at the member, each number missing missing_required_field naming it, an importance of 0 or 1 000 001 and a cap of 1 000 001 limit_exceeded at the number, another member unknown_field naming it, beside spend_line type_mismatch at the member (t1); the composer carries the member with pool_goal_tiers in requires, refuses it without as schedule_invalid at /pools/0/goal_tiers, and a Runtime whose manifest does not name the subsystem refuses the file schedule_requires_missing at /requires/0 (t1); the V2 pools schema lists the member with the compiler's bounds and not beside spend_line, the V1 schema not at all (t1). The weight, stored 200 and need 30: held 50 need_gap 0, stock_gap 180, gap_weight 40; held 10 need_weight 200000, stock_weight 40, gap_weight 200040; held 230 satisfied; no records held 50 gap_weight 40; the computed goal of 30 alone held 10 gap_weight 200000; I_n 1 000 000 and a need gap of 30 gap_weight 1000000 capped, the producer's term 100000 (t2). Without the member held 10 gap_weight 22000 and held 50 18000, main's item text (t3). The order: a need of 2 (term 2000, B 11 000) before a stock gap of 150 (term 4, B 9 004), and without the member the stock's producer first (B 10 500 against 9 020); at the capped pool's capacity the same pair heads the round, the need's producer with the member, the stock's without (t4). The runs: a need gap of 5 and a stock gap of 150 gives gap_remaining 5 and run_cap 5, the need met 150 and 150, without the member 155 and 155 (t5). With a fixed value of -100 of its own: B 19 904 dispatched by the need's part, -96 policy_benefit_nonpositive by the stock's alone (t6). One stored goal under a catalogue whose member writes 50 000 and 20 weighs 100020 with nothing set again (t7). The item names the two parts on the pool with the member and is main's text on the pool without (t8). The neutral example keeps its V1 and V2 golden identities and the member changes the V2 one (t10). Ruling A1, below the trigger line of a regenerating pool the rule consumes: a rule of -2 of its own and a stock's capped term 4 dispatched there, without the member policy_benefit_nonpositive -2 with the note goal_terms=not_counted_below_trigger_line (a); a rule of -100 with the stock alone -96 without the note, with a need gap of 2 B 1904 dispatched (b); with one goal term of a pool with the member and one without, the gate counts the first, the items pool.tiered:+4,pool.regen:-1000 and the note (c)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t1_the_reader_takes_both_numbers_and_refuses_each_fault_at_its_pointer",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t1_the_composer_requires_pool_goal_tiers_and_an_older_runtime_refuses_the_file",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t1_the_v2_pools_schema_lists_the_member_with_the_compiler_s_bounds",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t2_the_need_and_the_stock_are_weighed_apart_over_one_step",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t3_without_the_member_the_whole_gap_is_weighed_as_on_main",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t4_a_need_of_two_outranks_a_stock_of_150_and_heads_the_capped_round",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t5_a_run_is_told_the_need_s_part_while_it_is_open_then_the_stock_s",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t6_a_need_makes_a_negative_rule_positive_and_a_stock_does_not",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t7_a_goal_set_once_weighs_by_the_numbers_of_the_catalogue_in_force",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t8_the_item_names_the_two_parts_only_on_a_pool_with_the_member",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_t10_a_catalogue_without_the_member_keeps_its_golden_identity",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_a1_a_below_the_trigger_line_a_stock_s_capped_term_counts",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_a1_b_below_the_trigger_line_a_need_lifts_a_rule_a_stock_does_not",
+    "actingcommand-policy::lib::tests::gate_455_rr3b::rr3b_a1_c_only_the_goal_terms_of_pools_without_the_member_are_left_out",
+]
+incident = ["#455 RR3b"]
+
+# #455 RR3c (0.12.98; register §1.543; brief rd-1123/brief-455-rr3c.md; contracts/scheduling/README.md, "Pool lines"; contracts/resource-targets.md, "Resource weights (v2)" and "Needs computed from the records"; contracts/remedies.md, section 4): a run that was told enough turns to close a goal's gap leaves the pool it produced unread until a reading observed at or after its end, no clock read. Ruling 1's arithmetic n·y ≥ g·1000 (one unit a run: a gap of 2 told 2 unread, told 1 read, a gap of 1 without run_cap unread, a gap of 150 told 3 read; half a unit: told 4 unread, told 3 read; a pending amount passed over); the span (unread while the run runs and after it with an older reading or one observed while it ran, read with one at or after its end); the three readers on one fixture (the pool values fact_stale and a trigger asking for the key, the target pending reason=expired with Γ 0, B 9000, no gap_remaining and run_cap 399, the needs' holding Unread, said goal_records_holding_unknown fact_stale); RR3b's numbers (a rule of −100 sent once by a need of 2, B 1900 told 2, not sent again until the pool is read, not sent with the need met, sent again told 1 with 1 lacking); a stock gap of 150 told 3 sent again as before; with LF-1 both pools unread; a pool of the game unread on both instances after a run on one.
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t1_a_run_told_enough_turns_to_close_its_gap_leaves_the_pool_unread",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t2_the_pool_is_unread_until_a_reading_observed_at_or_after_the_runs_end",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t3_the_pool_values_the_target_and_the_needs_read_the_pool_as_unread",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t4_a_negative_rule_a_need_sent_is_not_sent_again_until_the_pool_is_read",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t5_a_run_not_told_enough_to_close_the_gap_leaves_the_pool_read",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t6_a_run_that_spends_under_a_run_cap_and_closes_a_gap_leaves_both_pools_unread",
+    "actingcommand-policy::lib::tests::gate_455_rr3c::rr3c_t8_a_pool_whose_scope_covers_two_instances_is_unread_on_both_after_a_run_on_one",
+]
+incident = ["#455 RR3c"]

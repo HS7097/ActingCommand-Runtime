@@ -39,7 +39,8 @@ member `"trigger_line"` passes through as the other two lines do. Workflow #500 
 §1.511, since 0.12.81): a rule may carry `"variables"`, values for its package's variables, which
 pass through to its task as a V2 member ("A rule's variable values" below). #455 SL1 (register
 §1.540, since 0.12.97): a pool's V2 member `"spend_line"` passes through as the lines do ("A
-currency a line governs" below).
+currency a line governs" below). #455 RR3b (register §1.542, since 0.12.98): so does a pool's V2
+member `"goal_tiers"` ("A goal's gap in two parts" below).
 
 Every member but `schema_version` may be absent, which means empty. The reader
 (`actingcommand_contract::parse_standard_pack_schedule`) refuses, each as
@@ -169,6 +170,18 @@ while `requires` does not name it, `schedule_invalid` at the first such pool's m
 (for example `/pools/0/spend_line`). The member passes through as written, and the catalog compiler
 checks it, mapped back to the pool. A Runtime names `pool_spend_line` in `config.subsystems`,
 always on, from 0.12.97. **No Runtime of 0.12.96 names it**: such a Runtime, and its check-config,
+refuse a file that lists it with `schedule_requires_missing` at that entry, and the installer's
+plan refuses a rollback to such a build while an installed or kept schedule lists it (#429 RB-1
+above). The resource tools check no `requires`: `standard-pack check`, `compose` and `adopt` accept
+and carry the member.
+
+#455 RR3b (register §1.542, since 0.12.98). A pool that writes `goal_tiers`, which weighs a goal's
+gap on it in two parts ([scheduling/README.md](scheduling/README.md), "A goal's gap in two
+parts"), requires `pool_goal_tiers`, alike: the composer refuses a file that writes one while
+`requires` does not name it, `schedule_invalid` at the first such pool's member in file order (for
+example `/pools/0/goal_tiers`). The member passes through as written, and the catalog compiler
+checks it, mapped back to the pool. A Runtime names `pool_goal_tiers` in `config.subsystems`,
+always on, from 0.12.98. **No Runtime of 0.12.97 names it**: such a Runtime, and its check-config,
 refuse a file that lists it with `schedule_requires_missing` at that entry, and the installer's
 plan refuses a rollback to such a build while an installed or kept schedule lists it (#429 RB-1
 above). The resource tools check no `requires`: `standard-pack check`, `compose` and `adopt` accept
@@ -644,6 +657,18 @@ benefit within a tier", "A declared 0"). Write no `target_defaults` and no valua
 such a pool will be its line, set in a later build, never a weight on its producers. A rule that
 also reserves the pool is held by the reserve gate as for any pool.
 
+**A goal's gap in two parts** (#455 RR3b, since 0.12.98; register §1.542). On a pool a goal may be
+set on, a pack may write `goal_tiers` (`{"need_importance_milli": I_n, "stock_cap_milli": C}` from
+the research table; the file then names `pool_goal_tiers` in `requires`, "`requires`" above), beside
+the pool's valuation or `target_defaults` or alone, never beside `spend_line`: the part of a goal's
+gap that the recorded characters need is then weighed by `I_n`, strongly enough to send a rule of a
+negative value of its own that produces it, and the part a stored goal asks beyond it by the goal's
+importance at most `C`, enough to prefer among rules about worth running anyway and never to send a
+clearly negative one ([scheduling/README.md](scheduling/README.md), "A goal's gap in two parts";
+[resource-targets.md](resource-targets.md), "Choosing scale and importance"). A rule the need sends
+is handed the need's part as its gap and its `run_cap`, not the stock's. A pool without the member
+weighs the whole gap as before.
+
 **Provenance** (SCHED-C1a, since 0.12.52; the coordinator's point 6). So that a later model export
 can replace them one by one, the composer reports, per game, which judged rules run on a fixed
 value and which pools on a declared valuation block, each by who wrote it: `pack` (no origin
@@ -766,6 +791,7 @@ pure: its caller reads the packages.
    `valuation_origin`, #455 P1 (0.12.78): `pool_list_rows` when a pool's `observation` is of the
    kind `list_rows`, #455 B3-P (0.12.82): `pool_target_defaults` when a pool writes
    `target_defaults`, #455 SL1 (0.12.97): `pool_spend_line` when a pool writes `spend_line`,
+   #455 RR3b (0.12.98): `pool_goal_tiers` when a pool writes `goal_tiers`,
    SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
    writes `max_queue_wait_ms`, Workflow #500 SV-2 (0.12.81): `rule_variables` when a rule carries

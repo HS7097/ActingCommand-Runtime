@@ -243,6 +243,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #455 RR3b (register §1.542): this build reads a pool's `goal_tiers`, which weighs the part
+        // of a goal's gap the recorded characters need by its own importance and caps the part a
+        // stored goal asks beyond it; a `schedule.json` whose pool writes it requires it, so an
+        // older Runtime refuses the file instead of weighing the whole gap by one importance.
+        subsystem(
+            actingcommand_policy::POOL_GOAL_TIERS_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #477 CV-2 (register §1.508): this build's composer takes a game root's business
         // part from its version 2 `pack-catalog.json`; a `schedule.json` that names it writes none
         // of its rules' business members, so an older Runtime refuses the file instead of

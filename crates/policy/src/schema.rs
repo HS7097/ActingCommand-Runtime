@@ -1165,6 +1165,29 @@ pub struct PoolSpec {
     /// costing nothing while no line is set. Absent, the catalog keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spend_line: Option<PoolSpendLine>,
+    /// #455 RR3b (register §1.542; V2 only): a goal's gap on the pool is weighed in two parts
+    /// ([`PoolGoalTiers`]): what the recorded characters need by its own importance, what a stored
+    /// goal asks beyond that by the goal's importance, bounded. Written beside a `valuation`,
+    /// beside `target_defaults` or alone, never beside `spend_line`. Absent, the gap is weighed
+    /// whole as before and the catalog keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_tiers: Option<PoolGoalTiers>,
+}
+
+/// #455 RR3b (register §1.542; `contracts/scheduling/README.md`, "A goal's gap in two parts"): a
+/// pool's `goal_tiers`. A target's gap on the pool, with the holding `c`, the need `N` the records
+/// stack and the target's own `T`, is `g_n = max(0, N − c)` and `g_s = max(0, T − max(0, c − N))`;
+/// `Γ = min(min(⌊I_n·g_n/S⌋, 1 000 000) + min(⌊I·g_s/S⌋, C), 1 000 000)` over the one step `S`.
+/// Both are required; read at every evaluation from the catalog in force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PoolGoalTiers {
+    /// `I_n`, the importance of the part of a gap the recorded characters need, in
+    /// `1..=1 000 000` (the bound of a target's own `importance_milli`).
+    pub need_importance_milli: u64,
+    /// `C`, the most the part a stored goal asks beyond the characters' need may weigh, in
+    /// `0..=1 000 000` (the bound of a gap weight); 0 says it weighs nothing.
+    pub stock_cap_milli: u64,
 }
 
 /// #455 SL1 (register §1.540; `contracts/scheduling/README.md`, "A pool whose spending a line
@@ -1440,6 +1463,13 @@ pub const POOL_TARGET_DEFAULTS_SUBSYSTEM: &str = "pool_target_defaults";
 /// every Runtime of that version refuses such a file (`schedule_requires_missing`) and keeps the
 /// game's last good rules.
 pub const POOL_SPEND_LINE_SUBSYSTEM: &str = "pool_spend_line";
+
+/// #455 RR3b (register §1.542; `contracts/standard-pack-schedule.md`, "`requires`"): the
+/// configuration-manifest subsystem of a Runtime that reads a pool's `goal_tiers`; a
+/// `schedule.json` whose pool writes it names it in `requires`. No Runtime of 0.12.97 names it, so
+/// every Runtime of that version refuses such a file (`schedule_requires_missing`) and keeps the
+/// game's last good rules.
+pub const POOL_GOAL_TIERS_SUBSYSTEM: &str = "pool_goal_tiers";
 
 /// Workflow #477 CV-2 (register §1.508; `contracts/standard-pack-schedule.md`, "`requires`"): the
 /// configuration-manifest subsystem of a Runtime whose composer takes a game root's business part
