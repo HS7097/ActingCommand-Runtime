@@ -15,8 +15,22 @@
 //! A worker panic follows spec §7: the thread root catches it and records `panic_caught` under
 //! the payload's own failure category; the payload is dropped, not retried (device actions are
 //! not idempotent); its key is left to lapse at its TTL, where the sweep's expiry hands it on;
-//! and the worker carries on with fresh state. A second panic before the rebuilt worker
-//! finished one payload marks the Runtime fatal with `runtime_restart_required`.
+//! and the worker carries on with fresh state.
+//!
+//! #503 ISO-A (board #419, the owner's rule of 10-24: one instance's fault does not stop the
+//! whole Runtime): the worker is the containment boundary of its payloads (ISO-M R0.5).
+//! - A payload that ends with an error goes to the one decision point (`contain_failure`) with
+//!   the payload's own instance and links: a failure of the whole latches the Runtime as before;
+//!   one of the instance fences it with the fence's own records; one of the operation is
+//!   recorded once (`runtime.failed` with its own code). Then the ends a panic runs for its kind
+//!   run too (a policy run's lane, a probe's unavailability with the error's code, an entry
+//!   recovery), and the worker goes on.
+//! - At a panic, first of all, the poison the unwind left on the payload's own two locks (its
+//!   device's admission guard and queue-order lock, which guard no data) is cleared without
+//!   blocking; when either was poisoned the instance is fenced with `instance_lock_poisoned`
+//!   after the panic's ends and its record. A second panic before the rebuilt worker finished a
+//!   payload fences the payload's instance (cause `panic_caught`) instead of asking for a
+//!   restart of the whole Runtime, and the worker goes on.
 //!
 //! Workflow #427-A: a worker also runs the scheduled policy runs the driver hands it
 //! (`policy_lanes.rs`), one at a time, under the same panic rule; a panicked policy run's
@@ -106,6 +120,13 @@ pub(super) enum WorkerJob {
     },
     /// Workflow #427-A: a scheduled policy run the driver handed to the instance.
     PolicyRun(Box<super::policy_lanes::PolicyRunJob>),
+    /// #503 ISO-A, tests: a payload of `instance` that does what `act` says
+    /// (`RuntimeHost::post_worker_payload_for_test`).
+    #[cfg(test)]
+    Test {
+        instance: InstanceId,
+        act: failure_scope::WorkerActForTest,
+    },
 }
 
 impl WorkerJob {
@@ -113,6 +134,20 @@ impl WorkerJob {
         match self {
             Self::HostClaim { work, .. } => work.failure_category(),
             Self::PolicyRun(_) => HostLocation::RunHandedPolicyRun.as_str(),
+            #[cfg(test)]
+            Self::Test { .. } => HostLocation::RunInstanceWorker.as_str(),
+        }
+    }
+
+    /// #503 ISO-A: the instance the payload is for, which its failure is contained against and
+    /// whose two locks a panic of it is cleared on: its key's for a host claim, its lease's for
+    /// a policy run.
+    fn instance(&self) -> InstanceId {
+        match self {
+            Self::HostClaim { key, .. } => key.token.instance_id(),
+            Self::PolicyRun(run) => run.context().lease_token().instance_id(),
+            #[cfg(test)]
+            Self::Test { instance, .. } => *instance,
         }
     }
 }
@@ -124,6 +159,10 @@ impl WorkerJob {
 pub(super) struct InstanceWorkers {
     senders: BTreeMap<InstanceId, mpsc::Sender<WorkerJob>>,
     threads: Vec<JoinHandle<RuntimeHostResult<()>>>,
+    /// #503 ISO-A, tests: by device key, the failure the next host claim of that device's worker
+    /// ends with instead of its work (`RuntimeHost::fail_next_host_claim_for_test`).
+    #[cfg(test)]
+    failures_for_test: BTreeMap<InstanceId, RuntimeHostError>,
 }
 
 /// W-2: creates one worker per registered device. It runs at host start, before the
@@ -180,8 +219,10 @@ pub(super) fn spawn_instance_workers(shared: &Arc<HostShared>) -> RuntimeHostRes
     Ok(())
 }
 
-/// W-2: one worker's thread root. A closed channel (shutdown) ends it normally; a fatal
-/// payload error marks the Runtime fatal and ends it; a panic follows spec §7.
+/// W-2: one worker's thread root. A closed channel (shutdown) ends it normally; a panic follows
+/// spec §7. #503 ISO-A: a payload's error goes to the one decision point against the payload's
+/// instance; only a failure of the whole latches the Runtime and ends the worker, which every
+/// other end leaves running (the module documentation).
 fn instance_worker_loop(
     shared: &HostShared,
     receiver: &mpsc::Receiver<WorkerJob>,
@@ -190,10 +231,13 @@ fn instance_worker_loop(
     let mut rebuilt = false;
     while let Ok(job) = receiver.recv() {
         let category = job.failure_category();
+        let instance = job.instance();
         // Workflow #427-A: what a panicked policy run leaves behind (its registration).
         let lane = match &job {
             WorkerJob::PolicyRun(run) => Some(run.lane()),
             WorkerJob::HostClaim { .. } => None,
+            #[cfg(test)]
+            WorkerJob::Test { .. } => None,
         };
         // Workflow #489 AVAIL-1 fix round 1 (item 4): what a panicked probe of an unavailable
         // instance leaves behind (its instance's probe step, queued or running).
@@ -231,10 +275,27 @@ fn instance_worker_loop(
         match catch_unwind(AssertUnwindSafe(|| shared.run_worker_job(job))) {
             Ok(Ok(())) => rebuilt = false,
             Ok(Err(error)) => {
-                shared.fatal.mark(error.clone())?;
-                return Err(error);
+                // #503 ISO-A (R-A1-1, R-A1-2): the payload's error is contained against its own
+                // instance, and a payload that ended with an error is a finished one. Only a
+                // failure of the whole (latched there) or of the containment's own records and
+                // ends stops the Runtime, as a failed clean-up of a panic does.
+                let ends = PayloadEnds {
+                    lane,
+                    probe,
+                    ladder,
+                };
+                if let Err(error) = shared.contain_worker_failure(error, instance, links, ends) {
+                    let error = error.into_fatal();
+                    shared.fatal.mark(error.clone())?;
+                    return Err(error);
+                }
+                rebuilt = false;
             }
             Err(panic) => {
+                // #503 ISO-A (R-A1-3): first of all, before any record, the poison the unwind
+                // left on the payload's own two locks is cleared, without blocking; whether
+                // either was poisoned decides the fence below.
+                let cleared = shared.clear_instance_lock_poison(instance);
                 // The payload is dropped, not retried; its lease lapses at its TTL. A policy
                 // run's registration stays as abandoned (its instance still occupied) until the
                 // reconciliation settles the run once its lease ended, and the driver is woken.
@@ -244,11 +305,15 @@ fn instance_worker_loop(
                     shared.drop_panicked_policy_run(lane)?;
                 }
                 // Workflow #489 AVAIL-1 fix round 2 (item 2): a panicked probe ends its
-                // unavailability's probes and tells a person (`end_panicked_unavailable_probe`).
-                // A failure of that clean-up is kept, and returned only after the panic's own
-                // record and the fatal mark a second panic owes, which it never swallows.
+                // unavailability's probes and tells a person (`end_panicked_unavailable_probe`),
+                // with the code the panic's own record carries. A failure of that clean-up is
+                // kept, and returned only after the panic's own record and its fence, which it
+                // never swallows.
+                let panic_caught = actingcommand_contract::outcome::CodeStr::from(
+                    actingcommand_contract::codes::ContractCode::PanicCaught.code(),
+                );
                 let probe_ended = probe.map_or(Ok(()), |(instance_id, probe)| {
-                    shared.end_panicked_unavailable_probe(instance_id, probe)
+                    shared.end_panicked_unavailable_probe(instance_id, probe, &panic_caught)
                 });
                 // Workflow #490 ENTRY-A fix round 1: a panicked recovery ladder ended without
                 // recovering; an entry block it was a recovery of tells a person
@@ -260,18 +325,35 @@ fn instance_worker_loop(
                     )
                 });
                 let ended = probe_ended.and(ladder_ended);
-                shared.record_worker_panic(category, links, panic.as_ref())?;
-                if rebuilt {
-                    let error = RuntimeHostError::fatal(
-                        actingcommand_contract::codes::SharedCode::RuntimeRestartRequired,
+                let words = WorkerPanic::of(panic.as_ref());
+                shared.record_worker_panic(category, links.clone(), &words)?;
+                // #503 ISO-A: after the panic's ends and its record, a lock of the instance the
+                // panic left poisoned (R-A1-3), else a second panic before the rebuilt worker
+                // finished a payload (R-A1-5, the owner's rule of 10-24: an instance that fails
+                // twice in a row stops only that instance), fences the payload's instance; the
+                // worker goes on.
+                let fault = match &cleared {
+                    Ok(true) => Some(RuntimeHostError::instance_fault(
+                        HostCode::InstanceLockPoisoned,
                         HostLocation::RunInstanceWorker,
                         RuntimeErrorCode::RuntimeHalted,
-                    );
-                    shared.fatal.mark(error.clone())?;
-                    ended?;
-                    return Err(error);
-                }
-                if let Err(error) = ended {
+                        instance,
+                    )),
+                    Ok(false) if rebuilt => Some(
+                        RuntimeHostError::instance_fault(
+                            actingcommand_contract::codes::ContractCode::PanicCaught,
+                            HostLocation::RunInstanceWorker,
+                            RuntimeErrorCode::RuntimeHalted,
+                            instance,
+                        )
+                        .with_outcome_values(|outcome| words.values(outcome)),
+                    ),
+                    Ok(false) | Err(_) => None,
+                };
+                let fenced = fault.map_or(Ok(()), |fault| {
+                    shared.fence_panicked_instance(fault, instance, links)
+                });
+                if let Err(error) = cleared.map(|_poisoned| ()).and(ended).and(fenced) {
                     let error = error.into_fatal();
                     shared.fatal.mark(error.clone())?;
                     return Err(error);
@@ -283,12 +365,77 @@ fn instance_worker_loop(
     Ok(())
 }
 
+/// #503 ISO-A (R-A1-2): what a payload its worker did not finish leaves to end, by its kind, as
+/// a panic ends it: a policy run's lane, a probe's step of an unavailable instance, a recovery
+/// ladder an entry block may wait for.
+struct PayloadEnds {
+    lane: Option<super::policy_lanes::PolicyLane>,
+    probe: Option<(InstanceId, u32)>,
+    ladder: Option<PendingRecoveryLadder>,
+}
+
+/// Spec §7: a worker's panic as its `panic_caught` carries it: the worker thread and the panic
+/// payload, each as words only, bounded.
+struct WorkerPanic {
+    thread: String,
+    raw_text: String,
+}
+
+impl WorkerPanic {
+    fn of(panic: &(dyn std::any::Any + Send)) -> Self {
+        let raw_text = panic
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "non-text panic payload".to_owned());
+        let thread_name = thread::current()
+            .name()
+            .unwrap_or("actingd-instance")
+            .to_owned();
+        // A diagnostic message carries no path, control character or credential shape: the
+        // panic text is kept as words only, bounded.
+        let detail_text = |text: &str| {
+            text.chars()
+                .take(256)
+                .map(|character| {
+                    if character.is_ascii_alphanumeric()
+                        || matches!(character, ' ' | '_' | '-' | '.')
+                    {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
+        Self {
+            thread: detail_text(&thread_name),
+            raw_text: detail_text(&raw_text),
+        }
+    }
+
+    /// `outcome` with the panic's values (ledger revision 3): the worker thread, the boundary,
+    /// the raw source and the panic payload.
+    fn values(
+        &self,
+        outcome: actingcommand_contract::outcome::Outcome,
+    ) -> actingcommand_contract::outcome::Outcome {
+        outcome
+            .thread(self.thread.clone())
+            .boundary(HostLocation::RunInstanceWorker)
+            .raw_source(actingcommand_contract::outcome::RawSource::Panic)
+            .raw_text(self.raw_text.clone())
+    }
+}
+
 impl HostShared {
     /// One payload of an instance's worker.
     fn run_worker_job(&self, job: WorkerJob) -> RuntimeHostResult<()> {
         match job {
             WorkerJob::HostClaim { work, key } => self.run_host_claim(work, key),
             WorkerJob::PolicyRun(run) => self.run_handed_policy_run(*run),
+            #[cfg(test)]
+            WorkerJob::Test { instance, act } => self.act_for_test(instance, act),
         }
     }
 
@@ -300,6 +447,18 @@ impl HostShared {
         #[cfg(test)]
         if self.worker_panic_for_test.swap(false, Ordering::AcqRel) {
             panic!("injected instance worker panic");
+        }
+        // #503 ISO-A, tests: the failure this device's next host claim ends with instead of its
+        // work, its key released first, as a payload releases it at its end.
+        #[cfg(test)]
+        {
+            let failure = lock(&self.instance_workers, HostLocation::PostHostClaim)?
+                .failures_for_test
+                .remove(&self.device_key(key.token.instance_id()));
+            if let Some(error) = failure {
+                self.release_host_key(&key)?;
+                return Err(error);
+            }
         }
         let _work = loop {
             if self.fatal.is_shutdown_requested() {
@@ -325,11 +484,20 @@ impl HostShared {
     }
 
     /// The links a worker's panic is recorded under: the instance and the payload's causation.
+    /// #503 ISO-A: and the links a payload's contained failure is recorded and fenced under.
     fn host_claim_failure_links(&self, job: &WorkerJob) -> RuntimeHostResult<EventLinksDraft> {
         let work = match job {
             WorkerJob::HostClaim { work, .. } => work,
             // Workflow #427-A: a policy run's panic is recorded under its run's links.
             WorkerJob::PolicyRun(run) => return self.policy_run_event_links(run.context()),
+            // #503 ISO-A, tests: a test payload's are its instance's.
+            #[cfg(test)]
+            WorkerJob::Test { instance, .. } => {
+                return Ok(self
+                    .events
+                    .system_links()?
+                    .with_instance_id(self.events.issuer().issue_registered_instance(*instance)));
+            }
         };
         Ok(match work {
             HostClaimWork::StartupPackage(pending) => self
@@ -365,33 +533,8 @@ impl HostShared {
         &self,
         category: &'static str,
         links: EventLinksDraft,
-        panic: &(dyn std::any::Any + Send),
+        panic: &WorkerPanic,
     ) -> RuntimeHostResult<()> {
-        let raw_text = panic
-            .downcast_ref::<&str>()
-            .map(|text| (*text).to_owned())
-            .or_else(|| panic.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "non-text panic payload".to_owned());
-        let thread_name = thread::current()
-            .name()
-            .unwrap_or("actingd-instance")
-            .to_owned();
-        // A diagnostic message carries no path, control character or credential shape: the
-        // panic text is kept as words only, bounded.
-        let detail_text = |text: &str| {
-            text.chars()
-                .take(256)
-                .map(|character| {
-                    if character.is_ascii_alphanumeric()
-                        || matches!(character, ' ' | '_' | '-' | '.')
-                    {
-                        character
-                    } else {
-                        '_'
-                    }
-                })
-                .collect::<String>()
-        };
         self.append_event_raw(
             EventSeverity::Warning,
             EventSource::Runtime,
@@ -403,13 +546,9 @@ impl HostShared {
             RuntimePayloadDraft::failed(
                 DiagnosticCode::RuntimeDiagnostic,
                 EffectDisposition::Indeterminate,
-                actingcommand_contract::outcome::Outcome::new(
+                panic.values(actingcommand_contract::outcome::Outcome::new(
                     actingcommand_contract::codes::ContractCode::PanicCaught,
-                )
-                .thread(detail_text(&thread_name))
-                .boundary(HostLocation::RunInstanceWorker)
-                .raw_source(actingcommand_contract::outcome::RawSource::Panic)
-                .raw_text(detail_text(&raw_text)),
+                )),
                 DiagnosticDetailDraft::new(
                     category,
                     RuntimeLifecycleFailureStage::OperationCleanup.location(),
@@ -420,6 +559,95 @@ impl HostShared {
             ),
         )
         .map(|_| ())
+    }
+
+    /// #503 ISO-A (R-A1-1, R-A1-2): `error`, the error a payload of `instance` ended with, at the
+    /// one decision point against that instance, under the payload's `links`. A failure of the
+    /// whole latches the Runtime and is the `Err`, as before. One of the instance fences it: the
+    /// fence's own records say so. One of the operation is recorded once, a `runtime.failed` with
+    /// the error's own code at stage `operation_cleanup` (nothing more when its path recorded it
+    /// already). Then `ends` run as a panic runs them: a policy run's lane is ended and its sink
+    /// told the run was dropped, a probe's unavailability tells a person with the error's code
+    /// and probes no more, and a recovery ladder of an entry block is noted ended as a panicked
+    /// worker's is (`worker_panicked`: nothing climbs again in that block). Any other `Err` is a
+    /// failure of those records or ends, which its caller marks fatal.
+    fn contain_worker_failure(
+        &self,
+        error: RuntimeHostError,
+        instance: InstanceId,
+        links: EventLinksDraft,
+        ends: PayloadEnds,
+    ) -> RuntimeHostResult<()> {
+        let cause = error.outcome().code().clone();
+        match self.contain_failure(error, Some(instance), links.clone())? {
+            failure_scope::Contained::Latched(error) => return Err(error),
+            failure_scope::Contained::Fenced(_) => {}
+            failure_scope::Contained::Failed(error) => self.append_lifecycle_failure(
+                RuntimeLifecycleFailureStage::OperationCleanup,
+                RuntimeLifecycleFailure::Host(&error),
+                links,
+                None,
+            )?,
+        }
+        if let Some(lane) = ends.lane {
+            self.drop_panicked_policy_run(lane)?;
+        }
+        let probe_ended = ends.probe.map_or(Ok(()), |(instance_id, probe)| {
+            self.end_panicked_unavailable_probe(instance_id, probe, &cause)
+        });
+        let ladder_ended = ends.ladder.as_ref().map_or(Ok(()), |ladder| {
+            self.note_entry_recovery_failed(ladder, crate::codes::EntryRecoveryEnd::WorkerPanicked)
+        });
+        probe_ended.and(ladder_ended)
+    }
+
+    /// #503 ISO-A (R-A1-3, R-A1-5): fences `instance` after its worker's panic for `fault`, an
+    /// `instance_fault` of the instance (`instance_lock_poisoned` or `panic_caught`), through the
+    /// one decision point under the payload's `links`. `Err` when the fence latched instead (it
+    /// failed, or no registered instance owns it).
+    fn fence_panicked_instance(
+        &self,
+        fault: RuntimeHostError,
+        instance: InstanceId,
+        links: EventLinksDraft,
+    ) -> RuntimeHostResult<()> {
+        match self.contain_failure(fault, Some(instance), links)? {
+            failure_scope::Contained::Latched(error) => Err(error),
+            failure_scope::Contained::Fenced(_) | failure_scope::Contained::Failed(_) => Ok(()),
+        }
+    }
+
+    /// #503 ISO-A, tests: a test payload of `instance` doing `act`.
+    #[cfg(test)]
+    fn act_for_test(
+        &self,
+        instance: InstanceId,
+        act: failure_scope::WorkerActForTest,
+    ) -> RuntimeHostResult<()> {
+        match act {
+            failure_scope::WorkerActForTest::Finish(done) => {
+                done.store(true, Ordering::Release);
+                Ok(())
+            }
+            failure_scope::WorkerActForTest::Fail(error) => Err(error),
+            failure_scope::WorkerActForTest::Panic => panic!("injected test payload panic"),
+            failure_scope::WorkerActForTest::PanicHoldingInstanceLocks => {
+                // As a device step holds them: the admission guard, then the queue-order lock.
+                let guard = self
+                    .instance_guard(instance)
+                    .map_err(|failure| *failure.error)?;
+                let order = self
+                    .queue_order_lock(instance)
+                    .map_err(|failure| *failure.error)?;
+                let _admission = lock(&guard, HostLocation::LockInstanceAdmission)?;
+                let _order = lock(&order, HostLocation::LockInstanceQueueOrder)?;
+                panic!("injected test payload panic holding its instance's locks");
+            }
+            failure_scope::WorkerActForTest::PanicHoldingSharedLock => {
+                let _scheduler = lock(&self.scheduler, HostLocation::ReadHostKey)?;
+                panic!("injected test payload panic holding a shared lock");
+            }
+        }
     }
 
     /// W-2: posts a granted host claim's payload with its key to the instance's worker (Workflow
@@ -466,7 +694,7 @@ impl HostShared {
         match sender.send(WorkerJob::PolicyRun(run)) {
             Ok(()) => Ok(Ok(())),
             Err(mpsc::SendError(WorkerJob::PolicyRun(run))) => Ok(Err(run)),
-            Err(mpsc::SendError(WorkerJob::HostClaim { .. })) => Err(RuntimeHostError::fatal(
+            Err(mpsc::SendError(_)) => Err(RuntimeHostError::fatal(
                 HostCode::InstanceWorkerUnavailable,
                 HostLocation::HandOffScheduledPolicyRun,
                 RuntimeErrorCode::RuntimeHalted,
@@ -638,5 +866,60 @@ impl HostShared {
                 None,
             ),
         }
+    }
+}
+
+#[cfg(test)]
+impl RuntimeHost {
+    /// #503 ISO-A, tests: posts a payload doing `act` to the worker of `instance_alias`'s
+    /// device, as a granted claim's payload is posted; `instance_worker_unavailable` when that
+    /// worker takes no more payloads.
+    pub(crate) fn post_worker_payload_for_test(
+        &self,
+        instance_alias: &str,
+        act: failure_scope::WorkerActForTest,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectInstanceWorkerPanicForTest,
+        )?;
+        let instance = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let device = shared.device_key(instance);
+        let workers = lock(&shared.instance_workers, HostLocation::PostHostClaim)?;
+        let posted = workers
+            .senders
+            .get(&device)
+            .is_some_and(|sender| sender.send(WorkerJob::Test { instance, act }).is_ok());
+        if posted {
+            return Ok(());
+        }
+        Err(RuntimeHostError::fatal(
+            HostCode::InstanceWorkerUnavailable,
+            HostLocation::PostHostClaim,
+            RuntimeErrorCode::RuntimeHalted,
+        ))
+    }
+
+    /// #503 ISO-A, tests: the next host claim the worker of `instance_alias`'s device takes ends
+    /// with `error` instead of its work, after releasing its key.
+    pub(crate) fn fail_next_host_claim_for_test(
+        &self,
+        instance_alias: &str,
+        error: RuntimeHostError,
+    ) -> RuntimeHostResult<()> {
+        let shared = self.shared_ref(
+            crate::codes::test_spellings::TestLocation::InjectInstanceWorkerPanicForTest,
+        )?;
+        let instance = shared
+            .resolve_instance(instance_alias)
+            .map_err(|failure| *failure.error)?
+            .instance_id();
+        let device = shared.device_key(instance);
+        lock(&shared.instance_workers, HostLocation::PostHostClaim)?
+            .failures_for_test
+            .insert(device, error);
+        Ok(())
     }
 }

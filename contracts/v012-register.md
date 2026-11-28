@@ -52263,6 +52263,143 @@ the `package` edge, a placed one is refused at every admission), so the rollback
 no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
 `"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
 
+### 1.554 Slice #503 ISO-A (0.12.102): one instance's worker no longer takes the whole Runtime down: its payload's error is contained against its instance, a panic that poisons the instance's own locks fences that instance, a second panic fences it too, and the Runtime's own availability record of an instance is never refused as not newer (board #503, after board #419's instance isolation and its open remainder, board #496; the owner's rule of 10-24; the rulings are the coordinator's of 11-28, taken from a read-only study of the worker's isolation, its open point R-A1-5 decided on the owner's rule; on main `cdc3e0b4`, v0.12.99)
+
+It ships in 0.12.102. [runtime-outcomes.md](runtime-outcomes.md) ("Failure scope": the worker's row
+of the boundaries, "A lock of one instance alone", the new "The instance worker"),
+[scheduling/README.md](scheduling/README.md) ("An unavailable instance is probed again": the probe's
+end and "The device's locks after a panic"; the handed runs' "Failures"),
+[instance-fact-store.md](instance-fact-store.md) ("Backend self-check availability": the
+withdrawal's time and the new "The observation time") and the catalog's text of
+`instance_lock_poisoned` (and of `panic_caught`'s handling and `panic_unrecovered`'s causes, which
+named the second panic's old end) are the contract. No interface revision, record shape,
+configuration key or outcome code moves; `instance_lock_poisoned` (since 0.12.12) is written for the
+first time.
+
+**The three holes** (read at `cdc3e0b4`, in neutral words; what each did to the host).
+- *A payload's error ended its worker.* A payload of an instance's worker (a host claim's work, a
+  handed scheduled run) that ended with an error that is not of the whole was given to the fatal
+  state's mark, which refuses an error that is not fatal before it records anything: nothing was
+  recorded, and the worker's thread ended. The next job posted to that instance found no worker and
+  answered `instance_worker_unavailable`, which latched the whole Runtime. An error that was fatal
+  latched the Runtime whatever it concerned, an instance's included: the worker, listed as a
+  boundary, contained nothing.
+- *A panic poisoned the instance's locks for everyone.* A payload that panicked while it held its
+  device's admission guard or queue-order lock left the lock poisoned. Every taker of those locks
+  goes through the host's shared lock helper, which reads a poisoned lock as a poisoned Runtime
+  state (`runtime_state_poisoned`, of the whole): the next toucher (the emulator watch, the idle
+  check, the sweep's lease expiry when the panicked payload's key lapsed, a later run or observation)
+  stopped the host, at the latest within one key's TTL. A second panic of a worker before it finished
+  a payload latched `runtime_restart_required`.
+- *The availability record could be refused as not newer.* The Runtime's own
+  `session.instance.available` record of an instance was stamped with the bare wall clock. Two of
+  its writes in one millisecond (a preparation's withdrawal and its restore), or a write after the
+  wall clock stepped back, were refused `fact_observation_not_newer`: on a worker that ended the
+  worker (the first hole); on a person's self-check the refusal was made fatal and latched the host;
+  at a start it failed the start.
+
+**The owner's rule** (10-24, board #419): a fault of one emulator or instance must not stop the
+whole Runtime; only a fault of the whole (the ledger's integrity, an invalid configuration, the
+owner lock) may.
+
+**The rulings, as built.**
+- *R-A1-1, the worker contains* (`host/host_claims.rs`, `instance_worker_loop`,
+  `contain_worker_failure`, `WorkerJob::instance`). A payload's error goes to `contain_failure` with
+  the payload's own instance (its key's for a host claim, its lease's for a handed run) and the links
+  its panic is recorded under. A failure of the whole latches as before and ends the worker; one of
+  the instance fences it, with the fence's own record (`instance_resources_fenced` caused by it); one
+  of the operation is recorded once, a `runtime.failed` of its own code at stage `operation_cleanup`
+  (nothing more when its path recorded it). The classification is the existing scope rule's: an
+  untagged fatal failure stays of the whole, a tagged one is its instance's, a request failure the
+  operation's. A payload that ended with an error is a finished one, and the worker goes on.
+- *R-A1-2, the ends of its kind.* After a contained error the ends a panic runs for the payload's
+  kind run too: a handed run's lane is ended and the driver told the run was dropped; a probe of an
+  unavailable instance ends its probes and tells a person with the error's own code as
+  `failure_code` (`end_panicked_unavailable_probe` takes the cause, `panic_caught` after a panic); a
+  recovery ladder an entry block waits for is noted ended with `worker_panicked`, the one word of
+  `entry_recovery_end` for a ladder its worker ended (nothing climbs again in that block, a person is
+  told; the worker's own record names the error).
+- *R-A1-3, the panic's locks* (`host/failure_scope.rs`, `clear_instance_lock_poison`). At a panic,
+  first of all, the poison is cleared on the payload's instance's admission guard and queue-order
+  lock, each tested and cleared on the lock itself, without locking or waiting for it. After the
+  panic's ends and its `panic_caught` record, an instance whose lock was poisoned is fenced, the
+  fence caused by `instance_lock_poisoned`. A panic that poisoned nothing records only `panic_caught`.
+- *R-A1-4, unchanged*: the `panic_caught` record (thread, boundary, raw text; written byte for byte
+  as before), the payload dropped and not retried, its key lapsing at its TTL, the ends of a panicked
+  probe and ladder, `instance_worker_unavailable` (now only a worker that ended on a failure of the
+  whole), the Global list, a poisoned shared lock staying of the whole, `contain_failure` and the
+  request door.
+- *R-A1-5, decided* (the owner's rule of 10-24, and the isolation model's question as it was settled
+  then on the owner's words: an instance that fails twice in a row stops only that instance). A second panic
+  before the rebuilt worker finished a payload fences the payload's instance, the fence caused by
+  that panic's `panic_caught` with its values, instead of asking for a restart of the whole Runtime;
+  the worker goes on. The whole Runtime is asked to stop only for a fault of the whole.
+- *R-A2-1 to R-A2-3, the availability record's time* (`host/facts.rs`,
+  `publish_policy_instance_availability`, `FactPublicationPurpose::RuntimeAvailability`,
+  `observed_after_stored`; `fact_store.rs`, `latest_observed_unix_ms`). All five of the Runtime's
+  availability publishers stamp the later of the host clock and one millisecond after the latest
+  observation the store holds for the key (its active record's, else the key's latest, which an
+  invalidation keeps), read and published in one hold of `fact_write_gate`; a record of the active
+  record's own source snapshot is not raised (the store replays or refuses it as before). The store's
+  rules and every fact a client publishes are unchanged.
+
+**What the code proved of the design.** The design stamped the record ahead of the clock (its R-A2-3:
+"stamped 1 ms ahead"), but the fact store also refuses a record observed after the clock its
+publication samples (`fact_observation_in_future`), so the raised record alone would have been
+refused in every case it was for. The smallest change that keeps the design: under the same hold of
+the gate the Runtime's own availability record is judged at its own observation when that is later
+than the clock (the purpose above); neither of the store's rules changes, and a client's publication
+is judged at the clock as before. Read and written in one hold of the gate every fact writer takes,
+the raise cannot be raced by any writer of the key, the Runtime's or a client's.
+
+**Why the poison may be cleared.** Both locks are `Mutex<()>`: they guard no data, so nothing is left
+half written behind them. When the panicking payload held one, no other thread was inside it; a
+taker that met the poison before the clear failed at once and holds nothing (the shared helper drops
+the poisoned guard). What the panic left half done is the device's (a device step, a step of the
+device's queue), and the fence holds the instance until a passing preparation proves it again. A
+lock every instance shares that the panic held is poisoned itself and stays of the whole. Clearing
+locks nothing: the worker's root holds no lock at that point, and the order of the admission guard,
+the queue-order lock and the scheduler is not met.
+
+**Decided here.** The test seams live in the worker's own module: a test-only payload a test posts to
+an instance's worker (end, fail, panic, panic holding the instance's two locks or the scheduler's) and
+a failure the next host claim of a device ends with, its key released first; neither exists outside
+test builds. A device group of several shares the cleared locks; the payload's instance alone is
+fenced, as a member's own fault is fenced today.
+
+**Tests** (host gate map row "#503 ISO-A"; manual clocks; no clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_iso_a::iso_a_h1_one_instances_worker_failures_and_panics_hold_only_that_instance` | X's worker: an instance's error fences X (caused by it); an operation's error is one `runtime.failed` of its code under X, nothing fenced; a panic holding X's two locks is recorded, then fences X (`instance_lock_poisoned`), both locks no longer poisoned; a second panic fences X (`panic_caught`); after each step a payload posted to each worker runs, a person's self-check, which takes X's admission guard, lifts X's fence, and nothing latches |
+| `…::iso_a_h2_a_probe_whose_payload_fails_tells_a_person_with_the_failures_code` | a probe's payload ends with an operation's error: one record of it, a person told at once (`failure_code` that code, `attempts` 1, no next probe), no probe however far the clock runs, the worker goes on |
+| `…::iso_a_h3_a_payload_failure_of_the_whole_latches_the_runtime` | a payload's ledger failure latches the Runtime as before; nothing fenced |
+| `…::iso_a_h4_a_panic_holding_a_shared_lock_latches_at_the_next_touch` | a panic holding the scheduler's lock latches `runtime_state_poisoned` at the next touch; nothing fenced |
+| `…::iso_a_h5_two_availability_writes_in_one_millisecond_are_both_taken` | on a clock that does not move, the start's withdrawal and restore and a person's self-check's, each one millisecond after the one before; nothing latches |
+| `…::iso_a_h6_writes_after_a_clock_step_back_are_taken_and_a_fence_completes` | the clock a second back: a person's self-check's withdrawal and restore after the stored record, a fence's withdrawal one millisecond after it and the fence complete, the next passing self-check lifts it |
+
+Every existing test passes unchanged; none moves. The worker's own (`instance_workers`' panic before
+any lock: recorded, nothing fenced, the next payload runs), the panicked probe's and the panicked
+ladder's (AVAIL-1's T7, ENTRY-A's R5 b) and the isolation core's (`gate_419_iso1`, `gate_437_g1`'s
+shared lock) take the paths they took; the two tests written around the same-millisecond refusal
+(`gate_hs5`'s application rung, `gate_486_asleep`'s check of a stopped emulator) move their clocks
+and meet no raise; `gate_382_h4`'s refusal is a client's, unchanged. No golden re-recorded; no test
+leaves the gate maps.
+
+**What is not changed, and what is left.** The Global list; a poisoned shared lock staying of the
+whole; the `panic_caught` record; the payload dropped and not retried; the key lapsing at its TTL; the
+request door; the fact store's rules and every client's fact. Left for a later slice: the sites that
+take the two locks still take them through the shared helper (converting them to `lock_instance`,
+with containment at the sweep's, the watch's and the policy admission's touch, closes the moment
+between the unwind and the clear); the memory gate before an emulator start is another slice.
+
+**At deploy.** Nothing to configure or migrate: no record, setting or revision moves.
+
+**Rollback.** An older build reads every record this one writes (both codes of the fence exist since
+0.12.12; a raised availability record is an ordinary fact record). It stops the host again in these
+cases: a payload's error, a panic holding an instance's lock, a second panic, and an availability
+write in the same millisecond or after a clock step back.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

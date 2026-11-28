@@ -5011,3 +5011,16 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_455_rr3c::rr3c_h1_a_run_told_enough_to_close_its_gap_leaves_its_pool_unread_across_a_start",
 ]
 incident = ["#455 RR3c"]
+
+# #503 ISO-A (0.12.102; register §1.554; contracts/runtime-outcomes.md, "Failure scope"; contracts/scheduling/README.md, "An unavailable instance is probed again"; contracts/instance-fact-store.md, "Backend self-check availability"), on manual clocks: two instances X and Y, X's worker given test payloads: an instance's error fences X with the fence's record caused by it, an operation's error is one runtime.failed record of its code under X and fences nothing, a panic while X's admission guard and queue-order lock are held is recorded and then fences X caused by instance_lock_poisoned, both locks no longer poisoned, and a second panic before the rebuilt worker finished a payload fences X caused by panic_caught; after each step a payload posted to each worker runs, X's fence is lifted by a person's self-check that takes X's admission guard, and the Runtime never latches (h1); a probe of an unavailable instance whose payload ends with an operation's error tells a person at once with that code (failure_code, attempts 1, no next probe), probes no more however far the clock runs, and its worker goes on (h2); a payload's ledger failure latches the Runtime as before and fences nothing (h3); a panic while the scheduler's lock is held latches runtime_state_poisoned at the next touch and fences nothing (h4); the policy instance's availability withdrawn and restored twice in one millisecond, at its start and at a person's self-check, each write taken one millisecond after the one before, nothing latched (h5); after the wall clock stepped back a second a person's self-check's withdrawal and restore are taken after the stored record, a fence's withdrawal is taken one millisecond after it and the fence completes, and the next passing self-check lifts it (h6)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_iso_a::iso_a_h1_one_instances_worker_failures_and_panics_hold_only_that_instance",
+    "actingcommand-runtime-host::lib::tests::gate_503_iso_a::iso_a_h2_a_probe_whose_payload_fails_tells_a_person_with_the_failures_code",
+    "actingcommand-runtime-host::lib::tests::gate_503_iso_a::iso_a_h3_a_payload_failure_of_the_whole_latches_the_runtime",
+    "actingcommand-runtime-host::lib::tests::gate_503_iso_a::iso_a_h4_a_panic_holding_a_shared_lock_latches_at_the_next_touch",
+    "actingcommand-runtime-host::lib::tests::gate_503_iso_a::iso_a_h5_two_availability_writes_in_one_millisecond_are_both_taken",
+    "actingcommand-runtime-host::lib::tests::gate_503_iso_a::iso_a_h6_writes_after_a_clock_step_back_are_taken_and_a_fence_completes",
+]
+incident = ["#503 ISO-A"]

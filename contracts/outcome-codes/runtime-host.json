@@ -8693,9 +8693,9 @@
       "review": "pending",
       "status": "active",
       "since": "0.12.12",
-      "description": "A lock of one instance alone that guards no data (its admission guard or its queue-order lock) was left poisoned by a panic (ISO-M #419, R8). Its poison is cleared, the work that met it fails, and the boundary of that work fences the instance; every other instance keeps dispatching and executing.",
-      "common_causes": "TBD",
-      "handling": "TBD"
+      "description": "A worker of this instance panicked while it held one of the instance's own locks, its device's admission guard or its queue-order lock, and left it poisoned (ISO-M #419, R8; written since 0.12.102, #503 ISO-A). The locks guard no data: the worker cleared the poison, without waiting, and fenced the instance with this code as the cause of its instance_resources_fenced record, after the panic's own panic_caught record. The other instances keep dispatching and executing, and the Runtime does not stop.",
+      "common_causes": "A defect in the Runtime's code that panicked in the middle of a device step of the instance (its preparation, a probe, a ladder's rung, an emulator control, an idle action) or of a step of its queue. What the device was doing when the panic came is not known, which is why the instance is fenced.",
+      "handling": "Nothing is needed for the other instances. The instance stays fenced until its fence is lifted as any fence is: by the recovery ladder when the instance's stuck recovery is on, else by a person (status shows the fence awaiting a person): bring the device back to a known state and run actingctl selfcheck or actingctl resume for the instance; a passing self-check lifts the fence. Report the panic_caught record (its raw_text, thread and boundary) with the build as a Runtime defect."
     },
     "instance_not_running": {
       "category": "error",

@@ -40,9 +40,9 @@ here.
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 831 |
+| `common_causes` and `handling` both written | 832 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3149 |
+| neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
 | `pending` | 3830 |
 | all active codes | 3984 |
@@ -76,9 +76,9 @@ here.
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1198 | 1151 | 230 | 6 |
+| [runtime-host](runtime-host.md) | 1198 | 1151 | 231 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4074 | 3984 | 831 | 154 |
+| all | 4074 | 3984 | 832 | 154 |
