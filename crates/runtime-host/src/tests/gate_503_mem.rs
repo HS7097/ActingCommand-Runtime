@@ -14,9 +14,11 @@
 //! early would leave an earlier stamp. Every wait returns as soon as what it waits for is read,
 //! reported or recorded; `GATE_WAIT` only bounds a broken run. No clock is read in this file.
 
-use super::gate_369_s6c::{GATE_WAIT, connectivity, control, instance_scope, pause, send, stop};
-use super::gate_idle1p::{emulator_starts, x_state};
-use super::instance_workers::wait_until;
+use super::gate_369_s6c::{
+    GATE_WAIT, connectivity, control, instance_scope, of_request, pause, send, stop,
+};
+use super::gate_idle1p::{emulator_starts, stops, x_state};
+use super::instance_workers::{ladder_finished, wait_until};
 use super::*;
 use crate::codes::HostCode;
 use crate::host::{CommitReadForTest, CommitSampleForTest};
@@ -45,6 +47,11 @@ const LIMIT: u64 = 100 * GIB;
 const RESERVE: u64 = 17_179_869_184;
 /// `emulator_control.start_spacing_ms`'s default.
 const SPACING_MS: u64 = 30_000;
+/// How far the manual clock moves between a Start and the next Stop of the same emulator, as a
+/// real host's clock moves: each records the instance's `device.connected` at the clock, and a
+/// second record of one key at the same millisecond is refused as not newer
+/// (`runtime_fact_stale`).
+const LATER_MS: u64 = 1_000;
 /// The gate's three codes.
 const GATE_CODES: [HostCode; 3] = [
     HostCode::EmulatorAutostartCommitShort,
@@ -358,8 +365,9 @@ fn mem_1_a_day_change_holds_the_one_in_line_and_those_behind_it_with_one_short_f
 }
 
 // The spacing after a person's start: with ample headroom, an automatic start whose turn comes
-// right after a person started the instance's emulator waits until 30 s after that Start returned,
-// held at 29 999 ms and started at 30 000 ms, and the spacing alone tells nothing.
+// right after a person started the instance's emulator (and stopped it a second later) waits until
+// 30 s after that Start returned, held at 29 999 ms and started at 30 000 ms, and the spacing alone
+// tells nothing.
 #[test]
 fn mem_2_the_spacing_holds_an_automatic_start_after_a_persons_start_for_its_length() {
     let root = TempDir::new().expect("tempdir");
@@ -383,11 +391,12 @@ fn mem_2_the_spacing_holds_an_automatic_start_after_a_persons_start_for_its_leng
         "{started_by_hand:?}"
     );
     assert_eq!(stamp(&host), Some(0), "the person's Start returned at 0");
+    clock.advance(LATER_MS);
     stop(&host, A, 5_013);
 
     assert_eq!(host.enqueue_emulator_autostart().expect("enqueue"), 1);
-    assert_eq!(available(next_read(&commit)), 32 * GIB, "the read at 0");
-    clock.advance(SPACING_MS - 1);
+    assert_eq!(available(next_read(&commit)), 32 * GIB, "the read at 1 s");
+    clock.advance(SPACING_MS - 1 - LATER_MS);
     assert_eq!(
         available(next_read(&commit)),
         32 * GIB,
@@ -448,7 +457,11 @@ fn mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_hea
     );
     assert_eq!(emulator_starts(&b_state), 1, "the person's Start of B");
     assert_eq!(stamp(&host), Some(0));
-    let drill = send(
+    // The drill comes a second later (`LATER_MS`): its rung's Stop records B's `device.connected`
+    // after the person's Start did. Waited out as the drill gates wait for a drill: its
+    // `recovery_ladder_finished` recorded and its key released.
+    clock.advance(LATER_MS);
+    let receipt = send(
         &host,
         RuntimeOperation::DrillRecoveryLadder {
             instance_alias: B.to_owned(),
@@ -456,18 +469,33 @@ fn mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_hea
         },
         5_024,
     );
-    assert_eq!(drill.state(), RuntimeReceiptState::Completed, "{drill:?}");
-    wait_until("the drill's emulator restart and its end", || {
-        emulator_starts(&b_state) == 2
+    assert_eq!(
+        receipt.state(),
+        RuntimeReceiptState::Completed,
+        "{receipt:?}"
+    );
+    let Some(RuntimeResult::RecoveryLadderDrillQueued { drill }) = receipt.result() else {
+        panic!("a drill's receipt names the drill: {receipt:?}");
+    };
+    let ladder = drill.ladder_request_id;
+    wait_until("the drill's end and its release", || {
+        ladder_finished(&of_request(&host, ladder)).is_some()
             && host
                 .instance_claims_for_test(B)
                 .expect("instance claims")
                 .0
                 .is_none()
     });
+    let ended =
+        ladder_finished(&of_request(&host, ladder)).map(|(_, result, rungs)| (result, rungs));
+    assert_eq!(
+        (stops(&b_state), emulator_starts(&b_state)),
+        (2, 2),
+        "the person's Stop and Start of B, then the rung's: {ended:?}"
+    );
     assert_eq!(
         stamp(&host),
-        Some(0),
+        Some(LATER_MS),
         "the rung's Start stamped the spacing"
     );
 
@@ -486,7 +514,7 @@ fn mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_hea
             .any(|line| of_alias(line, HostCode::EmulatorAutostartSuperseded, A))
     });
     assert_eq!(emulator_starts(&a_state), 1, "the person's Start of A");
-    assert_eq!(stamp(&host), Some(5_000));
+    assert_eq!(stamp(&host), Some(LATER_MS + 5_000));
     assert_eq!(count(&lines, HostCode::EmulatorAutostartCommitShort), 1);
     assert_eq!(count(&lines, HostCode::EmulatorAutostartStarted), 0);
     assert_eq!(gate_records(&host).len(), 1, "the short record alone");
