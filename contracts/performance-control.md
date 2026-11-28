@@ -24,6 +24,43 @@ therefore always `responsiveness_pressure` and a recovery's `recovery`; the
 reasons `third_party_contention` and `fullscreen_contention` are no longer
 produced and stay readable in earlier records.
 
+What is the Runtime's own and what is outside load (#503 NOISE-A, since
+0.12.102; [v012-register.md](v012-register.md) §1.552). The monitor's process
+sampler counts as owned (`ownership` `owned` in `perf.summary.owned_processes`),
+beside the Runtime's own process: a process whose parent is the Runtime and that
+was created at or after it; and a process whose image is one the host hands
+over. The host hands over, once its provider is installed, each registered
+device instance's debug-bridge executables (its input's and its capture's), and,
+for each emulator instance whose installation root is known (configured, or read
+from the path of its vendor tool, a debug bridge or its capture library), the
+emulator images the device layer names for that installation: the front end at
+`nx_main\MuMuNxMain.exe`, the device process at
+`nx_device\<any one version>\shell\MuMuNxDevice.exe`, and the vendor's virtual
+machine images `MuMuVMMHeadless.exe` and `MuMuNxSVC.exe` by their executable
+name, since they run from the vendor's hypervisor directory outside the
+installation root, which this build has no way to find. A handset contributes its
+debug bridge only, a fixture simulation nothing. Paths and names compare ignoring
+ASCII case; a process whose image path cannot be read is not owned by its path.
+The list lives in memory only and is never persisted; a start hands it over once,
+since no rebinding changes an instance's installation, and until then only the
+Runtime and its children are owned. Ownership is by image, not by the process id
+of each instance: an instance of the same installation that the Runtime does not
+manage counts as owned too. A sample lists at most 32 owned processes, the
+Runtime first, then by CPU descending and pid ascending; an owned process left
+out of the list is still never outside load, and only the registry of owned
+process ids (the Runtime's) makes the process metrics unavailable when one of
+them is missing.
+
+Outside load, the `third_party` pressure, is every other process, at the same
+thresholds as before. What replaces the protection the owned processes had: what
+they weigh on the host is still caught by host responsiveness (the timer and
+message probes, the capture-acquire and touch-response spans) and by the
+whole-machine CPU, RAM, GPU and disk-I/O pressure kinds, all of them kinds of the
+pacing pressure floor. A busy owned process therefore no longer starts a
+`third_party` pressure, holds the pacing at S1, stops the baselines from
+learning, exempts a recoverable failure from the escalation or wakes the policy
+driver.
+
 Every instance with an active policy workload carries its own level: an
 escalation below Suspended raises every instance to the new level, a recovery
 releases one instance per transition. The levels in rank order are Normal,

@@ -4,8 +4,8 @@
 
 use crate::{
     ConnectivityReason, ForegroundSample, GpuAggregate, HostMetric, HostMetricsCode, HostSample,
-    HostSampler, NetworkConnectivity, ProcessLoadThresholds, ProcessMetricCoverage,
-    ProcessOwnership, ProcessSample, gpu_utilization_basis_points,
+    HostSampler, NetworkConnectivity, OwnedImageSet, OwnedImages, ProcessLoadThresholds,
+    ProcessMetricCoverage, ProcessOwnership, ProcessSample, gpu_utilization_basis_points,
 };
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::Code;
@@ -64,6 +64,12 @@ const GPU_COUNTER: &str = r"\GPU Engine(*)\Utilization Percentage";
 /// Mirrors `MAX_PROCESS_NAME_BYTES` of `PerformanceProcessSummary::validate` in
 /// `crates/actingcommand-contract/src/performance.rs`.
 const MAX_PROCESS_NAME_BYTES: usize = 260;
+/// #503 NOISE-A: mirrors `MAX_PROCESS_SUMMARIES` of `crates/actingcommand-contract/src/performance.rs`,
+/// the most owned processes a sample lists.
+const MAX_OWNED_PROCESSES: usize = 32;
+
+#[cfg(test)]
+mod gate_503_noise_a;
 
 #[derive(Clone, Copy)]
 struct SystemTimes {
@@ -226,16 +232,19 @@ pub(crate) struct WindowsHostSampler {
     pdh: PdhQuery,
     /// Workflow #385 P-m: how the GPU's engines make one utilisation.
     gpu: GpuAggregate,
+    /// #503 NOISE-A: the images the host hands over, read at each sample.
+    owned_images: OwnedImages,
 }
 
 impl WindowsHostSampler {
-    pub(crate) fn new(gpu: GpuAggregate) -> Result<Self, Code> {
+    pub(crate) fn new(gpu: GpuAggregate, owned_images: OwnedImages) -> Result<Self, Code> {
         Ok(Self {
             previous_system: system_times()?,
             previous_processes: BTreeMap::new(),
             previous_observed_at_unix_ms: None,
             pdh: PdhQuery::open()?,
             gpu,
+            owned_images,
         })
     }
 }
@@ -275,11 +284,13 @@ impl HostSampler for WindowsHostSampler {
             Some(previous) => observed_at_unix_ms - previous,
             None => 0,
         };
-        let process_scan = process_samples(
+        let owned_images = self.owned_images.current();
+        let (process_scan, parents) = process_samples(
             total_delta,
             elapsed_ms,
             &self.previous_processes,
             owned_processes,
+            &owned_images,
         )?;
         let process_coverage = process_coverage(&process_scan)?;
         let mut next_processes = BTreeMap::new();
@@ -288,29 +299,11 @@ impl HostSampler for WindowsHostSampler {
             next_processes.insert(record.sample.pid, record.counters);
             all_processes.insert(record.sample.pid, record.sample);
         }
-        let mut owned = all_processes
-            .values()
-            .filter(|process| process.ownership != ProcessOwnership::ThirdParty)
-            .cloned()
-            .collect::<Vec<_>>();
-        owned.sort_by_key(|process| process.pid);
-        let mut third_party_high_load = all_processes
-            .values()
-            .filter(|process| {
-                process.ownership == ProcessOwnership::ThirdParty
-                    && (process.cpu_basis_points >= thresholds.cpu_basis_points
-                        || process.io_bytes_per_second >= thresholds.io_bytes_per_second)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        third_party_high_load.sort_by(|left, right| {
-            right
-                .cpu_basis_points
-                .cmp(&left.cpu_basis_points)
-                .then_with(|| right.io_bytes_per_second.cmp(&left.io_bytes_per_second))
-                .then_with(|| left.pid.cmp(&right.pid))
-        });
-        third_party_high_load.truncate(top_process_count);
+        own_runtime_children(std::process::id(), &mut all_processes, &parents);
+        let ProcessSplit {
+            owned,
+            third_party_high_load,
+        } = split_processes(&all_processes, thresholds, top_process_count);
 
         let pdh_collected = self.pdh.collect();
         let mut unavailable = BTreeSet::new();
@@ -660,17 +653,23 @@ fn process_image_path(pid: u32) -> Option<String> {
         return None;
     }
     let handle = OwnedHandle(handle);
+    // SAFETY: the handle is live for the call and was opened for a limited query.
+    unsafe { image_path_of(handle.0) }
+}
+
+/// #503 NOISE-A: the full Win32 image path of the process `handle` stands for; `None` when it
+/// cannot be read.
+///
+/// # Safety
+///
+/// `handle` is a live process handle opened with at least `PROCESS_QUERY_LIMITED_INFORMATION`.
+unsafe fn image_path_of(handle: HANDLE) -> Option<String> {
     let mut buffer = vec![0u16; MAX_IMAGE_PATH_UNITS];
     let mut length = u32::try_from(buffer.len()).ok()?;
-    // SAFETY: the handle is live, the buffer holds `length` units and both out pointers are valid
-    // for the call.
+    // SAFETY: the caller keeps the handle live, the buffer holds `length` units and both out
+    // pointers are valid for the call.
     let read = unsafe {
-        QueryFullProcessImageNameW(
-            handle.0,
-            PROCESS_NAME_WIN32,
-            buffer.as_mut_ptr(),
-            &mut length,
-        )
+        QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut length)
     };
     if read == 0 {
         return None;
@@ -748,17 +747,133 @@ pub(super) fn fill_system_random(buffer: &mut [u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// #503 NOISE-A: each enumerated process's Toolhelp parent process id, by its own id.
+type ProcessParents = BTreeMap<u32, u32>;
+
+/// One scan of the process list, with each enumerated process's parent (#503 NOISE-A).
 fn process_samples(
     total_system_delta: u64,
     elapsed_ms: u64,
     previous: &BTreeMap<u32, ProcessCounters>,
     owned: &BTreeMap<u32, String>,
-) -> Result<ProcessScan, Code> {
+    owned_images: &OwnedImageSet,
+) -> Result<(ProcessScan, ProcessParents), Code> {
     let mut enumerator = ToolhelpProcessEnumerator::open()?;
-    scan_processes(&mut enumerator, |entry| {
+    let mut parents = ProcessParents::new();
+    let scan = scan_processes(&mut enumerator, |entry| {
+        parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
         // SAFETY: the entry comes from the live Toolhelp snapshot and is read only here.
-        unsafe { process_record(entry, total_system_delta, elapsed_ms, previous, owned) }
-    })
+        unsafe {
+            process_record(
+                entry,
+                total_system_delta,
+                elapsed_ms,
+                previous,
+                owned,
+                owned_images,
+            )
+        }
+    })?;
+    Ok((scan, parents))
+}
+
+/// The ownership a process's own record gives: the Runtime's process; owned when the pid registry
+/// names it or (#503 NOISE-A) it runs an image the host handed over (`image_path` reads its full
+/// image path when the name alone does not decide); else third-party. A child of the Runtime is
+/// owned after the scan (`own_runtime_children`).
+fn record_ownership(
+    pid: u32,
+    runtime_pid: u32,
+    owned: &BTreeMap<u32, String>,
+    owned_images: &OwnedImageSet,
+    executable_name: &str,
+    image_path: impl FnOnce() -> Option<String>,
+) -> ProcessOwnership {
+    if pid == runtime_pid {
+        ProcessOwnership::Runtime
+    } else if owned.contains_key(&pid) || owned_images.owns(executable_name, image_path) {
+        ProcessOwnership::Owned
+    } else {
+        ProcessOwnership::ThirdParty
+    }
+}
+
+/// #503 NOISE-A: a process the Runtime started is owned: one whose Toolhelp parent is the
+/// Runtime (`runtime_pid`) and that was created at or after the Runtime, so that a parent id the
+/// Runtime took over from an exited process names no child of it. Without the Runtime's own
+/// record and its creation time no process is owned by this rule; the Runtime's record missing
+/// already makes the process metrics unavailable.
+fn own_runtime_children(
+    runtime_pid: u32,
+    processes: &mut BTreeMap<u32, ProcessSample>,
+    parents: &ProcessParents,
+) {
+    let Some(runtime_created) = processes
+        .get(&runtime_pid)
+        .and_then(|runtime| runtime.process_created_at_windows_100ns)
+    else {
+        return;
+    };
+    for process in processes.values_mut() {
+        if process.ownership == ProcessOwnership::ThirdParty
+            && parents.get(&process.pid) == Some(&runtime_pid)
+            && process
+                .process_created_at_windows_100ns
+                .is_some_and(|created| created >= runtime_created)
+        {
+            process.ownership = ProcessOwnership::Owned;
+        }
+    }
+}
+
+/// A sample's two process lists.
+struct ProcessSplit {
+    owned: Vec<ProcessSample>,
+    third_party_high_load: Vec<ProcessSample>,
+}
+
+/// The owned processes, at most [`MAX_OWNED_PROCESSES`] (#503 NOISE-A: the Runtime first, then by
+/// CPU descending and pid ascending; owned processes beyond the bound are left out and are never
+/// third-party), and the third-party processes at or above a threshold, the busiest
+/// `top_process_count` of them.
+fn split_processes(
+    processes: &BTreeMap<u32, ProcessSample>,
+    thresholds: ProcessLoadThresholds,
+    top_process_count: usize,
+) -> ProcessSplit {
+    let mut owned = processes
+        .values()
+        .filter(|process| process.ownership != ProcessOwnership::ThirdParty)
+        .cloned()
+        .collect::<Vec<_>>();
+    owned.sort_by(|left, right| {
+        (right.ownership == ProcessOwnership::Runtime)
+            .cmp(&(left.ownership == ProcessOwnership::Runtime))
+            .then_with(|| right.cpu_basis_points.cmp(&left.cpu_basis_points))
+            .then_with(|| left.pid.cmp(&right.pid))
+    });
+    owned.truncate(MAX_OWNED_PROCESSES);
+    let mut third_party_high_load = processes
+        .values()
+        .filter(|process| {
+            process.ownership == ProcessOwnership::ThirdParty
+                && (process.cpu_basis_points >= thresholds.cpu_basis_points
+                    || process.io_bytes_per_second >= thresholds.io_bytes_per_second)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    third_party_high_load.sort_by(|left, right| {
+        right
+            .cpu_basis_points
+            .cmp(&left.cpu_basis_points)
+            .then_with(|| right.io_bytes_per_second.cmp(&left.io_bytes_per_second))
+            .then_with(|| left.pid.cmp(&right.pid))
+    });
+    third_party_high_load.truncate(top_process_count);
+    ProcessSplit {
+        owned,
+        third_party_high_load,
+    }
 }
 
 fn scan_processes<E, F>(enumerator: &mut E, mut record: F) -> Result<ProcessScan, Code>
@@ -807,6 +922,7 @@ unsafe fn process_record(
     elapsed_ms: u64,
     previous: &BTreeMap<u32, ProcessCounters>,
     owned: &BTreeMap<u32, String>,
+    owned_images: &OwnedImageSet,
 ) -> ProcessRecordOutcome {
     let pid = entry.th32ProcessID;
     if pid == 0 {
@@ -863,17 +979,23 @@ unsafe fn process_record(
                 / elapsed_ms
         })
         .unwrap_or(0);
+    // #503 NOISE-A: the image path is read with the handle already open, and only when the
+    // executable name is that of an image the host handed over by path.
+    let ownership = record_ownership(
+        pid,
+        std::process::id(),
+        owned,
+        owned_images,
+        &process_name(&entry.szExeFile),
+        || {
+            // SAFETY: `_handle` keeps the handle, opened for a limited query, live here.
+            unsafe { image_path_of(handle) }
+        },
+    );
     let process_name = owned
         .get(&pid)
         .cloned()
         .unwrap_or_else(|| sampled_process_name(pid, &entry.szExeFile));
-    let ownership = if pid == std::process::id() {
-        ProcessOwnership::Runtime
-    } else if owned.contains_key(&pid) {
-        ProcessOwnership::Owned
-    } else {
-        ProcessOwnership::ThirdParty
-    };
     let working_set_bytes = memory.WorkingSetSize as u64;
     // Windows reports a peak below the current working set for some processes, and a zero
     // creation time; the contract pairs the peak with a non-zero creation time.
@@ -1419,7 +1541,14 @@ mod tests {
 
     #[test]
     fn live_windows_scan_reports_explicit_coverage() {
-        let scan = process_samples(1, 0, &BTreeMap::new(), &BTreeMap::new()).expect("scan");
+        let (scan, _parents) = process_samples(
+            1,
+            0,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &OwnedImageSet::default(),
+        )
+        .expect("scan");
         let coverage = process_coverage(&scan).expect("coverage");
         assert!(coverage.enumerated_processes > 0);
         assert!(coverage.sampled_processes > 0);

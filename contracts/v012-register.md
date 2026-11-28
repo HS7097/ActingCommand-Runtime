@@ -52263,6 +52263,135 @@ the `package` edge, a placed one is refused at every admission), so the rollback
 no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
 `"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
 
+### 1.552 Slice #503 NOISE-A (0.12.102): the performance monitor counts the Runtime's own emulator and debug-bridge processes as its own, and no longer takes an application step's completion for a failed pairing (board #503; the owner approved the direction on 11-28; the rulings 1 to 5 are the coordinator's of the same day, taken from a read-only study of the tree with its open fact decided; coordinator work order `rd-1123/brief-503-noise-a.md`; on main `cdc3e0b4`, v0.12.99)
+
+[performance-control.md](performance-control.md) (a new paragraph, "What is the Runtime's own and
+what is outside load") and [performance-timing-signals.md](performance-timing-signals.md)
+("Pipeline observation": the application step) are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). On a production host the
+ledger shows a warning that outside load presses the host every thirty to forty seconds while the
+emulators work, and about six degraded-monitor records an hour. Both come from the monitor's own
+rules:
+- *The monitor owned only the daemon's process.* `PerformanceMonitor::enabled` put the Runtime's
+  own process id in the registry of owned processes, and nothing else ever did
+  (`with_owned_process` has one caller, a unit test). So the emulators the Runtime starts and
+  manages and its debug-bridge server were outside load, and one of them at or above the process
+  thresholds was a `third_party` pressure. That pressure raises no level of the balance controller
+  (P22-0), but it slowed the Runtime's own work through the pacing pressure floor (every step
+  stretched to at least 1.25 times, an extra wait round), stopped the baselines from learning,
+  exempted recoverable failures from the escalation, and woke the policy driver at its start and
+  end and at each pacing change it caused.
+- *An application step's completion was taken for a failed pairing.* By
+  [application-lifecycle.md](application-lifecycle.md) an application launch, stop or restart
+  writes `task.effect_completed` and no `task.effect_intent`. The monitor took a completion
+  without a pending intent for `performance_pipeline_start_missing`, so each such step wrote a
+  warning `perf.monitor_degraded` and, at the next pipeline event, a `perf.monitor_recovered`.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *No persisted member and no setting carries the list.* The host computes it in memory from what
+  the provider's registry resolves for each instance (its configuration's debug bridges, its
+  configured installation root and capture library, the vendor tool of its discovery binding) and
+  hands it to the sampler through a shared handle; the monitor is built before the provider, so
+  until the handover only the Runtime and its children are owned. No discovery rebinding changes
+  an instance's installation in this tree (a rebinding changes the port only), so a start hands
+  it over once.
+- *No privilege beyond what the sampler already has.* The parent comes from the Toolhelp entry
+  the sampler already enumerates; a name from the same entry; a full image path is read with the
+  handle the sampler already opened for the process's times and counters, which carries the
+  limited query `QueryFullProcessImageNameW` needs. A process the sampler cannot open is not
+  sampled at all, as before (it counts in the coverage), and one whose path cannot be read stays
+  outside load.
+- *The bound is not reached in a way that invalidates a sample.* A host with six emulator
+  instances runs the Runtime, six device processes, up to six front ends, six virtual machine
+  processes, one hypervisor service, one debug-bridge server and a few short-lived children of
+  the Runtime: about 22 to 26. And the owned list is cut at 32 before the sample is checked, so a
+  larger set cannot make it invalid.
+
+**The rulings, as built.**
+- *1, the rule* (`crates/host-metrics/src/windows.rs`, `record_ownership`, `own_runtime_children`;
+  `crates/host-metrics/src/lib.rs`, `OwnedImageSet`). A process that is not the Runtime is owned
+  when the registry of owned process ids names it (as before), when its Toolhelp parent is the
+  Runtime and it was created at or after the Runtime (a parent id the Runtime took over from an
+  exited process names no child of it), or when its image is one the host handed over. An image is
+  a full path, a path with one directory level left open, or an executable name; paths and names
+  compare ignoring ASCII case, `/` and `\` alike and a leading `\\?\` left out. A path is read only
+  for a process whose executable name is that of an image handed over by path. Every other process
+  is `third_party` exactly as before.
+- *1, the list* (`crates/device/src/mumu.rs`, `mumu_instance_images` and `mumu_installation_root`;
+  `crates/runtime-host/src/performance.rs`, `owned_process_images`). The host hands over each
+  registered device instance's debug-bridge executables (its input's and its capture's), and for
+  each emulator instance (no handset) whose installation root is known the images the device layer
+  names for it: the front end `nx_main\MuMuNxMain.exe` at its path, and the device process
+  `nx_device\<version>\shell\MuMuNxDevice.exe` with the version left open, so no directory is read
+  and an upgrade's new version is one of them. The vendor's virtual machine images,
+  `MuMuVMMHeadless.exe` and `MuMuNxSVC.exe`, run from the vendor's own hypervisor directory, which
+  is not under the installation root and which this tree has no way to find: they are owned **by
+  their image name**, when at least one emulator instance's installation is known. An image the
+  list names that does not exist matches no process and changes nothing.
+- *2, the bound and the order* (`split_processes`). A sample's `owned_processes` holds at most 32
+  entries (`MAX_PROCESS_SUMMARIES`, which `validate_raw_sample` and the contract enforce), the
+  Runtime first, then by CPU descending and pid ascending. Owned processes beyond 32 are left out of
+  the list and are never `third_party`. Only the registry of owned process ids makes the process
+  metrics unavailable when one of its processes is missing; an image-owned process that exits
+  changes nothing.
+- *3, an application step* (`PerformanceMonitor::observe_pipeline_event`, the `task.effect_completed`
+  arm). A completion whose action has no pending intent records no pipeline sample and no failure;
+  the host then counts the event as accepted (`record_pipeline_success`), as any other. A pending
+  intent of another instance (`performance_pipeline_identity_conflict`) and the pairing of capture
+  and recognition events (`performance_pipeline_start_missing`) are judged as before.
+- *4, what replaces the protection* is said in the contract: outside load is still every other
+  process at the same thresholds, and the emulators' own weight on the host is still caught by host
+  responsiveness and by the whole-machine CPU, RAM, GPU and disk-I/O pressure kinds, all kinds of
+  the pacing floor.
+- *5, not this slice*: ownership by the process id of each instance (so that an instance of the
+  same installation the Runtime does not manage stays outside load); any threshold, severity or
+  rule of the pacing floor.
+
+**Decided here.** The device process's version directory is left open in the image rather than
+listed from the disk, so the list is read from nothing and cannot fail (a directory read that
+failed would have needed a new code); the parent rule takes the Runtime's creation time from the
+sample's own record of the Runtime; a handset contributes its debug bridge, since the server it
+starts is the Runtime's own, and no emulator image; the summary's owned list now begins with the
+Runtime instead of being ordered by pid.
+
+**Tests** (host gate map row "#503 NOISE-A"; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `host-metrics` `windows::gate_503_noise_a::noise_a_an_owned_image_is_a_handed_over_path_one_open_level_or_a_name` (1) | a handed-over path in another case, with `/` or `\\?\`; any one version level and not none, two or another directory; a name deciding alone and an unrelated name reading no path; the same file name elsewhere and an unreadable path owning nothing; the empty set owning nothing; the handle's clones reading the set put last |
+| `…::noise_a_a_child_an_image_and_an_unrelated_heavy_process_only_the_third_is_third_party` (2) | a child of the Runtime, a process at a handed-over path and one at an unrelated path, all at 5 000 bp: the owned list holds the Runtime, the child and the image process, the third-party list the third alone; a process created before the Runtime whose parent id is the Runtime's stays third-party |
+| `…::noise_a_more_than_32_owned_processes_list_32_the_runtime_first_and_none_is_third_party` (2) | the Runtime and 39 heavy owned processes beside one heavy third-party one: 32 listed, the Runtime first, then by CPU descending and pid ascending; the third-party list holds the third-party one alone |
+| `…::noise_a_an_empty_handle_owns_only_the_runtime_and_its_children` (1) | before the handover a process at an image path and one of a vendor name are third-party; the Runtime is the Runtime and its child owned |
+| `runtime-host` `performance::gate_503_noise_a::noise_a_a_heavy_owned_process_raises_no_pressure_and_paces_as_a_calm_host` (1, 4) | three samples whose only heavy process is owned: no pressure, `third_party_pressure_basis_points` 0, and after it exits still 0 with nothing degraded; the shipped pacing gives S0, 1 000 and no extra round, as a calm host's; three samples of one third-party process at 5 000 bp start one elevated `third_party` pressure and S1, 1 250, one extra round |
+| `…::noise_a_an_application_steps_completion_keeps_the_monitor_healthy_and_a_capture_one_degrades` (3) | a completion no intent named: no events, the health and a failure count of 0 kept, no latency in the context; a completion of another instance's intent `performance_pipeline_identity_conflict`; a capture completion without its request `performance_pipeline_start_missing` and a `perf.monitor_degraded` |
+| `…::noise_a_the_host_hands_over_each_instances_bridges_and_its_installations_images` (1) | a discovery-bound emulator instance (root from its vendor tool, written with `\\?\`), one with a configured root and a bridge outside it, a handset and a fixture simulation: the three device instances' bridges, both installations' front end and device process of any version, the virtual machine images by name; nothing of the handset's installation, the fixture or another root; no vendor image without an emulator instance |
+| `runtime-host` `tests::gate_503_noise_a::noise_a_an_application_step_writes_no_degraded_or_recovered_monitor_record` (3) | a person's run of a package whose one step restarts the application, on a fake device with the monitor on and calm scripted samples: completed, one `task.effect_completed`, no `task.effect_intent`, no `perf.monitor_degraded` and no `perf.monitor_recovered` (until 0.12.102 one of each) |
+
+Adapted: `host-metrics` `windows::tests::live_windows_scan_reports_explicit_coverage` (not in a gate
+map) passes the scan's new argument, the empty set of owned images, and takes the scan out of the
+answer's pair; what it asserts is unchanged. No other test changes, none leaves the gate maps and no
+golden is re-recorded: the gate tests of the monitor and the sampler (host gate 37, the P22-0 gate,
+the coverage tests) pin nothing this slice moves; `pipeline_monitor_failure_is_explicitly_degraded_and_related_to_the_trigger`
+still meets a capture completion without its request, and
+`typed_pipeline_events_collect_capture_recognition_and_effect_latency` an intent and its completion.
+
+**What is not changed.** The pressure kinds and `performance.pacing.pressure_floor.kinds`; every
+threshold, streak, severity and the top-5 cut of the third-party list; P22-0; the evaluator's
+contention formula; every record shape and outcome code (no code is added, none changes its
+severity; `performance_pipeline_start_missing` keeps its category); the registry of owned process
+ids, `with_owned_process` and its test; the kernel's and the host's application chain; no setting,
+no interface revision (`package`, `ledger`, `runtime-client`, `actingd-config`).
+
+**At deploy.** Nothing to migrate or configure. Clients see fewer `perf.pressure_started` and
+`perf.pressure_ended` of kind `third_party`, fewer `perf.pacing_changed` with cause `pressure`, fewer
+`performance_tax_exempt` failures, and no `perf.monitor_degraded` / `perf.monitor_recovered` pair for
+an application step; `perf.summary.owned_processes` gains rows with ownership `owned` and
+`third_party_high_load` loses them. In the release notes' language: 性能监视不再把 Runtime 自己管的模拟器进程和调试桥进程当成外部负载，所以模拟器干活时不再每半分钟报一次外部压力、不再因此放慢步子；应用启动、停止、重启那一步也不再写一对“监视降级／恢复”的记录。别的程序的负载照旧按原来的线算外部压力；模拟器自己压得太重，仍由主机响应和整机的 CPU、内存、GPU、磁盘压力管住。
+
+**Rollback.** Nothing new is persisted: an older build reads `owned` rows (an existing value) and
+classes those processes as outside load again, and degrades again on each application step.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

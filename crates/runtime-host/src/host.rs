@@ -2637,6 +2637,16 @@ impl RuntimeHost {
             let discovered_at_unix_ms = shared.clock.sample()?.unix_ms;
             let registered_instances =
                 initial_registered_instances(provider.as_ref(), discovered_at_unix_ms)?;
+            // #503 NOISE-A (register §1.552): from here on the process sampler counts the
+            // processes the registered instances run as owned. No rebinding changes an
+            // instance's installation, so a start hands them over once.
+            let resolved = provider
+                .instance_aliases()
+                .iter()
+                .filter_map(|alias| provider.resolve(alias))
+                .collect::<Vec<_>>();
+            lock(&shared.performance, HostLocation::StartRuntimeHost)?
+                .hand_over_owned_images(crate::performance::owned_process_images(&resolved));
             drop(provider);
             stages.end(StartStage::Provider);
             let startup_packages = startup_package::resolve_startup_packages(

@@ -305,6 +305,9 @@ mod gate_503_cyc3;
 // #503 GOAL-1 (0.12.88; register §1.531): on a game with two instances a goal names its pool as
 // the game root's files write it, and no value of a request stops the Runtime.
 mod gate_503_goal1;
+// #503 NOISE-A (0.12.102; register §1.552): an application step's completion, which has no intent,
+// writes no degraded or recovered monitor record.
+mod gate_503_noise_a;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.
