@@ -22,6 +22,18 @@
 //!   starts of one instance's stopped emulator by the watch within that window.
 //!
 //! The watch reads them at every tick, so an instruction may change each while the Runtime runs.
+//!
+//! #503 MEM (`contracts/emulator-control.md`, "Commit headroom and spacing"; register §1.556;
+//! `actingd-config` revision 36) adds the start gate of the automatic emulator starts:
+//!
+//! - `start_commit_reserve_bytes` (default 17 179 869 184, 16 GiB; `0` turns the headroom check
+//!   off): an automatic start whose turn has come waits while the host's available commit is below
+//!   it;
+//! - `start_spacing_ms` (default 30 000; `0..=600000`, `0` no spacing): an automatic start waits
+//!   until this long after the latest emulator Start of any kind returned.
+//!
+//! The claim that holds the start turn reads both at every tick of its wait, so an instruction
+//! changes each while the Runtime runs. No per-instance form.
 
 use crate::codes::ConfigValueProblem;
 use crate::effective::ConfigFailure;
@@ -43,6 +55,12 @@ pub const WATCH_INTERVAL_MS: &str = "emulator_control.watch_interval_ms";
 pub const RESTART_ATTEMPTS: &str = "emulator_control.restart_attempts";
 /// emu-watch: the window `restart_attempts` counts in, in milliseconds.
 pub const RESTART_WINDOW_MS: &str = "emulator_control.restart_window_ms";
+/// #503 MEM: the commit, in bytes, the host must have available before an automatic emulator start
+/// goes on; `0` checks nothing.
+pub const START_COMMIT_RESERVE_BYTES: &str = "emulator_control.start_commit_reserve_bytes";
+/// #503 MEM: how long after the latest emulator Start of any kind returned an automatic start may
+/// go on, in milliseconds; `0` spaces nothing.
+pub const START_SPACING_MS: &str = "emulator_control.start_spacing_ms";
 
 /// The smallest `restart_exit_wait_ms`: one second.
 pub const RESTART_EXIT_WAIT_MIN_MS: i64 = 1_000;
@@ -67,6 +85,17 @@ const RESTART_WINDOW_RANGE: KeyRange = KeyRange::Integer {
     min: 60_000,
     max: 86_400_000,
 };
+/// #503 MEM: the bounds of `start_commit_reserve_bytes`, none (`0`) to one tebibyte. Schema, not a
+/// threshold.
+const START_COMMIT_RESERVE_RANGE: KeyRange = KeyRange::Integer {
+    min: 0,
+    max: 1 << 40,
+};
+/// #503 MEM: the bounds of `start_spacing_ms`, none (`0`) to ten minutes. Schema, not a threshold.
+const START_SPACING_RANGE: KeyRange = KeyRange::Integer {
+    min: 0,
+    max: 600_000,
+};
 
 /// The section as the configuration file and the defaults file write it: every member may be
 /// left out and none is unknown (M387 §5.3).
@@ -89,6 +118,13 @@ pub struct EmulatorControlFile {
     restart_attempts: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     restart_window_ms: Option<Value>,
+    // Interface anchor `actingd-config` revision 36 (contracts/component-interfaces.md; #503 MEM):
+    // a Runtime before #503 MEM refuses a file that names either member, because the section
+    // denies unknown members; a file that names neither keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_commit_reserve_bytes: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_spacing_ms: Option<Value>,
 }
 
 /// emu-watch: a key of the watch, read at every tick of the watch, so an instruction takes
@@ -103,6 +139,21 @@ const fn watch_row(name: &'static str, value_type: ValueType, range: KeyRange) -
         settable: Settable::Yes,
         reader: "EMU-W",
         since: "0.12.12",
+    }
+}
+
+/// #503 MEM: a key of the start gate, read at every tick of an automatic start's claim that holds
+/// the start turn, so an instruction takes effect at the next one.
+const fn start_gate_row(name: &'static str, value_type: ValueType, range: KeyRange) -> KeyRow {
+    KeyRow {
+        name: KeyName::Exact(name),
+        file_path: FilePath::Key,
+        value_type,
+        range,
+        default: DefaultSource::File,
+        settable: Settable::Yes,
+        reader: "MEM",
+        since: "0.12.102",
     }
 }
 
@@ -131,6 +182,12 @@ pub(crate) static ROWS: &[KeyRow] = &[
         ValueType::DurationMs,
         RESTART_WINDOW_RANGE,
     ),
+    start_gate_row(
+        START_COMMIT_RESERVE_BYTES,
+        ValueType::Integer,
+        START_COMMIT_RESERVE_RANGE,
+    ),
+    start_gate_row(START_SPACING_MS, ValueType::DurationMs, START_SPACING_RANGE),
 ];
 
 /// `restart_exit_wait_ms` in effect, within its range; `config_value_invalid` otherwise.
@@ -190,6 +247,32 @@ impl EmulatorWatchConfig {
                     .with_range(RESTART_ATTEMPTS_RANGE)
             })?,
             restart_window_ms: bounded(value, RESTART_WINDOW_MS, RESTART_WINDOW_RANGE)?,
+        })
+    }
+}
+
+/// #503 MEM: the start gate's keys of the section in effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmulatorStartGateConfig {
+    /// The commit, in bytes, the host must have available before an automatic emulator start goes
+    /// on (`0..=1099511627776`; `0` checks nothing).
+    pub commit_reserve_bytes: u64,
+    /// How long after the latest emulator Start of any kind returned an automatic start may go on,
+    /// in milliseconds (`0..=600000`; `0` spaces nothing).
+    pub spacing_ms: u64,
+}
+
+impl EmulatorStartGateConfig {
+    /// The start gate's keys from `value` (the configuration in effect), each of its type and
+    /// within its range; `config_value_invalid` for the first key that is not.
+    pub(crate) fn parse(value: &dyn Fn(&str) -> Option<FactScalar>) -> Result<Self, ConfigFailure> {
+        Ok(Self {
+            commit_reserve_bytes: bounded(
+                value,
+                START_COMMIT_RESERVE_BYTES,
+                START_COMMIT_RESERVE_RANGE,
+            )?,
+            spacing_ms: bounded(value, START_SPACING_MS, START_SPACING_RANGE)?,
         })
     }
 }

@@ -53715,6 +53715,349 @@ an application step; `perf.summary.owned_processes` gains rows with ownership `o
 **Rollback.** Nothing new is persisted: an older build reads `owned` rows (an existing value) and
 classes those processes as outside load again, and degrades again on each application step.
 
+### 1.554 Slice #503 ISO-A (0.12.102): one instance's worker no longer takes the whole Runtime down: its payload's error is contained against its instance, a panic that poisons the instance's own locks fences that instance, a second panic fences it too, and the Runtime's own availability record of an instance is never refused as not newer (board #503, after board #419's instance isolation and its open remainder, board #496; the owner's rule of 10-24; the rulings are the coordinator's of 11-28, taken from a read-only study of the worker's isolation, its open point R-A1-5 decided on the owner's rule; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546)
+
+It ships in 0.12.102. [runtime-outcomes.md](runtime-outcomes.md) ("Failure scope": the worker's row
+of the boundaries, "A lock of one instance alone", the new "The instance worker"),
+[scheduling/README.md](scheduling/README.md) ("An unavailable instance is probed again": the probe's
+end and "The device's locks after a panic"; the handed runs' "Failures"),
+[instance-fact-store.md](instance-fact-store.md) ("Backend self-check availability": the
+withdrawal's time and the new "The observation time") and the catalog's text of
+`instance_lock_poisoned` (and of `panic_caught`'s handling and `panic_unrecovered`'s causes, which
+named the second panic's old end) are the contract. No interface revision, record shape,
+configuration key or outcome code moves; `instance_lock_poisoned` (since 0.12.12) is written for the
+first time.
+
+**The three holes** (read at `cdc3e0b4`, in neutral words; what each did to the host).
+- *A payload's error ended its worker.* A payload of an instance's worker (a host claim's work, a
+  handed scheduled run) that ended with an error that is not of the whole was given to the fatal
+  state's mark, which refuses an error that is not fatal before it records anything: nothing was
+  recorded, and the worker's thread ended. The next job posted to that instance found no worker and
+  answered `instance_worker_unavailable`, which latched the whole Runtime. An error that was fatal
+  latched the Runtime whatever it concerned, an instance's included: the worker, listed as a
+  boundary, contained nothing.
+- *A panic poisoned the instance's locks for everyone.* A payload that panicked while it held its
+  device's admission guard or queue-order lock left the lock poisoned. Every taker of those locks
+  goes through the host's shared lock helper, which reads a poisoned lock as a poisoned Runtime
+  state (`runtime_state_poisoned`, of the whole): the next toucher (the emulator watch, the idle
+  check, the sweep's lease expiry when the panicked payload's key lapsed, a later run or observation)
+  stopped the host, at the latest within one key's TTL. A second panic of a worker before it finished
+  a payload latched `runtime_restart_required`.
+- *The availability record could be refused as not newer.* The Runtime's own
+  `session.instance.available` record of an instance was stamped with the bare wall clock. Two of
+  its writes in one millisecond (a preparation's withdrawal and its restore), or a write after the
+  wall clock stepped back, were refused `fact_observation_not_newer`: on a worker that ended the
+  worker (the first hole); on a person's self-check the refusal was made fatal and latched the host;
+  at a start it failed the start.
+
+**The owner's rule** (10-24, board #419): a fault of one emulator or instance must not stop the
+whole Runtime; only a fault of the whole (the ledger's integrity, an invalid configuration, the
+owner lock) may.
+
+**The rulings, as built.**
+- *R-A1-1, the worker contains* (`host/host_claims.rs`, `instance_worker_loop`,
+  `contain_worker_failure`, `WorkerJob::instance`). A payload's error goes to `contain_failure` with
+  the payload's own instance (its key's for a host claim, its lease's for a handed run) and the links
+  its panic is recorded under. A failure of the whole latches as before and ends the worker; one of
+  the instance fences it, with the fence's own record (`instance_resources_fenced` caused by it); one
+  of the operation is recorded once, a `runtime.failed` of its own code at stage `operation_cleanup`
+  (nothing more when its path recorded it). The classification is the existing scope rule's: an
+  untagged fatal failure stays of the whole, a tagged one is its instance's, a request failure the
+  operation's. A payload that ended with an error is a finished one, and the worker goes on.
+- *R-A1-2, the ends of its kind.* After a contained error the ends a panic runs for the payload's
+  kind run too: a handed run's lane is ended and the driver told the run was dropped; a probe of an
+  unavailable instance ends its probes and tells a person with the error's own code as
+  `failure_code` (`end_panicked_unavailable_probe` takes the cause, `panic_caught` after a panic); a
+  recovery ladder an entry block waits for is noted ended with `worker_failed` (fix round 1, below;
+  nothing climbs again in that block, a person is told; the error's own record names the error).
+- *R-A1-3, the panic's locks* (`host/failure_scope.rs`, `clear_instance_lock_poison`). At a panic,
+  first of all, the poison is cleared on the payload's instance's admission guard and queue-order
+  lock, each tested and cleared on the lock itself, without locking or waiting for it. After the
+  panic's ends and its `panic_caught` record, an instance whose lock was poisoned is fenced, the
+  fence caused by `instance_lock_poisoned`. A panic that poisoned nothing records only `panic_caught`.
+- *R-A1-4, unchanged*: the `panic_caught` record (thread, boundary, raw text; written byte for byte
+  as before), the payload dropped and not retried, its key lapsing at its TTL, the ends of a panicked
+  probe and ladder, `instance_worker_unavailable` (now only a worker that ended on a failure of the
+  whole), the Global list, a poisoned shared lock staying of the whole, `contain_failure` and the
+  request door.
+- *R-A1-5, decided* (the owner's rule of 10-24, and the isolation model's question as it was settled
+  then on the owner's words: an instance that fails twice in a row stops only that instance). A
+  second panic before the rebuilt worker finished a payload fences the payload's instance, the fence
+  caused by that panic's `panic_caught` with its values, instead of asking for a restart of the whole
+  Runtime; the worker goes on. The whole Runtime is asked to stop only for a fault of the whole.
+- *R-A2-1 to R-A2-3, the availability record's time* (`host/facts.rs`,
+  `publish_policy_instance_availability`, `FactPublicationPurpose::RuntimeAvailability`,
+  `observed_after_stored`; `fact_store.rs`, `latest_observed_unix_ms`). All five of the Runtime's
+  availability publishers stamp the later of the host clock and one millisecond after the latest
+  observation the store holds for the key (its active record's, else the key's latest, which an
+  invalidation keeps), read and published in one hold of `fact_write_gate`; a record of the active
+  record's own source snapshot is not raised (the store replays or refuses it as before). The store's
+  rules and every fact a client publishes are unchanged.
+
+**What the code proved of the design.** The design stamped the record ahead of the clock (its R-A2-3:
+"stamped 1 ms ahead"), but the fact store also refuses a record observed after the clock its
+publication samples (`fact_observation_in_future`), so the raised record alone would have been
+refused in every case it was for. The smallest change that keeps the design: under the same hold of
+the gate the Runtime's own availability record is judged at its own observation when that is later
+than the clock (the purpose above); neither of the store's rules changes, and a client's publication
+is judged at the clock as before. Read and written in one hold of the gate every fact writer takes,
+the raise cannot be raced by any writer of the key, the Runtime's or a client's.
+
+**Why the poison may be cleared.** Both locks are `Mutex<()>`: they guard no data, so nothing is left
+half written behind them. When the panicking payload held one, no other thread was inside it; a
+taker that met the poison before the clear failed at once and holds nothing (the shared helper drops
+the poisoned guard). What the panic left half done is the device's (a device step, a step of the
+device's queue), and the fence holds the instance until a passing preparation proves it again. A
+lock every instance shares that the panic held is poisoned itself and stays of the whole. Clearing
+locks nothing: the worker's root holds no lock at that point, and the order of the admission guard,
+the queue-order lock and the scheduler is not met.
+
+**Decided here.** The test seams live in the worker's own module: a test-only payload a test posts to
+an instance's worker (end, fail, panic, panic holding the instance's two locks or the scheduler's) and
+a failure the next host claim of a device ends with, its key released first; neither exists outside
+test builds. A device group of several shares the cleared locks; the payload's instance alone is
+fenced, as a member's own fault is fenced today.
+
+**Tests** (host gate map row "#503 ISO-A"; manual clocks; no clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_iso_a::iso_a_h1_one_instances_worker_failures_and_panics_hold_only_that_instance` | X's worker: an instance's error fences X (caused by it); an operation's error is one `runtime.failed` of its code under X, nothing fenced; a panic holding X's two locks is recorded, then fences X (`instance_lock_poisoned`), both locks no longer poisoned; a second panic fences X (`panic_caught`); after each step a payload posted to each worker runs, a person's self-check, which takes X's admission guard, lifts X's fence, and nothing latches |
+| `…::iso_a_h2_a_probe_whose_payload_fails_tells_a_person_with_the_failures_code` | a probe's payload ends with an operation's error: one record of it, a person told at once (`failure_code` that code, `attempts` 1, no next probe), no probe however far the clock runs, the worker goes on |
+| `…::iso_a_h3_a_payload_failure_of_the_whole_latches_the_runtime` | a payload's ledger failure latches the Runtime as before; nothing fenced |
+| `…::iso_a_h4_a_panic_holding_a_shared_lock_latches_at_the_next_touch` | a panic holding the scheduler's lock latches `runtime_state_poisoned` at the next touch; nothing fenced |
+| `…::iso_a_h5_two_availability_writes_in_one_millisecond_are_both_taken` | on a clock that does not move, the start's withdrawal and restore and a person's self-check's, each one millisecond after the one before; nothing latches |
+| `…::iso_a_h6_writes_after_a_clock_step_back_are_taken_and_a_fence_completes` | the clock a second back: a person's self-check's withdrawal and restore after the stored record, a fence's withdrawal one millisecond after it and the fence complete, the next passing self-check lifts it |
+| `…::iso_a_h7_an_entry_recovery_whose_payload_fails_ends_worker_failed_and_climbs_no_more` | (fix round 1, on `gate_490_entry_a`'s replay) an entry block's held recovery whose ladder's payload ends with an operation's error its worker contains: the error's one record, one `instance_entry_blocked_recovery_failed` with `worker_failed` and no next climb, the block holding nothing, no climb then or two hours later, the worker going on, nothing stopped |
+
+Every existing test passes unchanged; none moves. The worker's own (`instance_workers`' panic before
+any lock: recorded, nothing fenced, the next payload runs), the panicked probe's and the panicked
+ladder's (AVAIL-1's T7, ENTRY-A's R5 b) and the isolation core's (`gate_419_iso1`, `gate_437_g1`'s
+shared lock) take the paths they took; the two tests written around the same-millisecond refusal
+(`gate_hs5`'s application rung, `gate_486_asleep`'s check of a stopped emulator) move their clocks
+and meet no raise; `gate_382_h4`'s refusal is a client's, unchanged. No golden re-recorded; no test
+leaves the gate maps.
+
+**What is not changed, and what is left.** The Global list; a poisoned shared lock staying of the
+whole; the `panic_caught` record; the payload dropped and not retried; the key lapsing at its TTL; the
+request door; the fact store's rules and every client's fact. Left for a later slice: the sites that
+take the two locks still take them through the shared helper (converting them to `lock_instance`,
+with containment at the sweep's, the watch's and the policy admission's touch, closes the moment
+between the unwind and the clear); the memory gate before an emulator start is another slice.
+
+**Fix round 1** (the coordinator's work order of 11-29 after the first CI round; one code, one
+cause). The finding: after a payload's error its worker contained, the end of an entry block's
+recovery ladder was written `worker_panicked`, so `instance_entry_blocked_recovery_failed` told a
+person that the worker which climbed the ladder panicked when nothing had. The vocabulary
+`entry_recovery_end` gains one word, `worker_failed` (`EntryRecoveryEnd::WorkerFailed`, since
+0.12.102): the work that climbed the ladder ended with an error its worker contained, the error's
+own record under the same links saying which; `contain_worker_failure` writes it, and the panic
+path keeps `worker_panicked`. Every reader of the word decides for it exactly as for
+`worker_panicked` (`host/entry_blocks.rs`: the match of `EntryBlocks::recovery_ended`, which sets
+the block's flag, still named `panicked` and now said to hold for both, and lets its held
+recovery go; `worker_ended`, which `note_entry_recovery_failed` and `block_instance_entry` read to
+leave such a climb out of the stretch's count; the update dialog's test is false for both). No other
+word, record shape, key or interface revision moves: an outcome's values reach every reader as a
+map of text, which spells a word it does not know and refuses none (the `ledger` rows of
+[component-interfaces.md](component-interfaces.md): codes and value words the reader only spells;
+the precedent of a word added to an existing value vocabulary, §1.511's `rule` of
+`variable_source`), and nothing parses this vocabulary back into its enum, so an older build reads
+the new word as a word. The catalog's entry of the word and the texts of the code and the
+vocabulary say it; the index was regenerated and checked current. One test more, h7 in the table
+above, built on `gate_490_entry_a`'s replay, whose helpers it calls are made `pub(super)` for it
+(nothing else of that file changes); ENTRY-A's R5 (b), a panicked worker's `worker_panicked`,
+passes unchanged.
+
+**At deploy.** Nothing to configure or migrate: no record, setting or revision moves.
+
+**Rollback.** An older build reads every record this one writes (both codes of the fence exist since
+0.12.12; a raised availability record is an ordinary fact record). It stops the host again in these
+cases: a payload's error, a panic holding an instance's lock, a second panic, and an availability
+write in the same millisecond or after a clock step back.
+
+### 1.556 Slice #503 MEM (0.12.102): an automatic emulator start waits for commit headroom and keeps a minimum distance from the previous start; both numbers are configuration keys with defaults (board #503; the rulings are the coordinator's of 11-29, taken from a read-only study of the tree with its open point decided, not the owner's words; coordinator work order `rd-1123/brief-503-mem.md` and its correction of the same day; on #503 NOISE-A's head, which holds main `924f4034`)
+
+[emulator-control.md](emulator-control.md) ("Configured start at daemon start", the bullet "Commit
+headroom and spacing") and [runtime-config.md](runtime-config.md) ("The `emulator_control`
+section") are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). Each emulator the Runtime
+starts commits seven to eight gibibytes. The host's commit limit is finite and other programs hold
+part of it. At a day change several instances are due within the same minutes; the Runtime starts
+them one after another, knowing nothing of memory, and a production host has been seen within a few
+gibibytes of its limit. A host that reaches the limit fails allocations in every program on it,
+the Runtime included. Read in the tree: the host's memory sample kept only physical memory, no
+start path read commit, and nothing put a minimum time between two starts (the automatic starts
+were already serialised by the start turn, which is not the same: the turn has no interval and
+knows nothing of memory, and a person's control and the ladder's rung run outside it).
+
+**What it rests on** (read on this tree; none of the stop conditions holds).
+- *The interface.* `actingd-config` 35 is #489 AVAIL-1's (row 35), so this slice takes the next
+  free revision, **36** (the work order said 35; its correction of the same day says 36; no open
+  branch raises it). This build declares [5, 36]; the installed console declares [5, 32]; the
+  installer is this build's `actingctl` ([5, 36]) or the installed build's ([5, 35]). The edge
+  `installer_ui_next_common` asks that the three ranges meet: they meet in [5, 32] either way, as
+  before, so nothing the console or the installer does changes. The console sets keys only of the
+  `daily` and `advanced` tiers and these two are `hidden`; a root's file that names neither key
+  passes `installer_knows_keys` unchanged.
+- *An older build and the keys.* A configuration file that names either key is refused by a build
+  before this one (`EmulatorControlFile` denies unknown members, `config_decode_failed`), at its
+  start and in its check-config. An instruction that set
+  either key (a `host.config_overrides` row) is not a stop: an older build's restore finds no row of
+  the key (`EffectiveConfig::restore`, `setting_position`) and drops the value with
+  `config_override_dropped`; the start goes on (below, "Rollback").
+- *The wait holds nothing a person's control needs.* It keeps the start turn (a word in memory, no
+  lock held across a tick) and its claim's key; an emulator control queued on the same instance
+  ends the wait at the next tick (`emulator_autostart_superseded`, as today), and every other
+  instance's control takes neither.
+- *No existing test reads the clock or the commit through the gate.* A test build without the
+  commit seam consults no gate and stamps no Start (below, "Decided here"), so every test written
+  before this slice starts its emulators as it did, and none depends on the CI host's memory.
+
+**The rulings, as built.**
+- *1, the read* (`crates/host-metrics/src/lib.rs`, `CommitSample`, `sample_commit`; `windows.rs`,
+  `sample_commit`). `GlobalMemoryStatusEx`'s `ullTotalPageFile` (the limit) and `ullAvailPageFile`
+  (what the process may still commit: without a job object, and the tree creates none, the
+  system's available commit); off Windows `performance_sampler_unsupported`. The physical sample
+  is unchanged.
+- *1, where* (`crates/runtime-host/src/host/emulator_autostart.rs`, `hold_autostart_claim`,
+  `start_gate_open`). The gate is asked only by an automatic start's claim (the daemon start's
+  configured start, the emulator watch's restart, an idle wake after `stop_emulator`), at every
+  tick, after the network wait and once it holds the start turn, before the last checks and the
+  Start. Held, it keeps the turn and its key and ticks on (500 ms; the commit read at once and then
+  every 5 s, as the network read): whatever ends a hold today ends the wait (a drain or a shutdown,
+  an emulator control waiting on the instance, the instance's or the global pause, `start_emulator`
+  turned off), and there is no deadline. The gate's memory lives with the turn (`AutostartTurn`,
+  `StartGateMemory`): the latest Start's time, the open short episode, the failing streak; memory
+  only.
+- *1, the stamp* (`emulator_instance.rs`, `perform_control_phase`; `note_emulator_start_returned`).
+  Every emulator Start meets the provider in that one place: the time it returned is stamped
+  there, whatever its result, for a Start of any kind.
+- *2, the numbers are keys* (`crates/runtime-config/src/emulator_control.rs`, the two rows and
+  `EmulatorStartGateConfig`; `effective.rs`, `emulator_start_gate`, also in the section's whole
+  check; `crates/runtime-host/src/host/runtime_config.rs`, `emulator_start_gate_settings`). A Start
+  goes on when the available commit is at or above the reserve and the spacing has passed since the
+  latest Start returned.
+- *3, a wait is told* (the codes below; each a `runtime.failed` record under the instance's links,
+  fresh system links and not the claim's request, so a start a pause holds afterwards still records
+  no `command.*` and no `runtime.failed` of its own as PG-1 requires; its severity the code's
+  category; and the same report line, which actingd writes as a daemon line).
+  The network wait is shown today only in the claim's report lines (`emulator_autostart_network_ready`,
+  `_status_unknown`) and the refusal's records: no member of an instance's state in the status or
+  the overview, no not-run explanation and no other report names it (the status shows the claim's
+  lease as `lease_active` and a pause lists `automatic_start` in its way, for any automatic start,
+  waiting or not). So the commit wait is shown the same way, as report lines and records, and
+  nothing is added to the status, the overview or the schedule's explanation.
+- *4, a read that fails* lets the start go on, once told per failing streak.
+- *5, unchanged*: every start with the gate off or with headroom and spacing satisfied, but for the
+  stamp; every explicit control, every stop, the ladder, the turn's order and every existing record.
+  A file that names neither key reads as the defaults.
+
+**What is never held, and why.** A person's, an agent's or the Lab's emulator control (start, stop,
+restart: an explicit act of a person is not held by an automatic guard, as PAUSE-AUTO's "an explicit
+emulator control never asks"); any Stop (it frees commit); the recovery ladder's emulator-restart
+rung (a broken instance's recovery, whose own Stop frees what its Start takes, with its own bounds;
+holding it is a possible later ruling, not this slice); a recognition (it launches nothing); a
+startup package and an application start (no virtual machine). Their Starts only stamp the spacing,
+so they delay the next automatic start, which they never wait for.
+
+**Keys** (`actingd-config` 36; settable, read at every tick of the waiting claim, so an instruction
+applies at the next tick without a restart; no per-instance form; console tier `hidden`):
+
+| Key | Range | Default |
+|---|---|---|
+| `emulator_control.start_commit_reserve_bytes` | integer `0..=1099511627776`; `0` checks nothing and reads nothing | `17179869184` (16 GiB) |
+| `emulator_control.start_spacing_ms` | milliseconds `0..=600000`; `0` spaces nothing | `30000` |
+
+With a commit limit of about 103 GiB the defaults let automatic starts go on until about 87 GiB are
+committed. Both defaults are the study's inference (twice the top of the measured seven to eight
+gibibytes a start commits; whether a machine's commit is all in when its Start returns could not be
+read): a trace of the limit and the available commit around one start on the production host
+settles them, and a later commit raises the spacing.
+
+**Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
+class `none`, so no trigger matches them and no decision reads them). Three outcome keys are added
+to the key table (`commit_limit_bytes`, `commit_available_bytes`, `commit_reserve_bytes`): the
+study's `limit_bytes`, `free_bytes` and `memory_reserve_bytes` mean a length limit, a volume's free
+space and the frame stores' reserve, and a key keeps one meaning. No location is added.
+
+| Code | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `emulator_autostart_commit_short` | automatic starts are held: the available commit (`commit_available_bytes`, of `commit_limit_bytes`) is below the reserve (`commit_reserve_bytes`); `alias` the instance first in line, `idle_action` for an idle wake; once per short episode for the whole host, from the first short read until a start passes the gate again | warns | none: no request answers it |
+| `emulator_autostart_commit_ready` | the start that ends the episode passes the gate (`elapsed_ms` since the episode began, the read, the reserve) | info | none |
+| `emulator_autostart_commit_unknown` | the commit could not be read (`failure_code` the read's code); the start goes on without the headroom check; once per failing streak, until a read succeeds | warns | none |
+
+The catalogue's text of each says the result (what holds, how much is available, the limit, the
+reserve, who is first in line) and the operation: the Runtime starts the instance as soon as the
+headroom is back, which happens when another emulator stops or another program frees memory; a
+person may start an emulator by hand at any time, which is not held; the reserve is
+`emulator_control.start_commit_reserve_bytes`.
+
+**Interfaces.** `actingd-config` [5, 35] → [5, 36] ([component-interfaces.md](component-interfaces.md),
+row 36): the two members of `emulator_control`. `ledger` does not move: the three codes travel as
+text in `runtime.failed` records, which every revision reads; `runtime-client` and `package` do not
+move.
+
+**Decided here.** The revision is 36, not the work order's 35 (above). A test build without the
+commit seam (`RuntimeHostConfig::with_commit_sample_for_test`) consults no gate at all, spacing
+included, and stamps nothing: with the default 30 s spacing, every existing test that starts two
+emulators within 30 s on the system clock would otherwise wait, and on a manual clock never go on;
+the study's "ample" without the seam covers only the headroom. The spacing wait alone records
+nothing: it ends by itself within `start_spacing_ms` (at most ten minutes), the claim's lease shows
+meanwhile, and the work order names only the three codes. A failed read, or the reserve turned to
+`0` by an instruction, ends an open episode without a ready line. The new keys follow AVAIL-1's
+places (the last slice that added a settable key and raised `actingd-config`): the configuration
+crate, the section's whole check (which actingd's check-config runs), the defaults file, the
+contract and the two interface tables; the console's tiers need no row (`hidden` is every key the
+table does not list).
+
+**Tests** (`crates/runtime-host/src/tests/gate_503_mem.rs`, host gate map row "#503 MEM"; the commit
+seam, the Runtime's manual clock and the scripted emulators; the spacing read from the Runtime's own
+stamp of the latest Start, so a start the gate let through early would leave an earlier stamp; no
+clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `mem_1_a_day_change_holds_the_one_in_line_and_those_behind_it_with_one_short_for_the_episode` | three instances due at once: the first starts on ample headroom; the next, first in line, holds the turn and its key with one `…_short` (its alias, 8 GiB of 100 GiB, the 16 GiB reserve) while the third waits behind it, neither started at 5 s; the headroom back at 10 s, it still waits out the spacing and starts at 30 s with one `…_ready` (`elapsed_ms` 30 000); the third starts at 60 s; both lines are records under the instance in line, warning and info |
+| `mem_2_the_spacing_holds_an_automatic_start_after_a_persons_start_for_its_length` | with ample headroom an automatic start right after a person's start is held at 29 999 ms and starts at 30 000 ms; no gate line or record |
+| `mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_headroom_short` | while an automatic start waits for headroom, a person's stop and start of another instance and a device drill of its ladder's emulator-restart rung are driven at once and stamp the spacing; a person's start of the waiting instance is driven and the claim yields (`emulator_autostart_superseded`) |
+| `mem_4_a_pause_and_a_shutdown_end_the_wait_as_they_end_a_hold_today` | an instance pause ends the wait (`emulator_autostart_skipped`, `instance_paused`), the next in line waits in the same episode with no second short line, and the host's close ends that wait (`emulator_autostart_interrupted`); nothing started |
+| `mem_5_start_emulator_turned_off_ends_the_wait` | `start_emulator` set off by an instruction ends the wait (`start_emulator_off`); nothing started |
+| `mem_6_the_reserve_0_never_holds_and_reads_nothing` | the file's reserve `0`: with a short scripted headroom the start goes on, no read, no line |
+| `mem_7_a_configuration_without_the_keys_holds_at_the_defaults` | a file naming neither key: 16 GiB less one byte is short, exactly 16 GiB goes on, and the next start is held at 29 999 ms after it and starts at 30 000 ms |
+| `mem_8_both_keys_set_by_an_instruction_take_effect_at_the_next_tick` | `ConfigureSettings` of the reserve (4 GiB) lets the waiting start go on with the read it has, its ready line naming 4 GiB; of the spacing (`0`) lets the next one go on at once |
+| `mem_9_a_failing_read_starts_and_says_so_once` | failing reads: the first start goes on with one `…_unknown` (its code, under its instance, warning), the next reads fail again with no second line, and the spacing still holds it to 30 s |
+
+Adapted (1), the requirement moving what it pins: `tools/actinglab-architecture/tests/component_interfaces.rs`
+(`V0120`: `actingd-config` [5, 36]). No other test pins the range (the rescue module's fixtures
+declare their own, and the readers of the shipped declaration pin `runtime-client` and `package`).
+No other existing test changes, none leaves the gate maps and no golden is re-recorded. The
+existing autostart, idle and watch gates (`gate_369_s6c`, `gate_r3`, `gate_pause_auto`,
+`gate_idle1p`, `gate_480_pg1`, `gate_emu_bind`, `gate_emu_watch`, `gate_486_asleep`, the autostart
+tests of `instance_workers`) set no commit seam, so the gate is not consulted there.
+
+**What is not changed.** The network wait and its codes; the turn, its order and its contenders;
+the pauses' holds and their records; `start_emulator`; the watch's bound; the idle plan's wake
+leads (staggering them is a separate decision); the ladder and its rungs; every explicit control
+and its records; the physical memory sample and every use of it; a page file that could grow is
+not counted. No game, package or alias is named in code.
+
+**At deploy.** Nothing to configure: the two keys take their defaults from the new build's defaults
+file, and the update leaves the root's configuration file as it is. The installed console and the
+installer meet this build as before (above). On the production host, after the first automatic
+starts, read the daemon's lines and the ledger for `emulator_autostart_commit_*`; a short episode at
+a day change shows one `…_short` and later one `…_ready`. In the release notes' language:
+运行时自动启动模拟器之前先看主机还剩多少可提交内存，不够 16 GiB 就先等，等到别的模拟器停了或者别的程序放出内存再启动；两次启动之间至少隔 30 秒（人手动启动、停止和恢复阶梯的重启都不拦，只计时）。两个数都是新配置键 `emulator_control.start_commit_reserve_bytes`、`emulator_control.start_spacing_ms`，运行中可改。等待时记一条 `emulator_autostart_commit_short`，放行时一条 `emulator_autostart_commit_ready`，读不到内存时照常启动并记一条 `emulator_autostart_commit_unknown`。`actingd-config` 升到 36。
+
+**Rollback.** A build before this one reads the root's configuration file as before, since the
+update writes neither key there. A file into which a person wrote either key is refused by it
+(`config_decode_failed`, at its start and in its check-config), so such a file is put back first.
+An instruction that set either key is dropped by its restore with
+`config_override_dropped` and the start goes on, naming the key among the instructions it dropped;
+a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It reads the three new
+codes in the records as text it does not know. The gate's memory was memory only and is gone; the
+older build starts automatic emulators with no gate, as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

@@ -331,7 +331,7 @@ containment never fails silently.
 |---|---|---|
 | the request door, also the direct run's boundary: a failure that would poison the Runtime is contained against the request's instance (its lease token's, else the registered instance of its alias) | `host/requests.rs`, `process_request_at_door` | ISO-1 |
 | the scheduled run and the host package run | `host.rs`, `startup_package.rs` | ISO-2 |
-| the instance worker | `host/host_claims.rs` | ISO-3 |
+| the instance worker: a payload's error, against the payload's own instance (its key's; its lease's for a policy run); a panic that left that instance's own locks poisoned, and a second panic, fence it (below) | `host/host_claims.rs`, `instance_worker_loop` | #503 ISO-A (Runtime 0.12.102; planned as ISO-3) |
 | each per-instance step of a shared loop | the sweep, pump, fence and monitor loops | ISO-4a |
 | actingd's policy driver, per intent (through `halts_runtime()`) | `apps/actingd/src/main.rs` | ISO-6 |
 
@@ -438,11 +438,43 @@ session still fences its instance (#411 A46 widened, ISO-M row C01).
   `lease_missing`, ...). The input's own command timeout, the clock, the scheduler's own failures
   and a close's check stay the device's failure, as before.
 
-**A lock of one instance alone** that guards no data (its admission guard, its queue-order lock;
-R8) is taken through `lock_instance`: when a panic left it poisoned, the poison is cleared and
-the work fails with `instance_lock_poisoned` (error, ladder class `none`), an `Instance` failure
-of that instance. A poisoned lock that every instance shares stays `Global`
+**A lock of one instance alone** that guards no data (its device's admission guard, its
+queue-order lock; R8; each a `Mutex<()>`): when a panic of a payload on the instance's worker left
+one poisoned, the worker's root clears the poison and fences the instance with
+`instance_lock_poisoned` (error, ladder class `none`), an `Instance` failure of that instance
+(#503 ISO-A, below). `lock_instance` clears and fails the same way at a site that takes such a
+lock; the sites still take them through the shared `lock` (their conversion is a later slice), so
+a touch of the lock in the moment between the unwind and the worker's clear still answers
+`runtime_state_poisoned`. A poisoned lock that every instance shares stays `Global`
 (`runtime_state_poisoned`).
+
+**The instance worker** (#503 ISO-A, Runtime 0.12.102; the owner's rule of 10-24: a fault of one
+instance stops only that instance). The worker of a device runs its payloads one at a time (a host
+claim's work, a handed scheduled run) and is their boundary:
+- *A payload that ends with an error* goes to `contain_failure` with the payload's own instance
+  and the links its panic would be recorded under. `Global`: the Runtime latches, as before, and
+  the worker ends. `Instance`: the instance is fenced, and the fence's own record says so.
+  `Operation`: one `runtime.failed` record of the error's own code (stage `operation_cleanup`;
+  none more when the payload's own path recorded it). The classification is the scope rule's
+  above; nothing new decides it. Then what a panic ends for the payload's kind is ended the same
+  way: a scheduled run's lane is ended and the driver told the run was dropped (its registration
+  left for the reconciliation, as after a panic); a probe of an unavailable instance ends its
+  probes and tells a person with `instance_unavailable_awaiting_person` whose `failure_code` is the
+  error's own code; a recovery ladder that an entry block waits for is noted ended by its worker's
+  contained error (`entry_recovery_end` `worker_failed`, fix round 1: one cause, one word, so the
+  record no longer says the worker panicked), which decides as `worker_panicked` does: nothing
+  climbs again in that block, a person is told, and the error's own record names it. A payload
+  that ended with an error is a finished payload. The worker goes on.
+- *A panic*: first of all, before any record, the poison is cleared on the payload's instance's
+  two locks above, without waiting for either. Then the panic's ends and its `panic_caught` record
+  (thread, boundary, raw text), as before; the payload is dropped, not retried, and its key lapses
+  at its TTL. When either lock was poisoned the instance is then fenced, its fence caused by
+  `instance_lock_poisoned`. A panic before any lock (nothing poisoned) records only `panic_caught`.
+- *A second panic* before the rebuilt worker finished a payload fences the payload's instance,
+  the fence caused by that panic's `panic_caught` (with its values), instead of latching
+  `runtime_restart_required` for the whole Runtime (until 0.12.101); the worker goes on.
+- `instance_worker_unavailable` is answered only by a post to a worker that ended on a `Global`
+  failure, or a failure of the containment's own records and ends, which latched the Runtime.
 
 **The closed Global list** (`GLOBAL_CODES`; R0.3), 142 codes in ten families, plus every catalog
 code of category `fatal` (family `CatalogFatal`):

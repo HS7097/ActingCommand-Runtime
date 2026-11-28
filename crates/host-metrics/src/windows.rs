@@ -451,6 +451,24 @@ pub(super) fn sample_physical_memory() -> Result<super::PhysicalMemorySample, Co
     }
 }
 
+/// #503 MEM: `GlobalMemoryStatusEx`'s `ullTotalPageFile` (the commit limit) and `ullAvailPageFile`
+/// (the commit this process may still take); the physical members are [`sample_physical_memory`]'s.
+pub(super) fn sample_commit() -> Result<super::CommitSample, Code> {
+    // SAFETY: MEMORYSTATUSEX is initialized with its documented byte size.
+    unsafe {
+        let mut status: MEMORYSTATUSEX = zeroed();
+        status.dwLength = u32::try_from(size_of::<MEMORYSTATUSEX>())
+            .map_err(|_| HostMetricsCode::PerformanceMemoryStructureInvalid.code())?;
+        if GlobalMemoryStatusEx(&mut status) == 0 || status.ullTotalPageFile == 0 {
+            return Err(HostMetricsCode::PerformanceMemoryStatusFailed.code());
+        }
+        Ok(super::CommitSample {
+            limit_bytes: status.ullTotalPageFile,
+            available_bytes: status.ullAvailPageFile,
+        })
+    }
+}
+
 /// #407 PERF-READ: `GetProcessMemoryInfo` on this process with the extended counters, whose
 /// `PrivateUsage` is the process's private bytes.
 pub(super) fn sample_own_process_memory() -> Result<super::OwnProcessMemory, Code> {
