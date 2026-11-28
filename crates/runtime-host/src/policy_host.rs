@@ -757,6 +757,10 @@ pub(crate) struct PolicyEvaluationContext<'a> {
     /// each instance a scheduled run's failure at its entry blocked, by alias, as the host held them
     /// when the cycle's inputs were read; every candidate of such an instance waits.
     pub(crate) entry_blocked: &'a crate::entry_block::EntryBlockGates,
+    /// #503 PACE (`scheduling-blackout.md`, "Order of the deferrals", position 4b, after the
+    /// entry's pairs): each pair whose scheduled runs keep failing, by alias and catalog task, as
+    /// the host held them when the cycle's inputs were read; such a pair waits or is set aside.
+    pub(crate) failure_paced: &'a crate::failure_pacing::FailurePacingGates,
 }
 
 /// Workflow #469 H1 (register §1.397; the design's place 3): who withdrew an application's
@@ -4652,6 +4656,7 @@ impl PolicyHost {
             asleep,
             idle_sleepers,
             entry_blocked,
+            failure_paced,
         } = context;
         let directive = self.cadence.observe(trigger, time.unix_ms)?;
         if directive.kind == PolicyRecomputeKind::Deferred {
@@ -4930,6 +4935,20 @@ impl PolicyHost {
             {
                 return Ok(Some(deferred_wake(&waiting)));
             }
+            // #503 PACE (register §1.545, ruling 6): then, as at position 4b, a task whose
+            // scheduled runs keep failing waits from its second failure in a row on, or is set
+            // aside for its window, and is let through at that end.
+            if (entry_blocked.get(&intent.instance_id).is_none()
+                || store_tasks.contains(&intent.task_id))
+                && let Some(waiting) = failure_paced.deferral(
+                    &intent.instance_id,
+                    &intent.task_id,
+                    time.unix_ms,
+                    false,
+                )
+            {
+                return Ok(Some(deferred_wake(&waiting)));
+            }
             // Positions 5 and 6, and between them (Workflow #500 SV-2) position 5a: the package's
             // declaration in force refuses a value the task's rule carries (fix round 1), or a
             // value set on the application excludes the rule, with no time of its own.
@@ -5124,6 +5143,19 @@ impl PolicyHost {
                 // each failure, or is set aside until its activity window ends; each wakes at its
                 // end. The instance's other tasks are not held.
                 if let Some(waiting) = entry_blocked.pair_deferral(
+                    &intent.instance_id,
+                    &intent.task_id,
+                    time.unix_ms,
+                    refresh,
+                ) {
+                    return Ok(waiting);
+                }
+                // #503 PACE (register §1.545; position 4b, after the entry's pairs): the task's
+                // scheduled runs keep failing on the instance: from its second failure in a row on
+                // it waits there after each, or is set aside until its activity window ends; each
+                // wakes at its end. Every candidate of the pair is held, whatever makes it one;
+                // the instance's other tasks are not.
+                if let Some(waiting) = failure_paced.deferral(
                     &intent.instance_id,
                     &intent.task_id,
                     time.unix_ms,

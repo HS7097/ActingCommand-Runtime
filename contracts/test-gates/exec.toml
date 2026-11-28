@@ -4646,3 +4646,11 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_455_rr1::rr4a_lab_resource_verify_declares_32_for_a_tables_file_that_writes_names",
 ]
 incident = ["#455 RR4a"]
+
+# #455 SL2 (0.12.101; register §1.547; brief rd-1123/brief-455-sl2.md, ruling 2 and test 5; contracts/standard-pack-goals.md, the row of goal_pool_unvalued): standard-pack check's goal check on G-R1's root with two more pools without a valuation, one writing spend_line (schedule.json naming pool_spend_line in requires) and one writing neither it nor target_defaults: the valid goals.json whose resource entry governs the first gives no warning, its goal being that pool's line; governing the second, or the pool whose valuation has no gap weight, is goal_pool_unvalued at /entries/2/governs/pool as before (test 5)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-resource-tooling::lib::gate_455_gr1::sl2_a_resource_entry_on_a_pool_that_writes_spend_line_is_accepted",
+]
+incident = ["#455 SL2"]

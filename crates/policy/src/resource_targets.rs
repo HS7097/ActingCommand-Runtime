@@ -751,7 +751,11 @@ fn check_resource_targets_v2(
 /// The entry's check of one v2 target: its pool, then its step and importance (the target's
 /// own, else the pool valuation's, else, #455 B3-P, the pool's `target_defaults`:
 /// [`target_terms`]), then its named tasks, or, without `tasks`, whether any task of the instance
-/// produces the pool. A refusal names its reason and its path below the target.
+/// produces the pool. A refusal names its reason and its path below the target. #455 SL2 (register
+/// §1.547): a target on a pool that writes `spend_line` is the pool's line ([`line_pool`]): it
+/// carries `at_least` and no term of its own, so a `scale`, an `importance_milli` or `tasks`
+/// written on it is `unknown_field` at that member, the first of them in this order, and it needs
+/// no task of the instance that produces the pool.
 fn check_target_v2<'a>(
     catalog: &'a CompiledCatalog,
     target: &ResourceTargetSpecV2,
@@ -759,6 +763,17 @@ fn check_target_v2<'a>(
 ) -> Result<(&'a PoolSpec, String), (ResourceTargetsRejectionReason, String)> {
     use ResourceTargetsRejectionReason as Reason;
     let (pool, fact_key) = resolve_target_pool(catalog, &target.resource, instance)?;
+    if line_pool(pool) {
+        let members = [
+            ("scale", target.scale.is_some()),
+            ("importance_milli", target.importance_milli.is_some()),
+            ("tasks", target.tasks.is_some()),
+        ];
+        return match members.into_iter().find(|(_, written)| *written) {
+            Some((member, _)) => Err((Reason::UnknownField, format!("/{member}"))),
+            None => Ok((pool, fact_key)),
+        };
+    }
     match target_terms(target, pool) {
         Err(MissingTerm::Scale) => return Err((Reason::MissingField, "/scale".to_owned())),
         Err(MissingTerm::Importance) => {
@@ -815,6 +830,29 @@ fn pool_target_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
     )
 }
 
+/// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): whether a stored
+/// target on `pool` is the pool's line: the pool writes `spend_line` (#455 SL1), which it writes only
+/// without a valuation and without `target_defaults`, so [`pool_target_terms`] gives it nothing. The
+/// one place the difference is read, from the catalog in force: a line carries `at_least` alone and
+/// needs no producer ([`check_target_v2`], the v1 check), the targetable list names its pool with
+/// neither term required ([`listed_terms`]), and the evaluation reads no line
+/// ([`weighed_target_policies`]).
+fn line_pool(pool: &PoolSpec) -> bool {
+    pool.spend_line.is_some()
+}
+
+/// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): the step and the
+/// importance the targetable list gives `pool` as its defaults: [`pool_target_terms`], or, on a
+/// line's pool ([`line_pool`]), its `spend_line`'s `scale` and `price_milli`, the numbers a line is
+/// pressed by, read from the catalog in force and never written in a target. `None` where a target
+/// must state its own.
+fn listed_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
+    match &pool.spend_line {
+        Some(line) => (Some(line.scale), Some(line.price_milli)),
+        None => pool_target_terms(pool),
+    }
+}
+
 /// A v2 target's gap step `S` and importance `I`: the target's own, else the pool valuation's
 /// `scale` and `gap.weight_milli`, else (#455 B3-P) the pool's `target_defaults`
 /// ([`pool_target_terms`]). The rule needs no resolution: `shortfall_linear`, the only one, is also
@@ -840,13 +878,22 @@ pub(crate) struct ResolvedTarget<'a> {
 
 /// Resolves `target` for `instance`: its pool, then each task, the first refusal winning.
 /// The entry check and the evaluator share both halves, so both judge a target alike. A
-/// refusal names its reason and its path below the target.
+/// refusal names its reason and its path below the target. #455 SL2 (register §1.547): a v1
+/// target always writes its own `scale`, `importance_milli` and `tasks`, which a line does not
+/// carry, so one on a pool that writes `spend_line` ([`line_pool`]) is `unknown_field` at its
+/// `scale`, before its tasks.
 pub(crate) fn resolve_target<'a>(
     catalog: &'a CompiledCatalog,
     target: &ResourceTargetSpec,
     instance: &InstanceSnapshot,
 ) -> Result<ResolvedTarget<'a>, (ResourceTargetsRejectionReason, String)> {
     let (pool, fact_key) = resolve_target_pool(catalog, &target.resource, instance)?;
+    if line_pool(pool) {
+        return Err((
+            ResourceTargetsRejectionReason::UnknownField,
+            "/scale".to_owned(),
+        ));
+    }
     let mut per_task = Vec::with_capacity(target.tasks.len());
     for (index, task_id) in target.tasks.iter().enumerate() {
         let per_run = resolve_target_task(catalog, pool, task_id, instance)
@@ -1955,10 +2002,47 @@ fn landing_targets(
 /// `Unreadable`; a withdrawal is no policy; `applied_at` is the record's `observed_at` and its
 /// confidence is not read. A server- or game-scoped record is never a policy and never an
 /// error: every instance it covers notes it as ignored (a server record over a game one). The
-/// map holds only the instances with something to report.
+/// map holds only the instances with something to report. #455 SL2: every stored target as it is
+/// stored, lines included, as the view (`ResourceTargetView`) shows them; the evaluation reads
+/// [`weighed_target_policies`].
 pub(crate) fn instance_target_policies(
     facts: &EvaluationFacts,
     time: EvaluationTime,
+) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    target_policies(facts, time, |_, _| false)
+}
+
+/// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): the stored
+/// policies as the evaluation weighs them, [`instance_target_policies`] with each record read
+/// without its lines: a stored target whose pool, as [`target_pool`] gives it for the record's
+/// instance in `catalog`, writes `spend_line` ([`line_pool`]) is left out of the record's targets,
+/// its own lifetime with it, before anything reads them, so a line adds no term, order, reason,
+/// gap, run count or stacked need to any task, and a record that holds lines alone is read as one
+/// that holds no target (no policy). Nothing stored is rewritten; the view and the goal page show
+/// the lines as stored. The next slice that presses spending reads the lines here, from the same
+/// records.
+pub(crate) fn weighed_target_policies(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    target_policies(facts, time, |instance_id, resource| {
+        facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_id)
+            .and_then(|instance| target_pool(catalog, resource, instance))
+            .is_some_and(line_pool)
+    })
+}
+
+/// The walk of [`instance_target_policies`] and [`weighed_target_policies`]: each record read by
+/// [`stored_policy_state`] without the targets `line` names, by the record's instance and the
+/// target's `resource`.
+fn target_policies(
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    line: impl Fn(&str, &str) -> bool,
 ) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
     let mut policies = BTreeMap::<String, InstanceTargetPolicy>::new();
     for fact in facts
@@ -1968,7 +2052,8 @@ pub(crate) fn instance_target_policies(
     {
         let scope_kind = match &fact.scope {
             ScopeSelector::Instance { instance_id } => {
-                if let Some(state) = stored_policy_state(fact, instance_id, time) {
+                let of_instance = |resource: &str| line(instance_id.as_str(), resource);
+                if let Some(state) = stored_policy_state(fact, instance_id, time, &of_instance) {
                     policies.entry(instance_id.clone()).or_default().state = Some(state);
                 }
                 continue;
@@ -2019,13 +2104,17 @@ pub fn resource_targets_without_active(
         unix_ms: now_unix_ms,
         monotonic_ms: 0,
     };
-    stored_policy_state(&fact, instance_id, time).is_none()
+    stored_policy_state(&fact, instance_id, time, &|_: &str| false).is_none()
 }
 
+/// One instance-scoped record as a policy, each version by its reader. #455 SL2: without the
+/// targets `line` names by their `resource` (after the record's own checks, so a record they would
+/// leave unreadable stays so); a record left with none reads as no policy.
 fn stored_policy_state(
     fact: &ObservedFact,
     instance_id: &str,
     time: EvaluationTime,
+    line: &dyn Fn(&str) -> bool,
 ) -> Option<TargetPolicyState> {
     let unreadable = |code| Some(TargetPolicyState::Unreadable { code });
     let FactValue::RecordList(rows) = &fact.value else {
@@ -2033,10 +2122,10 @@ fn stored_policy_state(
     };
     // Workflow #455 G-R2a: a v3 header selects the v3 reader, which reads the targets as v2's.
     if v3::declares_v3_rows(rows) {
-        return v3::stored_policy_state_v3(fact, rows, instance_id, time);
+        return v3::stored_policy_state_v3(fact, rows, instance_id, time, line);
     }
     if declares_v2_rows(rows) {
-        return stored_policy_state_v2(fact, rows, instance_id, time);
+        return stored_policy_state_v2(fact, rows, instance_id, time, line);
     }
     let decoded = match decode_rows(rows, instance_id) {
         Ok(decoded) => decoded,
@@ -2050,8 +2139,12 @@ fn stored_policy_state(
     };
     let DecodedResourceTargets {
         policy_sha256,
-        targets,
+        mut targets,
     } = decoded;
+    targets.retain(|target| !line(target.resource.as_str()));
+    if targets.is_empty() {
+        return None;
+    }
     let applied_at_unix_ms = fact.observed_at_unix_ms;
     Some(if time.unix_ms > valid_until_unix_ms {
         TargetPolicyState::Expired {
@@ -2071,17 +2164,19 @@ fn stored_policy_state(
 }
 
 /// [`stored_policy_state`] for a v2 record: unreadable when its rows are refused or it holds
-/// targets without an expiry, no policy for a withdrawal, else active or expired.
+/// targets without an expiry, no policy for a withdrawal, else active or expired. #455 SL2: without
+/// the targets `line` names; a record left with none is no policy.
 fn stored_policy_state_v2(
     fact: &ObservedFact,
     rows: &[BTreeMap<String, FactScalar>],
     instance_id: &str,
     time: EvaluationTime,
+    line: &dyn Fn(&str) -> bool,
 ) -> Option<TargetPolicyState> {
     let unreadable = |code| Some(TargetPolicyState::Unreadable { code });
     let DecodedResourceTargetsV2 {
         policy_sha256,
-        targets,
+        mut targets,
     } = match decode_rows_v2(rows, instance_id) {
         Ok(decoded) => decoded,
         Err(error) => return unreadable(error.code()),
@@ -2092,6 +2187,10 @@ fn stored_policy_state_v2(
     let Some(valid_until_unix_ms) = fact.expires_at_unix_ms else {
         return unreadable(RowsDecodeError::MalformedRows.code());
     };
+    targets.retain(|target| !line(target.resource.as_str()));
+    if targets.is_empty() {
+        return None;
+    }
     let applied_at_unix_ms = fact.observed_at_unix_ms;
     Some(if time.unix_ms > valid_until_unix_ms {
         TargetPolicyState::ExpiredV2 {
@@ -2118,7 +2217,10 @@ fn stored_policy_state_v2(
 /// valuation supplies, else (#455 B3-P) its `target_defaults` (as [`target_terms`] reads them,
 /// [`pool_target_terms`]), and its inventory as the time-validity projection of `facts` shows it
 /// ([`observe_target`]). #503 GOAL-1: each pool once, named as the game root's files write it
-/// (a composed copy without `@<alias>`), the name a target takes. Pure.
+/// (a composed copy without `@<alias>`), the name a target takes. #455 SL2 (register §1.547): a
+/// pool that writes `spend_line` takes a line, which needs no producer: it is targetable whatever
+/// its producing tasks, its defaults its `spend_line`'s `scale` and `price_milli`
+/// ([`listed_terms`]), so neither is required. Pure.
 pub fn targetable_resources(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -2181,15 +2283,17 @@ pub fn targetable_resources_with_readings(
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
-        if producing_tasks.is_empty() {
+        // #455 SL2 (register §1.547): a line needs no producer.
+        if producing_tasks.is_empty() && !line_pool(pool) {
             not_targetable.push(NotTargetableResource {
                 resource: resource.to_owned(),
                 reason: ResourceTargetsRejectionReason::UnmappedTask,
             });
             continue;
         }
-        // #455 B3-P (register §1.522): the pool's valuation's, else its `target_defaults`.
-        let (default_scale, default_importance_milli) = pool_target_terms(pool);
+        // #455 B3-P (register §1.522): the pool's valuation's, else its `target_defaults`. #455
+        // SL2: a line's pool its `spend_line`'s, so neither term is required.
+        let (default_scale, default_importance_milli) = listed_terms(pool);
         let observation = match observe_target(&projected, &given, instance, pool, &fact_key, time)
         {
             TargetObservation::Known {
