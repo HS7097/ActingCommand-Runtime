@@ -616,13 +616,16 @@ fn entry_table<'a>(
     Ok((table, tables.names.table(&table.name)))
 }
 
+/// What [`ladder_ref`] finds: a ladder, its column, its sub and the class whose ladder it is.
+type NamedLadder<'t> = (&'t GoalLadder, &'t str, Option<&'t str>, Option<&'t str>);
+
 /// The ladder `ladder` names in `table`, with its column, its sub and the class whose ladder it
 /// is; else the refusal: a key or a class the table does not hold `not_an_option`, a ladder it does
 /// not have `out_of_range`, each at its pointer.
 fn ladder_ref<'t>(
     table: &'t GoalTable,
     ladder: &'t GoalLadderRef,
-) -> Result<(&'t GoalLadder, &'t str, Option<&'t str>, Option<&'t str>), PageFailure> {
+) -> Result<NamedLadder<'t>, PageFailure> {
     let refused = |problem, pointer| PageFailure::Refused { problem, pointer };
     match ladder {
         GoalLadderRef::Class { class, column } => {
