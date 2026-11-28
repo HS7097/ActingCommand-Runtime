@@ -2859,7 +2859,11 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
   importance. Each covers the pool's producing candidates as a target without `tasks` does, so the
   pool's shortfall weight `Γ` raises them ("Resource weights (v2)" there); when the gap closes the
   push is gone. What a goal changes is which task is worth running: when one runs stays with its
-  trigger and the pool's lines.
+  trigger and the pool's lines. #455 MAKE (since 0.12.104; register §1.558): the pool of an item
+  with a recipe whose items in hand make part of what its holding does not cover asks that made
+  part too, and the goal the needs alone give it covers only its makers (the tasks that produce
+  the pool and consume the pool of one of the recipe's `from` items), which are told the made part
+  as their gap; on an instance without a maker it is passed over and nothing changes.
 - **Identities.** The set's identity is hashed into the decision identity of every candidate of
   the instance (a change of the tables appends nothing to the ledger, and one identity must never
   name two decisions) and into the instance's view (`dispatch_view_identity`) after the rest; the
@@ -2879,7 +2883,13 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
   lines"), the goal on the pool pending and, for an item with a recipe,
   `goal_records_holding_unknown` with `unknown_reason` `fact_stale`, nothing taken apart below it;
   a rule that produces an item with a recipe counts for what it produces, not for what it is made
-  from.
+  from. Since #455 MAKE (0.12.104): the part of such an item its items in hand make now is asked of
+  the rules that make it, and of them alone, so a rule that buys or farms the item ready-made is
+  still not lifted by the need; holdings are taken whole, not shared out among several items that
+  use one of them (two makers that consume one such item are then ordered by their benefit, and
+  the lines' count of the consumption a reading does not show yet holds the second); and a making
+  run leaves the pools of the items it consumed read unless it was handed a `run_cap` (#477 LF-1,
+  "Pool lines").
 
 ## Pool lines (SS-2h)
 

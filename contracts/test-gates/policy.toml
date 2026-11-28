@@ -1818,3 +1818,17 @@ tests = [
     "actingcommand-policy::lib::tests::gate_503_wake::wake_t13_the_release_leaves_room_for_the_longer_of_the_judged_and_the_dispatched_run",
 ]
 incident = ["#503 WAKE"]
+
+# #455 MAKE (0.12.104; register §1.558; the coordinator's rulings of 11-29 on its read-only study of the same day; contracts/resource-targets.md, "Needs computed from the records"; contracts/scheduling/README.md, "Needs computed from the records"), the policy's half, the needs given as the host gives them, no clock read. One instance, pool.top read 4 without a valuation (target_defaults S 1, I 1000; goal_tiers I_n 1000, C 40), pool.low valued 1000 at the step 1 with the constant lines 900 000 and 0, pool.coin valued 1; a judged maker of V 10 000 consuming 4 low and producing 1 top, a buyer of V 3000 consuming 300 coin, a farm of V 2000 consuming nothing. Making made 2 of 6, no stored goal: the computed goal covers the maker alone, goal_records@pool.top:applied current=4 at_least=6 gap=2 with need_gap=2, goal_records_need ending made=2, B 8000 (6000 with Covered 4), told 2; the buyer and the farm byte for byte as with Covered (t1). No maker: every decision equal to Covered's, the buyer dispatched, no resource_targets item, no goal_records_need, no resource_target_tasks_unevaluable (t2). A stored 50: at_least 56, gap 52, need_gap 2, stock_gap 50 on the maker (B 8040) and the buyer (B 4740), goal_records_need with stock 50 and made=2, the maker told 2 (t3). Today's pump pinned: Covered 4 and a stored 50 give at_least 54, gap 50, need_gap 0, B 6040 and 2740, told 50, no computed goal and no made (t4). A maker not judged, one making a run, no run_cap: told 2 and read after one dispatch, told 2 again and unread after the second, the computed goal then pending, and Unsplit 10 with its note gives no goal and says goal_records_holding_unknown fact_stale (t5). FIXV's V 0 maker of a priced top (base 5000, gap weight 3000), low read 40: policy_benefit_nonpositive −4000 with Covered, dispatched with B 2000 with Making made 2, told 2 and run_cap 2 (t6). low read 3, below one run's 4: held pool_line_held would_cross_hard_line without needs, with Covered and with a made part (t7).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-policy::lib::tests::gate_455_make::make_t1_the_computed_goal_covers_the_maker_alone_and_tells_it_the_made_part",
+    "actingcommand-policy::lib::tests::gate_455_make::make_t2_an_instance_without_a_maker_decides_as_with_the_holdings_part_alone",
+    "actingcommand-policy::lib::tests::gate_455_make::make_t3_a_stored_goal_on_the_pool_asks_its_stock_and_the_need_and_keeps_its_coverage",
+    "actingcommand-policy::lib::tests::gate_455_make::make_t4_today_s_stored_goal_on_a_covered_pool_lifts_by_its_stock_alone",
+    "actingcommand-policy::lib::tests::gate_455_make::make_t5_the_made_part_is_read_by_the_unread_rule_as_any_goal_s_gap",
+    "actingcommand-policy::lib::tests::gate_455_make::make_t6_a_maker_worth_nothing_by_itself_is_sent_by_the_made_part_alone",
+    "actingcommand-policy::lib::tests::gate_455_make::make_t7_a_maker_whose_input_reads_below_one_run_is_held_by_the_hard_line",
+]
+incident = ["#455 MAKE"]

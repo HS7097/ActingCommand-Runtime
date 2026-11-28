@@ -1145,8 +1145,31 @@ records"). The evaluator stacks it on the instance's stored record for that eval
 - **A pool without one**, on which a need lands (the pool of an item without a recipe), is judged
   as if it held a goal of `need`, adjusting every producing candidate, with the pool's own step and
   importance ("Who gives a goal its step and importance"); its `resource_targets` item names it
-  `goal_records@<pool>`. The pool of an item with a recipe gains no goal of its own: its need is the
-  part its holding covers, which only stacks on a stored goal there.
+  `goal_records@<pool>`. The pool of an item with a recipe gains no goal of its own while its need
+  is the part its holding covers alone, which only stacks on a stored goal there. #455 MAKE (since
+  0.12.104; register §1.558): when the items in hand make part of what the holding does not cover
+  ([standard-pack-goal-tables.md](standard-pack-goal-tables.md), "What is computed", "The made
+  part"), its need is the holding and the made part, `held + made`, and the made part is asked of
+  its makers: it gains the goal `goal_records@<pool>` of that need with the pool's own step and
+  importance, but that goal **covers only the pool's makers**, the candidates whose task's scope
+  covers the instance, that produce the pool (one run's production at least 1) and whose
+  `consumes` names the pool one of the recipe's `from` items names for the instance (a target's
+  pool, "A target's pool"). The tasks' declarations and scopes decide it, never an enablement, an
+  override or a run state. A rule that buys or farms the item ready-made is not a maker and is not
+  lifted by the need, as before; nor is a rule that declares none of the `from` items' pools among
+  its `consumes`. **On an instance with no maker the goal is passed over**: no `resource_targets`
+  item, no `goal_records_need`, no `resource_target_tasks_unevaluable`, and the instance is judged
+  as with the holding's part alone. A maker is told the made part as its gap by the members that
+  tell any goal's gap (`gap_remaining`, the goal term of `run_cap`; on a pool that writes
+  `goal_tiers`, the need's part), and a run told enough to close it leaves the pool unread as any
+  goal's ("A pool a run was told enough to close the gap on"). A stored goal on such a pool asks
+  `stock + held + made` and keeps its own coverage; its need's part is then the made part. Why the
+  made part and not all the part not covered: that part would ask the same units of the makers and
+  of the producers of the recipe's items at once, tell a maker more makings than its items in hand
+  pay for (so that it is sent again and again on one reading), and lift the rules that buy the item
+  ready-made, among them those that pay in a currency whose spending costs nothing while no line
+  presses it; the made part asks a maker exactly when it can work and for no more than it can do,
+  and the items' own gaps ask exactly what cannot be made yet.
 - **No stored goal at all.** An instance with records and no stored record (or a record of entries
   alone) is evaluated for goals all the same: it reads as an active v2 policy of the computed goals
   alone, whose `resource_weights` names it `goal-records:<identity>` at the time its records were
@@ -1163,7 +1186,8 @@ records"). The evaluator stacks it on the instance's stored record for that eval
   `goal_records_need` (info, `pool_id`) for each such pool: what the characters need, the stock, the
   holding, how much of it goes to the characters, the gap and the tables' sha256, in its text, as
   the existing reasons' numbers are; the holding and what follows from it read `pending` while the
-  evaluation does not know it. Then every candidate of the instance carries the notes of the
+  evaluation does not know it; #455 MAKE: on a pool whose need holds a made part, ` made=<n>` last,
+  there only. Then every candidate of the instance carries the notes of the
   computed set, one reason for each code and value: `goal_records_not_applied` (warning,
   `goal_problem`), `goal_records_not_held`, `goal_records_progress_unknown` (`fact_key`,
   `unknown_reason`), `goal_records_row_missing` (`fact_key`; fix round 1, apart from the next),

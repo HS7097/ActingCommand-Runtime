@@ -825,6 +825,27 @@ stale. A reading the run wrote itself does not count; where the fact refresh can
 pool's key one more reading run reads it, and a pool whose reading only a package's own rule
 brings waits for that rule.
 
+**A rule that makes an item with a recipe** (#455 MAKE, since 0.12.104; register §1.558). When the
+root's `goal-tables.json` gives an item a recipe, the part of that item the recipe's items in hand
+make now is asked of the rules that make it ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
+"What is computed", "The made part"; [resource-targets.md](resource-targets.md), "Needs computed
+from the records"). A rule is such a maker when it declares **the item's pool among its
+`produces` and the pool of at least one of the recipe's `from` items among its `consumes`**: write
+both, with the amounts of one run. A rule that declares none of the `from` items' pools is not seen
+as a maker and is asked nothing; a rule that buys the item with a currency, or farms it
+ready-made, is not a maker either and stays as it is. Nothing is to be configured, and a root
+without such a rule decides as before. One run may make one batch or as many as it is told; that
+is the package's choice:
+
+- **One batch a run**: the rule's `produces` on the item's pool is what one making turns out (the
+  recipe's `makes`). The gap the maker is told closes over its dispatches (the production told
+  under the gap adds up since the pool's reading, "Pool lines") or within one run when the rule is
+  handed a `run_cap` (a consumed pool with written lines, or a reserve).
+- **As many as told**: the package reads `session.dispatch.schedule.run_cap`, or the told gap
+  `gap_remaining.<j>` of its production entry `j` ([remedies.md](remedies.md), section 4). Without
+  a `run_cap` (no consumed pool's lines and no reserve take part) a package that caps its repeats by
+  it ends at its entry, as every such package does.
+
 ## Composition
 
 `actingcommand_policy::compose_standard_pack_rules` is the one composer. The Runtime's

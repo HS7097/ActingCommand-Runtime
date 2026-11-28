@@ -1849,6 +1849,24 @@ impl StackedNeeds {
     fn stock(&self, resource: &str) -> u64 {
         self.stocks.get(resource).copied().unwrap_or(0)
     }
+
+    /// #455 MAKE (register §1.558; `contracts/resource-targets.md`, "Needs computed from the
+    /// records"): when `target` is the goal the needs alone gave a pool of the kind
+    /// [`PoolNeedKind::Making`] ([`landing_targets`]: no stored goal names the pool, so no stock was
+    /// stacked on one), the pools of the recipe's `from` items, as the root's files write them,
+    /// by which [`resolve_v2`] knows the pool's makers; `None` for every other target, a stored
+    /// one on such a pool included, which keeps its own coverage.
+    fn making_from(&self, target: &ResourceTargetSpecV2) -> Option<&[String]> {
+        let computed = target.id == COMPUTED_TARGET_ID
+            && target.tasks.is_none()
+            && !self.stocks.contains_key(&target.resource);
+        let making = self
+            .needs
+            .pools()
+            .get(&target.resource)
+            .is_some_and(|need| matches!(need.kind, PoolNeedKind::Making { .. }));
+        (computed && making).then(|| self.needs.making_from(&target.resource))
+    }
 }
 
 /// The id of a target the computed needs give a pool no stored target names: in memory only,
@@ -1862,8 +1880,9 @@ const COMPUTED_TARGET_ID: &str = "goal_records";
 /// - an active v2 policy (a v2 record, or a v3 record's live targets): each target on a pool with
 ///   a computed need asks `stock + need` (its own `at_least` the stock, its own step and
 ///   importance kept), and each pool on which a need lands (an item without a recipe) that no
-///   target names gains a target of `need` with the pool's own step and importance; the policy's
-///   lifetime ends no later than the needs' freshness;
+///   target names gains a target of `need` with the pool's own step and importance (#455 MAKE: and
+///   each pool whose need holds a made part, [`landing_targets`]); the policy's lifetime ends no
+///   later than the needs' freshness;
 /// - no record, or one that holds no target: such a policy of the landing needs alone, its identity
 ///   `goal-records:<identity>` and its time the records' own;
 /// - an expired v2 policy (every target lapsed): such a policy of the landing needs, the lapsed
@@ -1964,7 +1983,10 @@ pub(crate) fn stack_record_needs(
 
 /// The targets of `computed`'s landing needs (each pool of an item without a recipe whose need
 /// is above 0) that no target of `existing` names: `at_least` the need, the pool's own step and
-/// importance, adjusting every producing candidate.
+/// importance, adjusting every producing candidate. #455 MAKE (register §1.558): and of each pool
+/// of the kind [`PoolNeedKind::Making`] no target of `existing` names, `at_least` its need (the
+/// holding and the made part), which [`resolve_v2`] lets cover the pool's makers alone. A pool of
+/// the kind `Covered` or `Unsplit` gains none, as before.
 fn landing_targets(
     computed: &InstanceRecordNeeds,
     existing: &[ResourceTargetSpecV2],
@@ -1973,7 +1995,7 @@ fn landing_targets(
         .pools()
         .iter()
         .filter(|(resource, need)| {
-            need.kind == PoolNeedKind::Lands
+            matches!(need.kind, PoolNeedKind::Lands | PoolNeedKind::Making { .. })
                 && need.need > 0
                 && !existing.iter().any(|target| target.resource == **resource)
         })
@@ -2981,7 +3003,9 @@ impl TargetGap {
 struct ResolvedTargetV2<'a> {
     target: &'a ResourceTargetSpecV2,
     pool: &'a PoolSpec,
-    /// The named tasks that map (`r >= 1`); `None` covers every producing candidate.
+    /// The named tasks that map (`r >= 1`); `None` covers every producing candidate. #455 MAKE
+    /// (register §1.558): for the goal the needs alone gave a pool of the kind
+    /// [`PoolNeedKind::Making`], the pool's makers ([`pool_makers`]).
     named: Option<BTreeSet<&'a str>>,
     status: TargetStatus,
 }
@@ -3512,6 +3536,9 @@ fn weighed_tasks(
 /// Workflow #455 RR3: `stacked`, the needs computed from the instance's stored records as
 /// [`stack_record_needs`] stacked them on `targets`, gives each covered candidate the
 /// `goal_records_need` of each covering target's pool that has one, and the policy its notes.
+/// #455 MAKE (register §1.558): the goal it gave a pool of the kind [`PoolNeedKind::Making`]
+/// covers the pool's makers alone ([`pool_makers`]), and none at all, so it is passed over, on an
+/// instance without one.
 fn resolve_v2(
     context: &TargetContext<'_>,
     targets: &[ResourceTargetSpecV2],
@@ -3532,6 +3559,21 @@ fn resolve_v2(
     let mut unmapped = BTreeMap::<String, (String, String, String, &'static str)>::new();
     let mut unevaluable = Vec::new();
     for target in targets {
+        // #455 MAKE (register §1.558): the goal the needs alone gave a pool whose need holds a made
+        // part covers the pool's makers alone; with none on the instance it is passed over (no
+        // item, no need, no lapse), and the instance is judged as without it.
+        let made_by = match stacked.and_then(|computed| computed.making_from(target)) {
+            None => None,
+            Some(from) => {
+                let makers = target_pool(catalog, &target.resource, instance)
+                    .map(|pool| pool_makers(catalog, instance, pool, from))
+                    .unwrap_or_default();
+                if makers.is_empty() {
+                    continue;
+                }
+                Some(makers)
+            }
+        };
         let mut mark_unmapped = |task: &str, why| {
             unmapped.insert(
                 task.to_owned(),
@@ -3579,7 +3621,7 @@ fn resolve_v2(
             lapsed("no_producing_task");
         }
         let named = match &target.tasks {
-            None => None,
+            None => made_by,
             Some(tasks) => {
                 let mut named = BTreeSet::new();
                 for task in tasks {
@@ -3772,6 +3814,41 @@ fn resolve_v2(
             .map(|stacked| stacked.needs.note_reasons())
             .unwrap_or_default(),
     })
+}
+
+/// #455 MAKE (register §1.558; `contracts/resource-targets.md`, "Needs computed from the
+/// records"): the makers on `instance` of `pool`, the pool of an item with a recipe whose `from`
+/// items are held in the pools `from` (as the root's files write them): every catalog task whose
+/// scope covers the instance, that produces `pool` (one run's production at least 1, as a target's
+/// coverage reads it) and whose `consumes` names the pool one of `from` names for the instance
+/// ([`target_pool`]). Read from the tasks' declarations and scopes alone, never from an enablement,
+/// an override or a run state (SS-1's one-way guard), so no such change moves a goal's coverage.
+fn pool_makers<'a>(
+    catalog: &'a CompiledCatalog,
+    instance: &InstanceSnapshot,
+    pool: &PoolSpec,
+    from: &[String],
+) -> BTreeSet<&'a str> {
+    let inputs = from
+        .iter()
+        .filter_map(|resource| target_pool(catalog, resource, instance))
+        .map(|input| input.id.as_str())
+        .collect::<BTreeSet<_>>();
+    catalog
+        .catalog()
+        .tasks
+        .tasks
+        .iter()
+        .filter(|task| {
+            scope_matches_instance(&task.scope, instance)
+                && per_run_production(task, &pool.id) >= 1
+                && task
+                    .consumes
+                    .iter()
+                    .any(|effect| inputs.contains(effect.pool_id.as_str()))
+        })
+        .map(|task| task.id.as_str())
+        .collect()
 }
 
 /// Resolves one active target (T1) and records the effect of each task it names.

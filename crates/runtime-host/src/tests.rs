@@ -339,6 +339,10 @@ mod gate_455_sl2;
 // pool's trigger line before the line; the idle plan keeps that release, and three answers only a
 // change lets through are held.
 mod gate_503_wake;
+
+// #455 MAKE (0.12.104; register §1.558): the pool of an item with a recipe asks the part its items
+// in hand make now, as the needs take it apart, and nothing else changes.
+mod gate_455_make;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

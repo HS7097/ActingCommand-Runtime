@@ -5082,3 +5082,17 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_wake::wake_h6_a_time_bound_gate_holds_the_release_until_the_gate_lets_the_instance_through",
 ]
 incident = ["#503 WAKE"]
+
+# #455 MAKE (0.12.104; register §1.558; the coordinator's rulings of 11-29 on its read-only study of the same day; contracts/standard-pack-goal-tables.md, "What is computed", "The made part"), the host's half, the pure computation, no clock read. RR3's tables (an item needed 10, held 4, made 1 from 4 of a lower item and 300 of a cost item, and 2 of an item of no pool): 8 and 1000 in hand make min(6, 2, 3) = 2, the item's pool 6 Making made 2, made from the lower item's pool, the lower item 24 and the cost 1800 Lands, the set's freshness the earliest of the roster's and the two inputs' holdings whichever ends first (m1); 3 of the lower item or 200 of the cost pay for no making and the set equals RR3's, identity included, no input bounding its freshness (m2); the cost not known, the cost unread or the lower item unread give RR3's set (m3); made 3 at a time, held 6, 4 not covered: 4 with two makings paid, 3 with one (m4); an input item of no pool: Covered 4 and its goal_records_item_unweighed of 6 (m5); two levels, a top item made of 2 middle ones made of 3 lower ones, needed 5, held 2: no middle item in hand, the top Covered 2 and the middle Making made 3 of 3, the lower item 18; 4 in hand, the top Making made 2 of 4, the middle Making made 2 of 6, the lower item 6 (m6); a Making set hashes apart from RR3's, Making 2, Making 3, Covered and Lands give four identities on one pool, and the from pools are not hashed (m7).
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m1_the_items_in_hand_make_part_of_what_is_not_covered",
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m2_items_in_hand_that_pay_for_no_making_leave_the_set_as_before",
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m3_an_input_not_known_or_unread_makes_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m4_the_made_part_is_bounded_by_the_part_not_covered_and_by_the_inputs",
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m5_an_input_without_a_pool_makes_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m6_each_level_makes_what_its_items_in_hand_pay_for",
+    "actingcommand-runtime-host::lib::tests::gate_455_make::make_m7_the_identity_hashes_the_kind_and_the_made_part",
+]
+incident = ["#455 MAKE"]

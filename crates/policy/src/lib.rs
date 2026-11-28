@@ -259,6 +259,10 @@ mod tests {
     // pool's trigger line waits for the line, or for the end of its chance less its run.
     mod gate_503_wake;
 
+    // #455 MAKE (0.12.104; register §1.558): the goal the needs give the pool of an item with a
+    // recipe, the part its items in hand make now, covers the rules that make it alone.
+    mod gate_455_make;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

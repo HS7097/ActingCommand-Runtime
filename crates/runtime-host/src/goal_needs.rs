@@ -31,7 +31,12 @@
 //!   whose holding is not known adds nothing below itself (#455 RR3c: nor one whose holding the
 //!   production told under a goal's gap on its pool since its reading left unread). What remains
 //!   on an item without a recipe is its pool's need; an item without a recipe and without a pool
-//!   is noted and weighs nothing.
+//!   is noted and weighs nothing. #455 MAKE (register §1.558): the pool of an item with a recipe
+//!   whose holding is known and below its need asks, beside what its holding covers, the made
+//!   part: what its items in hand make now, the least over its `from` and `cost` items of
+//!   ⌊holding ÷ what one making takes⌋ makings, at most those the need asks, times `makes`, at most
+//!   the part not covered; an item whose holding is not known or unread, or without a pool, makes
+//!   none, and with none the pool is as before. Its items keep their needs either way.
 //!
 //! Nothing here reads a clock, a file, a lock or the ledger, and nothing computed is stored.
 
@@ -40,7 +45,7 @@ use std::sync::Arc;
 
 use actingcommand_contract::{
     FactRecord, FactScalar, GoalColumnRead, GoalKey, GoalKeyColumn, GoalLadder, GoalProblem,
-    GoalProgressList, GoalRequirement, GoalStep, GoalTable, GoalTableItem, GoalUse,
+    GoalProgressList, GoalRecipe, GoalRequirement, GoalStep, GoalTable, GoalTableItem, GoalUse,
     MAX_GOAL_SAFE_INTEGER, StandardPackGoalTables,
 };
 use actingcommand_policy::{
@@ -156,17 +161,20 @@ pub(crate) fn instance_needs(
         }
     }
     let mut fresh_until_unix_ms = lists.fresh_until_unix_ms;
-    let pools = match tables {
+    let taken = match tables {
         Some((tables, _)) => take_apart(tables, raw, sources, &mut notes, &mut fresh_until_unix_ms),
-        None => BTreeMap::new(),
+        None => TakenApart::default(),
     };
-    Some(InstanceRecordNeeds::new(
-        tables.map(|(_, sha256)| sha256.clone()),
-        records_observed_at_unix_ms,
-        pools,
-        notes,
-        fresh_until_unix_ms,
-    ))
+    Some(
+        InstanceRecordNeeds::new(
+            tables.map(|(_, sha256)| sha256.clone()),
+            records_observed_at_unix_ms,
+            taken.pools,
+            notes,
+            fresh_until_unix_ms,
+        )
+        .with_making_from(taken.making_from),
+    )
 }
 
 /// The table, the key and the target of `record` when the root in force declares them, or the
@@ -651,21 +659,71 @@ fn recipe_order<'t>(
     order
 }
 
+/// #455 MAKE (register §1.558): what [`take_apart`] gives: each pool's need, by the pool as the
+/// root's files write it, and, for each pool whose need holds a made part
+/// ([`PoolNeedKind::Making`]), the pools of its recipe's `from` items, which say who makes it.
+#[derive(Debug, Default)]
+struct TakenApart {
+    pools: BTreeMap<String, PoolNeed>,
+    making_from: BTreeMap<String, Vec<String>>,
+}
+
+/// #455 MAKE (register §1.558; module doc, "Taking apart"): how many makings of `recipe` the
+/// holdings of its items pay for now, at most `makings` (those the need asks), with the earliest
+/// end of the holdings read: the least, over its `from` and `cost` items, of ⌊the item's holding ÷
+/// what one making takes of it⌋, each holding read as an item's own ([`NeedsSources::holding`]) and
+/// taken whole, not shared out among the items that use it. An item whose holding is not known or
+/// unread, or that names no pool, pays for none: `(0, None)`.
+fn makings_in_hand(
+    recipe: &GoalRecipe,
+    items: &BTreeMap<&str, &GoalTableItem>,
+    sources: &dyn NeedsSources,
+    makings: u128,
+) -> (u128, Option<u64>) {
+    if makings == 0 {
+        return (0, None);
+    }
+    let mut paid = makings;
+    let mut fresh_until_unix_ms = None;
+    for (input, per) in recipe.from.iter().chain(&recipe.cost) {
+        let holding = items
+            .get(input.as_str())
+            .and_then(|item| item.pool.as_deref())
+            .map(|pool| sources.holding(pool));
+        let Some(NeedHolding::Known {
+            held,
+            fresh_until_unix_ms: holding_fresh_until,
+        }) = holding
+        else {
+            return (0, None);
+        };
+        paid = paid.min(u128::from(held) / u128::from((*per).max(1)));
+        fresh_until_unix_ms = earliest(fresh_until_unix_ms, holding_fresh_until);
+    }
+    (paid, fresh_until_unix_ms)
+}
+
 /// The needs `need`, by item, taken apart once (module doc, "Taking apart"), by pool as the root's
-/// files write it; the earliest end of the holdings read lowers `fresh_until_unix_ms`.
+/// files write it; the earliest end of the holdings read lowers `fresh_until_unix_ms`. #455 MAKE
+/// (register §1.558): an item with a recipe whose holding `h` is known and below its need `n`
+/// asks its pool `h + made` as well (`Making`), `made = min(n − h, k·makes)` with `k` the makings
+/// its items in hand pay for now ([`makings_in_hand`]), and their holdings lower the freshness
+/// then; with `made` 0 the pool is `Covered`, byte for byte as before. Its recipe's items keep the
+/// needs the taking apart gives them either way.
 fn take_apart(
     tables: &StandardPackGoalTables,
     mut need: BTreeMap<String, u128>,
     sources: &dyn NeedsSources,
     notes: &mut Vec<RecordNeedsNote>,
     fresh_until_unix_ms: &mut Option<u64>,
-) -> BTreeMap<String, PoolNeed> {
+) -> TakenApart {
     let items = tables
         .items
         .iter()
         .map(|item| (item.name.as_str(), item))
         .collect::<BTreeMap<_, _>>();
     let mut pools = BTreeMap::new();
+    let mut making_from = BTreeMap::<String, Vec<String>>::new();
     for item in recipe_order(tables, &items) {
         let Some(amount) = need.get(&item.name).copied().filter(|amount| *amount > 0) else {
             continue;
@@ -678,14 +736,35 @@ fn take_apart(
                 } => {
                     *fresh_until_unix_ms = earliest(*fresh_until_unix_ms, holding_fresh_until);
                     let covered = amount.min(u128::from(held));
-                    pools.insert(
-                        pool.clone(),
+                    let makes = u128::from(recipe.makes.max(1));
+                    let makings = (amount - covered).div_ceil(makes);
+                    let (paid, inputs_fresh_until) =
+                        makings_in_hand(recipe, &items, sources, makings);
+                    let made = (amount - covered).min(paid.saturating_mul(makes));
+                    let pool_need = if made == 0 {
                         PoolNeed {
                             need: bounded(covered),
                             kind: PoolNeedKind::Covered,
-                        },
-                    );
-                    let makings = (amount - covered).div_ceil(u128::from(recipe.makes.max(1)));
+                        }
+                    } else {
+                        *fresh_until_unix_ms = earliest(*fresh_until_unix_ms, inputs_fresh_until);
+                        making_from.insert(
+                            pool.clone(),
+                            recipe
+                                .from
+                                .iter()
+                                .filter_map(|(input, _)| items.get(input.as_str()))
+                                .filter_map(|from_item| from_item.pool.clone())
+                                .collect(),
+                        );
+                        PoolNeed {
+                            need: bounded(covered + made),
+                            kind: PoolNeedKind::Making {
+                                made: bounded(made),
+                            },
+                        }
+                    };
+                    pools.insert(pool.clone(), pool_need);
                     if makings == 0 {
                         continue;
                     }
@@ -740,5 +819,5 @@ fn take_apart(
             }),
         }
     }
-    pools
+    TakenApart { pools, making_from }
 }
