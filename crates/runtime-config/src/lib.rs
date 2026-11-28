@@ -20,7 +20,8 @@
 //!   options `lab_module_authoring` and `lab_module_debugging` (Workflow #389 U-2); `device_link`
 //!   (Workflow #398 RD-2, model-398 §4.6); `device_state` (Workflow #398 RD-5b, model-398 §7.8);
 //!   `startup_discovery` (Workflow #390 DISC-1); `touch` (Workflow #406 T12);
-//!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys); `watchdog` (#411
+//!   `emulator_control` (#411 A50; emu-watch adds the emulator watch's keys, #503 MEM the
+//!   automatic starts' commit reserve and spacing); `watchdog` (#411
 //!   A66, read by the watchdog and `actingctl` from the configuration file,
 //!   [`watchdog::start_window_ms`]); `execution` (PERF-B1, Workflow #407 B1: the kernel's
 //!   capture cadence); `artifact_store` (Workflow #407 PF-1: how many bytes of a stream one
@@ -122,7 +123,7 @@ pub use effective::{
     OVERRIDE_VALUE_JSON, OverridesInvalid, RestoreNote,
 };
 pub use emulator_control::{
-    EmulatorControlFile, EmulatorWatchConfig,
+    EmulatorControlFile, EmulatorStartGateConfig, EmulatorWatchConfig,
     RESTART_EXIT_WAIT_MAX_MS as EMULATOR_RESTART_EXIT_WAIT_MAX_MS,
     RESTART_EXIT_WAIT_MS as EMULATOR_RESTART_EXIT_WAIT_MS,
 };

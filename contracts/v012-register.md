@@ -52528,6 +52528,189 @@ an application step; `perf.summary.owned_processes` gains rows with ownership `o
 **Rollback.** Nothing new is persisted: an older build reads `owned` rows (an existing value) and
 classes those processes as outside load again, and degrades again on each application step.
 
+### 1.556 Slice #503 MEM (0.12.102): an automatic emulator start waits for commit headroom and keeps a minimum distance from the previous start; both numbers are configuration keys with defaults (board #503; the rulings are the coordinator's of 11-29, taken from a read-only study of the tree with its open point decided, not the owner's words; coordinator work order `rd-1123/brief-503-mem.md` and its correction of the same day; on #503 NOISE-A's head, which holds main `924f4034`)
+
+[emulator-control.md](emulator-control.md) ("Configured start at daemon start", the bullet "Commit
+headroom and spacing") and [runtime-config.md](runtime-config.md) ("The `emulator_control`
+section") are the contract.
+
+**The problem** (the work order's, taken as given, in neutral words). Each emulator the Runtime
+starts commits seven to eight gibibytes. The host's commit limit is finite and other programs hold
+part of it. At a day change several instances are due within the same minutes; the Runtime starts
+them one after another, knowing nothing of memory, and a production host has been seen within a few
+gibibytes of its limit. A host that reaches the limit fails allocations in every program on it,
+the Runtime included. Read in the tree: the host's memory sample kept only physical memory, no
+start path read commit, and nothing put a minimum time between two starts (the automatic starts
+were already serialised by the start turn, which is not the same: the turn has no interval and
+knows nothing of memory, and a person's control and the ladder's rung run outside it).
+
+**What it rests on** (read on this tree; none of the stop conditions holds).
+- *The interface.* `actingd-config` 35 is #489 AVAIL-1's (row 35), so this slice takes the next
+  free revision, **36** (the work order said 35; its correction of the same day says 36; no open
+  branch raises it). This build declares [5, 36]; the installed console declares [5, 32]; the
+  installer is this build's `actingctl` ([5, 36]) or the installed build's ([5, 35]). The edge
+  `installer_ui_next_common` asks that the three ranges meet: they meet in [5, 32] either way, as
+  before, so nothing the console or the installer does changes. The console sets keys only of the
+  `daily` and `advanced` tiers and these two are `hidden`; a root's file that names neither key
+  passes `installer_knows_keys` unchanged.
+- *An older build and the keys.* A configuration file that names either key is refused by a build
+  before this one (`EmulatorControlFile` denies unknown members, `config_decode_failed`), at its
+  start and in its check-config. An instruction that set
+  either key (a `host.config_overrides` row) is not a stop: an older build's restore finds no row of
+  the key (`EffectiveConfig::restore`, `setting_position`) and drops the value with
+  `config_override_dropped`; the start goes on (below, "Rollback").
+- *The wait holds nothing a person's control needs.* It keeps the start turn (a word in memory, no
+  lock held across a tick) and its claim's key; an emulator control queued on the same instance
+  ends the wait at the next tick (`emulator_autostart_superseded`, as today), and every other
+  instance's control takes neither.
+- *No existing test reads the clock or the commit through the gate.* A test build without the
+  commit seam consults no gate and stamps no Start (below, "Decided here"), so every test written
+  before this slice starts its emulators as it did, and none depends on the CI host's memory.
+
+**The rulings, as built.**
+- *1, the read* (`crates/host-metrics/src/lib.rs`, `CommitSample`, `sample_commit`; `windows.rs`,
+  `sample_commit`). `GlobalMemoryStatusEx`'s `ullTotalPageFile` (the limit) and `ullAvailPageFile`
+  (what the process may still commit: without a job object, and the tree creates none, the
+  system's available commit); off Windows `performance_sampler_unsupported`. The physical sample
+  is unchanged.
+- *1, where* (`crates/runtime-host/src/host/emulator_autostart.rs`, `hold_autostart_claim`,
+  `start_gate_open`). The gate is asked only by an automatic start's claim (the daemon start's
+  configured start, the emulator watch's restart, an idle wake after `stop_emulator`), at every
+  tick, after the network wait and once it holds the start turn, before the last checks and the
+  Start. Held, it keeps the turn and its key and ticks on (500 ms; the commit read at once and then
+  every 5 s, as the network read): whatever ends a hold today ends the wait (a drain or a shutdown,
+  an emulator control waiting on the instance, the instance's or the global pause, `start_emulator`
+  turned off), and there is no deadline. The gate's memory lives with the turn (`AutostartTurn`,
+  `StartGateMemory`): the latest Start's time, the open short episode, the failing streak; memory
+  only.
+- *1, the stamp* (`emulator_instance.rs`, `perform_control_phase`; `note_emulator_start_returned`).
+  Every emulator Start meets the provider in that one place: the time it returned is stamped
+  there, whatever its result, for a Start of any kind.
+- *2, the numbers are keys* (`crates/runtime-config/src/emulator_control.rs`, the two rows and
+  `EmulatorStartGateConfig`; `effective.rs`, `emulator_start_gate`, also in the section's whole
+  check; `crates/runtime-host/src/host/runtime_config.rs`, `emulator_start_gate_settings`). A Start
+  goes on when the available commit is at or above the reserve and the spacing has passed since the
+  latest Start returned.
+- *3, a wait is told* (the codes below; each a `runtime.failed` record under the instance's links,
+  fresh system links and not the claim's request, so a start a pause holds afterwards still records
+  no `command.*` and no `runtime.failed` of its own as PG-1 requires; its severity the code's
+  category; and the same report line, which actingd writes as a daemon line).
+  The network wait is shown today only in the claim's report lines (`emulator_autostart_network_ready`,
+  `_status_unknown`) and the refusal's records: no member of an instance's state in the status or
+  the overview, no not-run explanation and no other report names it (the status shows the claim's
+  lease as `lease_active` and a pause lists `automatic_start` in its way, for any automatic start,
+  waiting or not). So the commit wait is shown the same way, as report lines and records, and
+  nothing is added to the status, the overview or the schedule's explanation.
+- *4, a read that fails* lets the start go on, once told per failing streak.
+- *5, unchanged*: every start with the gate off or with headroom and spacing satisfied, but for the
+  stamp; every explicit control, every stop, the ladder, the turn's order and every existing record.
+  A file that names neither key reads as the defaults.
+
+**What is never held, and why.** A person's, an agent's or the Lab's emulator control (start, stop,
+restart: an explicit act of a person is not held by an automatic guard, as PAUSE-AUTO's "an explicit
+emulator control never asks"); any Stop (it frees commit); the recovery ladder's emulator-restart
+rung (a broken instance's recovery, whose own Stop frees what its Start takes, with its own bounds;
+holding it is a possible later ruling, not this slice); a recognition (it launches nothing); a
+startup package and an application start (no virtual machine). Their Starts only stamp the spacing,
+so they delay the next automatic start, which they never wait for.
+
+**Keys** (`actingd-config` 36; settable, read at every tick of the waiting claim, so an instruction
+applies at the next tick without a restart; no per-instance form; console tier `hidden`):
+
+| Key | Range | Default |
+|---|---|---|
+| `emulator_control.start_commit_reserve_bytes` | integer `0..=1099511627776`; `0` checks nothing and reads nothing | `17179869184` (16 GiB) |
+| `emulator_control.start_spacing_ms` | milliseconds `0..=600000`; `0` spaces nothing | `30000` |
+
+With a commit limit of about 103 GiB the defaults let automatic starts go on until about 87 GiB are
+committed. Both defaults are the study's inference (twice the top of the measured seven to eight
+gibibytes a start commits; whether a machine's commit is all in when its Start returns could not be
+read): a trace of the limit and the available commit around one start on the production host
+settles them, and a later commit raises the spacing.
+
+**Codes** (`contracts/outcome-codes/runtime-host.json`; index regenerated and checked current;
+class `none`, so no trigger matches them and no decision reads them). Three outcome keys are added
+to the key table (`commit_limit_bytes`, `commit_available_bytes`, `commit_reserve_bytes`): the
+study's `limit_bytes`, `free_bytes` and `memory_reserve_bytes` mean a length limit, a volume's free
+space and the frame stores' reserve, and a key keeps one meaning. No location is added.
+
+| Code | The one situation | Refuses or warns | Exit status |
+|---|---|---|---|
+| `emulator_autostart_commit_short` | automatic starts are held: the available commit (`commit_available_bytes`, of `commit_limit_bytes`) is below the reserve (`commit_reserve_bytes`); `alias` the instance first in line, `idle_action` for an idle wake; once per short episode for the whole host, from the first short read until a start passes the gate again | warns | none: no request answers it |
+| `emulator_autostart_commit_ready` | the start that ends the episode passes the gate (`elapsed_ms` since the episode began, the read, the reserve) | info | none |
+| `emulator_autostart_commit_unknown` | the commit could not be read (`failure_code` the read's code); the start goes on without the headroom check; once per failing streak, until a read succeeds | warns | none |
+
+The catalogue's text of each says the result (what holds, how much is available, the limit, the
+reserve, who is first in line) and the operation: the Runtime starts the instance as soon as the
+headroom is back, which happens when another emulator stops or another program frees memory; a
+person may start an emulator by hand at any time, which is not held; the reserve is
+`emulator_control.start_commit_reserve_bytes`.
+
+**Interfaces.** `actingd-config` [5, 35] → [5, 36] ([component-interfaces.md](component-interfaces.md),
+row 36): the two members of `emulator_control`. `ledger` does not move: the three codes travel as
+text in `runtime.failed` records, which every revision reads; `runtime-client` and `package` do not
+move.
+
+**Decided here.** The revision is 36, not the work order's 35 (above). A test build without the
+commit seam (`RuntimeHostConfig::with_commit_sample_for_test`) consults no gate at all, spacing
+included, and stamps nothing: with the default 30 s spacing, every existing test that starts two
+emulators within 30 s on the system clock would otherwise wait, and on a manual clock never go on;
+the study's "ample" without the seam covers only the headroom. The spacing wait alone records
+nothing: it ends by itself within `start_spacing_ms` (at most ten minutes), the claim's lease shows
+meanwhile, and the work order names only the three codes. A failed read, or the reserve turned to
+`0` by an instruction, ends an open episode without a ready line. The new keys follow AVAIL-1's
+places (the last slice that added a settable key and raised `actingd-config`): the configuration
+crate, the section's whole check (which actingd's check-config runs), the defaults file, the
+contract and the two interface tables; the console's tiers need no row (`hidden` is every key the
+table does not list).
+
+**Tests** (`crates/runtime-host/src/tests/gate_503_mem.rs`, host gate map row "#503 MEM"; the commit
+seam, the Runtime's manual clock and the scripted emulators; the spacing read from the Runtime's own
+stamp of the latest Start, so a start the gate let through early would leave an earlier stamp; no
+clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `mem_1_a_day_change_holds_the_one_in_line_and_those_behind_it_with_one_short_for_the_episode` | three instances due at once: the first starts on ample headroom; the next, first in line, holds the turn and its key with one `…_short` (its alias, 8 GiB of 100 GiB, the 16 GiB reserve) while the third waits behind it, neither started at 5 s; the headroom back at 10 s, it still waits out the spacing and starts at 30 s with one `…_ready` (`elapsed_ms` 30 000); the third starts at 60 s; both lines are records under the instance in line, warning and info |
+| `mem_2_the_spacing_holds_an_automatic_start_after_a_persons_start_for_its_length` | with ample headroom an automatic start right after a person's start is held at 29 999 ms and starts at 30 000 ms; no gate line or record |
+| `mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_headroom_short` | while an automatic start waits for headroom, a person's stop and start of another instance and a device drill of its ladder's emulator-restart rung are driven at once and stamp the spacing; a person's start of the waiting instance is driven and the claim yields (`emulator_autostart_superseded`) |
+| `mem_4_a_pause_and_a_shutdown_end_the_wait_as_they_end_a_hold_today` | an instance pause ends the wait (`emulator_autostart_skipped`, `instance_paused`), the next in line waits in the same episode with no second short line, and the host's close ends that wait (`emulator_autostart_interrupted`); nothing started |
+| `mem_5_start_emulator_turned_off_ends_the_wait` | `start_emulator` set off by an instruction ends the wait (`start_emulator_off`); nothing started |
+| `mem_6_the_reserve_0_never_holds_and_reads_nothing` | the file's reserve `0`: with a short scripted headroom the start goes on, no read, no line |
+| `mem_7_a_configuration_without_the_keys_holds_at_the_defaults` | a file naming neither key: 16 GiB less one byte is short, exactly 16 GiB goes on, and the next start is held at 29 999 ms after it and starts at 30 000 ms |
+| `mem_8_both_keys_set_by_an_instruction_take_effect_at_the_next_tick` | `ConfigureSettings` of the reserve (4 GiB) lets the waiting start go on with the read it has, its ready line naming 4 GiB; of the spacing (`0`) lets the next one go on at once |
+| `mem_9_a_failing_read_starts_and_says_so_once` | failing reads: the first start goes on with one `…_unknown` (its code, under its instance, warning), the next reads fail again with no second line, and the spacing still holds it to 30 s |
+
+Adapted (1), the requirement moving what it pins: `tools/actinglab-architecture/tests/component_interfaces.rs`
+(`V0120`: `actingd-config` [5, 36]). No other test pins the range (the rescue module's fixtures
+declare their own, and the readers of the shipped declaration pin `runtime-client` and `package`).
+No other existing test changes, none leaves the gate maps and no golden is re-recorded. The
+existing autostart, idle and watch gates (`gate_369_s6c`, `gate_r3`, `gate_pause_auto`,
+`gate_idle1p`, `gate_480_pg1`, `gate_emu_bind`, `gate_emu_watch`, `gate_486_asleep`, the autostart
+tests of `instance_workers`) set no commit seam, so the gate is not consulted there.
+
+**What is not changed.** The network wait and its codes; the turn, its order and its contenders;
+the pauses' holds and their records; `start_emulator`; the watch's bound; the idle plan's wake
+leads (staggering them is a separate decision); the ladder and its rungs; every explicit control
+and its records; the physical memory sample and every use of it; a page file that could grow is
+not counted. No game, package or alias is named in code.
+
+**At deploy.** Nothing to configure: the two keys take their defaults from the new build's defaults
+file, and the update leaves the root's configuration file as it is. The installed console and the
+installer meet this build as before (above). On the production host, after the first automatic
+starts, read the daemon's lines and the ledger for `emulator_autostart_commit_*`; a short episode at
+a day change shows one `…_short` and later one `…_ready`. In the release notes' language:
+运行时自动启动模拟器之前先看主机还剩多少可提交内存，不够 16 GiB 就先等，等到别的模拟器停了或者别的程序放出内存再启动；两次启动之间至少隔 30 秒（人手动启动、停止和恢复阶梯的重启都不拦，只计时）。两个数都是新配置键 `emulator_control.start_commit_reserve_bytes`、`emulator_control.start_spacing_ms`，运行中可改。等待时记一条 `emulator_autostart_commit_short`，放行时一条 `emulator_autostart_commit_ready`，读不到内存时照常启动并记一条 `emulator_autostart_commit_unknown`。`actingd-config` 升到 36。
+
+**Rollback.** A build before this one reads the root's configuration file as before, since the
+update writes neither key there. A file into which a person wrote either key is refused by it
+(`config_decode_failed`, at its start and in its check-config), so such a file is put back first.
+An instruction that set either key is dropped by its restore with
+`config_override_dropped` and the start goes on, naming the key among the instructions it dropped;
+a rollback's post-check counts that as a mismatch, as for AVAIL-1's keys. It reads the three new
+codes in the records as text it does not know. The gate's memory was memory only and is gone; the
+older build starts automatic emulators with no gate, as before.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its

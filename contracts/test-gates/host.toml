@@ -5035,3 +5035,19 @@ tests = [
     "actingcommand-runtime-host::lib::tests::gate_503_noise_a::noise_a_an_application_step_writes_no_degraded_or_recovered_monitor_record",
 ]
 incident = ["#503 NOISE-A"]
+
+# #503 MEM (0.12.102; register §1.556; brief rd-1123/brief-503-mem.md, rulings 1 to 5; contracts/emulator-control.md, "Commit headroom and spacing"; contracts/runtime-config.md, "The emulator_control section"), on the commit seam (scripted reads, each sent to the test), the Runtime's manual clock and the scripted emulators, the spacing read from the Runtime's stamp of the latest Start; no clock read. Three instances due at once: the first starts on ample headroom, the next, first in line, holds the turn and its key with one emulator_autostart_commit_short for the episode (alias, available, limit, reserve) while the third waits behind it; the headroom back, it still waits out the 30 s spacing after the first Start and goes on with one emulator_autostart_commit_ready (elapsed_ms), and the third starts 30 s after it; both lines are runtime.failed records under the instance in line, warning and info (1); an automatic start right after a person's start is held at 29 999 ms and starts at 30 000 ms, and the spacing alone tells nothing (2); with the headroom short a person's stop and start, a device drill's emulator-restart rung and a person's start of the waiting instance are driven at once and stamp the spacing, the waiting claim yielding as today (3); an instance pause ends the wait as held and the next in line waits in the same episode with no second short line, and a shutdown ends that wait as interrupted, nothing started (4); start_emulator turned off ends the wait with start_emulator_off (5); the reserve 0 reads nothing and holds nothing (6); a file naming neither key holds at 16 GiB less a byte, goes on at 16 GiB and spaces 30 s (7); both keys set by ConfigureSettings take effect at the waiting claim's next tick (8); a failing read starts, says emulator_autostart_commit_unknown once per streak with its code, and the spacing still applies (9)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_1_a_day_change_holds_the_one_in_line_and_those_behind_it_with_one_short_for_the_episode",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_2_the_spacing_holds_an_automatic_start_after_a_persons_start_for_its_length",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_3_a_persons_start_a_stop_and_the_ladders_rung_are_never_held_with_the_headroom_short",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_4_a_pause_and_a_shutdown_end_the_wait_as_they_end_a_hold_today",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_5_start_emulator_turned_off_ends_the_wait",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_6_the_reserve_0_never_holds_and_reads_nothing",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_7_a_configuration_without_the_keys_holds_at_the_defaults",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_8_both_keys_set_by_an_instruction_take_effect_at_the_next_tick",
+    "actingcommand-runtime-host::lib::tests::gate_503_mem::mem_9_a_failing_read_starts_and_says_so_once",
+]
+incident = ["#503 MEM"]
