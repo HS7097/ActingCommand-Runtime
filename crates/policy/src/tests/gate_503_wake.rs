@@ -32,6 +32,12 @@
 //   ends nothing: the consumer waits for the line.
 // - t11 (fix round 1): the same through `all` and `any`, one side naming the pool's step and the
 //   other the interval's end at the same time: the end is an end; steps alone are none.
+// - t12 (fix round 2, review F3, kept as built): t10's trigger with a reading that expires before
+//   the line: the reading's freshness end is an end of the chance, so the release is that end
+//   plus one less the run, and at the release the consumer passes.
+// - t13 (fix round 2, review F7): a pair whose last settled run was shorter than declared, its
+//   snapshot without `E`: judged with the shorter run, released at the window's end less the
+//   declared one, the longer, which its dispatch would carry.
 //
 // The fixture: one instance, a pool regenerating one unit in six minutes, capacity 240, read 100 a
 // minute before NOW, written lines 50 (hard), 120 (stop) and 150 (trigger) unless a test says
@@ -610,14 +616,79 @@ fn projected_at(at: u64) -> i64 {
     READ + i64::try_from((at - READ_AT) / STEP_MS).expect("a count of steps")
 }
 
+// ---- t12, t13 (fix round 2: the independent review's F3 and F7)
+
+#[test]
+fn wake_t12_a_trigger_reading_the_consumed_pool_ends_the_chance_at_that_readings_expiry() {
+    // Review F3, kept as built: t10's trigger (at least 60 of the regenerating pool), its reading
+    // now valid until twenty minutes after NOW. The reading's freshness end is an end of what lets
+    // the consumer run, so the release is that end plus one less the run: the instance is woken
+    // before the knowledge lapses, never after. At the release, the reading still fresh, the
+    // consumer is the task the instance is woken for.
+    let expiry = NOW + 20 * MINUTE_MS;
+    let release = expiry + 1 - E;
+    assert!(NOW < release && release < REACHES, "before the line");
+    let catalog = catalog(
+        vec![consumer(CONSUMER, 10_000, regen_at_least(60))],
+        regen_pools(Some(LINES)),
+        no_events(),
+        0,
+    );
+    let mut world = World::new(catalog, &[(REGEN_KEY, READ)]).with_expiry(REGEN_KEY, expiry);
+    let asleep = world.asleep(NOW);
+    assert!(asleep.dispatch_intents.is_empty(), "{asleep:#?}");
+    assert_below_line(
+        decision(&asleep, CONSUMER),
+        REGEN,
+        (READ, LINES.2),
+        "catalog",
+        release,
+    );
+    let at_release = world.asleep(release);
+    let woken_for = decision(&at_release, CONSUMER);
+    assert!(
+        last_is(woken_for, PolicyCode::InstanceAsleepWakeDue),
+        "{woken_for:#?}"
+    );
+}
+
+#[test]
+fn wake_t13_the_release_leaves_room_for_the_longer_of_the_judged_and_the_dispatched_run() {
+    // Review F7: the pair's last settled run took half its declared minute and its snapshot carries
+    // no `E`, so the benefit gate judges it with 30 seconds while its dispatch would carry the
+    // declared minute, which the host's day-boundary fit checks. t4's activity window closing at
+    // 17:00 releases it at that end less the longer of the two, the declared minute.
+    let catalog = catalog(
+        vec![consumer(CONSUMER, 10_000, quiet())],
+        regen_pools(Some(LINES)),
+        no_events(),
+        17 * 60,
+    );
+    let mut world =
+        World::new(catalog, &[(REGEN_KEY, READ)]).with_dispatched(CONSUMER, NOW - HOUR_MS);
+    world.tasks[0].last_duration_ms = Some(E / 2);
+    let asleep = world.asleep(NOW);
+    let waits = decision(&asleep, CONSUMER);
+    fixed_first(waits, 9_000, 10_000, E / 2);
+    assert_below_line(
+        waits,
+        REGEN,
+        (READ, LINES.2),
+        "catalog",
+        NOW + 59 * MINUTE_MS - E,
+    );
+}
+
 // ---- The world a test drives
 
 /// The catalog, the Runtime's memory of the capped episodes, the pools' readings a minute before
-/// NOW, the pairs' snapshots and the instance's goal record.
+/// NOW (with no expiry but the one `expiry` names), the pairs' snapshots and the instance's goal
+/// record.
 struct World {
     catalog: CompiledCatalog,
     memory: CappedMemory,
     readings: Vec<(&'static str, i64)>,
+    expiry: Option<(&'static str, u64)>,
     tasks: Vec<TaskRuntimeSnapshot>,
     goal: Option<ObservedFact>,
 }
@@ -628,6 +699,7 @@ impl World {
             catalog,
             memory: CappedMemory::default(),
             readings: readings.to_vec(),
+            expiry: None,
             tasks: Vec::new(),
             goal: None,
         }
@@ -635,6 +707,12 @@ impl World {
 
     fn with_goal(mut self, goal: &ObservedFact) -> Self {
         self.goal = Some(goal.clone());
+        self
+    }
+
+    /// The same world with the reading of `key` expiring at `at` (t12).
+    fn with_expiry(mut self, key: &'static str, at: u64) -> Self {
+        self.expiry = Some((key, at));
         self
     }
 
@@ -658,11 +736,12 @@ impl World {
 
     fn facts(&self) -> EvaluationFacts {
         let mut observed = vec![fact(A, OUT_KEY, 0, READ_AT, None)];
-        observed.extend(
-            self.readings
-                .iter()
-                .map(|(key, reading)| fact(A, key, *reading, READ_AT, None)),
-        );
+        observed.extend(self.readings.iter().map(|(key, reading)| {
+            let expires = self
+                .expiry
+                .and_then(|(expiring, at)| (expiring == *key).then_some(at));
+            fact(A, key, *reading, READ_AT, expires)
+        }));
         observed.extend(self.goal.clone());
         EvaluationFacts {
             facts: observed,

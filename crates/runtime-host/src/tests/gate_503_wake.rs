@@ -20,12 +20,19 @@
 //!   before the release (no reader bound): the consumer's benefit is unknown and its last reason
 //!   `fact_refresh_unbound`, which ruling 3 counts held, so nothing wakes the instance at the
 //!   expiry; the wake planned from the release stays, and comes at its time.
+//! - h5 (fix round 2, review F2): the same with a reader bound for the consumed pool's key, which
+//!   pins today's behaviour and changes nothing: past the expiry the consumer's row is
+//!   `fact_refresh_pending`, due, so the instance is woken at once (`task_due`), and awake, with a
+//!   fresh reading, the consumer is dispatched below the line.
+//! - h6 (fix round 2, review F1): a time-bound gate holding the instance (IDLE-WG) holds the
+//!   release's wake until the gate's time, and a gate that names no time leaves it none.
 //!
 //! Every evaluation runs on a manual Runtime clock; nothing reads a clock.
 
 use super::emulator_controller::stopped_state;
 use super::gate_369_s6c::{connectivity, head, send};
 use super::gate_372k2::{SlotTask, at, slot_sources};
+use super::gate_384_d2s4::{READ_KEY, recognition_package};
 use super::gate_idle1p::{emulator_starts, stops};
 use super::instance_workers::{all_events, phases};
 use super::*;
@@ -71,6 +78,8 @@ const LINES: (u64, u64, u64) = (426, 440, 450);
 const POOL: &str = "pool.neutral";
 const READING_KEY: &str = "resource.neutral";
 const READ_LINES: (u64, u64, u64) = (111, 130, 150);
+/// h5's pool, as h4's but read from [`READ_KEY`], a key the bound reader's marks write.
+const BOUND_POOL: &str = "pool.k2";
 /// The pool the consumer produces into.
 const OUT: &str = "pool.out";
 /// What a run of the consumer consumes and produces.
@@ -205,27 +214,28 @@ fn static_sources() -> CatalogSources {
     })
 }
 
-/// h4: the consumer of [`POOL`], read from its key, regenerating one unit every six minutes, with
-/// [`READ_LINES`].
-fn read_sources() -> CatalogSources {
-    wake_sources(POOL, |pools| {
-        let mut pool = valued_pool(POOL, 180);
-        pool["projection"] = json!({"amount": 1, "per_ms": STEP_MS});
-        with_lines(&mut pool, READ_LINES);
-        pools.push(pool);
+/// h4 ([`POOL`]) and h5 ([`BOUND_POOL`]): the consumer of `pool`, read from its key (capacity
+/// 180), regenerating one unit every six minutes, with [`READ_LINES`].
+fn read_sources(pool: &str) -> CatalogSources {
+    wake_sources(pool, |pools| {
+        let mut entry = valued_pool(pool, 180);
+        entry["projection"] = json!({"amount": 1, "per_ms": STEP_MS});
+        with_lines(&mut entry, READ_LINES);
+        pools.push(entry);
     })
 }
 
-/// [`POOL`]'s reading `value` as a package publishes it, observed at `observed_at`, valid for
-/// `valid_ms` (at least a second), no input invalidation (`gate_486_asleep`'s `pool_reading`). Its
-/// freshness policy admits that lifetime: `stored_fact`'s admits one second to two minutes, and a
-/// record whose lifetime lies outside its own policy is refused (`fact_observation_invalid`).
-fn pool_reading(value: i64, observed_at: u64, valid_ms: u64) -> FactRecord {
+/// The reading `value` of the key `key` as a package publishes it, observed at `observed_at`,
+/// valid for `valid_ms` (at least a second), no input invalidation (`gate_486_asleep`'s
+/// `pool_reading`). Its freshness policy admits that lifetime: `stored_fact`'s admits one second
+/// to two minutes, and a record whose lifetime lies outside its own policy is refused
+/// (`fact_observation_invalid`).
+fn pool_reading(key: &str, value: i64, observed_at: u64, valid_ms: u64) -> FactRecord {
     let mut record = stored_fact(
         FactScope::Instance {
             instance_id: ALIAS.to_owned(),
         },
-        READING_KEY,
+        key,
         ContractFactValue::Integer(value),
         "run:fixture/frame:503-wake/k2",
         Vec::new(),
@@ -318,13 +328,16 @@ fn declared_application(root: &TempDir) -> PathBuf {
 /// A start of the replay instance's host with the idle action `action`: its startup package, its
 /// stuck recovery off; for `close_app` the standard pack root that declares its application, for
 /// `stop_emulator` its configured emulator start in the start turn and internet access at once
-/// (`gate_486_asleep`'s `open_closing_host` and `open_replay_host`).
+/// (`gate_486_asleep`'s `open_closing_host` and `open_replay_host`). With `reader` (h5, fix round
+/// 2's seam), the instance binds `gate_384_d2s4`'s recognition maintenance package, whose marks
+/// write `resource.k1` and [`READ_KEY`]; the start reads its marks and prepares nothing.
 fn open_host(
     root: &TempDir,
     registered: InstanceId,
     clock: &Arc<ManualRuntimeClock>,
     state: &Arc<FakeState>,
     action: IdleAction,
+    reader: bool,
 ) -> RuntimeHost {
     // `gate_ord1c`'s fix round 3: each capture of a preparation takes the clock's millisecond.
     let moved = Arc::clone(clock);
@@ -355,6 +368,12 @@ fn open_host(
             .with_network_connectivity_for_test(read);
     } else {
         host_config = host_config.with_standard_packs_root(Some(declared_application(root)));
+    }
+    if reader {
+        let recognition = root.path().join("wake-recognition-package.zip");
+        fs::write(&recognition, recognition_package(false)).expect("write the recognition package");
+        host_config = host_config
+            .with_recognition_packages(BTreeMap::from([(ALIAS.to_owned(), recognition)]));
     }
     RuntimeHost::start(
         host_config,
@@ -399,11 +418,21 @@ struct Replay {
 
 impl Replay {
     fn start(unix_ms: u64, action: IdleAction, sources: &CatalogSources) -> Self {
+        Self::start_reading(unix_ms, action, sources, false)
+    }
+
+    /// [`Self::start`], the instance binding a reader with `reader` ([`open_host`]).
+    fn start_reading(
+        unix_ms: u64,
+        action: IdleAction,
+        sources: &CatalogSources,
+        reader: bool,
+    ) -> Self {
         let root = TempDir::new().expect("tempdir");
         let registered = instance_id();
         let clock = Arc::new(ManualRuntimeClock::new(unix_ms, 0));
         let state = device_state();
-        let host = open_host(&root, registered, &clock, &state, action);
+        let host = open_host(&root, registered, &clock, &state, action, reader);
         host.activate_policy_catalog(sources)
             .expect("activate the catalogue");
         Self {
@@ -815,14 +844,14 @@ fn wake_h1_an_asleep_instance_sleeps_below_the_trigger_line_and_is_woken_once_at
 #[test]
 fn wake_h4_a_reading_that_expires_before_the_release_wakes_nothing_and_the_planned_wake_stays() {
     let below = PolicyCode::InstanceAsleepBelowTriggerLine.as_str();
-    let replay = Replay::start(at(1, 6, 0), IdleAction::CloseApp, &read_sources());
+    let replay = Replay::start(at(1, 6, 0), IdleAction::CloseApp, &read_sources(POOL));
     let before = head(&replay.host);
     // The pool read at 120 at 06:29, valid for twenty minutes.
     let read_at = at(1, 6, 29);
     replay.set_time(read_at);
     replay
         .host
-        .publish_fact(pool_reading(120, read_at, 20 * MINUTE_MS))
+        .publish_fact(pool_reading(READING_KEY, 120, read_at, 20 * MINUTE_MS))
         .expect("the pool's reading is published");
 
     // 06:30: one run would leave 110, below the hard line; the application is closed.
@@ -897,6 +926,116 @@ fn wake_h4_a_reading_that_expires_before_the_release_wakes_nothing_and_the_plann
     replay.close();
 }
 
+// ---- h5 (fix round 2, review F2)
+
+#[test]
+fn wake_h5_a_bound_reader_wakes_the_instance_at_the_readings_expiry_and_awake_it_spends() {
+    // h4's case with a reader bound for the consumed pool's key. This pins today's behaviour, which
+    // fix round 2 changes nothing of: past the reading's expiry the consumer's benefit is unknown
+    // and a reader can read the key, so its row is `fact_refresh_pending` (IDLE-1: a task that
+    // waits for a reading is due; h4's `fact_refresh_unbound` is not), the plan counts it due, and
+    // the idle check wakes the instance at once (`task_due`), hours before the release; awake, with
+    // a fresh reading, the consumer is dispatched below the trigger line as on any awake instance.
+    // So an installation's asleep instance sleeps no longer than the consumed reading stays valid.
+    // Not pinned here: the reader's own run; the fresh reading is published as that run would.
+    assert_eq!(
+        format!("resource.{}", &BOUND_POOL["pool.".len()..]),
+        READ_KEY,
+        "the pool is read from a key the reader's marks write"
+    );
+    let below = PolicyCode::InstanceAsleepBelowTriggerLine.as_str();
+    let replay = Replay::start_reading(
+        at(1, 6, 0),
+        IdleAction::CloseApp,
+        &read_sources(BOUND_POOL),
+        true,
+    );
+    let before = head(&replay.host);
+    let read_at = at(1, 6, 29);
+    replay.set_time(read_at);
+    replay
+        .host
+        .publish_fact(pool_reading(READ_KEY, 120, read_at, 20 * MINUTE_MS))
+        .expect("the pool's reading is published");
+
+    // 06:30 and 06:36 as in h4: the hard line holds the consumer and the application is closed;
+    // then it waits for the line, 150 at 09:29.
+    assert_eq!(
+        deferred_by(
+            &replay.cycle(at(1, 6, 30)),
+            PolicyCode::PoolLineHeld.as_str()
+        ),
+        Some(at(1, 6, 35)),
+        "the pool's next step"
+    );
+    assert_eq!(
+        replay.host.await_idle_action_ends_for_test(1, GATE_WAIT),
+        Some(1),
+        "the close ended"
+    );
+    let release = at(1, 9, 29);
+    assert_eq!(
+        deferred_by(&replay.cycle(at(1, 6, 36)), below),
+        Some(release)
+    );
+    assert_eq!(replay.plan().next_wake_unix_ms, Some(release));
+
+    // 06:50, past the expiry: the consumer waits for the reading of its pool's key with no wake of
+    // its own, and is due; the instance is woken for it.
+    let woken_at = head(&replay.host);
+    let expired = replay.cycle(at(1, 6, 50));
+    assert_eq!(
+        deferred_by(&expired, PolicyCode::FactRefreshPending.as_str()),
+        None,
+        "no wake of its own"
+    );
+    let waits_for = expired
+        .evaluation
+        .as_ref()
+        .expect("an evaluated cycle")
+        .decisions
+        .iter()
+        .find(|decision| decision.task_id == TASK_W)
+        .and_then(|decision| decision.reasons.last())
+        .and_then(|reason| reason.outcome.value("fact_key"))
+        .cloned();
+    assert_eq!(waits_for, Some(json!(READ_KEY)));
+    let plan = replay.plan();
+    assert!(plan.due_now, "{plan:?}");
+    let due_wake = (
+        IdleCode::Taken.as_str().to_owned(),
+        IdleLocation::Wake.as_str().to_owned(),
+        Some(IdleWakeCause::TaskDue.as_str().to_owned()),
+    );
+    assert_eq!(
+        replay.records(before),
+        [action_record(), due_wake],
+        "woken at the expiry, not at the release"
+    );
+    replay.await_free(woken_at);
+
+    // Awake, a fresh reading of 124: below the trigger line and one run above the hard line, the
+    // consumer is dispatched.
+    let fresh_at = at(1, 6, 55);
+    replay.set_time(fresh_at);
+    let mut fresh = pool_reading(READ_KEY, 124, fresh_at, 20 * MINUTE_MS);
+    fresh.source_snapshot_id = "run:fixture/frame:503-wake/k2-fresh".to_owned();
+    replay
+        .host
+        .publish_fact(fresh)
+        .expect("the fresh reading is published");
+    let awake = replay.cycle(at(1, 6, 56));
+    let evaluation = awake.evaluation.as_ref().expect("an evaluated cycle");
+    assert!(
+        evaluation
+            .dispatch_intents
+            .iter()
+            .any(|intent| intent.task_id == TASK_W),
+        "{evaluation:#?}"
+    );
+    replay.close();
+}
+
 // ---- h2, h3: the idle plan
 
 fn reason_of(outcome: Outcome) -> DecisionReason {
@@ -932,6 +1071,18 @@ fn idle_task() -> TaskDecision {
 /// instance is one whose idle action can put it to sleep and those are the next projection steps
 /// of the regenerating pools the evaluation read.
 fn plan_of(decisions: Vec<TaskDecision>, at: u64, pool_steps: Option<&BTreeSet<u64>>) -> IdlePlan {
+    held_plan_of(decisions, at, pool_steps, &IdleHeldBack::new())
+}
+
+/// [`plan_of`] with `held_back`, the instances a time-bound gate holds back as the evaluation ran
+/// (IDLE-WG: a blackout covers it or its activity window is closed), each with the time the gate
+/// lets it through (none: no such time).
+fn held_plan_of(
+    decisions: Vec<TaskDecision>,
+    at: u64,
+    pool_steps: Option<&BTreeSet<u64>>,
+    held_back: &IdleHeldBack,
+) -> IdlePlan {
     let none = BTreeSet::new();
     let instances = if pool_steps.is_some() {
         BTreeSet::from([NODE.to_owned()])
@@ -951,7 +1102,7 @@ fn plan_of(decisions: Vec<TaskDecision>, at: u64, pool_steps: Option<&BTreeSet<u
         at,
         &|_: &str, _: &str| -> Option<(u64, String)> { None },
         IdleGates {
-            held_back: &IdleHeldBack::new(),
+            held_back,
             held_ahead: &IdleHeldAhead::new(),
             update_hold: IdleUpdateHold::default(),
         },
@@ -1082,5 +1233,37 @@ fn wake_h3_three_answers_only_a_change_lets_through_are_held_and_the_others_stay
             Some(CLOSE_WAKE),
             "{code}: woken"
         );
+    }
+}
+
+// ---- h6 (fix round 2, review F1)
+
+#[test]
+fn wake_h6_a_time_bound_gate_holds_the_release_until_the_gate_lets_the_instance_through() {
+    // A blackout covering the instance or its activity window closed (IDLE-WG's held-back time):
+    // before 0.12.101 the eligibility closure deferred the same consumer with that time, so the
+    // release wakes the instance no earlier than it, and not at all when the gate names no time.
+    // (release, the time the gate lets the instance through, the plan's wake, case).
+    let early = AT + 30 * MINUTE_MS;
+    let gate = AT + 60 * MINUTE_MS;
+    let late = AT + 90 * MINUTE_MS;
+    for (release, through, wake, case) in [
+        (early, Some(gate), Some(gate), "before the gate's time"),
+        (late, Some(gate), Some(late), "after the gate's time"),
+        (early, None, None, "a gate that names no time"),
+    ] {
+        let held_back = IdleHeldBack::from([(NODE.to_owned(), through)]);
+        let steps = BTreeSet::from([release]);
+        // On an instance that can sleep, the release a pool's step too, and on any other.
+        for pool_steps in [Some(&steps), None] {
+            let plan = held_plan_of(
+                vec![deferred(below_line(release), Some(release))],
+                AT,
+                pool_steps,
+                &held_back,
+            );
+            assert!(!plan.due_now, "{case}: {plan:?}");
+            assert_eq!(plan.next_wake_unix_ms, wake, "{case}: {plan:?}");
+        }
     }
 }

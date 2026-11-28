@@ -1099,7 +1099,10 @@ pub(super) fn gate(
 /// stop's own boundaries (`TaskWork::chance_end_unix_ms`, which never holds a regenerating pool's
 /// projection step, whatever its value: that is the evaluation's next reading of the pool, no end
 /// of anything) and the end of the activity window open now. `None` when that release is not after
-/// the evaluation: the consumer passes as on an awake instance.
+/// the evaluation: the consumer passes as on an awake instance. Fix round 2 (review F7): the run
+/// that release leaves room for is the longer of `expected` and the duration the candidate's
+/// dispatch would carry (its pair's measured `E`, else the declared one), which the host's
+/// day-boundary fit checks, so a release at a window's end is never later than that fit allows.
 fn asleep_release(
     context: &PlacementContext<'_>,
     candidate: &PlacementCandidate,
@@ -1116,8 +1119,9 @@ fn asleep_release(
         .transpose()?
         .flatten()
         .map(|window| window.until_unix_ms);
+    let run = expected.max(candidate.expected_duration_ms);
     let release = match min_wake(task_work.chance_end_unix_ms, window_end) {
-        Some(end) => trigger.unix_ms.min(end.saturating_sub(expected)),
+        Some(end) => trigger.unix_ms.min(end.saturating_sub(run)),
         None => trigger.unix_ms,
     };
     Ok((release > now).then_some(release))

@@ -1512,7 +1512,8 @@ instance", "Below a pool's trigger line"). The idle plan does not count that dec
 release is its wake on every instance, also on one whose idle action can put it to sleep when the
 release is a regenerating pool's next projection step: the instance is woken at the release less
 the wake lead (`planned_time_reached`), and awake, the consumer is judged and dispatched as on any
-awake instance. Another task of the instance that is due still wakes it at once, as before.
+awake instance. A blackout covering the instance or its closed activity window holds that wake
+until it lets the instance through, and one that names no such time leaves none (fix round 2). Another task of the instance that is due still wakes it at once, as before.
 
 Three more answers wake nothing (#503 WAKE, ruling 3). A decision whose last reason is
 `fact_refresh_unbound` (a realistic key no reader can read), `selection_input_unknown` (a selection

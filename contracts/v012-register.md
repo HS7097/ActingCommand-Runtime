@@ -52469,8 +52469,9 @@ as it is (its decisions carry no reason). The new reason is in no closed set tha
   occurrence or the end of its grace, a fact's freshness end where today's wake counts it, a
   feedback result's expiry), and the end of the activity window open now; a regenerating pool's
   next projection step is never one, wherever it entered the decision's wake, and a time that is
-  both is an end. `d` is the candidate's expected duration. *Fix round 1* (CI's first round, test
-  t4 at its interval's release): the first build took the decision's whole wake as the end unless
+  both is an end. `d` is the candidate's run: since fix round 2 the longer of its expected duration
+  as the benefit gate reads it and the one its dispatch would carry. *Fix round 1* (CI's first
+  round, test t4 at its interval's release): the first build took the decision's whole wake as the end unless
   that time equalled a pool's next projection step, so an interval or a clock ending on a step was
   dropped and the consumer waited for the line past its chance; now an end is known by where it
   comes from. Built as the coordinator's shape A: `PredicateEvaluation::end_unix_ms`
@@ -52507,7 +52508,53 @@ as it is (its decisions carry no reason). The new reason is in no closed set tha
   before `next_eligible_unix_ms`; it is judged again then, or as soon as the instance is awake for
   anything else; nothing for a person to do).
 - *5, unchanged*: below.
-- *6, a reading that expires during the sleep*: not changed; host test h4 pins what this build does.
+- *6, a reading that expires during the sleep*: not changed; host test h4 pins what this build does
+  with no reader bound, and h5 (fix round 2) with a reader bound.
+
+**Fix round 2** (coordinator work order `rd-1123/brief-503-wake-fix2.md`, on the independent review
+`rd-1123/review-1936.md` of this pull request and its findings F1 to F13; CI's second round was green
+in every test job). Acted on:
+- *F1, a defect*: the idle plan took the release as the wake even while a time-bound gate held the
+  instance (a blackout covering it, its activity window closed), so the instance could be started
+  once, at night say, for a run its admission then refused; before 0.12.101 the eligibility closure
+  deferred the same consumer with that gate's time and the plan woke it no earlier. `IdleDraft::add`
+  (`crates/runtime-host/src/schedule_explanation.rs`) now gives a decision whose last reason is the
+  new code the later of its release and the time IDLE-WG's held-back entry lets the instance
+  through, combined with a later position a hold hides as `held_until` combines them, and no wake
+  when the gate names no time (h6).
+- *F4, text*: the catalogue entry stated the first build's end of the chance; it now states fix
+  round 1's (the earliest end its trigger and feedback stop name, never a regenerating pool's
+  projection step, or the end of the activity window open now) and F7's run, and the index is
+  regenerated and current.
+- *F2*: h5 pins, changing nothing, the case the study was least sure of. With a reader bound for the
+  consumed pool's key, past the reading's expiry the consumer's row is `fact_refresh_pending`, which
+  IDLE-1 counts due, so the instance is woken at once (`task_due`), and awake, with a fresh reading,
+  the consumer is dispatched below the line: an installation's asleep instance sleeps no longer than
+  the consumed reading stays valid. The seam is a parameter of the test's replay that binds
+  `gate_384_d2s4`'s recognition maintenance package; the reader's own run is not pinned (the fresh
+  reading is published as that run would publish it).
+- *F3, kept as built*: a trigger that reads the consumed pool gives that reading's freshness end as
+  an end of the chance, so the release is that end plus one less the run and the instance is woken
+  before the knowledge lapses, never after (t12); the contract's "Not built" sentence that said
+  otherwise is corrected.
+- *F7*: the run the release subtracts is the longer of the gate's expected duration and the one the
+  dispatch would carry (the pair's measured `E`, else the declared one), which the host's
+  day-boundary fit checks, so a release at a window's end is never later than that fit allows
+  (`asleep_release`, `crates/policy/src/evaluator/benefit.rs`; t13).
+- *F12*, the tests' strength: answered by t12, t13, h5 and h6 for what this round touches.
+
+Left as known limits of the contract ("Below a pool's trigger line"), changed by nothing in this
+round: F1's other timed positions (a spent budget, a backoff, a pack schedule's row with an opening,
+the quiet before a blackout) need the host's look ahead and are a later slice. F5: a goal's lifetime
+is no end of the chance, so a consumer lifted only by a goal that lapses before the line loses that
+chance; to be settled before deadlines on goals are built. F6: the ends that end nothing (an
+interval clock's next occurrence, a whole-day window's midnight, in an `any` the time a false side
+turns true, a feedback stop's result expiry) each cost one early wake, never a chance. F8: in a
+device group the awake member is now selected while the asleep member's consumer waits, which
+follows from ruling 1. F9: the releases at an end rely on the wake lead covering the start. F10: with
+the capacity as the trigger line and a dispatch the reading does not show, the consumer passes as
+before. F11: a key that only a run on the instance itself publishes is no longer refreshed by a wake
+for nothing. F13: a trigger override keeps the original trigger's end.
 
 **Tests** (policy gate map row and host gate map row "#503 WAKE"; no clock read in a gate file).
 
@@ -52528,6 +52575,10 @@ as it is (its decisions carry no reason). The new reason is in no closed set tha
 | `…::wake_h2_the_release_stays_the_plans_wake_also_when_it_is_a_pool_step` (study host 2) | ruling 2 on the plan: the release that is a pool's step kept on an instance that can sleep and on another; another code's step names none there; never due |
 | `…::wake_h3_three_answers_only_a_change_lets_through_are_held_and_the_others_stay_due` (study host 3) | ruling 3: the three not due, an awake instance closes, a closed one is not woken; the reserve without `amount_after` and `heavy_scene_budget_deferred` due, kept open, a closed one woken |
 | `…::wake_h4_a_reading_that_expires_before_the_release_wakes_nothing_and_the_planned_wake_stays` (ruling 6) | a reading of 120 valid twenty minutes, the consumer waiting until 09:29; past the expiry its benefit is unknown (`reading_unknown`) and, no reader bound, its last reason `fact_refresh_unbound`, held by ruling 3: nothing wakes the instance; the wake planned at 09:24 stays and comes then |
+| `actingcommand-policy` `…::wake_t12_a_trigger_reading_the_consumed_pool_ends_the_chance_at_that_readings_expiry` (fix round 2, F3) | t10's trigger, its reading valid until twenty minutes after now: released at that expiry plus one less `E`, and at the release the task woken for |
+| `…::wake_t13_the_release_leaves_room_for_the_longer_of_the_judged_and_the_dispatched_run` (fix round 2, F7) | a pair whose last settled run took half its declared `E`, its snapshot without `E`: judged with the half, released at the activity window's 17:00 less the declared `E` |
+| `actingcommand-runtime-host` `…::wake_h5_a_bound_reader_wakes_the_instance_at_the_readings_expiry_and_awake_it_spends` (fix round 2, F2) | h4 with a recognition maintenance package bound that reads the pool's key: past the expiry `fact_refresh_pending`, no wake of its own, the plan due, one wake `task_due` at once; awake, with a fresh reading, the consumer dispatched below the line |
+| `…::wake_h6_a_time_bound_gate_holds_the_release_until_the_gate_lets_the_instance_through` (fix round 2, F1) | IDLE-WG's held-back time set: a release before it wakes at the gate's time, one after it at the release, a gate naming no time leaves none; never due |
 
 No existing test is adapted: the gates the study lists as pinning today's behaviour (§1.518's
 `b1_t8` to `b1_t14`, §1.542's `rr3b_a1_a` and `rr3b_a1_b`, `sched_c1c_t1`,
@@ -52557,7 +52608,8 @@ only moves earlier; that is the study's R4, not built. A consumed pool's reading
 the instance sleeps makes the consumer's benefit unknown: with no reader bound (h4) its last reason
 `fact_refresh_unbound` is held by ruling 3 and the wake planned from the release stays; with a
 reader bound its row is `fact_refresh_pending`, due under IDLE-1, and wakes the instance for the
-reading, which the study read and no test here pins.
+reading, which h5 pins as built (fix round 2). The closure's other timed positions that a release
+does not read yet (fix round 2, F1) are a later slice with the host's look ahead.
 
 **At deploy.** Nothing to migrate or configure: the rule reads the evaluation's memory only. On
 production the not-run explanation of an asleep instance names `instance_asleep_below_trigger_line`
