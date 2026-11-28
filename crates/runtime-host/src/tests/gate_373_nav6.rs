@@ -1360,7 +1360,8 @@ fn assert_rerun_only(failure: &actingcommand_contract::PolicyFailureRecord, case
 /// scheduled run that ends with `contained_task_interrupt_environment_limit_reached` is rerun
 /// at once (R22) and fails the same way again without pausing its pair: each failure is
 /// scheduled for a retry, and the next evaluation reruns the pair with
-/// `failure_retry_immediate` and no `policy_task_paused`.
+/// `failure_retry_immediate` and no `policy_task_paused` (#503 PACE, register §1.545: after the
+/// second failure in a row, the evaluation once its wait has passed).
 #[test]
 fn b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pair() {
     let state = Arc::new(FakeState::default());
@@ -1414,8 +1415,10 @@ fn b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pai
         "a repeat never carries the first identity"
     );
 
-    // The pair is rerun again, at once and not paused.
-    let at = b43_rerun_time(&second, &second_context).max(clock_now(&clock));
+    // The pair is rerun again, at once and not paused. #503 PACE (register §1.545): a second
+    // failure in a row first waits `scheduling.unavailable_probe`'s first interval (shipped, one
+    // minute) from its settlement; at that wait's end the rerun is the immediate rerun still.
+    let at = b43_rerun_time(&second, &second_context).max(clock_now(&clock) + 60_000);
     advance_manual_clock_to(&clock, at);
     let cycle = host
         .evaluate_policy_cycle_with_test_inputs(
