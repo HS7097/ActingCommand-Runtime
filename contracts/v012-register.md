@@ -52263,6 +52263,114 @@ the `package` edge, a placed one is refused at every admission), so the rollback
 no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
 `"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
 
+### 1.551 Slice #503 TRIAL (0.12.101): the standard-pack trial no longer asks for an acknowledgement before it runs a package the irreversible mark flags (board #503; the owner's ruling of 11-28, in neutral words below; the rulings 1 to 4 are the coordinator's on it; coordinator work order `rd-1123/brief-503-trial.md`; on main `cdc3e0b4`, v0.12.99)
+
+This section takes 1.551: §1.545 to §1.550 are slices built at the same time.
+[standard-pack-trial.md](standard-pack-trial.md) (the opening, "The operation", "The irreversible
+mark", "The plan", "The record", "The run", "The end", "Outcome codes"), the row `standard-pack
+trial` of [lab-operations.json](lab-operations.json) and the resource tooling's fragment of the
+outcome catalog are the contract; [standard-pack-goals.md](standard-pack-goals.md) follows it in
+one sentence (what stays of the mark).
+
+**What was left on 11-21, and why.** The owner's rulings of 11-21 removed the locks on a package
+marked as able to do something that cannot be undone. They were built as two slices: G-R2x
+(§1.499) removed the scheduler's line, G-SLx (§1.501) the goal and variable locks. §1.501 kept one
+refusal on purpose, as none of the two locks the question had named: `actinglab standard-pack
+trial` refused the run of a package the irreversible mark flags (`marked`, judged over `--root`)
+unless `--irreversible` was given (`trial_irreversible_unacknowledged`, §1.418). The mark counts a
+package its root does not register as `marked`, so every new package not yet in a bundle index was
+refused once before its first trial over its root.
+
+**The owner's ruling of 11-28**, in neutral words: that refusal goes too. A person who edits and
+tries packages should not meet a detour that protects nothing; a trial on a real application is
+already sent only under the owner's authorization (`--authorization`), which stays.
+
+**The rulings, as built.**
+- *1, the refusal and the flag* (`crates/resource-tooling/src/standard_pack_trial.rs`,
+  `check_trial_run`; `apps/actinglab/src/standard_pack_cli.rs`). The run refuses only a missing
+  authorization (`trial_authorization_missing`). `--irreversible` leaves every place it had:
+  `StandardPackTrialRequest::irreversible`, actinglab's `TRIAL_FLAGS` and `TRIAL_SWITCHES`, the
+  usage (`trial_options`), the request, the `next.collect` line, the operation table's row and so
+  the MCP tool's parameter, and the contract. The plan keeps `irreversible` and
+  `irreversible_basis`, information, and drops `irreversible_acknowledged`.
+  `trial_irreversible_unacknowledged` is retired as the catalog retires a code, as
+  `trial_variables_not_carried` (§1.444) and `resource_target_package_irreversible` (§1.499) were:
+  its fragment entry stays with `status` `retired` and `retired_in` `0.12.101`, its description
+  beginning "Retired" and keeping what it was, its `common_causes` and `handling` saying it is no
+  longer emitted; its variant leaves the resource tooling's registry for a comment naming the
+  release (G1 refuses a retired code in a registry); the index is regenerated and checked
+  (`ci/outcome_codes_index.py --check`: "is current"). It was `pending`, so no earlier release file
+  binds it; the release file of 0.12.101, which the release pull request writes with
+  `ci/outcome_release.py` (a release file is never overwritten, so a slice writes none), will hold
+  its retired signature, as `released/0.12.68.json` holds the first precedent's.
+- *2, the record* (`TrialRecordPlan`). It keeps its member `irreversible_acknowledged`, required;
+  the one conversion from a plan writes it `false`, and its doc says that no acknowledgement exists
+  since 0.12.101. So the record keeps the shape of `actingcommand.pack-trial.v1`: a record of an
+  earlier build, `true` where its `--irreversible` was given, decodes here as written, and a record
+  of this build decodes in an earlier build, whose reader denies unknown members and requires this
+  one, both of which the record meets.
+- *3, nothing else changes.* The study's list of what still behaves differently for an
+  irreversible package or operation was checked again by searching the workspace's code and
+  contracts: the mark is still judged over `--root` and shown, the last non-test reader of
+  `IrreversiblePackages::counts_irreversible` and `irreversible_capabilities`; the remedy rule that
+  an irreversible capability declares a parameter, the `package` revision 23 edge, the withdrawn
+  catalog member `irreversible_reach`, the Lab operations marked `irreversible` (which record who
+  started them and ask nothing), the displays of the mark and the words kept registered are
+  untouched. Nothing else in the tree refuses, or asks for an acknowledgement, because a package is
+  marked.
+- *4, a flag no longer taken is refused loudly.* A line or a script that still gives
+  `--irreversible` is `validation_failed` with `argument` `--irreversible` and `argument_problem`
+  `unknown`, as every flag the row does not take, before anything is read, sent or written; the
+  MCP tool `ac_standard_pack_trial`, whose schema is the row's, has no `irreversible` and takes no
+  other property (`additionalProperties` `false`).
+
+**Interfaces.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config`,
+`runtime-outcomes` or `install-cli` shape changes; the row is the authoring module's, which no
+interface revision covers. One code is retired and none is added; no key, word or setting.
+
+**Tests** (exec gate map row "#503 TRIAL"; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| resource tooling `gate_463_s311::trial_a_record_keeps_its_shape_and_an_earlier_acknowledged_record_still_reads` (2) | the record's plan of a marked package's run holds every member of the `v1` plan, `irreversible` `marked`, its basis and `irreversible_acknowledged` `false`; a record an earlier build wrote with it `true`, its bytes at its place, is read as written beside one this build's writer wrote; the content's summary is `passed`, passed on record, its latest record this build's |
+| actinglab `gate_463_s311::trial_a_marked_package_is_sent_and_recorded_under_its_authorization_alone` (1, 3) | over a root that does not register the package, a line with `--authorization` and no other flag sends status, the run once and the five event reads of any trial's run, exit 0; the plan `marked` with its basis and no `irreversible_acknowledged`, the record `marked` with its basis and `irreversible_acknowledged` `false`; the catalog holds the code retired in 0.12.101 |
+
+Adapted, the requirement changing what they pin: the resource tooling's
+`gate_463_s311::s311_the_runs_own_refusals_come_after_the_plan_in_their_order` (a marked package
+without an authorization is `trial_authorization_missing`; with one it passes, its record's plan
+`marked`, with its basis and `irreversible_acknowledged` `false`) and
+`gate_463_s310::s310_the_irreversible_mark_is_judged_only_over_a_root` (the plan shows the mark
+and holds no acknowledgement member); actinglab's
+`gate_463_s311::s311_each_run_only_refusal_sends_nothing_and_writes_nothing` (the marked line with
+an authorization is no refusal; `--irreversible` is `unknown`, 4). Touched because the plan and the
+request lost a member, nothing they assert changing otherwise:
+`gate_463_s310::s310_the_plan_of_a_package_with_two_endings_lists_three_keys` loses its one pin of
+the plan's `irreversible_acknowledged`; the request helpers of `gate_463_s310` and
+`gate_463_s311`, `gate_463_s312`'s `trial_request` and the two request literals of
+`gate_463_s314`'s fixture lose `irreversible: false`. No golden changes; no test leaves a gate
+map. The rows of S3-10 and S3-11 say what was adapted.
+
+**What is not changed.** The mark: judged over `--root` by the same functions, `not_judged`
+without one, shown in the plan and kept in the record with its basis; the record's shape, its
+schema version, its writer and its reader; `trial_authorization_missing`, the plan's refusals and
+their order; adoption's review and the status row, which read only `passed` and `trial_summary`;
+every other code. No Runtime component, ledger record or configuration key is involved: the trial
+is the Lab's, and its run is `run start`'s request. `distribution/windows/RELEASE-NOTES.md` still
+names the code in the notes of 0.12.65, as released, and §1.417, §1.418 and §1.501 stay as
+written.
+
+**At deploy.** Nothing to migrate or configure. The records on disk read as before; the first
+trial of a marked package over its root is sent under its authorization. In the release notes'
+language: 改动：`actinglab standard-pack trial` 试跑带「不可逆」标记的包时不再要求 `--irreversible`
+确认，有授权（`--authorization`）就直接发出；这个开关和 `ac_standard_pack_trial` 的 `irreversible`
+参数都去掉了，还写着它的命令会作为不认识的参数被拒（`validation_failed`）。码
+`trial_irreversible_unacknowledged` 停用。计划里照旧显示这个标记和它的依据，试跑记录的格式不变。
+
+**Rollback.** A build before this one refuses a marked package's run without `--irreversible`
+again, by its own rule, and its line takes the flag again; it reads this build's records (the same
+members, `irreversible_acknowledged` `false`), so its adoption review and its status row read them
+as their own.
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
