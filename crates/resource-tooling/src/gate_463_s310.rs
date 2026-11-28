@@ -10,7 +10,8 @@
 //   derives them from its one reading), the instance and the authorization as given, each
 //   declared variable with the value given (`given`) or its default (`default`), the irreversible
 //   mark `not_judged` without a root, `--expect`, nothing the run would still require, and the
-//   record's directory `<state>/trials/<package_id>`; `sent` is false;
+//   record's directory `<state>/trials/<package_id>`; `sent` is false (Workflow #503 TRIAL: its
+//   pin of the plan's `irreversible_acknowledged`, a member the plan no longer has, is gone);
 // - `s310_the_plan_writes_nothing`: after a plan every file and directory of the temporary tree is
 //   as it was, the state directory included, which is not made;
 // - `s310_the_authorization_is_optional_bounded_and_shown_back` (fix round 2, the coordinator's
@@ -29,9 +30,10 @@
 //   the key given and the declared keys in the details;
 // - `s310_the_irreversible_mark_is_judged_only_over_a_root`: over a game root whose package
 //   provides a capability it marks irreversible the plan of that package answers `marked` with
-//   the capability, `irreversible_acknowledged` as `--irreversible` was given, and refuses nothing
-//   (fix round 2, ruling 1); a package that provides nothing such is `unmarked`; one the root does
-//   not register counts as marked (the type's safe side); without a root it is `not_judged`;
+//   the capability and refuses nothing (fix round 2, ruling 1); adapted by Workflow #503 TRIAL
+//   (register §1.551): the plan has no member `irreversible_acknowledged` and the request no
+//   `--irreversible`; a package that provides nothing such is `unmarked`; one the root does not
+//   register counts as marked (the type's safe side); without a root it is `not_judged`;
 // - `s310_a_state_directory_in_a_repository_or_an_installed_root_is_refused`: a state directory
 //   below a directory holding `.git` is `trial_state_dir_refused` `repository`, below one whose
 //   `install\state.json` is a file `installed_root` (`installed_root_containing` answers that
@@ -262,7 +264,6 @@ fn request(package: &Path, state: &Path) -> StandardPackTrialRequest {
         authorization: Some(AUTHORIZATION.to_owned()),
         variables: Vec::new(),
         expect: None,
-        irreversible: false,
         root: None,
         state_dir: state.to_path_buf(),
     }
@@ -370,7 +371,6 @@ fn s310_the_plan_of_a_package_with_two_endings_lists_three_keys() {
     );
     assert_eq!(trial.irreversible, TrialIrreversible::NotJudged);
     assert_eq!(trial.irreversible_basis, None);
-    assert!(!trial.irreversible_acknowledged);
     assert_eq!(trial.expect.as_deref(), Some(SHORT_KEY));
     assert_eq!(
         answer.record_directory,
@@ -582,18 +582,22 @@ fn s310_the_irreversible_mark_is_judged_only_over_a_root() {
         capabilities: vec![CAPABILITY.to_owned()],
         unreadable_packages: Vec::new(),
     });
-    // Shown, never refused: without `--irreversible` as with it.
-    let unacknowledged = plan(&over_root);
-    assert_eq!(unacknowledged.plan.irreversible, TrialIrreversible::Marked);
-    assert!(!unacknowledged.plan.irreversible_acknowledged);
-    assert_eq!(unacknowledged.plan.irreversible_basis, marked_basis);
-    let acknowledged = plan(&StandardPackTrialRequest {
-        irreversible: true,
-        ..over_root
-    });
-    assert_eq!(acknowledged.plan.irreversible, TrialIrreversible::Marked);
-    assert!(acknowledged.plan.irreversible_acknowledged);
-    assert_eq!(acknowledged.plan.irreversible_basis, marked_basis);
+    // Shown, never refused (adapted by Workflow #503 TRIAL: nothing acknowledges it, and the plan
+    // has no acknowledgement member).
+    let marked = plan(&over_root);
+    assert_eq!(marked.plan.irreversible, TrialIrreversible::Marked);
+    assert_eq!(marked.plan.irreversible_basis, marked_basis);
+    let shown = serde_json::to_value(&marked).expect("the answer as JSON");
+    assert_eq!(shown["plan"]["irreversible"], "marked", "{shown}");
+    assert_eq!(
+        shown["plan"]["irreversible_basis"]["capabilities"],
+        json!([CAPABILITY]),
+        "{shown}"
+    );
+    assert!(
+        shown["plan"].get("irreversible_acknowledged").is_none(),
+        "{shown}"
+    );
     // Without a root the mark is not judged.
     let unjudged = plan(&request(&spend, &state));
     assert_eq!(unjudged.plan.irreversible, TrialIrreversible::NotJudged);

@@ -751,7 +751,11 @@ fn check_resource_targets_v2(
 /// The entry's check of one v2 target: its pool, then its step and importance (the target's
 /// own, else the pool valuation's, else, #455 B3-P, the pool's `target_defaults`:
 /// [`target_terms`]), then its named tasks, or, without `tasks`, whether any task of the instance
-/// produces the pool. A refusal names its reason and its path below the target.
+/// produces the pool. A refusal names its reason and its path below the target. #455 SL2 (register
+/// §1.547): a target on a pool that writes `spend_line` is the pool's line ([`line_pool`]): it
+/// carries `at_least` and no term of its own, so a `scale`, an `importance_milli` or `tasks`
+/// written on it is `unknown_field` at that member, the first of them in this order, and it needs
+/// no task of the instance that produces the pool.
 fn check_target_v2<'a>(
     catalog: &'a CompiledCatalog,
     target: &ResourceTargetSpecV2,
@@ -759,6 +763,17 @@ fn check_target_v2<'a>(
 ) -> Result<(&'a PoolSpec, String), (ResourceTargetsRejectionReason, String)> {
     use ResourceTargetsRejectionReason as Reason;
     let (pool, fact_key) = resolve_target_pool(catalog, &target.resource, instance)?;
+    if line_pool(pool) {
+        let members = [
+            ("scale", target.scale.is_some()),
+            ("importance_milli", target.importance_milli.is_some()),
+            ("tasks", target.tasks.is_some()),
+        ];
+        return match members.into_iter().find(|(_, written)| *written) {
+            Some((member, _)) => Err((Reason::UnknownField, format!("/{member}"))),
+            None => Ok((pool, fact_key)),
+        };
+    }
     match target_terms(target, pool) {
         Err(MissingTerm::Scale) => return Err((Reason::MissingField, "/scale".to_owned())),
         Err(MissingTerm::Importance) => {
@@ -815,6 +830,29 @@ fn pool_target_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
     )
 }
 
+/// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): whether a stored
+/// target on `pool` is the pool's line: the pool writes `spend_line` (#455 SL1), which it writes only
+/// without a valuation and without `target_defaults`, so [`pool_target_terms`] gives it nothing. The
+/// one place the difference is read, from the catalog in force: a line carries `at_least` alone and
+/// needs no producer ([`check_target_v2`], the v1 check), the targetable list names its pool with
+/// neither term required ([`listed_terms`]), and the evaluation reads no line
+/// ([`weighed_target_policies`]).
+fn line_pool(pool: &PoolSpec) -> bool {
+    pool.spend_line.is_some()
+}
+
+/// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): the step and the
+/// importance the targetable list gives `pool` as its defaults: [`pool_target_terms`], or, on a
+/// line's pool ([`line_pool`]), its `spend_line`'s `scale` and `price_milli`, the numbers a line is
+/// pressed by, read from the catalog in force and never written in a target. `None` where a target
+/// must state its own.
+fn listed_terms(pool: &PoolSpec) -> (Option<u64>, Option<u64>) {
+    match &pool.spend_line {
+        Some(line) => (Some(line.scale), Some(line.price_milli)),
+        None => pool_target_terms(pool),
+    }
+}
+
 /// A v2 target's gap step `S` and importance `I`: the target's own, else the pool valuation's
 /// `scale` and `gap.weight_milli`, else (#455 B3-P) the pool's `target_defaults`
 /// ([`pool_target_terms`]). The rule needs no resolution: `shortfall_linear`, the only one, is also
@@ -840,13 +878,22 @@ pub(crate) struct ResolvedTarget<'a> {
 
 /// Resolves `target` for `instance`: its pool, then each task, the first refusal winning.
 /// The entry check and the evaluator share both halves, so both judge a target alike. A
-/// refusal names its reason and its path below the target.
+/// refusal names its reason and its path below the target. #455 SL2 (register §1.547): a v1
+/// target always writes its own `scale`, `importance_milli` and `tasks`, which a line does not
+/// carry, so one on a pool that writes `spend_line` ([`line_pool`]) is `unknown_field` at its
+/// `scale`, before its tasks.
 pub(crate) fn resolve_target<'a>(
     catalog: &'a CompiledCatalog,
     target: &ResourceTargetSpec,
     instance: &InstanceSnapshot,
 ) -> Result<ResolvedTarget<'a>, (ResourceTargetsRejectionReason, String)> {
     let (pool, fact_key) = resolve_target_pool(catalog, &target.resource, instance)?;
+    if line_pool(pool) {
+        return Err((
+            ResourceTargetsRejectionReason::UnknownField,
+            "/scale".to_owned(),
+        ));
+    }
     let mut per_task = Vec::with_capacity(target.tasks.len());
     for (index, task_id) in target.tasks.iter().enumerate() {
         let per_run = resolve_target_task(catalog, pool, task_id, instance)
@@ -1096,11 +1143,11 @@ pub(crate) fn observe_target(
 }
 
 /// #455 RR3c (register §1.543): `observed`, an evaluation's observation of `pool` as a target's
-/// inventory, unless a run told enough turns to close a goal's gap on the pool has left it unread
-/// (`unread`, [`crate::evaluator::produced_unread`], the judgement the evaluation's pool values
-/// read): a reading that would be known is then pending with the reason a stale reading gives
-/// (`expired`), so the target weighs nothing and its gap is unknown (no goal term of `run_cap`, no
-/// `gap_remaining`). A pending observation keeps its own reason.
+/// inventory, unless the production told under a goal's gap on the pool since its reading has
+/// left it unread (`unread`, [`crate::evaluator::produced_unread`], the judgement the evaluation's
+/// pool values read): a reading that would be known is then pending with the reason a stale
+/// reading gives (`expired`), so the target weighs nothing and its gap is unknown (no goal term of
+/// `run_cap`, no `gap_remaining`). A pending observation keeps its own reason.
 fn unless_unread(
     observed: TargetObservation,
     pool: &PoolSpec,
@@ -1955,10 +2002,47 @@ fn landing_targets(
 /// `Unreadable`; a withdrawal is no policy; `applied_at` is the record's `observed_at` and its
 /// confidence is not read. A server- or game-scoped record is never a policy and never an
 /// error: every instance it covers notes it as ignored (a server record over a game one). The
-/// map holds only the instances with something to report.
+/// map holds only the instances with something to report. #455 SL2: every stored target as it is
+/// stored, lines included, as the view (`ResourceTargetView`) shows them; the evaluation reads
+/// [`weighed_target_policies`].
 pub(crate) fn instance_target_policies(
     facts: &EvaluationFacts,
     time: EvaluationTime,
+) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    target_policies(facts, time, |_, _| false)
+}
+
+/// #455 SL2 (register §1.547; `contracts/resource-targets.md`, "A pool's line"): the stored
+/// policies as the evaluation weighs them, [`instance_target_policies`] with each record read
+/// without its lines: a stored target whose pool, as [`target_pool`] gives it for the record's
+/// instance in `catalog`, writes `spend_line` ([`line_pool`]) is left out of the record's targets,
+/// its own lifetime with it, before anything reads them, so a line adds no term, order, reason,
+/// gap, run count or stacked need to any task, and a record that holds lines alone is read as one
+/// that holds no target (no policy). Nothing stored is rewritten; the view and the goal page show
+/// the lines as stored. The next slice that presses spending reads the lines here, from the same
+/// records.
+pub(crate) fn weighed_target_policies(
+    catalog: &CompiledCatalog,
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
+    target_policies(facts, time, |instance_id, resource| {
+        facts
+            .instances
+            .iter()
+            .find(|instance| instance.instance_id == instance_id)
+            .and_then(|instance| target_pool(catalog, resource, instance))
+            .is_some_and(line_pool)
+    })
+}
+
+/// The walk of [`instance_target_policies`] and [`weighed_target_policies`]: each record read by
+/// [`stored_policy_state`] without the targets `line` names, by the record's instance and the
+/// target's `resource`.
+fn target_policies(
+    facts: &EvaluationFacts,
+    time: EvaluationTime,
+    line: impl Fn(&str, &str) -> bool,
 ) -> PolicyEvaluationResult<BTreeMap<String, InstanceTargetPolicy>> {
     let mut policies = BTreeMap::<String, InstanceTargetPolicy>::new();
     for fact in facts
@@ -1968,7 +2052,8 @@ pub(crate) fn instance_target_policies(
     {
         let scope_kind = match &fact.scope {
             ScopeSelector::Instance { instance_id } => {
-                if let Some(state) = stored_policy_state(fact, instance_id, time) {
+                let of_instance = |resource: &str| line(instance_id.as_str(), resource);
+                if let Some(state) = stored_policy_state(fact, instance_id, time, &of_instance) {
                     policies.entry(instance_id.clone()).or_default().state = Some(state);
                 }
                 continue;
@@ -2019,13 +2104,17 @@ pub fn resource_targets_without_active(
         unix_ms: now_unix_ms,
         monotonic_ms: 0,
     };
-    stored_policy_state(&fact, instance_id, time).is_none()
+    stored_policy_state(&fact, instance_id, time, &|_: &str| false).is_none()
 }
 
+/// One instance-scoped record as a policy, each version by its reader. #455 SL2: without the
+/// targets `line` names by their `resource` (after the record's own checks, so a record they would
+/// leave unreadable stays so); a record left with none reads as no policy.
 fn stored_policy_state(
     fact: &ObservedFact,
     instance_id: &str,
     time: EvaluationTime,
+    line: &dyn Fn(&str) -> bool,
 ) -> Option<TargetPolicyState> {
     let unreadable = |code| Some(TargetPolicyState::Unreadable { code });
     let FactValue::RecordList(rows) = &fact.value else {
@@ -2033,10 +2122,10 @@ fn stored_policy_state(
     };
     // Workflow #455 G-R2a: a v3 header selects the v3 reader, which reads the targets as v2's.
     if v3::declares_v3_rows(rows) {
-        return v3::stored_policy_state_v3(fact, rows, instance_id, time);
+        return v3::stored_policy_state_v3(fact, rows, instance_id, time, line);
     }
     if declares_v2_rows(rows) {
-        return stored_policy_state_v2(fact, rows, instance_id, time);
+        return stored_policy_state_v2(fact, rows, instance_id, time, line);
     }
     let decoded = match decode_rows(rows, instance_id) {
         Ok(decoded) => decoded,
@@ -2050,8 +2139,12 @@ fn stored_policy_state(
     };
     let DecodedResourceTargets {
         policy_sha256,
-        targets,
+        mut targets,
     } = decoded;
+    targets.retain(|target| !line(target.resource.as_str()));
+    if targets.is_empty() {
+        return None;
+    }
     let applied_at_unix_ms = fact.observed_at_unix_ms;
     Some(if time.unix_ms > valid_until_unix_ms {
         TargetPolicyState::Expired {
@@ -2071,17 +2164,19 @@ fn stored_policy_state(
 }
 
 /// [`stored_policy_state`] for a v2 record: unreadable when its rows are refused or it holds
-/// targets without an expiry, no policy for a withdrawal, else active or expired.
+/// targets without an expiry, no policy for a withdrawal, else active or expired. #455 SL2: without
+/// the targets `line` names; a record left with none is no policy.
 fn stored_policy_state_v2(
     fact: &ObservedFact,
     rows: &[BTreeMap<String, FactScalar>],
     instance_id: &str,
     time: EvaluationTime,
+    line: &dyn Fn(&str) -> bool,
 ) -> Option<TargetPolicyState> {
     let unreadable = |code| Some(TargetPolicyState::Unreadable { code });
     let DecodedResourceTargetsV2 {
         policy_sha256,
-        targets,
+        mut targets,
     } = match decode_rows_v2(rows, instance_id) {
         Ok(decoded) => decoded,
         Err(error) => return unreadable(error.code()),
@@ -2092,6 +2187,10 @@ fn stored_policy_state_v2(
     let Some(valid_until_unix_ms) = fact.expires_at_unix_ms else {
         return unreadable(RowsDecodeError::MalformedRows.code());
     };
+    targets.retain(|target| !line(target.resource.as_str()));
+    if targets.is_empty() {
+        return None;
+    }
     let applied_at_unix_ms = fact.observed_at_unix_ms;
     Some(if time.unix_ms > valid_until_unix_ms {
         TargetPolicyState::ExpiredV2 {
@@ -2118,7 +2217,10 @@ fn stored_policy_state_v2(
 /// valuation supplies, else (#455 B3-P) its `target_defaults` (as [`target_terms`] reads them,
 /// [`pool_target_terms`]), and its inventory as the time-validity projection of `facts` shows it
 /// ([`observe_target`]). #503 GOAL-1: each pool once, named as the game root's files write it
-/// (a composed copy without `@<alias>`), the name a target takes. Pure.
+/// (a composed copy without `@<alias>`), the name a target takes. #455 SL2 (register §1.547): a
+/// pool that writes `spend_line` takes a line, which needs no producer: it is targetable whatever
+/// its producing tasks, its defaults its `spend_line`'s `scale` and `price_milli`
+/// ([`listed_terms`]), so neither is required. Pure.
 pub fn targetable_resources(
     catalog: &CompiledCatalog,
     facts: &EvaluationFacts,
@@ -2181,15 +2283,17 @@ pub fn targetable_resources_with_readings(
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
-        if producing_tasks.is_empty() {
+        // #455 SL2 (register §1.547): a line needs no producer.
+        if producing_tasks.is_empty() && !line_pool(pool) {
             not_targetable.push(NotTargetableResource {
                 resource: resource.to_owned(),
                 reason: ResourceTargetsRejectionReason::UnmappedTask,
             });
             continue;
         }
-        // #455 B3-P (register §1.522): the pool's valuation's, else its `target_defaults`.
-        let (default_scale, default_importance_milli) = pool_target_terms(pool);
+        // #455 B3-P (register §1.522): the pool's valuation's, else its `target_defaults`. #455
+        // SL2: a line's pool its `spend_line`'s, so neither term is required.
+        let (default_scale, default_importance_milli) = listed_terms(pool);
         let observation = match observe_target(&projected, &given, instance, pool, &fact_key, time)
         {
             TargetObservation::Known {
@@ -2512,15 +2616,23 @@ pub(crate) struct ResourceTerm {
 /// ([`ResourceTerm::pool_weights`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PoolWeight {
-    /// `W = B + Γ`, the pool's effective weight for the candidate.
+    /// `W = B + Γ`, the pool's effective weight for the candidate: a unit consumed costs it, and a
+    /// unit produced is worth it to a task without a fixed value. #503 FIXV (register §1.550): it
+    /// holds the pool's own `B` also for a task with a fixed value, whose term counts `Γ` alone.
     pub(crate) weight_milli: u64,
+    /// #503 FIXV (register §1.550): `Γ`, the part of `W` a goal in force that covers the candidate
+    /// adds (0 without one): all a task with a fixed value reads of a pool it produces, so a priced
+    /// product's base valuation `B` is never added to the fixed value. Equal to `W` for a pool
+    /// without a valuation.
+    pub(crate) gap_weight_milli: u64,
     /// `Q`, the step its term divides by: the pool's `valuation.scale`, else the `scale` of the
     /// goal that covers the candidate (#455 B1, register §1.518: the step of a fixed-value task's
     /// goal term), its own, else (#455 B3-P, register §1.522) the pool's `target_defaults.scale`.
     pub(crate) step: u64,
 }
 
-/// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`.
+/// One weighed resource of a candidate: `T = ⌊r · W / Q⌋` with `W = B + Γ`; #503 FIXV (register
+/// §1.550): for a task with a fixed value `B` is 0 here, so `T = ⌊r · Γ / Q⌋`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WeightItem {
     pool: String,
@@ -2529,6 +2641,10 @@ struct WeightItem {
     base_milli: u64,
     gap_weight_milli: u64,
     effective_milli: u64,
+    /// #503 FIXV: `B_p + Γ` with the pool's own base valuation whatever the task declares, the
+    /// weight [`ResourceTerm::pool_weights`] hands the net benefit, which a consumption of the pool
+    /// costs; `effective_milli` for a task without a fixed value.
+    weight_milli: u64,
     term_milli: u128,
 }
 
@@ -2540,7 +2656,8 @@ impl ResourceTerm {
 
     /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, with the step `Q` its
     /// term divides by, by pool id; the net benefit reads the resource layer's own weights and
-    /// writes none.
+    /// writes none. #503 FIXV (register §1.550): with its gap weight `Γ` beside it; `W` holds the
+    /// pool's own `B` also where the term counted it 0 (a task with a fixed value).
     pub(crate) fn pool_weights(&self) -> BTreeMap<String, PoolWeight> {
         self.items
             .iter()
@@ -2548,7 +2665,8 @@ impl ResourceTerm {
                 (
                     item.pool.clone(),
                     PoolWeight {
-                        weight_milli: item.effective_milli,
+                        weight_milli: item.weight_milli,
+                        gap_weight_milli: item.gap_weight_milli,
                         step: item.step,
                     },
                 )
@@ -3060,8 +3178,8 @@ struct TargetContext<'a> {
     projected_facts: &'a EvaluationFacts,
     /// #455 P2: the readings given to the pools read from rows of a list, as the resets leave them.
     given: &'a GivenPoolReadings,
-    /// #455 RR3c (register §1.543): the pools a run told enough turns to close a goal's gap on left
-    /// unread ([`crate::evaluator::produced_unread`]).
+    /// #455 RR3c (register §1.543): the pools the production told under a goal's gap since their
+    /// reading left unread ([`crate::evaluator::produced_unread`]).
     unread: &'a BTreeSet<String>,
     instance: &'a InstanceSnapshot,
     time: EvaluationTime,
@@ -3199,7 +3317,13 @@ fn base_terms(
         .iter()
         .filter(|task| scope_matches_instance(&task.scope, instance))
     {
-        let weighed = weigh_production(&task.id, &task.produces, &pools, &[])?;
+        let weighed = weigh_production(
+            &task.id,
+            task.benefit_fixed_value_milli.is_some(),
+            &task.produces,
+            &pools,
+            &[],
+        )?;
         if weighed.items.is_empty() {
             continue;
         }
@@ -3251,13 +3375,18 @@ struct Weighed {
 /// covers the task for `p`, the only part a goal adds. `R = min(Σ T + ⌊Σ F⌋, 1_000_000)`. `Q` is
 /// the pool's `valuation.scale`, else the step the covering target resolves to (its own `scale`,
 /// else, #455 B3-P, the pool's `target_defaults.scale`), and a pool with neither is not weighed.
+/// #503 FIXV (register §1.550): with `fixed_value` (the task declares a fixed value) `B_p` counts
+/// 0 in `T`, so `T = ⌊r · Γ / Q⌋`: a priced product adds to `R` only the part a goal gives it, as
+/// to the net benefit. The weight the net benefit charges a consumption of the pool at stays
+/// `B_p + Γ` ([`ResourceTerm::pool_weights`]). For a pool without a valuation `B_p` is 0 anyway.
 ///
-/// One-way guard: the inputs are the task's id (only to ask a target's coverage), its own yield
-/// declaration, the pools and the resolved targets. No task's enablement, instance override,
-/// priority, offset or run state reaches this function, so changing any of them for one task
-/// changes no pool weight and no other task's term.
+/// One-way guard: the inputs are the task's id (only to ask a target's coverage), whether it
+/// declares a fixed value, its own yield declaration, the pools and the resolved targets. No
+/// task's enablement, instance override, priority, offset or run state reaches this function, so
+/// changing any of them for one task changes no pool weight and no other task's term.
 fn weigh_production(
     task_id: &str,
+    fixed_value: bool,
     produces: &[ResourceEffectSpec],
     pools: &[&PoolSpec],
     targets: &[ResolvedTargetV2<'_>],
@@ -3282,8 +3411,11 @@ fn weigh_production(
         else {
             continue;
         };
-        let base_milli = valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
+        let declared_milli =
+            valuation.map_or(0, |valuation| u64::from(valuation.base_weight_milli));
         let gap_weight_milli = covering.map_or(0, ResolvedTargetV2::gap_weight_milli);
+        // #503 FIXV (register §1.550): beside a fixed value the term counts no base valuation.
+        let base_milli = if fixed_value { 0 } else { declared_milli };
         let effective_milli = base_milli + gap_weight_milli;
         let numerator = per_run
             .checked_mul(u128::from(effective_milli))
@@ -3308,6 +3440,7 @@ fn weigh_production(
             base_milli,
             gap_weight_milli,
             effective_milli,
+            weight_milli: declared_milli + gap_weight_milli,
             term_milli,
         });
     }
@@ -3599,7 +3732,13 @@ fn resolve_v2(
                 term.inventory_expiries.push(expiry);
             }
         }
-        let weighed = weigh_production(&task.id, &task.produces, &pools, &resolved)?;
+        let weighed = weigh_production(
+            &task.id,
+            task.benefit_fixed_value_milli.is_some(),
+            &task.produces,
+            &pools,
+            &resolved,
+        )?;
         term.term_milli = weighed.term_milli;
         term.capped = weighed.capped;
         term.items = weighed.items;
@@ -4813,19 +4952,22 @@ fn run_cap(
 /// gap that declares no integer per-run `amount` on every entry (an `expected_amount_milli`
 /// production) needs ⌈gap·1000 / its expected yield per run in thousandths⌉ runs, at least 1; one
 /// that yields nothing per run (its amount pending) adds nothing. Before, such a pool removed
-/// `run_cap` whole.
+/// `run_cap` whole. #503 FIXV (register §1.550): a task with a fixed value makes no base-weight
+/// test: its base value is the fixed value alone, so its goals' runs bound `run_cap` whatever
+/// valuations its produced pools carry.
 fn goal_runs(
     task: &TaskSpec,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
 ) -> Option<u64> {
-    let base_weighted = task.produces.iter().any(|effect| {
-        pools
-            .iter()
-            .find(|pool| pool.id == effect.pool_id)
-            .and_then(|pool| pool.declared_valuation())
-            .is_some_and(|valuation| valuation.base_weight_milli > 0)
-    });
+    let base_weighted = task.benefit_fixed_value_milli.is_none()
+        && task.produces.iter().any(|effect| {
+            pools
+                .iter()
+                .find(|pool| pool.id == effect.pool_id)
+                .and_then(|pool| pool.declared_valuation())
+                .is_some_and(|valuation| valuation.base_weight_milli > 0)
+        });
     if base_weighted {
         return None;
     }
@@ -4839,7 +4981,7 @@ fn goal_runs(
             continue;
         };
         // #455 RR3c (register §1.543): the production per run in thousandths, read by the one
-        // function the judgement of a run told enough to close a gap reads; for an integer
+        // function the judgement of the production told under a gap reads; for an integer
         // production ⌈gap·1000 / (amount·1000)⌉ is the ⌈gap / amount⌉ of before.
         let per_run_milli = production_milli(&task.produces, &effect.pool_id);
         if per_run_milli == 0 {
@@ -4857,8 +4999,8 @@ fn goal_runs(
 /// goal term of `run_cap` divides a gap by it ([`goal_runs`]; #455 B1 ruling 10): the sum of its
 /// integer `amount`s on the pool times 1000 when every entry declares one ([`declared_amount`]),
 /// else its expected yield ([`per_run_yield`]); 0 when it yields nothing per run (its amount
-/// pending). The judgement of whether a run was told enough turns to close a gap reads it too
-/// (`crate::HandedRuns`).
+/// pending). The judgement of whether the production told under a pool's gap since its reading
+/// reaches that gap reads it too (`crate::HandedRuns`).
 pub(crate) fn production_milli(produces: &[ResourceEffectSpec], pool_id: &str) -> u128 {
     declared_amount(produces, pool_id).map_or_else(
         || per_run_yield(produces, pool_id),

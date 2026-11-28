@@ -61,8 +61,10 @@
 //! - **A fixed value** (SCHED-C1a, register §1.299; Alice's two kinds of scoring of 11-09 15:47
 //!   and 15:50; `contracts/scheduling/README.md`, "Fixed values written in the pack"). A task
 //!   that writes `benefit_fixed_value_milli` `V` is judged by
-//!   `B = V + Σ_g produce(k,g)·W(k,g)/Q_g − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a
-//!   consumption and without a goal term. A consumed pool still needs its valuation and a
+//!   `B = V + Σ_g produce(k,g)·Γ(k,g)/Q_g − Σ_p consume(k,p)·W(k,p)/Q_p`: `V` itself without a
+//!   consumption and without a goal term. #503 FIXV (register §1.550): `V` is of either sign, 0
+//!   included, and its base value alone: a produced pool's base valuation is never added to it. A
+//!   consumed pool still needs its valuation and a
 //!   regenerating one its reading, as above; a fixed value is exact and adds nothing to `ε`. So
 //!   below the cap a consumer's `B` is `V − W·c` plus its goal terms, and in a capped round its
 //!   value without the pool's cost is `V` plus its goal terms less the other pools' cost
@@ -71,13 +73,15 @@
 //!   its other reasons.
 //! - **A goal term of a fixed value** (#455 B1, register §1.518; the coordinator's rulings of
 //!   11-23; `contracts/resource-targets.md`, "Resource weights (v2)"). Each pool `g` the task
-//!   produces that the resource layer weighs above 0 for it adds `produce(k,g)·W(k,g)/Q_g`, its
-//!   production term as for a task without a fixed value, with its share of `ε` and its item: such
-//!   a pool declares no valuation (the compiler refuses a fixed value beside a priced product), so
-//!   it is weighed only by a goal in force that covers the task with an open gap, `W = Γ` and `Q`
-//!   the goal's `scale`. Any other pool it produces is not read: no goal, a pending goal (an
-//!   unknown reading, `Γ = 0`) and a met goal add nothing, so without such a goal `B`, `ε` and every
-//!   record are those of before, and a goal never lowers a `B`. Ruling 9 (a goal chooses which task
+//!   produces whose gap weight `Γ` the resource layer gives above 0 for it adds
+//!   `produce(k,g)·Γ(k,g)/Q_g`, with its share of `ε` (`Γ` as its `W`) and its item: `Γ` comes only
+//!   from a goal in force that covers the task with an open gap, and `Q` is the step its term
+//!   divides by (a priced pool's `valuation.scale`, else the goal's `scale`). #503 FIXV: a priced
+//!   or pending pool may be produced beside `V`, and its base valuation is not read; for a pool
+//!   without a valuation `Γ` is its whole weight, as before. Any other pool it produces is not read:
+//!   no goal, a pending goal (an unknown reading, `Γ = 0`) and a met goal add nothing, so without
+//!   such a goal `B`, `ε` and every record are `V`'s and the consumption's alone, and a goal never
+//!   lowers a `B`. Ruling 9 (a goal chooses which task
 //!   spends a pool, the pool's lines choose when), as corrected: below the trigger line of a
 //!   regenerating pool it consumes (the capacity without a written one; a pool whose lines give no
 //!   value counts as below), with no capped episode under way ([`super::capped`]), whether the task
@@ -480,8 +484,12 @@ fn goal_tiers_pool(
 /// (register §1.518): of its `produces` only the pools its term weighs above 0 are read, each a
 /// production term at its term's step `Q` (a goal's `scale`), with its share of `ε` and its item;
 /// no other produced pool is looked up, so neither its valuation nor an entry's pending amount
-/// makes `B` unknown. #455 SL1 (register §1.540): a consumed pool that writes `spend_line` needs no
-/// valuation and adds no term, no share of `ε` and no consumed term, only its item `<pool>:-0`.
+/// makes `B` unknown. #503 FIXV (register §1.550): `V` of either sign; a produced pool is read by
+/// its gap weight `Γ` alone ([`PoolWeight::gap_weight_milli`]), at the step its term divides by (a
+/// priced pool's `valuation.scale`), so its base valuation is never added to `V`; for a pool
+/// without a valuation `Γ` is the whole weight, as before. #455 SL1 (register §1.540): a consumed
+/// pool that writes `spend_line` needs no valuation and adds no term, no share of `ε` and no
+/// consumed term, only its item `<pool>:-0`.
 fn judge(
     task: &TaskSpec,
     instance: &InstanceSnapshot,
@@ -522,15 +530,11 @@ fn judge(
         ))
     };
     let mut sum = ExactSum::new();
-    // SCHED-C1a: a fixed value is exact, so it adds nothing to `ε`.
+    // SCHED-C1a: a fixed value is exact, so it adds nothing to `ε`. #503 FIXV (register §1.550):
+    // of either sign, 0 included, added as it is written.
     if let Some(value) = fixed_value {
-        let value = u128::try_from(value).map_err(|_| {
-            PolicyEvaluationError::invalid(format!(
-                "task '{}' has a negative fixed value on instance '{}'",
-                task.id, instance.instance_id
-            ))
-        })?;
-        sum.add(value, 1, false).ok_or_else(overflow)?;
+        sum.add(u128::from(value.unsigned_abs()), 1, value < 0)
+            .ok_or_else(overflow)?;
     }
     // SS-2d: the rounding bound `ε` of `sum`, accumulated as exactly (module doc).
     let mut tolerance = ExactSum::new();
@@ -553,7 +557,9 @@ fn judge(
         }
         seen.push(effect.pool_id.as_str());
         // `W` and `Q`: the pool's valuation's, its term's weight where it holds one; #455 B1, with
-        // a fixed value, only a pool its term weighs above 0, at that term's step.
+        // a fixed value, only a pool its term weighs above 0, at that term's step; #503 FIXV
+        // (register §1.550): by its gap weight `Γ` alone, so a priced product's base valuation is
+        // never added to the fixed value.
         let (weight_milli, scale) = match fixed_value {
             None => {
                 let (_, valuation) =
@@ -569,7 +575,7 @@ fn judge(
                 )
             }
             Some(_) => match weight(&effect.pool_id) {
-                Some(term) if term.weight_milli > 0 => (term.weight_milli, term.step),
+                Some(term) if term.gap_weight_milli > 0 => (term.gap_weight_milli, term.step),
                 _ => continue,
             },
         };

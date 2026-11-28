@@ -327,7 +327,7 @@ positions), then the references'.
 | `table_list_key_duplicate` | fix round 1: a progress list's `fact_key` is the one of an earlier list of its table | the later list's `fact_key` |
 | `table_reading_column_duplicate` | a reading column listed twice among a table's lists, or twice in one `read` or sub; fix round 1: a list's `key_column` listed among its own `columns` (the list names that column twice) | the later; the key column among the `columns` |
 | `table_pool_unknown` | an item's pool is no pool of the composed `schedule.json` (none without the file) | `/items/<item>/pool` |
-| `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
+| `table_pool_unvalued` | the pool of an item without a recipe (the one a need lands on) is one a goal cannot be put on: the judgement the goal check gives a `resource` entry's pool (`goal_pool_unvalued`), the same map, not a second one. #455 SL2 (since 0.12.101): a pool that writes `spend_line`, which the goal check takes because its goal is the pool's line, gives no step and no importance, so it is refused here too, the map saying which pools are lines. The pool of an item with a recipe need only be a pool of the root (every pool declares its reading) | `/items/<item>/pool` |
 
 `goal_tables_undeclared` is the installer's ("Interface").
 
@@ -505,8 +505,10 @@ records"), and nothing of it is stored. This file's shape is unchanged for it.
   those items' needs. An item with a recipe whose holding is not known adds nothing below itself
   (`goal_records_holding_unknown`). #455 RR3c (since 0.12.98; register §1.543): nor does one whose
   holding a run left unread, a run that was told enough turns to close a goal's gap on its pool
-  having produced into it after the holding was read; the holding is then not known until a reading
-  observed at or after that run's end (`goal_records_holding_unknown` with `unknown_reason`
+  having produced into it after the holding was read (#455 RR3d, since 0.12.101, register §1.548:
+  or several runs that were told enough together, the production told under the gap summed since
+  the reading); the holding is then not known until a reading observed at or after those runs' end
+  (`goal_records_holding_unknown` with `unknown_reason`
   `fact_stale`; [scheduling/README.md](scheduling/README.md), "Pool lines"). What remains on an item without a recipe is its pool's need;
   an item without a recipe and without a pool is shown (`goal_records_item_unweighed`) and weighs
   nothing.

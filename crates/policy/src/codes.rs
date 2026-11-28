@@ -312,9 +312,10 @@ actingcommand_contract::outcome_codes! {
         /// decision's other reasons, whatever the gate then decides (keys `benefit_milli`,
         /// `fixed_value_milli`, `expected_duration_ms`).
         BenefitFixedValue => "benefit_fixed_value": info / none,
-        /// Error (catalog compile diagnostic). A task's `benefit_fixed_value_milli` beside a
-        /// `produces` entry on a pool whose valuation is declared or pending, or beside
-        /// `benefit_realization: true`: the task would have two values.
+        /// Error (catalog compile diagnostic). A task's `benefit_fixed_value_milli` beside
+        /// `benefit_realization: true`: the task would have two values. #503 FIXV (register
+        /// §1.550): no longer beside a `produces` entry on a pool whose valuation is declared or
+        /// pending, which stands beside the fixed value.
         FixedValueConflict => "fixed_value_conflict": error / none,
         // ---- SCHED-C1a: end ----
         // ---- SCHED-C1c (a pool its lines cannot spend, `contracts/scheduling/README.md`, "Pool

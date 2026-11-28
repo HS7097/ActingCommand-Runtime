@@ -298,7 +298,6 @@ impl Fixture {
             authorization: Some(AUTHORIZATION.to_owned()),
             variables: Vec::new(),
             expect: None,
-            irreversible: false,
             root: None,
             state_dir: state.clone(),
         })
@@ -372,7 +371,6 @@ impl Fixture {
             authorization: Some(AUTHORIZATION.to_owned()),
             variables: Vec::new(),
             expect: None,
-            irreversible: false,
             root: None,
             state_dir: self.state.clone(),
         })

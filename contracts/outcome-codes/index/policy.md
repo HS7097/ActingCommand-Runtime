@@ -8,7 +8,7 @@ means. 132 codes.
 |---|---|---|---|---|---|---|---|
 | `activity_profile_missing` | info | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: no activity profile matches the instance. |
 | `approval_missing` | error | none | 0.12.0 | active | pending | TBD | Catalog compile diagnostic: the catalog declares no approval reference. |
-| `benefit_fixed_value` | info | none | 0.12.52 | active | pending | written | Scheduling decision reason (#428 SCHED-C1a, Alice's two kinds of scoring of 11-09; contracts/scheduling/README.md "Fixed values written in the pack"): a judged… |
+| `benefit_fixed_value` | info | none | 0.12.52 | active | pending | written | Scheduling decision reason (#428 SCHED-C1a, the owner's two kinds of scoring of 11-09; contracts/scheduling/README.md "Fixed values written in the pack"): a… |
 | `benefit_unknown` | info | none | 0.12.32 | active | pending | written | Scheduling decision reason (SS-2b, Alice's rulings 104 point 3 and 116; contracts/scheduling/README.md "Net benefit within a tier"): a judged candidate's net… |
 | `benefit_within_tolerance` | info | none | 0.12.35 | active | pending | written | Scheduling decision reason (SS-2d, Alice's ruling 127; contracts/scheduling/README.md "Net benefit within a tier", "Within tolerance"): a judged candidate's… |
 | `capability_missing` | info | none | 0.12.0 | active | pending | TBD | Scheduling decision reason: the instance does not provide the task's entry operation. |
