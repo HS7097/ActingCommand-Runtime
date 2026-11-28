@@ -450,6 +450,12 @@ fn list(
     );
     fact.observed_at_unix_ms = observed_at;
     fact.expires_at_unix_ms = Some(observed_at + FRESH_MS);
+    // The shared fixture's lifetime policy admits two minutes at most, and an observation whose
+    // lifetime lies outside its policy is refused (`fact_observation_invalid`): this list's own
+    // policy admits its hour.
+    if let Some(policy) = fact.ttl_policy.as_mut() {
+        policy.maximum_ms = FRESH_MS;
+    }
     fact.confidence_milli = 900;
     fact
 }
