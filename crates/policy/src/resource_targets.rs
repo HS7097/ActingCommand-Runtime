@@ -1096,11 +1096,11 @@ pub(crate) fn observe_target(
 }
 
 /// #455 RR3c (register §1.543): `observed`, an evaluation's observation of `pool` as a target's
-/// inventory, unless a run told enough turns to close a goal's gap on the pool has left it unread
-/// (`unread`, [`crate::evaluator::produced_unread`], the judgement the evaluation's pool values
-/// read): a reading that would be known is then pending with the reason a stale reading gives
-/// (`expired`), so the target weighs nothing and its gap is unknown (no goal term of `run_cap`, no
-/// `gap_remaining`). A pending observation keeps its own reason.
+/// inventory, unless the production told under a goal's gap on the pool since its reading has
+/// left it unread (`unread`, [`crate::evaluator::produced_unread`], the judgement the evaluation's
+/// pool values read): a reading that would be known is then pending with the reason a stale
+/// reading gives (`expired`), so the target weighs nothing and its gap is unknown (no goal term of
+/// `run_cap`, no `gap_remaining`). A pending observation keeps its own reason.
 fn unless_unread(
     observed: TargetObservation,
     pool: &PoolSpec,
@@ -3060,8 +3060,8 @@ struct TargetContext<'a> {
     projected_facts: &'a EvaluationFacts,
     /// #455 P2: the readings given to the pools read from rows of a list, as the resets leave them.
     given: &'a GivenPoolReadings,
-    /// #455 RR3c (register §1.543): the pools a run told enough turns to close a goal's gap on left
-    /// unread ([`crate::evaluator::produced_unread`]).
+    /// #455 RR3c (register §1.543): the pools the production told under a goal's gap since their
+    /// reading left unread ([`crate::evaluator::produced_unread`]).
     unread: &'a BTreeSet<String>,
     instance: &'a InstanceSnapshot,
     time: EvaluationTime,
@@ -4839,7 +4839,7 @@ fn goal_runs(
             continue;
         };
         // #455 RR3c (register §1.543): the production per run in thousandths, read by the one
-        // function the judgement of a run told enough to close a gap reads; for an integer
+        // function the judgement of the production told under a gap reads; for an integer
         // production ⌈gap·1000 / (amount·1000)⌉ is the ⌈gap / amount⌉ of before.
         let per_run_milli = production_milli(&task.produces, &effect.pool_id);
         if per_run_milli == 0 {
@@ -4857,8 +4857,8 @@ fn goal_runs(
 /// goal term of `run_cap` divides a gap by it ([`goal_runs`]; #455 B1 ruling 10): the sum of its
 /// integer `amount`s on the pool times 1000 when every entry declares one ([`declared_amount`]),
 /// else its expected yield ([`per_run_yield`]); 0 when it yields nothing per run (its amount
-/// pending). The judgement of whether a run was told enough turns to close a gap reads it too
-/// (`crate::HandedRuns`).
+/// pending). The judgement of whether the production told under a pool's gap since its reading
+/// reaches that gap reads it too (`crate::HandedRuns`).
 pub(crate) fn production_milli(produces: &[ResourceEffectSpec], pool_id: &str) -> u128 {
     declared_amount(produces, pool_id).map_or_else(
         || per_run_yield(produces, pool_id),

@@ -319,6 +319,10 @@ mod gate_455_sl1;
 // pool it produced unread, the needs' holding of it included, until a reading after its end; a
 // start rebuilds the same from the ledger.
 mod gate_455_rr3c;
+// #455 RR3d (0.12.101; register §1.548): the host notes every admitted dispatch in the order of
+// their admission, a run that failed at its entry passed over, so the production told under a
+// pool's gap adds up since its reading; a start rebuilds the same from the ledger.
+mod gate_455_rr3d;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

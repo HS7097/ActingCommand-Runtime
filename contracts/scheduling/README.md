@@ -2805,7 +2805,8 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
   whose root cannot be composed" in [../resource-targets.md](../resource-targets.md)); a reading
   is not made old by a run that has produced into it since (the gap reads the holding as it was
   read), unless (#455 RR3c, since 0.12.98) that run was told enough turns to close a goal's gap on
-  the pool: then the holding is unread until a reading observed at or after the run's end ("Pool
+  the pool (#455 RR3d, since 0.12.101: or the runs told under the gap since the reading were,
+  together): then the holding is unread until a reading observed at or after their end ("Pool
   lines"), the goal on the pool pending and, for an item with a recipe,
   `goal_records_holding_unknown` with `unknown_reason` `fact_stale`, nothing taken apart below it;
   a rule that produces an item with a recipe counts for what it produces, not for what it is made
@@ -2863,7 +2864,16 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   the evaluation, beside the left-out facts, the pairs whose latest admitted dispatch at the
   inputs' ledger position carried a `run_cap` on its recorded reasons, each with when its run
   ended (the observation of its settlement) or that it has not; no record, event or wire member
-  is new, and a start reads the same from the ledger. Limits: a package that runs one turn
+  is new, and a start reads the same from the ledger. #455 RR3d (since 0.12.101; register §1.548;
+  the coordinator's rulings of 11-28): **a run that failed at its entry leaves nothing unread.** A
+  dispatch whose execution record, at the inputs' ledger position, is a failure its settlement
+  settled as one at its run's entry (a condition whose failure identity carries the entry mark,
+  [../policy-suspension.md](../policy-suspension.md), "A failure at the entry") is passed over
+  before a pair's latest is chosen: its main package executed no step, so it consumed and produced
+  nothing, and the pair's previous admitted dispatch stands, judged by the same rule. Every other
+  end leaves the pool unknown as before: a success, any other failure (one at the entry of another
+  class and one a start's reconciliation settled included), a stop and an interrupted settlement
+  may each have done some turns, and nothing the host holds says how many. Limits: a package that runs one turn
   whatever its `run_cap` still leaves the pool unknown until the next reading; a pool whose scope
   covers several instances is unknown on all of them after such a run on any one; a run whose
   settlement is not recorded keeps it unknown until it is (a start settles an earlier epoch's
@@ -2871,33 +2881,47 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   and a pair whose latest admitted dispatch the host's journal no longer holds is not noted; the
   resource targets' conditions and a goal's gap read the pool's observation themselves, as
   before.
-  #455 RR3c (since 0.12.98; register §1.543; the coordinator's rulings of 11-28): **a run told
-  enough to close a goal's gap leaves the pool it produced unread.** For the latest scheduled
-  dispatch of a pair whose recorded `policy_dispatch_parameters` carry `gaps_remaining`, each record
-  `{effect_index: j, gap_remaining: g}` with `g ≥ 1` whose entry `j` of the task's `produces` (as
-  the catalogue in force at the evaluation declares it; an entry the task no longer has is passed
-  over) is on a pool, and for which `n·y ≥ g·1000`, leaves that pool unread: `n` the `run_cap` the
-  same reason carries (1 without one), `y` the task's production of the pool per run in thousandths
-  as the goal term of `run_cap` reads it (its integer amounts times 1000, else its expected yield;
-  a pending amount yields 0 and the record is passed over), checked arithmetic, an overflow counting
-  as enough. Unread means what it means above, for the same span: a pool read from a fact or from
-  rows of a list is unknown to the whole evaluation, `fact_stale` under its own key, for every
-  reader of the pool values (the triggers, which ask the fact refresh for it, the net benefit, the
-  lines, the reserve gate, the spend values), from that dispatch's admission until a reading
-  observed at or after its run's end; and, for this pool alone, also for the two readers that do not
-  read the pool values: a resource target's observation of it (pending, `Γ` 0, no goal term of
-  `run_cap` and no `gap_remaining` from it; [../resource-targets.md](../resource-targets.md),
-  "Resource weights (v2)") and the holdings of the needs computed from the records ("Needs computed
-  from the records" above). One judgement decides all three, and the host hands the needs and the
-  evaluation the one list, read once under the gates the inputs are projected under. A run that was
-  not told enough to close its gap (a gap of 150 at three turns of one unit), and a dispatch that
+  #455 RR3c (since 0.12.98; register §1.543) and RR3d (since 0.12.101; register §1.548; the
+  coordinator's rulings of 11-28): **the production told under a goal's gap leaves the pool unread
+  once it reaches the gap.** For a pool whose current reading was observed at `t`, take the
+  admitted dispatches the host's journal holds at the inputs' ledger position (of any pair, but one
+  whose run failed at its entry, above) whose run has not ended or ended after `t` and whose
+  recorded `policy_dispatch_parameters` carry `gaps_remaining` with a record
+  `{effect_index: j, gap_remaining: g}`, `g ≥ 1`, whose entry `j` of the task's `produces` (as the
+  catalogue in force at the evaluation declares it; an entry the task no longer has is passed over)
+  is on the pool, in the order of their admission. The pool is unread when for one of them the sum,
+  over it and those before it, of `n·y` reaches `g·1000`, `g` the gap that dispatch was itself told
+  (the least where it was told several on the pool): `n` the `run_cap` each one's reason carries (1
+  without one), `y` its task's production of the pool per run in thousandths as the goal term of
+  `run_cap` reads it (its integer amounts times 1000, else its expected yield; a pending amount
+  yields 0 and the dispatch is passed over), checked arithmetic, an overflow counting as reached.
+  With one such dispatch this is 0.12.98's rule, `n·y ≥ g·1000`, byte for byte. So dispatches that
+  each fall short of the gap but together reach it leave the pool unread (a gap of 6 told 3 twice;
+  a stock gap of 150 at three turns of one unit at its fiftieth dispatch since the reading, read
+  before), and a later dispatch of the pair that carries no gap for the pool (its goal pending, or it
+  ran for another pool) no longer takes the place of one that closed it. Unread means what it means
+  above, for the same span: a pool read from a fact or from rows of a list is unknown to the whole
+  evaluation, `fact_stale` under its own key, for every reader of the pool values (the triggers,
+  which ask the fact refresh for it, the net benefit, the lines, the reserve gate, the spend
+  values), until a reading observed at or after the end of every run of the sum that reached the
+  gap (a reading observed at a run's end or after counts only the dispatches after it); and, for
+  this pool alone, also for the two readers that do not read the pool values: a resource target's
+  observation of it (pending, `Γ` 0, no goal term of `run_cap` and no `gap_remaining` from it;
+  [../resource-targets.md](../resource-targets.md), "Resource weights (v2)") and the holdings of the
+  needs computed from the records ("Needs computed from the records" above). One judgement decides
+  all three, and the host hands the needs and the evaluation the one list, read once under the gates
+  the inputs are projected under. Dispatches whose sum does not reach the gap, and a dispatch that
   carried no `gaps_remaining`, leave the pool read, as before; the rule above for the pools a run
-  consumes is unchanged, and a pool both name is unknown once. The host notes such a dispatch from
-  its recorded reasons, with its gaps and its `run_cap`, as it notes one that carried a `run_cap`;
-  nothing recorded is new, memory only, and a start reads the same from the ledger. Limits: a pool
-  whose scope covers several instances is unread on all of them after such a run on one; a run
-  that did fewer turns than it was told still leaves the pool unread until it is read; the yield is
-  the catalogue's expectation, so a run with poor drops is read once and sent again.
+  consumes reads each pair's latest dispatch as before, and a pool both name is unknown once. The
+  host notes every admitted dispatch from its recorded reasons, in the order of their admission,
+  with its end, its gaps and its `run_cap`; nothing recorded is new, memory only, and a start reads
+  the same from the ledger. Limits: a pool whose scope covers several instances is unread on all of
+  them after such runs on one; a run that did fewer turns than it was told still counts what it was
+  told until the pool is read; the yield is the catalogue's expectation, so a run with poor drops is
+  read once and sent again; a run that still ran when the reading was observed is counted whole
+  though the reading may show part of what it produced (the sum errs toward unread, at the cost of a
+  reading); a pair's dispatches older than what the host's journal keeps of it (its latest 64
+  admitted dispatches) are not counted, as a pair the journal no longer holds is not noted.
 - **Below the cap** (SCHED-C1c, since 0.12.53: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,

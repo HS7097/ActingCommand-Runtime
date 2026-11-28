@@ -242,6 +242,10 @@ mod tests {
     // needs' holdings, until a reading observed at or after its end.
     mod gate_455_rr3c;
 
+    // #455 RR3d (0.12.101; register §1.548): the production told under a pool's gap adds up over
+    // the dispatches since the pool's reading, a later dispatch of the pair erasing nothing.
+    mod gate_455_rr3d;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.
