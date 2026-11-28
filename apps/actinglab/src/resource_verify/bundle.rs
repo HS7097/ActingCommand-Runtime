@@ -64,6 +64,11 @@
 //! the counts (`goal_tables`: the game, the path and how many tables and items it declares); the
 //! zip then declares `package` 28 (`GOAL_TABLES_PACKAGE_REVISION`), as one that carries
 //! `goals.json` of version 3 does. A repository with neither file is verified as before.
+//!
+//! Workflow #455 RR4a (register §1.546; contracts/standard-pack-goal-tables.md, "Interface"): a
+//! laid `goal-tables.json` that writes `names` makes the zip declare 32
+//! (`GOAL_TABLE_NAMES_PACKAGE_REVISION`), read from its bytes by the contract crate's
+//! `goal_tables_package_revision`, which the revision table calls too; one without keeps 28.
 
 use super::revision::content_revision;
 use super::steps::{
@@ -83,8 +88,8 @@ use actingcommand_contract::{
     STANDARD_PACK_BUNDLE_FILE, STANDARD_PACK_CATALOG_FILE, STANDARD_PACK_GOAL_TABLES_FILE,
     STANDARD_PACK_GOALS_FILE, STANDARD_PACK_NOTICES_DIRECTORY, STANDARD_PACK_RETIRED_UI_FILE,
     STANDARD_PACK_SCHEDULE_FILE, STANDARD_PACK_TABLES_DIRECTORY, StandardPackRegistry,
-    catalog_package_revision, notice_relative_path, parse_standard_pack_catalog_with,
-    read_standard_pack_tables, retired_ui_outcome,
+    catalog_package_revision, goal_tables_package_revision, notice_relative_path,
+    parse_standard_pack_catalog_with, read_standard_pack_tables, retired_ui_outcome,
 };
 use actingcommand_policy::standard_pack_schedule_takes_catalog;
 use actingcommand_resource_tooling::{
@@ -361,13 +366,20 @@ fn lay_out(
     // Workflow #464 P2: `standard-pack build` declares the revision its content needs; Workflow
     // #455 GOALS-PACK-1: `resource verify` the highest of what its root carries (Workflow #477 CV-2
     // fix round 1: a switched root's catalog's too).
+    // Workflow #455 RR4a: and its `goal-tables.json`'s, 32 when the file writes `names`, read from
+    // the laid file's bytes by the one function the revision table calls.
     let revision = match inputs.steps_for {
         StepsFor::Verify => {
             let carried = package_revision(notices, root_files);
-            entries
+            let catalog = entries
                 .get(STANDARD_PACK_CATALOG_FILE)
                 .map_or(carried, |bytes| {
                     carried.max(catalog_package_revision(bytes))
+                });
+            entries
+                .get(STANDARD_PACK_GOAL_TABLES_FILE)
+                .map_or(catalog, |bytes| {
+                    catalog.max(goal_tables_package_revision(bytes))
                 })
         }
         StepsFor::Build => content_revision(&entries),

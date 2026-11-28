@@ -208,7 +208,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   it keeps its revision, so [3, 30]. Workflow #503 LIST-D (0.12.99, register §1.544) raises it
 ///   to 31: a candidate layout's own budget of evaluations (`provider_evaluations`), which every
 ///   Runtime before it refuses where it reads a layout (`UnknownField` at the member); a pack
-///   without it keeps its revision, so [3, 31].
+///   without it keeps its revision, so [3, 31]. Workflow #455 RR4a (0.12.100, register §1.546)
+///   raises it to 32: a root's `goal-tables.json` that writes `names`, the names a person reads,
+///   which every reader before it refuses as an unknown member (the file then applies no records
+///   entry); a file without it keeps its revision, so [3, 32].
 /// - `runtime-client` [2, 2]: request v4, receipt v2; requests v1 to v3 are refused. Workflow
 ///   #429 R-0 (0.12.30, register §1.213) raises `max` to 3: the workbench's request kinds and
 ///   members; every revision-2 request is still answered as before, so [2, 3]. Workflow #429
@@ -259,7 +262,7 @@ const V0120: &[(&str, [u64; 2])] = &[
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
     ("ledger", [3, 10]),
-    ("package", [3, 31]),
+    ("package", [3, 32]),
     ("runtime-client", [12, 14]),
     ("runtime-outcomes", [1, 1]),
 ];
