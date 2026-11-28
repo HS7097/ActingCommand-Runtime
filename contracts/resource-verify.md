@@ -218,7 +218,7 @@ carries `step` where its code declares the key.
   | pins | `files` |
   | admission | `packs`, `admitted` |
   | format | `packs`, `json_files`, `unformatted` (files) |
-  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`, or (Workflow #455 GOALS-PACK-1) 14 when it carries `goals.json`, the highest of them); (Workflow #455 GOALS-PACK-1) `goals {game, path, entries}` when the step accepted and laid the repository's `goals.json`: the game whose root it was held to, `goals.json`, and how many entries of each type of version 2 it holds, every type named (`{heading, note, resource, tier, variable}`), and (Workflow #455 RR1) `records` when it holds one; absent otherwise, so that the counts of a repository without the file are as before. Workflow #455 RR1 (since 0.12.92): `package_revision` 28 when it carries `goals.json` (version 3) or `goal-tables.json`, and `goal_tables {game, path, entries {tables, items}}` when the step accepted and laid the repository's `goal-tables.json`, absent otherwise |
+  | bundle | `packs`, `files` and `bytes` (the indexed packs' `file_count` and `byte_count`), `zip {name, sha256, entries}` (`null` when no zip was written), `root_files`, `package_revision` (3, or (Workflow #444 NOTICES-3) 10 when the bundle carries `notices/`, or (Workflow #455 GOALS-PACK-1) 14 when it carries `goals.json`, the highest of them); (Workflow #455 GOALS-PACK-1) `goals {game, path, entries}` when the step accepted and laid the repository's `goals.json`: the game whose root it was held to, `goals.json`, and how many entries of each type of version 2 it holds, every type named (`{heading, note, resource, tier, variable}`), and (Workflow #455 RR1) `records` when it holds one; absent otherwise, so that the counts of a repository without the file are as before. Workflow #455 RR1 (since 0.12.92): `package_revision` 28 when it carries `goals.json` (version 3) or `goal-tables.json`, and `goal_tables {game, path, entries {tables, items}}` when the step accepted and laid the repository's `goal-tables.json`, absent otherwise; Workflow #455 RR4a (since 0.12.100): `package_revision` 32 when the laid `goal-tables.json` writes `names` |
 
 - **No prose.** Messages appear only on the CLI's human line and in developer lines on stderr.
   Failures and warnings are outcome envelopes with typed values. Paths are absolute and native for
@@ -442,7 +442,9 @@ that declares `identity_templates` or a layout feature that declares `region`; r
 that must also be stationary, Workflow #503 LIST-C, register §1.541, so it computes 30 for a zip
 whose pack has a scan whose `end` writes `require_stationary`; row 31, a layout's own budget of OCR
 and NN evaluations, Workflow #503 LIST-D, register §1.544, so it computes 31 for a zip whose pack
-has a candidate layout that writes `provider_evaluations`);
+has a candidate layout that writes `provider_evaluations`; row 32, the names of a root's tables of
+goals, Workflow #455 RR4a, register §1.546, so it computes 32 for a zip whose `goal-tables.json`
+writes `names`);
 and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
@@ -509,6 +511,7 @@ as an element of its array.
 | 29 | task | `identity_templates` under `candidate_layouts` (a layout's pool; a slot's stands under `slots` and keeps its revision) and `region` under `features`, whatever they hold, in a pack of any execution mode (a Runtime before 29 refuses either member's name at its declaration gate, `UnknownField` at the member, in every pack) (`LAYOUT_POOL_REVISION`) | LIST-B, §1.536; [business-identity-consensus.md](business-identity-consensus.md), "A layout's pool" |
 | 30 | task | `require_stationary` under `end` (a scan's end, of a select step or of a list reading), whatever it holds, in a pack of any execution mode (a Runtime before 30 refuses the member at its admission, whose reader of `end` denies every member but `check`, in every pack); the same name under another member needs nothing, and a scan without it keeps its revision (`STATIONARY_END_REVISION`) | LIST-C, §1.541; [selection-graph.md](selection-graph.md), "An end that must also be stationary" |
 | 31 | task | `provider_evaluations` under `candidate_layouts` (a layout's own budget of OCR and NN evaluations for one projection, of either kind), whatever it holds, in a pack of any execution mode (a Runtime before 31 refuses the member's name where it reads a layout, its recognition pack's reader and its declaration gate, `UnknownField` at `/candidate_layouts/<i>/provider_evaluations`, in every pack); a layout without it keeps its revision (`LAYOUT_EVALUATIONS_REVISION`) | LIST-D, §1.544; [candidate-projection.md](candidate-projection.md), "Budgets" |
+| 32 | root | `goal-tables.json` whose document writes `names`, whatever it holds (`GOAL_TABLE_NAMES_PACKAGE_REVISION`, by the contract crate's `goal_tables_package_revision`, as row 24 reads `pack-catalog.json`'s version); the same name inside a table needs nothing, and a file without it keeps row 28's revision; `place` asks nothing of it beyond row 28 | RR4a, §1.546; [standard-pack-goal-tables.md](standard-pack-goal-tables.md), "Names for people" and "Interface" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought
@@ -537,7 +540,9 @@ that does not read needs nothing here (the `format` step refuses it). A feature 
 `package` revision adds its row, in its own slice
 (`apps/actinglab/src/resource_verify/revision.rs`). `resource verify` keeps its rule, the highest
 of 3, 10 with `notices/` and (Workflow #455 GOALS-PACK-1, register §1.498) 14 with `goals.json`
-(Workflow #455 RR1, register §1.535: 28 with `goals.json` or `goal-tables.json`);
+(Workflow #455 RR1, register §1.535: 28 with `goals.json` or `goal-tables.json`; Workflow #455
+RR4a, register §1.546: 32 with a `goal-tables.json` that writes `names`, read from the laid file's
+bytes by the function row 32 names, as it reads a carried `pack-catalog.json`'s version);
 it reads no pack's content for it, so the two rows can still declare different revisions for one
 commit (a follow-up slice on `resource verify`).
 

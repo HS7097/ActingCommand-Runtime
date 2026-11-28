@@ -227,7 +227,9 @@ Not in version 2: a slider, multiple choice and a table (later types or blocks),
 
 Texts have the shape and the bounds that `ui.json`'s had and that the display part of
 `pack-catalog.json` keeps ([pack-catalog.md](pack-catalog.md), "Limits"; Workflow #477 PC-1):
-each text has 1 to 16 locales, each locale name 1 to 35 bytes. The words are
+each text has 1 to 16 locales, each locale name 1 to 35 bytes. Since Workflow #455 RR4a (0.12.100)
+the names of `goal-tables.json` are texts of this form with a `title`'s bound, read by the same
+check ([standard-pack-goal-tables.md](standard-pack-goal-tables.md), "Names for people"). The words are
 this file's own: a list, a map or a text's locales of a count outside its limit, and a name, an
 option value, an id, a locale or a text of a length outside its limit, are `goal_out_of_limits` at
 what exceeds, as `pack-catalog.json` has `catalog_out_of_limits` for its own (`ui.json` had
