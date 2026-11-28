@@ -334,6 +334,11 @@ mod gate_455_rr3d;
 // #455 SL2 (0.12.101; register §1.547): the goal page sets a pool's line by `{at_least}` alone on
 // a pool that writes `spend_line` and shows it as any goal; an older page refuses it and clears it.
 mod gate_455_sl2;
+
+// #503 WAKE (0.12.101; register §1.549): an asleep instance is not woken for a consumer below its
+// pool's trigger line before the line; the idle plan keeps that release, and three answers only a
+// change lets through are held.
+mod gate_503_wake;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

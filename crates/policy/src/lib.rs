@@ -255,6 +255,10 @@ mod tests {
     // and the productions feed only the goal layer.
     mod gate_503_fixv;
 
+    // #503 WAKE (0.12.101; register §1.549): on an asleep instance a consumer below a regenerating
+    // pool's trigger line waits for the line, or for the end of its chance less its run.
+    mod gate_503_wake;
+
     /// Workflow #455 G-R2s: the composer's required input for `root` when every package its
     /// registry lists reads and provides nothing, so nothing is warned unreadable: the gate tests'
     /// roots hold no package files.

@@ -1534,7 +1534,11 @@ task that writes it enters the score stage); the benefit gate never reads it.
   is −2 of its own; with a stock's capped term of 4 (`C` 40 at the step 10, one unit a run) it is
   `B = 2` below the line and spends there; a rule of `V` 900 (−100 of its own) is −96 with the
   stock's term and waits, and with a need of 2 units (`I_n` 100 000: a term of 2000) it spends. A
-  pool without the member is ruled as above, byte for byte.
+  pool without the member is ruled as above, byte for byte. #503 WAKE (since 0.12.101): on an
+  asleep instance such a task, and any task that passes below the line, waits for the line before
+  it spends there, so the instance is not started for one run each time one run's cost has
+  regenerated; awake, it spends as described here ("An asleep instance", "Below a pool's trigger
+  line").
 - **One scale** (the coordinator's point 3). Static and dynamic candidates of one instance are
   ordered by the keys the business tier already has, with no second stage: `promoted`, the tier,
   SS-2f's turns across instances, then `B ÷ E` compared exactly (`B·E' > B'·E`), then `affinity`
@@ -2995,7 +2999,12 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   0.12.82): below the trigger line of a pool that regenerates (the capacity without a written
   `trigger_line`), and while its lines give no value with no episode under way, whether a
   candidate with a fixed value would pass is judged without its goal terms ("Fixed values written
-  in the pack", "A goal chooses which task spends a pool, the pool's lines choose when").
+  in the pack", "A goal chooses which task spends a pool, the pool's lines choose when"). #503 WAKE
+  (since 0.12.101): on an asleep instance, below the trigger line of a regenerating pool whose
+  lines read, a candidate that would pass and that no line holds waits for the line (or for the end
+  of its chance less its run) with `instance_asleep_below_trigger_line`, and is no reason to wake
+  the instance before then; on an awake instance it spends as above ("An asleep instance", "Below a
+  pool's trigger line").
 - **Unknown or invalid.** A pool that writes its lines and whose capacity, reading or a line's fact
   gives no value enters no capped state, and its judged candidates that would pass are deferred
   with `pool_line_held` `capped_cap_unknown` (`fact_key`, `unknown_reason` when a fact gives
@@ -3652,7 +3661,19 @@ then held back; the idle check stopped it again, with no end.
   emulator start), a decision a gate without a time holds (the benefit gate, the no-progress guard,
   a pool's lines) is not due and names no wake, whatever next time its trigger names; on any other
   instance it names its own wake as before. The wake is the emulator's start, then the startup
-  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance").
+  package ([runtime-config.md](../runtime-config.md), "What wakes an idle instance"). #503 WAKE
+  (since 0.12.101, register §1.549, ruling 3): on every instance three more answers count as held
+  by a gate without a time, read from the decision's last reason: `fact_refresh_unbound` (a
+  realistic key no reader can read), `selection_input_unknown` (a selection input no reading
+  supplies) and `resource_reserve_insufficient` carrying `amount_after` (a known amount below the
+  reserve). Nothing but a change of the facts, the catalog or the configuration lets them through,
+  and each such change wakes the policy driver, so they are not due; an awake instance whose only
+  candidates are of these kinds now takes its idle action, and an asleep one is not woken for them.
+  The list stays closed: a reserve hold without `amount_after` (its amount unknown, a reading may be
+  what is missing), the shared run limits' waits, `instance_already_selected`, `device_group_waiting`,
+  `policy_chain_handover_waiting` and the fact refresh's waits for a reading stay due as before.
+  The decision a consumer below its pool's trigger line waits with is not due either ("Below a
+  pool's trigger line" below).
 - **After a Runtime start** (fix round 1, ruling 5) the instance is asleep as before it: the start
   restores it stopped with its wake, withdraws its availability (`backend_selfcheck:unchecked`) and
   does not prepare it (its emulator is stopped, so a preparation could only fail and take it into
@@ -3759,6 +3780,112 @@ then held back; the idle check stopped it again, with no end.
   not due yet), and its idle check starts the wake. What a cycle computes is unchanged: the
   selection, the order of the deferrals, the idle plan's decision to wake, the cool-down. No
   periodic evaluation is added.
+- **Below a pool's trigger line** (#503 WAKE, since 0.12.101; [v012-register.md](../v012-register.md)
+  §1.549, the coordinator's rulings 1 to 6 after the owner's direction of 11-28 that an asleep
+  instance waits until the pool has reached its trigger line and is then woken to spend it, while an
+  awake one counts goals and spends as before). Before it, a judged consumer of a regenerating pool
+  below its trigger line, with no capped episode under way, had only its hard line to respect
+  ("Pool lines", "Below the cap"): as soon as the pool had regenerated one run's cost above the
+  hard line it passed, became the task an asleep instance is woken for, and the instance was started
+  for one run and stopped again, each time one run's cost had regenerated; the batch at the trigger
+  line never came. Now, on an asleep instance, a candidate to which the pools' lines give their
+  normal answer below the trigger line of a regenerating pool it consumes whose lines read (no line
+  holds it, no episode is under way) and that passes the benefit gate (a positive `B`; one in the
+  zero tier is not touched) is deferred and kept by no later gate: its last reason is
+  `instance_asleep_below_trigger_line` (info; `instance_id`, `pool_id` the pool whose line comes
+  first, `pool_reading` and `trigger_line` as read now, `next_eligible_unix_ms`, `lines_source`),
+  after `benefit_fixed_value` when the task has one, and its wake is its release, the earlier of two
+  times:
+  - *the line*: when the pool's projection, less the consumption its reading does not show yet,
+    reaches the trigger line as read now. With the reading's snapshot `v` at `t0`, its regeneration
+    `a` every `p` milliseconds, the unshown consumption `u` and the trigger line `T`,
+    `r(t) = min(v + ⌊(t − t0) ÷ p⌋·a, cap) − u` is at least `T` from `t_T = t0 + p·⌈(T + u − v) ÷ a⌉`,
+    a step of the projection. There is no such time when `a` is 0, when `T + u` is above the
+    capacity, or when the snapshot is above a capacity read from its fact (it does not regenerate).
+    Over several such pools the candidate consumes, the earliest. A pool without written lines has
+    its capacity as its trigger line, so it waits for its capacity.
+  - *the chance*: the end of the task's chance less its run, the longer of its expected duration
+    `E` as the benefit gate reads it and the one its dispatch would carry (the pair's measured `E`,
+    else the declared one), which the host's day-boundary fit checks, so a release at a window's
+    end is never later than that fit allows (fix round 2 of 0.12.101). Its chance ends at the
+    earliest time at which what lets it run now stops for a reason of time: its trigger's and its
+    feedback stop's own boundaries (a timeline interval's end, a clock's next occurrence or the end
+    of its grace, a fact's freshness end where the decision's wake counts it, a feedback result's
+    expiry), and the end of the activity window open now. The freshness end of a reading a
+    `resource_projection` reads is such an end, the consumed pool's own included: a trigger that
+    reads the consumed pool releases the consumer at that reading's expiry plus one less its run,
+    so the instance is woken before the knowledge lapses, never after (fix round 2, kept as built).
+    A regenerating pool's next projection step is never one, wherever it enters the decision's wake
+    (a `resource_projection` of the trigger or of the feedback stop, alone or under `all`, `any` or
+    `not`): it is when the evaluation reads the pool again. An end is known by where it comes from,
+    never by its value, so a time that is both a pool's step and such a boundary is an end. (Fix
+    round 1 of 0.12.101: the first build dropped the decision's whole wake whenever it equalled a
+    pool's next step, so a chance that ended on a step was missed and the consumer waited for the
+    line past it.)
+  With no time for the line, or a release not after the evaluation, the candidate passes exactly
+  as before. The round goes on to the instance's next candidate through every gate: if that one is
+  eligible it is the task the instance is woken for, as before, and two consumers below the line
+  both wait, neither behind the other. Once the instance is awake for any reason this item no longer
+  applies to it: its consumers below the line are judged and dispatched as on any awake instance.
+  The idle plan does not count the deferred decision due, and its release is its wake on every
+  instance, on one whose idle action can put it to sleep too, even when it is a pool's next
+  projection step (ruling 7 drops such a step as the evaluation's next reading; this one is the time
+  the task is due), so the instance is woken at the release less the wake lead
+  ([runtime-config.md](../runtime-config.md), "What wakes an idle instance"). A time-bound gate that
+  holds the instance as the evaluation runs (a blackout covering it, its activity window closed:
+  the time the idle plan reads for a due decision) holds the release too: its wake is the later of
+  the release and the time that gate lets the instance through, and none when the gate names no
+  time. Before 0.12.101 the eligibility closure deferred the same consumer there with that time,
+  and the instance is not started for a run its admission would refuse (fix round 2 of 0.12.101).
+  Unchanged: every instance not asleep and an evaluation with no asleep instance, byte for byte; on
+  an asleep instance every other candidate (one that does not pass, one a line holds, a pool that
+  does not regenerate, an episode under way, a pool at or above its trigger line); the capped order
+  and its memory, the turns a run is told, the goal terms; every record (the reason lives in the
+  not-run explanation only: no decision record, no `task_held`, no clock-slot record). The hard
+  line, the reserve gate and every later gate still judge whatever runs. Known limits:
+  - *Ends that end nothing*, each costing one early wake, never a chance: an interval clock's next
+    occurrence; an activity window that closes at a day's end to open again at once (a whole-day
+    window's midnight); in an `any`, the time a side that is false turns true, and the end a first
+    true side names while a later side would stay true; a feedback stop's result expiry, at which
+    the stop is false and the task stays eligible.
+  - *Ends not seen*: a trigger that the filling pool turns false, as pool steps are not counted as
+    an end; a goal's lifetime (its inventory's expiry, its validity), so a consumer lifted only by a
+    goal that lapses before the line loses that chance, which is to be settled before deadlines on
+    goals are built; a trigger override (an immediate retry, a remedy request, an owed rerun) keeps
+    the original trigger's end, which may release it early.
+  - *Holds the evaluation does not read*: the eligibility closure's other timed positions (a spent
+    budget, a backoff, since 0.12.100 a failing pair's wait at position 4b, a pack schedule's row
+    with an opening, the quiet before a blackout) and a pack schedule's row or a blackout that
+    closes the task before the line. Reading them for the
+    release needs the host's look ahead, a later slice; until then such a release may start the
+    instance once for a run its admission refuses.
+  - *The wake lead*: a release at an end (a window's, an interval's, a clock's) relies on the wake
+    lead covering the instance's start and its startup package; a start that takes longer
+    dispatches after the release, and at an activity window's end the run is then deferred to the
+    next window.
+  - *A reading the reader refreshes*: with a reader bound for the consumed pool's key, the reading's
+    expiry while the instance sleeps makes the consumer's row `fact_refresh_pending`, which the idle
+    plan counts due, so the instance is woken at the expiry for the reading and, awake, the consumer
+    spends below the line: an installation's asleep instance sleeps no longer than the consumed
+    reading stays valid (host test h5 pins it as built).
+  - *The capacity as the trigger line*: with no written trigger line and a dispatch the reading does
+    not show yet, `T + u` is above the capacity, so there is no time for the line and the consumer
+    passes as before, until a reading taken after that dispatch arrives.
+  - *A device group*: the asleep member's consumer is deferred before the allocation, so it no
+    longer takes the device for the round, and an awake member of the same device that waited
+    behind it (`device_group_waiting`) is selected.
+  - *Ruling 3's held answers*: a key whose only source is a run on the instance itself (its startup
+    package's reading, say) is no longer refreshed by a wake that `fact_refresh_unbound` or
+    `selection_input_unknown` used to cause for nothing ("The idle plan" above).
+
+  Not built: a wake planned while the instance was awake for such a consumer's own later time (its
+  cooldown's end, its clock's next time) still wakes it then less the lead. A consumed pool's
+  reading that expires while the instance sleeps makes the consumer's benefit unknown, as before,
+  unless the trigger reads that pool, whose reading's freshness end then ends the chance and
+  releases the consumer before the expiry (*the chance* above). With no reader bound the consumer's
+  `fact_refresh_unbound` is held by the idle plan ("The idle plan" above and
+  [runtime-config.md](../runtime-config.md)) and the wake planned from the release stays (host test
+  h4); with a reader bound, see the known limits.
 - **Not asleep.** An instance unavailable for any other cause, an application closed among them
   (its candidates are blocked at placement as before, and #484's fix round 2 holds for it); an
   instance whose emulator a person stopped. An asleep instance under a person's pause waits for the

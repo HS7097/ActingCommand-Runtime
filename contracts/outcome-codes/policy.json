@@ -609,6 +609,32 @@
       "common_causes": "The idle action stopped the instance's emulator (stop_emulator, or auto's highest tier), and a task of the instance can be dispatched now.",
       "handling": "None needed: the idle check wakes the instance at once and the task is dispatched once it is prepared again. A wake that starts the emulator and is followed by no scheduled run admitted on the instance is reported as instance_idle_stop_withheld."
     },
+    "instance_asleep_below_trigger_line": {
+      "category": "info",
+      "ladder_class": "none",
+      "owner": "policy",
+      "layer": "policy",
+      "uncertain": false,
+      "values": {
+        "instance_id": "required",
+        "pool_id": "required",
+        "pool_reading": "required",
+        "trigger_line": "required",
+        "next_eligible_unix_ms": "required",
+        "lines_source": "required",
+        "operation": "optional",
+        "runtime_code": "optional",
+        "host_halted": "optional",
+        "receipt_state": "optional",
+        "request_id": "optional"
+      },
+      "review": "pending",
+      "status": "active",
+      "since": "0.12.101",
+      "description": "Scheduling decision reason (#503 WAKE, register 1.549; contracts/scheduling/README.md \"An asleep instance\", \"Below a pool's trigger line\"): the instance (instance_id, its alias) is asleep, and a regenerating pool this task consumes (pool_id, the one whose trigger line comes first) reads below its trigger line (pool_reading, trigger_line as read now; lines_source where the lines come from), with no capped episode under way. The task would pass every gate judged so far, but it is not selected, has no dispatch and is not the task the instance is woken for: it is deferred until next_eligible_unix_ms, the earlier of the time the pool's projection reaches the trigger line and the end of the task's chance (the earliest end its trigger and feedback stop name: a timeline interval's end, a clock's next occurrence or grace end, a fact's freshness end; never a regenerating pool's projection step; or the end of the activity window open now) less its run (the longer of the expected duration it is judged with and the one its dispatch would carry). The round goes on to the instance's next candidate, which may wake the instance as before.",
+      "common_causes": "The idle action stopped the instance's emulator or closed its application, and the pool has regenerated enough for one run above its hard line but not up to the line at which its capped episode begins.",
+      "handling": "Nothing for a person to do. The task is no reason to wake the instance before next_eligible_unix_ms; it is judged again then (the idle plan wakes the instance at that time less the wake lead, no earlier than a blackout covering the instance or its closed activity window lets it through), or as soon as the instance is awake for anything else, when it is judged as on an awake instance."
+    },
     "capability_missing": {
       "category": "info",
       "ladder_class": "none",

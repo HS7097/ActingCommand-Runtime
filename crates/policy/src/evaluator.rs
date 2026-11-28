@@ -2787,6 +2787,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
         instance_lines,
         amounts: &amounts,
         left_out,
+        asleep: &asleep,
     };
     let mut work = Vec::new();
     let mut candidates = Vec::new();
@@ -2872,6 +2873,7 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                 task_work.reasons.push(owed_rerun.reason.clone());
             }
             task_work.next_wake_unix_ms = trigger.next_wake_unix_ms;
+            task_work.chance_end_unix_ms = trigger.end_unix_ms;
             if let Some(not_before_unix_ms) = trigger.next_wake_unix_ms {
                 consider_preload_hint(
                     &mut preload_hint,
@@ -2980,14 +2982,10 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                             .min();
                         stop.fresh_until_unix_ms =
                             min_wake(stop.fresh_until_unix_ms, result_expiry);
-                        stop.next_wake_unix_ms = min_wake(
-                            stop.next_wake_unix_ms,
-                            result_expiry.and_then(|expiry| expiry.checked_add(1)),
-                        );
+                        stop.wake_at(result_expiry.and_then(|expiry| expiry.checked_add(1)));
                     }
                     if let Some(window) = window.filter(|_| has_window_result) {
-                        stop.next_wake_unix_ms =
-                            min_wake(stop.next_wake_unix_ms, Some(window.until_unix_ms));
+                        stop.wake_at(Some(window.until_unix_ms));
                         stop.fresh_until_unix_ms = min_wake(
                             stop.fresh_until_unix_ms,
                             window.until_unix_ms.checked_sub(1),
@@ -2995,6 +2993,8 @@ fn evaluate_scheduling<E: From<PolicyEvaluationError>>(
                     }
                     task_work.next_wake_unix_ms =
                         min_wake(task_work.next_wake_unix_ms, stop.next_wake_unix_ms);
+                    task_work.chance_end_unix_ms =
+                        min_wake(task_work.chance_end_unix_ms, stop.end_unix_ms);
                     match stop.truth {
                         PredicateTruth::True => {
                             task_work.eligibility = EligibilityState::False;
@@ -3751,6 +3751,12 @@ struct TaskWork {
     suggestions: Vec<DetectionSuggestion>,
     reasons: Vec<DecisionReason>,
     next_wake_unix_ms: Option<u64>,
+    /// #503 WAKE fix round 1 (register §1.549; `contracts/scheduling/README.md`, "Below a pool's
+    /// trigger line"): the earliest time its trigger's and its feedback stop's own boundaries end
+    /// what lets it run now, their `PredicateEvaluation::end_unix_ms`: their part of
+    /// `next_wake_unix_ms` with every regenerating pool's projection step left out by where it
+    /// comes from, whatever its value. Only the asleep release reads it; never serialized.
+    chance_end_unix_ms: Option<u64>,
     /// The score breakdown of a candidate that reached the ranking; never serialized.
     record: Option<RankRecord>,
 }
@@ -3766,6 +3772,7 @@ impl TaskWork {
             suggestions: Vec::new(),
             reasons: Vec::new(),
             next_wake_unix_ms: None,
+            chance_end_unix_ms: None,
             record: None,
         }
     }
@@ -3780,6 +3787,7 @@ impl TaskWork {
             suggestions: Vec::new(),
             reasons: vec![blocked_reason],
             next_wake_unix_ms: None,
+            chance_end_unix_ms: None,
             record: None,
         }
     }
@@ -4771,6 +4779,11 @@ struct PlacementContext<'a> {
     /// #428 S168-LB1a: the keys the Runtime's projection left out for each instance; they raise
     /// no fact refresh demand ([`LeftOutFacts`]). None outside the Runtime's cycle.
     left_out: &'a LeftOutFacts,
+    /// #503 WAKE (register §1.549): the instances the Runtime names asleep that the evaluation
+    /// judges as available ([`InstanceHolds::judge_asleep_as_available`]), which the pools' lines and
+    /// the benefit gate read for a consumer below a regenerating pool's trigger line. None outside
+    /// the Runtime's cycle.
+    asleep: &'a BTreeSet<String>,
 }
 
 impl PlacementContext<'_> {
@@ -7109,6 +7122,13 @@ struct PredicateEvaluation {
     truth: PredicateTruth,
     suggestions: Vec<DetectionSuggestion>,
     next_wake_unix_ms: Option<u64>,
+    /// #503 WAKE fix round 1 (register §1.549; `contracts/scheduling/README.md`, "Below a pool's
+    /// trigger line"): the earliest of the times `next_wake_unix_ms` is the least of that ends
+    /// something, known by where it comes from: a time the predicate names for itself (a timeline
+    /// interval's boundary, a clock's next occurrence or its grace's end, a fact's freshness end, a
+    /// record's deadline), never the next projection step a `resource_projection` names, which is
+    /// only when the evaluation reads the pool again. Only the asleep release reads it.
+    end_unix_ms: Option<u64>,
     fresh_until_unix_ms: Option<u64>,
 }
 
@@ -7122,6 +7142,7 @@ impl PredicateEvaluation {
             },
             suggestions: Vec::new(),
             next_wake_unix_ms,
+            end_unix_ms: next_wake_unix_ms,
             fresh_until_unix_ms: None,
         }
     }
@@ -7131,8 +7152,15 @@ impl PredicateEvaluation {
             truth: PredicateTruth::Unknown,
             suggestions: vec![suggestion],
             next_wake_unix_ms: None,
+            end_unix_ms: None,
             fresh_until_unix_ms: None,
         }
+    }
+
+    /// Wakes at `wake` too, a time that ends something (#503 WAKE fix round 1: no pool's step).
+    fn wake_at(&mut self, wake: Option<u64>) {
+        self.next_wake_unix_ms = min_wake(self.next_wake_unix_ms, wake);
+        self.end_unix_ms = min_wake(self.end_unix_ms, wake);
     }
 }
 
@@ -7157,6 +7185,7 @@ fn evaluate_predicate(
         PredicateSpec::All { predicates } => {
             let mut suggestions = Vec::new();
             let mut next_wake = None;
+            let mut end = None;
             let mut fresh_until = None;
             let mut unknown = false;
             for child in predicates {
@@ -7172,10 +7201,13 @@ fn evaluate_predicate(
                     reasons,
                 )?;
                 next_wake = min_wake(next_wake, result.next_wake_unix_ms);
+                end = min_wake(end, result.end_unix_ms);
                 fresh_until = min_wake(fresh_until, result.fresh_until_unix_ms);
                 match result.truth {
                     PredicateTruth::False => {
-                        return Ok(PredicateEvaluation::known(false, next_wake));
+                        let mut falsified = PredicateEvaluation::known(false, next_wake);
+                        falsified.end_unix_ms = end;
+                        return Ok(falsified);
                     }
                     PredicateTruth::Unknown => {
                         unknown = true;
@@ -7192,12 +7224,14 @@ fn evaluate_predicate(
                 },
                 suggestions,
                 next_wake_unix_ms: next_wake,
+                end_unix_ms: end,
                 fresh_until_unix_ms: fresh_until,
             })
         }
         PredicateSpec::Any { predicates } => {
             let mut suggestions = Vec::new();
             let mut next_wake = None;
+            let mut end = None;
             let mut unknown = false;
             for child in predicates {
                 let result = evaluate_predicate(
@@ -7212,12 +7246,14 @@ fn evaluate_predicate(
                     reasons,
                 )?;
                 next_wake = min_wake(next_wake, result.next_wake_unix_ms);
+                end = min_wake(end, result.end_unix_ms);
                 match result.truth {
                     PredicateTruth::True => {
                         return Ok(PredicateEvaluation {
                             truth: PredicateTruth::True,
                             suggestions: Vec::new(),
                             next_wake_unix_ms: next_wake,
+                            end_unix_ms: end,
                             fresh_until_unix_ms: result.fresh_until_unix_ms,
                         });
                     }
@@ -7236,6 +7272,7 @@ fn evaluate_predicate(
                 },
                 suggestions,
                 next_wake_unix_ms: next_wake,
+                end_unix_ms: end,
                 fresh_until_unix_ms: None,
             })
         }
@@ -7391,13 +7428,11 @@ fn evaluate_predicate(
                 truth,
                 next_pool_projection_change(spec, reading.bound, reading.snapshot, time.unix_ms)?,
             );
+            // #503 WAKE fix round 1: the pool's next step is when the evaluation reads it again,
+            // which ends nothing; the end of the reading's freshness does.
+            result.end_unix_ms = None;
             result.fresh_until_unix_ms = fresh_until;
-            result.next_wake_unix_ms = min_wake(
-                result.next_wake_unix_ms,
-                result
-                    .fresh_until_unix_ms
-                    .and_then(|expiry| expiry.checked_add(1)),
-            );
+            result.wake_at(fresh_until.and_then(|expiry| expiry.checked_add(1)));
             Ok(result)
         }
         PredicateSpec::Fact {
@@ -7508,18 +7543,14 @@ fn evaluate_predicate(
                     }
                 }
             };
-            Ok(PredicateEvaluation {
-                truth: if truth {
-                    PredicateTruth::True
-                } else {
-                    PredicateTruth::False
-                },
-                suggestions: Vec::new(),
-                next_wake_unix_ms: fresh_until
+            let mut result = PredicateEvaluation::known(
+                truth,
+                fresh_until
                     .and_then(|expiration| expiration.checked_add(1))
                     .filter(|expiration| *expiration > time.unix_ms),
-                fresh_until_unix_ms: fresh_until,
-            })
+            );
+            result.fresh_until_unix_ms = fresh_until;
+            Ok(result)
         }
         PredicateSpec::RecordDeadline {
             scope,
@@ -7615,16 +7646,9 @@ fn evaluate_predicate(
                     next_wake = min_wake(next_wake, deadline.checked_sub(*within_ms));
                 }
             }
-            Ok(PredicateEvaluation {
-                truth: if actionable {
-                    PredicateTruth::True
-                } else {
-                    PredicateTruth::False
-                },
-                suggestions: Vec::new(),
-                next_wake_unix_ms: next_wake,
-                fresh_until_unix_ms: fresh_until,
-            })
+            let mut result = PredicateEvaluation::known(actionable, next_wake);
+            result.fresh_until_unix_ms = fresh_until;
+            Ok(result)
         }
         // Workflow #405 W1: true once the time the fact holds plus `offset_ms` has come. A fact
         // that gives no time makes it false, not unknown: the time is a package's output, so no
@@ -9250,6 +9274,36 @@ fn asleep_reason(instance_id: &str) -> DecisionReason {
         format!(
             "instance_id={instance_id}: the instance is asleep, and this task is what it is woken \
              for"
+        ),
+    )
+}
+
+/// #503 WAKE (register §1.549; `contracts/scheduling/README.md`, "Below a pool's trigger line"):
+/// the reason of a consumer the asleep instance `instance_id` holds below a regenerating pool's
+/// trigger line until `release`: `instance_asleep_below_trigger_line`, with the pool whose line
+/// comes first (`trigger`), its reading and its trigger line as read now, and where its lines come
+/// from.
+fn asleep_below_trigger_reason(
+    instance_id: &str,
+    trigger: &capped::TriggerAt,
+    release: u64,
+) -> DecisionReason {
+    reason_with(
+        Outcome::new(PolicyCode::InstanceAsleepBelowTriggerLine)
+            .instance_id(instance_id)
+            .pool_id(trigger.pool_id.as_str())
+            .pool_reading(trigger.reading)
+            .trigger_line(trigger.trigger)
+            .next_eligible_unix_ms(release)
+            .lines_source(trigger.source),
+        format!(
+            "instance_id={instance_id} pool_id={} pool_reading={} trigger_line={} \
+             next_eligible_unix_ms={release} lines_source={}: the instance is asleep and the pool \
+             reads below its trigger line, so this task is no reason to wake it before then",
+            trigger.pool_id,
+            trigger.reading,
+            trigger.trigger,
+            trigger.source.as_str()
         ),
     )
 }
