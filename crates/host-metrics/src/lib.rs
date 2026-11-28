@@ -5,8 +5,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use actingcommand_contract::outcome::Code;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 
 mod capacity;
 pub mod codes;
@@ -300,6 +301,122 @@ pub struct ProcessLoadThresholds {
     pub min_coverage_basis_points: u16,
 }
 
+/// #503 NOISE-A (register §1.552): the executable images whose processes the Runtime runs or
+/// manages beside its own process and the processes it starts, which the process sampler counts
+/// as owned. An image is a full path; a path with one directory level left open (a directory,
+/// any one directory under it, then the rest of the path); or an executable name, wherever its
+/// image lies. Paths and names compare ignoring ASCII case, `/` and `\` are one separator and a
+/// leading `\\?\` is no part of a path. An image that no process runs changes nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnedImageSet {
+    paths: BTreeSet<String>,
+    open_level_paths: BTreeSet<(String, String)>,
+    names: BTreeSet<String>,
+}
+
+impl OwnedImageSet {
+    /// The image at `path`; an empty path names none.
+    pub fn with_path(mut self, path: &str) -> Self {
+        let key = image_path_key(path);
+        if !key.is_empty() {
+            self.paths.insert(key);
+        }
+        self
+    }
+
+    /// Every image `<directory>\<any one directory>\<rest>`; an empty directory or rest names
+    /// none.
+    pub fn with_open_level_path(mut self, directory: &str, rest: &str) -> Self {
+        let directory = image_path_key(directory);
+        let rest = image_path_key(rest);
+        if !directory.is_empty() && !rest.is_empty() {
+            self.open_level_paths.insert((directory, rest));
+        }
+        self
+    }
+
+    /// Every image whose executable name is `name`, wherever it lies; an empty name names none.
+    pub fn with_name(mut self, name: &str) -> Self {
+        if !name.is_empty() {
+            self.names.insert(name.to_ascii_lowercase());
+        }
+        self
+    }
+
+    /// Whether the set names no image.
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.open_level_paths.is_empty() && self.names.is_empty()
+    }
+
+    /// Whether a process whose executable name is `executable_name` runs an image of the set.
+    /// `image_path` reads the process's full image path; it is called only when the name alone
+    /// does not decide (the name is that of an image the set names by path), and a path it cannot
+    /// read (`None`) owns nothing.
+    pub fn owns(&self, executable_name: &str, image_path: impl FnOnce() -> Option<String>) -> bool {
+        let name = executable_name.to_ascii_lowercase();
+        if self.names.contains(&name) {
+            return true;
+        }
+        let named_by_path = self
+            .paths
+            .iter()
+            .chain(self.open_level_paths.iter().map(|(_, rest)| rest))
+            .any(|path| last_path_component(path) == name);
+        named_by_path && image_path().is_some_and(|path| self.owns_path(&path))
+    }
+
+    fn owns_path(&self, path: &str) -> bool {
+        let key = image_path_key(path);
+        self.paths.contains(&key)
+            || self.open_level_paths.iter().any(|(directory, rest)| {
+                key.strip_prefix(directory.as_str())
+                    .and_then(|below| below.strip_prefix('\\'))
+                    .and_then(|below| below.split_once('\\'))
+                    .is_some_and(|(level, tail)| !level.is_empty() && tail == rest)
+            })
+    }
+}
+
+/// A path as [`OwnedImageSet`] compares it: `/` read as `\`, a leading `\\?\` (`\\?\UNC\` as
+/// `\\`) and trailing separators left out, ASCII lowercase.
+fn image_path_key(path: &str) -> String {
+    let unified = path.replace('/', "\\");
+    let plain = if let Some(share) = unified.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{share}")
+    } else if let Some(local) = unified.strip_prefix(r"\\?\") {
+        local.to_owned()
+    } else {
+        unified
+    };
+    plain.trim_end_matches('\\').to_ascii_lowercase()
+}
+
+fn last_path_component(key: &str) -> &str {
+    key.rsplit('\\').next().unwrap_or(key)
+}
+
+/// #503 NOISE-A: where the host puts the [`OwnedImageSet`] once its provider is installed and the
+/// process sampler reads it at each sample. Its clones share one set, which only a whole
+/// replacement changes; nothing of it is persisted.
+#[derive(Debug, Clone, Default)]
+pub struct OwnedImages(Arc<Mutex<OwnedImageSet>>);
+
+impl OwnedImages {
+    /// Replaces the set every clone reads.
+    pub fn replace(&self, images: OwnedImageSet) {
+        // A set is only ever replaced whole, so a lock a panic poisoned still holds a whole set.
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = images;
+    }
+
+    /// The set as the host last put it; empty before it put one.
+    pub fn current(&self) -> OwnedImageSet {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
 pub trait HostSampler: Send {
     fn sample_capacity(&mut self, targets: &[CapacityTarget]) -> Vec<CapacitySample> {
         sample_capacity(targets)
@@ -357,12 +474,20 @@ pub fn gpu_utilization_basis_points(
 #[cfg(test)]
 mod gate_385_pm;
 
+/// The operating system's sampler; #503 NOISE-A: it reads `owned_images` at each sample.
 #[cfg(windows)]
-pub fn system_sampler(gpu: GpuAggregate) -> Result<Box<dyn HostSampler>, Code> {
-    windows::WindowsHostSampler::new(gpu).map(|sampler| Box::new(sampler) as Box<dyn HostSampler>)
+pub fn system_sampler(
+    gpu: GpuAggregate,
+    owned_images: OwnedImages,
+) -> Result<Box<dyn HostSampler>, Code> {
+    windows::WindowsHostSampler::new(gpu, owned_images)
+        .map(|sampler| Box::new(sampler) as Box<dyn HostSampler>)
 }
 
 #[cfg(not(windows))]
-pub fn system_sampler(_gpu: GpuAggregate) -> Result<Box<dyn HostSampler>, Code> {
+pub fn system_sampler(
+    _gpu: GpuAggregate,
+    _owned_images: OwnedImages,
+) -> Result<Box<dyn HostSampler>, Code> {
     Err(HostMetricsCode::PerformanceSamplerUnsupported.code())
 }

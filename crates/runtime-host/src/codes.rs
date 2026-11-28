@@ -305,11 +305,12 @@ actingcommand_contract::outcome_codes! {
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
         /// Warning (Workflow #490 ENTRY-A). One of an entry-blocked instance's own recoveries ended
         /// without recovering (`entry_recovery_end`: its ladder exhausted, the game's update
-        /// dialog ended a rung's run, its worker panicked; `trigger_rule` the trigger item it was
-        /// admitted under): the instance stays blocked, once per block; after an exhausted climb
-        /// the block climbs again by itself (`next_occurrence_unix_ms` its earliest time), after
-        /// the update dialog no climb again in the stretch, after a panicked worker none in the
-        /// block (keys as above).
+        /// dialog ended a rung's run, its worker panicked, its worker's payload ended with an
+        /// error the worker contained; `trigger_rule` the trigger item it was admitted under): the
+        /// instance stays blocked, once per block; after an exhausted climb the block climbs again
+        /// by itself (`next_occurrence_unix_ms` its earliest time), after the update dialog no
+        /// climb again in the stretch, after a panicked or failed worker none in the block (keys
+        /// as above).
         InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
         /// Info (Workflow #490 ENTRY-A fix round 4, ruling 2). The candidate's task failed at its
         /// entry on its instance `count` times in a row in its activity window, the latest
@@ -3927,6 +3928,10 @@ actingcommand_contract::outcome_vocabulary! {
         UpdateDialog => "update_dialog",
         /// The worker that climbed the ladder panicked; the ladder ended there.
         WorkerPanicked => "worker_panicked",
+        /// #503 ISO-A fix round 1 (since 0.12.102): the payload that climbed the ladder ended with
+        /// an error its worker contained (the error's own record says which); the ladder ended
+        /// there. Its effect on the block is `WorkerPanicked`'s.
+        WorkerFailed => "worker_failed",
     }
 }
 // ---- Workflow #490 ENTRY-A fix round 1: end ----

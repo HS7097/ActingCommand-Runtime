@@ -707,7 +707,11 @@ client's or the Lab's run are not scheduled candidates: the block never holds th
   attention after `attention_after_ms`; a person updates the game and runs a task or resumes the
   instance (a resume ends the block), or the Runtime's restart forgets it. `worker_panicked`: no
   `next_occurrence_unix_ms`, and nothing climbs again in that block, as AVAIL-1's probe after a panic
-  (a resume, a run's success or a restart ends the block). A scheduled run's own recovery that ended
+  (a resume, a run's success or a restart ends the block). `worker_failed` (#503 ISO-A fix round 1,
+  Runtime 0.12.102): the work that climbed the ladder ended with an error its instance worker
+  contained, no panic; the error's own record under the same links says which, and the block does
+  exactly what it does after `worker_panicked` (the climb not counted in the stretch, a held
+  recovery let go, nothing climbing again in that block). A scheduled run's own recovery that ended
   so before the run's settlement does the same with the block that settlement sets; a ladder of
   another trigger does not make the block warn. No configuration key is added.
 - *The emulator's restarts.* A climb that reaches the `emulator_restart` rung stops and starts the
