@@ -24,10 +24,10 @@ ActingCommand Runtime 是一个常驻的 Rust 运行时，用于在安卓模拟�
 
 ## 现状
 
-写于 2026-11-28，对应当前发布 **v0.12.98**。
+写于 2026-11-28，对应当前发布 **v0.12.99**。
 
-- **发布。** 当前发布是 v0.12.98（0.12 系列，预发布），在本仓 [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) 页。每个 Release 带两个 zip 与 `SHA256SUMS`：`actingcommand-runtime-<sha>.zip`（守护进程 `actingcommand-actingd.exe`、命令行 `actingctl.exe`、配置模板与默认值、`INSTALL.md`、`RELEASE-NOTES.md`）和 `actingcommand-tools-<sha>.zip`（`actinglab.exe`、Lab 的 MCP 服务 `actinglab-mcp.exe`、两代 MCP 入口、账本读取器 `actingledger.exe`、视觉检查程序、看门狗 `actingwatch.exe`，以及 Android platform-tools 37.0.1）。视觉模型与 ONNX Runtime 不随发布。
-- **接口与搭配。** v0.12.98 声明 `actingd-config` [5, 35]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 10]、`runtime-client` [12, 14]、`package` [3, 30]、`runtime-outcomes` [1, 1]。各组件各自发版，能否搭配看各自声明的接口修订，不看版本号是否一致：最新的 UI v0.12.34 可与 v0.12.73 起的 Runtime 搭配，包括 v0.12.98；v0.12.86 把 `ledger` 升到修订 10（单向），所以声明 `ledger` [3, 9] 的 UI v0.12.33 及更早版本只能配到 v0.12.85。0.11 系列的 UI、安装向导和标准包都不能用于 0.12。
+- **发布。** 当前发布是 v0.12.99（0.12 系列，预发布），在本仓 [Releases](https://github.com/HS7097/ActingCommand-Runtime/releases) 页。每个 Release 带两个 zip 与 `SHA256SUMS`：`actingcommand-runtime-<sha>.zip`（守护进程 `actingcommand-actingd.exe`、命令行 `actingctl.exe`、配置模板与默认值、`INSTALL.md`、`RELEASE-NOTES.md`）和 `actingcommand-tools-<sha>.zip`（`actinglab.exe`、Lab 的 MCP 服务 `actinglab-mcp.exe`、两代 MCP 入口、账本读取器 `actingledger.exe`、视觉检查程序、看门狗 `actingwatch.exe`，以及 Android platform-tools 37.0.1）。视觉模型与 ONNX Runtime 不随发布。
+- **接口与搭配。** v0.12.99 声明 `actingd-config` [5, 35]、`install-selection` [1, 1]、`install-control` [0, 0]、`ledger` [3, 10]、`runtime-client` [12, 14]、`package` [3, 31]、`runtime-outcomes` [1, 1]。各组件各自发版，能否搭配看各自声明的接口修订，不看版本号是否一致：最新的 UI v0.12.34 可与 v0.12.73 起的 Runtime 搭配，包括 v0.12.99；v0.12.86 把 `ledger` 升到修订 10（单向），所以声明 `ledger` [3, 9] 的 UI v0.12.33 及更早版本只能配到 v0.12.85。0.11 系列的 UI、安装向导和标准包都不能用于 0.12。
 - **调度。** 守护进程 `actingd` 常驻，调度多台实例：MuMu 模拟器和 USB 连接的安卓真机。任务由时钟槽和实例事实触发；业务任务按单次净收益除以预计运行时长排序，净收益未知或不为正的不派；资源池有停止线与硬红线；可以为账号的资源池设目标，目标的缺口计入对应任务的收益；也可以给实例记下练谁、练到哪一档，每次评估前按标准包里的规则表、进度列表和持有算出这些角色还缺多少，叠在目标上；每个没派出去的候选都记下原因。一段时间没有待办的实例按配置关掉应用或停掉模拟器，下一轮任务前再唤醒。
 - **识别与恢复。** 八种识别目标：模板匹配、颜色、颜色摘要、仅点击、OCR、ONNX 神经网络、组合条件、数值比对。标准包按 1280×720 制作，同比例更大的画面缩到这个基准。例行任务失败后由配置里的恢复阶梯接手；阶梯用尽、实例被隔离等人处理、或运行以规则列出的结果码失败时，可以按配置唤醒已登记的智能体会话。只属于一台实例的故障只围住那一台，其余实例照常运转。
 - **账本与证据。** 每一步看到了什么、点了哪里、得到什么结果都写进本机的 SQLite 账本，每条带结果的记录带一个登记过的结果码；截图按内容摘要存储，按类别到期清理。
