@@ -5,7 +5,10 @@ use actingcommand_contract::outcome::{FileState, Record, VocabularyToken};
 use actingcommand_contract::{
     ConfigParameter, FactScalar, InstanceResourcePackage, RuntimeConfigManifest,
 };
-use actingcommand_device::{MumuInstallSource, MumuManagerSource, resolve_mumu_manager};
+use actingcommand_device::{
+    MumuInstallSource, MumuManagerReads, MumuManagerSource, SystemMumuManagerReads,
+    resolve_mumu_manager_with,
+};
 use actingcommand_runtime_host::{
     CatalogGeneration, CatalogPreview, CatalogPreviewRequest, ExecutionBackendProvider,
     ExecutionBackendRegistry, ResolvedAdbEndpoint, ResolvedInstanceEndpoint, RuntimeHostConfig,
@@ -839,6 +842,7 @@ fn summarize(
     let (mumu_root, mumu_root_unresolved) = mumu_root_report(
         checked.mumu_root.as_deref(),
         checked.env_nemu_folder.as_deref(),
+        &mut SystemMumuManagerReads,
     );
     if let Some(unresolved) = mumu_root_unresolved {
         not_checked.push(MUMU_DISCOVERY_NOT_CHECKED);
@@ -1032,16 +1036,19 @@ fn manifest_integer(
 }
 
 /// The MuMu install root the daemon would use: the configured `mumu_root`, else one
-/// read-only `resolve_mumu_manager(None, env_folder)` run (the injected
+/// read-only `resolve_mumu_manager_with(None, env_folder, reads)` run (the injected
 /// `ACTINGCOMMAND_NEMU_FOLDER` only under `allow_env_overrides`, running process, uninstall
 /// registry, vendor folders). `MuMuManager.exe` is never run; no instance is started or
 /// stopped. A failed resolution is reported as `null` plus its outcome, a note of the passed
 /// check, never refused: the Nemu resolution reason, else `provider_native_failed` with the
 /// device failure's category, as provider startup records it (Workflow #378 A6a: was v1's
-/// `mumu_root_unresolved`).
-fn mumu_root_report(
+/// `mumu_root_unresolved`). Workflow #503 NOISE-B: the resolver's process listing is `reads`'
+/// (the program's [`SystemMumuManagerReads`], bounded at 60 s; a test injects its own), and a
+/// listing past its bound is such a failed resolution.
+pub(crate) fn mumu_root_report(
     configured: Option<&Path>,
     env_folder: Option<&Path>,
+    reads: &mut dyn MumuManagerReads,
 ) -> (serde_json::Value, Option<Outcome>) {
     if let Some(root) = configured {
         return (
@@ -1049,7 +1056,7 @@ fn mumu_root_report(
             None,
         );
     }
-    match resolve_mumu_manager(None, env_folder) {
+    match resolve_mumu_manager_with(None, env_folder, reads) {
         Ok(resolved) => (
             json!({
                 "path": resolved.install_root.to_string_lossy(),

@@ -77,7 +77,7 @@ pub use mumu_manager::{
     ResolvedMumuManager, SystemMumuManagerReads, application_state_read_problem, control_instance,
     discover_mumu_installation, discover_mumu_instances, mumu_capability_profile, mumu_state_wait,
     parse_application_state, query_instances, query_version, read_application_state,
-    read_instance_state, resolve_mumu_manager,
+    read_instance_state, resolve_mumu_manager, resolve_mumu_manager_with,
 };
 pub use nemu_diagnostic::*;
 pub use replay::*;
