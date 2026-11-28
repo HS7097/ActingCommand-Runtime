@@ -562,8 +562,25 @@ fn coin_roots() -> RecordRoots {
 /// A start of the policy instance's host over `state` on `clock`, its needs reading
 /// [`coin_roots`].
 fn open(state: &TempDir, instance: InstanceId, clock: &Arc<ManualRuntimeClock>) -> RuntimeHost {
+    open_guarded(state, instance, clock, true)
+}
+
+/// [`open`], with the no-progress guard off on the instance when `guarded` is false
+/// ([`no_progress_off_manifest`]): with it on, a pair whose run succeeded is not dispatched again
+/// while none of its basis keys has read another value (`policy_no_progress`), so two dispatches
+/// of one pair on one reading need it off.
+fn open_guarded(
+    state: &TempDir,
+    instance: InstanceId,
+    clock: &Arc<ManualRuntimeClock>,
+    guarded: bool,
+) -> RuntimeHost {
+    let mut host_config = config(state).with_runtime_clock(Arc::<ManualRuntimeClock>::clone(clock));
+    if !guarded {
+        host_config = host_config.with_config_manifest(no_progress_off_manifest(&instance));
+    }
     let host = RuntimeHost::start(
-        config(state).with_runtime_clock(Arc::<ManualRuntimeClock>::clone(clock)),
+        host_config,
         Arc::new(FakeProvider::one(
             POLICY_INSTANCE_ALIAS,
             instance,
@@ -858,7 +875,11 @@ fn rr3d_h6_two_runs_short_of_the_gap_leave_the_pool_unread_across_a_start() {
     let state = TempDir::new().expect("tempdir");
     let instance = instance_id();
     let clock = Arc::new(ManualRuntimeClock::new(POLICY_NOW_UNIX_MS, 0));
-    let host = open(&state, instance, &clock);
+    // The no-progress guard is off on the instance, at the start and after the restart: with it
+    // on, the pair's second dispatch on the one reading is held `policy_no_progress` (its run
+    // succeeded and the list, its basis key, has not been read again), and the sum this test is
+    // about is never reached through one pair.
+    let host = open_guarded(&state, instance, &clock, false);
     host.activate_policy_catalog(&producing(1_000))
         .expect("activate the fixture catalog");
     evaluate_at(&host, &clock, POLICY_NOW_UNIX_MS);
@@ -889,7 +910,7 @@ fn rr3d_h6_two_runs_short_of_the_gap_leave_the_pool_unread_across_a_start() {
     host.close().expect("close the host");
 
     let clock = Arc::new(ManualRuntimeClock::new(ended + 6_000, 0));
-    let host = open(&state, instance, &clock);
+    let host = open_guarded(&state, instance, &clock, false);
     for unix_ms in [ended + 7_000, ended + 8_000] {
         let restarted = evaluate_at(&host, &clock, unix_ms);
         assert!(intent(&restarted).is_none(), "{restarted:#?}");
