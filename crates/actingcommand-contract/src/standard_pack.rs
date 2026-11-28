@@ -285,7 +285,8 @@ crate::outcome_vocabulary! {
         /// G-R1: a `resource` entry's pool is not a pool of the composed schedule.
         GoalPoolUnknown => "goal_pool_unknown",
         /// G-R1: a `resource` entry's pool has no `valuation` with `scale` and `gap` and (#455
-        /// B3-P), as a pool without a valuation, no `target_defaults` with both numbers.
+        /// B3-P), as a pool without a valuation, no `target_defaults` with both numbers, nor (#455
+        /// SL2) `spend_line`, on which the goal is the pool's line.
         GoalPoolUnvalued => "goal_pool_unvalued",
         /// G-R1: a governed package is not a package of `bundle.json`; Workflow #463 V1: the
         /// package a governed rule runs, or one that declares a placed variable, is not.
@@ -407,7 +408,8 @@ crate::outcome_vocabulary! {
         /// RR1: an item's pool is no pool of the composed `schedule.json`, at its `pool`.
         TablePoolUnknown => "table_pool_unknown",
         /// RR1: the pool of an item without a recipe (the one a need lands on) gives a goal no
-        /// step and importance, as `goal_pool_unvalued` judges a pool, at its `pool`.
+        /// step and importance, as `goal_pool_unvalued` judges a pool, at its `pool`; #455 SL2: a
+        /// pool that writes `spend_line` gives none either, though a `resource` entry governs it.
         TablePoolUnvalued => "table_pool_unvalued",
         /// RR1 fix round 1: an item names a pool an earlier item of `goal-tables.json` names (a
         /// holding has one name in the file), at the later item's `pool`.

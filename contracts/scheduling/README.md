@@ -267,10 +267,19 @@ it reads any pool without a valuation: the reserve gate holds a consumer whose r
 ("Task Reserves"), the forward projection applies the consumption, a run handed a `run_cap` leaves
 the pools its task consumes unread until they are read after it ("Pool lines"), a reserve on the
 pool gives its spend values; the pool's lines and the capped spending order act on valued pools
-only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). The goal page and
-the stored goals are untouched: the pool is not offered as one a goal can be set on by
-`{at_least}`, a goal by its pool id is refused `pool_unvalued`, and the Lab's root check refuses a
-`resource` entry on it (`goal_pool_unvalued`). The line itself, its date, the pressing, the hold
+only, so the pool stays outside them (`pool_lines_unvalued` if it writes lines). Until #455 SL2
+the goal page and the stored goals were untouched: the pool was not offered as one a goal can be set
+on by `{at_least}`, a goal by its pool id was refused `pool_unvalued`, and the Lab's root check
+refused a `resource` entry on it (`goal_pool_unvalued`).
+
+**With a line** (#455 SL2, since 0.12.101; register §1.547; [../resource-targets.md](../resource-targets.md),
+"A pool's line"). There is now a way to give such a pool its line: a stored target on it is the
+pool's line, set by `{at_least}` alone on the goal page or in a document, with no producer asked,
+listed with the member's `scale` and `price_milli` as its numbers and neither required, and taken by
+a `resource` entry of `goals.json`; no need of the records lands on it. A line has no date of its
+own, and it never weighs: the evaluation reads each stored record without its lines, so the tasks
+that produce the pool are judged as with no target on it and the tasks that consume it as above, the
+consumption still costing nothing. The pressing of the spenders below the line, its date, the hold
 and the statement of a shortfall are later slices. A `schedule.json` whose pool writes the member
 names `pool_spend_line` in `requires`
 ([../standard-pack-schedule.md](../standard-pack-schedule.md), "`requires`"). A pool without it
@@ -1271,7 +1280,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) carry
   `<pool>:-0` at its place in the consumption's declaration order, so a reader of the decision sees
   the consumption was read and cost nothing. This 0 is a declared one, not an unknown read as 0:
-  the pool says its spending is governed by a line, and no line is set. Its reading is not read for
+  the pool says its spending is governed by a line, and no line is set. #455 SL2 (since 0.12.101):
+  with a line set it is the same 0, as the evaluation reads no line yet (the pressing below it is a
+  later slice's). Its reading is not read for
   the cost, and the pool takes no part in the pools' lines (below). An entry on it whose `amount`
   is the pending marker stays `entry_pending`; a task that produces it is judged as with any pool
   without a valuation (without a fixed value `valuation_missing`). A task without a fixed value
@@ -2380,7 +2391,7 @@ transaction state.
 
 The evaluator pins the selected activity profile in every dispatch intent. Runtime owns activity sampling, budget counters, retry state, and failure escalation; callers cannot supply remaining-budget values. Admission and execution ledger events record the selected profile, sample seed, activity window, cadence, cumulative task and activity budget receipts, and classified outcome. The admission record's activity sample names its window by `window_id` and `local_day` and, since 0.12.86 (#503 CYC-3; [v012-register.md](../v012-register.md) §1.529, `ledger` revision 10), by its end, `window_until_unix_ms`, taken from the one resolution of the window the admission makes; a record written before carries none.
 
-Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution. A run a `StopInstanceRun` stopped (Workflow #429 R-6b, since 0.12.55; [../policy-suspension.md](../policy-suspension.md), "A stopped run") receives none of the failure handling above: no backoff, streak, escalation, pause or ladder, no condition and no owed rerun, and the Runtime's own reruns its dispatch served end with it (since 0.12.55). A scheduled run that failed at its entry (Workflow #490 ENTRY-A, since 0.12.77; register §1.494; [../policy-suspension.md](../policy-suspension.md), "A failure at the entry": its main package executed no step, its failure came from the gate, a prerequisite or return-home layer or the home entry's check, does not accumulate, its code's class is `pack_logic_mismatch` whatever the ladder's `exclude_codes` say of it, and its instance's block has a recovery for it; a code of any other class, the capture backend's, the device link's or a fence's, is settled as before) is a condition of its instance, not a failure of its task: no backoff, streak, escalation, pause or immediate rerun, the counts its admission took given back (so a task's runs of the day are spent only by runs whose entry was reached), and no owed rerun; its instance is blocked until a recovery or a run of it succeeds, a resume lifts a pause of it, a blackout covers it at the lease sweep's tick, a fence takes it or the Runtime restarts ([../scheduling-blackout.md](../scheduling-blackout.md), "Order of the deferrals", position 4b, `instance_entry_blocked`; a store update package's task passes; a recovery the block held when it ends is dropped with its trigger's `recovery_ladder_suppressed` `cooldown` once more). The block's recovery is admitted, held through a cool-down or a transient refusal and tried again (a claim the queue refused on a growing interval, one second to one minute); it climbs from the first rung that restarts the application when no run was let in on the instance since its previous block ended; the first climb of a stretch of blocks with nothing let in between them starts as before, and every later one waits `scheduling.unavailable_probe`'s interval for the stretch's climbs from the previous climb's end, never before the cool-down window ends, whatever ended the previous climb (but a person's pause, under which nothing climbs and whose lifting ends the block); one that ends `exhausted` tells a person once per block and is followed by such a later climb; one the game's update dialog ended tells a person once and nothing climbs again in the stretch (the store update task passes); and a stretch that lasted `scheduling.unavailable_probe.attention_after_ms` is brought to a person once. Fix round 4 ("A pair that keeps failing at its entry"): no failure at the entry counts against its rule; a pair (instance, catalog task) that fails at its entry n times in a row in an activity window is not dispatched on that instance before `scheduling.unavailable_probe`'s interval for n has passed since the end of the block the latest failure set and of any later block of the instance (since the latest settlement until a block ends; `instance_entry_task_waiting`), and once its failures that came although another scheduled run was let in reach its rule's `escalation_threshold` it is set aside until the window's end (`instance_entry_task_set_aside`) and a person is told once (`instance_entry_task_set_aside_reported`); the instance's other tasks run meanwhile, first when a block ends, a store update task's success starts every pair of its instance from nothing, and a catalogue that becomes active starts every pair from nothing. The emulator is restarted at most once in a stretch of blocks. No rule is paused by failures at its entry, however long a condition lasts. A failure in a step of the main package is settled, rerun, counted and paused as before.
+Recoverable failures receive a positive, bounded backoff. Only repeated failures with the same failure code, failure identity and failure class share a consecutive-failure streak, and sensitive or severe failures are never automatically restarted. A failure records its `outcome` (whose category is the record's severity) and, for a scheduled `linear_steps` or (Workflow #390 EXEC-3) page-graph task, its `failure_identity`, which is rerun at once and lifted by a package update (`../policy-suspension.md`). Goal-missed, feasibility-red, and drift-predicted signals are informational planning facts: they do not consume failure tax, advance a failure streak, or pause execution. A run a `StopInstanceRun` stopped (Workflow #429 R-6b, since 0.12.55; [../policy-suspension.md](../policy-suspension.md), "A stopped run") receives none of the failure handling above: no backoff, streak, escalation, pause or ladder, no condition and no owed rerun, and the Runtime's own reruns its dispatch served end with it (since 0.12.55). A scheduled run that failed at its entry (Workflow #490 ENTRY-A, since 0.12.77; register §1.494; [../policy-suspension.md](../policy-suspension.md), "A failure at the entry": its main package executed no step, its failure came from the gate, a prerequisite or return-home layer or the home entry's check, does not accumulate, its code's class is `pack_logic_mismatch` whatever the ladder's `exclude_codes` say of it, and its instance's block has a recovery for it; a code of any other class, the capture backend's, the device link's or a fence's, is settled as before) is a condition of its instance, not a failure of its task: no backoff, streak, escalation, pause or immediate rerun, the counts its admission took given back (so a task's runs of the day are spent only by runs whose entry was reached), and no owed rerun; its instance is blocked until a recovery or a run of it succeeds, a resume lifts a pause of it, a blackout covers it at the lease sweep's tick, a fence takes it or the Runtime restarts ([../scheduling-blackout.md](../scheduling-blackout.md), "Order of the deferrals", position 4b, `instance_entry_blocked`; a store update package's task passes; a recovery the block held when it ends is dropped with its trigger's `recovery_ladder_suppressed` `cooldown` once more). The block's recovery is admitted, held through a cool-down or a transient refusal and tried again (a claim the queue refused on a growing interval, one second to one minute); it climbs from the first rung that restarts the application when no run was let in on the instance since its previous block ended; the first climb of a stretch of blocks with nothing let in between them starts as before, and every later one waits `scheduling.unavailable_probe`'s interval for the stretch's climbs from the previous climb's end, never before the cool-down window ends, whatever ended the previous climb (but a person's pause, under which nothing climbs and whose lifting ends the block); one that ends `exhausted` tells a person once per block and is followed by such a later climb; one the game's update dialog ended tells a person once and nothing climbs again in the stretch (the store update task passes); and a stretch that lasted `scheduling.unavailable_probe.attention_after_ms` is brought to a person once. Fix round 4 ("A pair that keeps failing at its entry"): no failure at the entry counts against its rule; a pair (instance, catalog task) that fails at its entry n times in a row in an activity window is not dispatched on that instance before `scheduling.unavailable_probe`'s interval for n has passed since the end of the block the latest failure set and of any later block of the instance (since the latest settlement until a block ends; `instance_entry_task_waiting`), and once its failures that came although another scheduled run was let in reach its rule's `escalation_threshold` it is set aside until the window's end (`instance_entry_task_set_aside`) and a person is told once (`instance_entry_task_set_aside_reported`); the instance's other tasks run meanwhile, first when a block ends, a store update task's success starts every pair of its instance from nothing, and a catalogue that becomes active starts every pair from nothing. The emulator is restarted at most once in a stretch of blocks. No rule is paused by failures at its entry, however long a condition lasts. A failure in a step of the main package is settled, rerun, counted and paused as before. Since 0.12.100 (#503 PACE; register §1.545; [../policy-suspension.md](../policy-suspension.md), "A pair whose runs keep failing") the immediate rerun costs a pair that keeps failing more than its day's counts: the first rerun after a failure is as immediate as above, but from its second failure in a row (failures no condition settled that left it unpaused, a store update task's excepted) the pair is not dispatched on its instance before `scheduling.unavailable_probe`'s interval for one less than its count has passed since that failure's settlement, never past its window's end (`instance_task_failure_waiting`, one record of it written at that settlement), and once its failures whose wait is the longest interval (the seventh in a row on with the shipped values) that came although another scheduled run succeeded on the instance reach its rule's `escalation_threshold` it is set aside there until its window ends (`instance_task_failure_set_aside`, a person told by `instance_task_failure_set_aside_reported`); memory only, and nothing is paused.
 
 ### Optional run-count bounds
 
@@ -2859,7 +2870,8 @@ evaluator stacks it on the instance's stored goals and raises the producers of w
   whose root cannot be composed" in [../resource-targets.md](../resource-targets.md)); a reading
   is not made old by a run that has produced into it since (the gap reads the holding as it was
   read), unless (#455 RR3c, since 0.12.98) that run was told enough turns to close a goal's gap on
-  the pool: then the holding is unread until a reading observed at or after the run's end ("Pool
+  the pool (#455 RR3d, since 0.12.101: or the runs told under the gap since the reading were,
+  together): then the holding is unread until a reading observed at or after their end ("Pool
   lines"), the goal on the pool pending and, for an item with a recipe,
   `goal_records_holding_unknown` with `unknown_reason` `fact_stale`, nothing taken apart below it;
   a rule that produces an item with a recipe counts for what it produces, not for what it is made
@@ -2917,7 +2929,16 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   the evaluation, beside the left-out facts, the pairs whose latest admitted dispatch at the
   inputs' ledger position carried a `run_cap` on its recorded reasons, each with when its run
   ended (the observation of its settlement) or that it has not; no record, event or wire member
-  is new, and a start reads the same from the ledger. Limits: a package that runs one turn
+  is new, and a start reads the same from the ledger. #455 RR3d (since 0.12.101; register §1.548;
+  the coordinator's rulings of 11-28): **a run that failed at its entry leaves nothing unread.** A
+  dispatch whose execution record, at the inputs' ledger position, is a failure its settlement
+  settled as one at its run's entry (a condition whose failure identity carries the entry mark,
+  [../policy-suspension.md](../policy-suspension.md), "A failure at the entry") is passed over
+  before a pair's latest is chosen: its main package executed no step, so it consumed and produced
+  nothing, and the pair's previous admitted dispatch stands, judged by the same rule. Every other
+  end leaves the pool unknown as before: a success, any other failure (one at the entry of another
+  class and one a start's reconciliation settled included), a stop and an interrupted settlement
+  may each have done some turns, and nothing the host holds says how many. Limits: a package that runs one turn
   whatever its `run_cap` still leaves the pool unknown until the next reading; a pool whose scope
   covers several instances is unknown on all of them after such a run on any one; a run whose
   settlement is not recorded keeps it unknown until it is (a start settles an earlier epoch's
@@ -2925,33 +2946,47 @@ SCHED-C1c (register §1.299, since 0.12.53) adds a third member in the same two 
   and a pair whose latest admitted dispatch the host's journal no longer holds is not noted; the
   resource targets' conditions and a goal's gap read the pool's observation themselves, as
   before.
-  #455 RR3c (since 0.12.98; register §1.543; the coordinator's rulings of 11-28): **a run told
-  enough to close a goal's gap leaves the pool it produced unread.** For the latest scheduled
-  dispatch of a pair whose recorded `policy_dispatch_parameters` carry `gaps_remaining`, each record
-  `{effect_index: j, gap_remaining: g}` with `g ≥ 1` whose entry `j` of the task's `produces` (as
-  the catalogue in force at the evaluation declares it; an entry the task no longer has is passed
-  over) is on a pool, and for which `n·y ≥ g·1000`, leaves that pool unread: `n` the `run_cap` the
-  same reason carries (1 without one), `y` the task's production of the pool per run in thousandths
-  as the goal term of `run_cap` reads it (its integer amounts times 1000, else its expected yield;
-  a pending amount yields 0 and the record is passed over), checked arithmetic, an overflow counting
-  as enough. Unread means what it means above, for the same span: a pool read from a fact or from
-  rows of a list is unknown to the whole evaluation, `fact_stale` under its own key, for every
-  reader of the pool values (the triggers, which ask the fact refresh for it, the net benefit, the
-  lines, the reserve gate, the spend values), from that dispatch's admission until a reading
-  observed at or after its run's end; and, for this pool alone, also for the two readers that do not
-  read the pool values: a resource target's observation of it (pending, `Γ` 0, no goal term of
-  `run_cap` and no `gap_remaining` from it; [../resource-targets.md](../resource-targets.md),
-  "Resource weights (v2)") and the holdings of the needs computed from the records ("Needs computed
-  from the records" above). One judgement decides all three, and the host hands the needs and the
-  evaluation the one list, read once under the gates the inputs are projected under. A run that was
-  not told enough to close its gap (a gap of 150 at three turns of one unit), and a dispatch that
+  #455 RR3c (since 0.12.98; register §1.543) and RR3d (since 0.12.101; register §1.548; the
+  coordinator's rulings of 11-28): **the production told under a goal's gap leaves the pool unread
+  once it reaches the gap.** For a pool whose current reading was observed at `t`, take the
+  admitted dispatches the host's journal holds at the inputs' ledger position (of any pair, but one
+  whose run failed at its entry, above) whose run has not ended or ended after `t` and whose
+  recorded `policy_dispatch_parameters` carry `gaps_remaining` with a record
+  `{effect_index: j, gap_remaining: g}`, `g ≥ 1`, whose entry `j` of the task's `produces` (as the
+  catalogue in force at the evaluation declares it; an entry the task no longer has is passed over)
+  is on the pool, in the order of their admission. The pool is unread when for one of them the sum,
+  over it and those before it, of `n·y` reaches `g·1000`, `g` the gap that dispatch was itself told
+  (the least where it was told several on the pool): `n` the `run_cap` each one's reason carries (1
+  without one), `y` its task's production of the pool per run in thousandths as the goal term of
+  `run_cap` reads it (its integer amounts times 1000, else its expected yield; a pending amount
+  yields 0 and the dispatch is passed over), checked arithmetic, an overflow counting as reached.
+  With one such dispatch this is 0.12.98's rule, `n·y ≥ g·1000`, byte for byte. So dispatches that
+  each fall short of the gap but together reach it leave the pool unread (a gap of 6 told 3 twice;
+  a stock gap of 150 at three turns of one unit at its fiftieth dispatch since the reading, read
+  before), and a later dispatch of the pair that carries no gap for the pool (its goal pending, or it
+  ran for another pool) no longer takes the place of one that closed it. Unread means what it means
+  above, for the same span: a pool read from a fact or from rows of a list is unknown to the whole
+  evaluation, `fact_stale` under its own key, for every reader of the pool values (the triggers,
+  which ask the fact refresh for it, the net benefit, the lines, the reserve gate, the spend
+  values), until a reading observed at or after the end of every run of the sum that reached the
+  gap (a reading observed at a run's end or after counts only the dispatches after it); and, for
+  this pool alone, also for the two readers that do not read the pool values: a resource target's
+  observation of it (pending, `Γ` 0, no goal term of `run_cap` and no `gap_remaining` from it;
+  [../resource-targets.md](../resource-targets.md), "Resource weights (v2)") and the holdings of the
+  needs computed from the records ("Needs computed from the records" above). One judgement decides
+  all three, and the host hands the needs and the evaluation the one list, read once under the gates
+  the inputs are projected under. Dispatches whose sum does not reach the gap, and a dispatch that
   carried no `gaps_remaining`, leave the pool read, as before; the rule above for the pools a run
-  consumes is unchanged, and a pool both name is unknown once. The host notes such a dispatch from
-  its recorded reasons, with its gaps and its `run_cap`, as it notes one that carried a `run_cap`;
-  nothing recorded is new, memory only, and a start reads the same from the ledger. Limits: a pool
-  whose scope covers several instances is unread on all of them after such a run on one; a run
-  that did fewer turns than it was told still leaves the pool unread until it is read; the yield is
-  the catalogue's expectation, so a run with poor drops is read once and sent again.
+  consumes reads each pair's latest dispatch as before, and a pool both name is unknown once. The
+  host notes every admitted dispatch from its recorded reasons, in the order of their admission,
+  with its end, its gaps and its `run_cap`; nothing recorded is new, memory only, and a start reads
+  the same from the ledger. Limits: a pool whose scope covers several instances is unread on all of
+  them after such runs on one; a run that did fewer turns than it was told still counts what it was
+  told until the pool is read; the yield is the catalogue's expectation, so a run with poor drops is
+  read once and sent again; a run that still ran when the reading was observed is counted whole
+  though the reading may show part of what it produced (the sum errs toward unread, at the cost of a
+  reading); a pair's dispatches older than what the host's journal keeps of it (its latest 64
+  admitted dispatches) are not counted, as a pair the journal no longer holds is not noted.
 - **Below the cap** (SCHED-C1c, since 0.12.53: below the trigger line, while no episode is under way) a judged candidate that would pass the net-benefit gate (a positive `B`, or
   released in the zero tier) and whose run would leave `r − ⌈C/1000⌉ < H` is not dispatched:
   deferred with `pool_line_held` (info; `pool_line_hold` `would_cross_hard_line`, `pool_id`,

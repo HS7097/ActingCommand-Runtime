@@ -52399,6 +52399,619 @@ Runtime before this build that reads a root whose file writes `names` refuses th
 until it is replaced, and nothing else is kept on disk for this slice. In the release notes'
 language: 新增：`goal-tables.json` 可以写 `names`，给物品、表里的键、列、子列、类别和条件起给人看的名字，并写明一个位置怎么念（按前缀匹配的片段，文字里可以有 `{0}` 到 `{3}` 的占位，子列也可以有自己的一套）；Runtime 不拿名字算任何东西，只随表一起保存。包的修订升到 32：写了 `names` 的表文件要本版以上；回滚到本版以前，先换回不写 `names` 的表文件，否则旧版拒收整个表文件、记录条目不生效（其余照常）。
 
+### 1.545 Slice #503 PACE (0.12.100): a pair whose scheduled runs keep failing waits a growing interval between its dispatches from its second failure in a row on, says so in one record per wait, and is set aside for its activity window when it keeps failing although its instance lets other runs succeed (board #503; rulings 1 to 8 the coordinator's of 11-28, the owner's ruling of 11-28 on this slice added to them; on main `cdc3e0b4`, v0.12.99)
+
+It ships in 0.12.100. [policy-suspension.md](policy-suspension.md) ("A pair whose runs keep
+failing", new; pointers in "Immediate rerun (R22)", "Which failures accumulate" and "Known
+limitations"), [scheduling-blackout.md](scheduling-blackout.md) ("Order of the deferrals", position
+4b; "The idle plan behind a hold"), [standard-pack-schedule.md](standard-pack-schedule.md)
+("Failure escalation without a daily bound", corrected), [scheduling/README.md](scheduling/README.md)
+(the failure handling's paragraph), [runtime-config.md](runtime-config.md)
+(`scheduling.unavailable_probe`), [runtime-interface.md](runtime-interface.md) (the not-running
+row's entry-block line) and the host's outcome codes with their index are the contract. No
+interface revision moves: `package`, `ledger`, `runtime-client` and `actingd-config` stay.
+
+**The problem** (the work order's, in neutral words). Only a few failures of a scheduled run can
+repeat an identity: the main package's own steps not matching the screen, a refusal of the
+prerequisite chain, the navigation and interrupt failures. Every other failure is rerun only: its
+identity's `F` is unique, so `consecutive_same_error` is 1 every time. That covers device and backend
+errors, the task timeout, recognition errors, the gate and the layers for every class but the
+entry's own, a failure in the restart segment and the environment's interrupts. On main, for such a
+pair: with `retry_limit` 1 or more every failure schedules a retry again, offered as
+`failure_retry_immediate` once its backoff has passed (the backoff never longer than
+`next_run_clamp_ms`; a minute in catalogues in use), whatever the trigger and the cooldown say; with
+`retry_limit` 0, `continue` and no cooldown the pair is a candidate again at the next evaluation
+while its trigger holds; `escalation_threshold` never applies, and `pause` is never reached with
+`retry_limit` 1 or more. Only the counts of its rule and its activity bound it, and the resource
+side is taking the daily counts out of the rules (dispatch follows live state). With a backoff of
+30 s and no daily count, one broken pair is run about 1 700 times in a window of fourteen hours.
+
+**Why the first rerun stays immediate.** The owner's ruling R22 stands: a failed task is rerun at
+once and does not wait for its next occurrence. One failure is weak evidence (a dialog, a slow
+device), and the rerun is what mends it. Only a pair that has just failed again waits.
+
+**Why the set-aside asks for evidence.** While nothing succeeds on the instance the fault is most
+likely the environment's (a network outage, a device), and setting pairs aside for the day then
+would lose the day's work for an outage of minutes; they keep trying at the longest interval
+instead. A pair that fails again and again while other runs succeed on its instance is broken in
+itself, and only then does a failure count against it. Fix round 2 (below, ruling 4) asks the
+evidence to be more than minutes old: only a failure whose wait is the longest interval counts.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *What the settlement knows.* `record_policy_dispatch_outcome_under_gate` (`host/policy_outcome.rs`)
+  holds the policy while it settles: the window's end is `PolicyHost::dispatch_window_end`, read
+  before the record is committed (the dispatch has no record yet; the admission record carries the
+  end since §1.529); the threshold in the dispatch's generation is
+  `PolicyHost::dispatch_escalation_threshold`; a store update task is `PolicyHost::is_store_task`,
+  as ENTRY-A reads both; the scheduled runs that succeeded on the instance are counted by this
+  slice's own memory at the same settlements. No record member, no interface revision.
+- *A deferral reaches no admission and writes nothing.* The deferral is the eligibility closure's
+  answer at position 4b, so the candidate is never an intent. The immediate rerun's withdrawal
+  (`policy_retry_round_ended`) is written only when an admission refuses an intent, so a waiting
+  immediate rerun writes nothing; its round ends at its window's end or its budgets as before. The
+  clock-slot trace classes every host code a queue wait and writes for it only once the pair's
+  window has closed, when this gate no longer holds; the held records (`HELD_CODES`) do not name
+  the codes, as they do not name ENTRY-A's.
+- *The wake.* The deferral names its end as its wake, so the evaluation after a failed run (actingd
+  evaluates again after a cycle in which a run failed) takes the wait's end as its wake, and a
+  cycle with nothing else due wakes then and not before.
+- *Nothing another run needs is held.* The gate holds only the pair's own candidates, never a
+  ladder, a startup package, a client's or the Lab's run, the store update task or another pair.
+- *ENTRY-A is untouched.* Its rules, state and tests are as on main; one private helper,
+  `settled_instance`, is made visible to the host module.
+
+**The rulings, as built.**
+- *1, which settlements count* (`crate::failure_pacing::PacedSettlement::of`). The live settlement
+  of a scheduled run whose record is a failure with no `condition` and a disposition other than
+  `paused_task`. A stop and a condition (configured, or at the entry) leave the pair as it is; the
+  interrupted settlement (`complete_scheduled_policy_interruption`) is marked by its caller
+  (`SettledBy::Interruption`) and leaves it as it is; reconciliations never reach this path. A
+  store update task's runs are neither counted nor held.
+- *2, the memory* (`crate::failure_pacing::FailurePairs`, kept by the host in
+  `host/failure_pairs.rs`, a leaf lock beside ENTRY-A's `entry_blocks`). Per (instance, catalog
+  task): the window's end, the failures in a row, the wait's end, the latest failure's dispatch,
+  code and settlement, the instance's succeeded runs at it, the failures against the pair and
+  whether it is set aside; per instance the scheduled runs that succeeded. Memory only.
+- *3, the count in a row and the wait.* One more in a row when the previous failure was in the same
+  window (the same end), else the first; after the n-th, n ≥ 2, the wait ends
+  `unavailable_probe.interval_ms(n - 1)` after the settlement (shipped one minute, two, four,
+  eight, sixteen, thirty, thirty, …), cut at the window's end where the gate reads it
+  (`FailurePair::wait_end`, one function for the gate and the record).
+- *4, set aside.* A failure after the first counts against the pair when the instance's succeeded
+  runs grew since the pair's previous failure and the record is not `performance_tax_exempt`; at
+  the threshold, with the window known, the pair is set aside to the window's end.
+  - *Amended in fix round 2 (the review's F1 and F2):* the first build counted every failure from
+    the second on, so three or four failures in two or three minutes with any other run succeeding
+    between them (a reading of the screen counts) set a pair aside for the rest of its window, and
+    it wrote a wait's or a set-aside's record, naming an end already past, for a failure settled at
+    or after the end of the window it was admitted in; now a failure counts only when, besides the
+    above, the wait it sets is the longest interval (`sets_longest_wait`: `interval_ms(n)` no
+    longer than `interval_ms(n - 1)`, so `max_interval_ms` from the seventh failure with the shipped
+    values, and from the second when the longest interval is the first, a first interval at the cap
+    or a `factor` of 1), and a failure settled at or after its window's end is stored as the pair's
+    latest and one more in a row but counts nothing against it, sets nothing aside and writes no
+    record.
+- *5, its end.* A success of the pair, a pausing settlement, the window's end (the next failure is
+  a first), a catalogue's activation (`policy_catalog.rs`) and the workbench's changed-package check
+  (`standard_pack_schedule.rs`), each beside ENTRY-A's clearing, a store update task's success (its
+  instance's pairs), a restart.
+- *6, where in the order* (`policy_host.rs`, `evaluate`). In the eligibility closure right after
+  ENTRY-A's `pair_deferral`, and in the idle plan's look ahead right after ENTRY-A's pair, both
+  through the one gate, `FailurePacingGates::deferral`. The look ahead stays the second walk it is
+  (§1.488); this slice adds its position there as ENTRY-A did, and the gate is one function both
+  call.
+- *7, the codes* (beside ENTRY-A's in the host's catalogue, `codes.rs`):
+  `instance_task_failure_waiting` (info), `instance_task_failure_set_aside` (info),
+  `instance_task_failure_set_aside_reported` (warning); and the operation
+  `instance_task_failure_pacing`. The lists that name `instance_entry_task_waiting`: position 4b of
+  the order, the look ahead's paragraph, the policy-suspension and scheduling contracts and the
+  not-running row's line in runtime-interface.md each gain the new codes; `HostCode::ALL` (the
+  clock-slot trace's classes) gains them as it gained ENTRY-A's; `HELD_CODES` and the chain
+  handover's `successor_wait_codes` do not name them, as they do not name ENTRY-A's (a wait that
+  ends by itself is no hold, and a successor that waits here does not go first).
+  - *Amended in fix round 2 (the review's F4 (a) to (c)):* the first build began each entry's
+    description with the slice's reference, so the generated index row said neither the result nor
+    the operation, promised in the handling that mending the package or the game root's data frees
+    the pair at once, and left a store update task's success out of what clears the counts the
+    report names; now each description begins with its result sentence, the handling names exactly
+    what frees a pair before its time (a success of the pair, a pausing settlement, the window's
+    end, an activation, the workbench's check finding a change among the files it compares, a store
+    update task's success, a restart) and says a file the check does not compare frees nothing, and
+    each entry says that a set-aside now means failures through the longest waits.
+- *8, unchanged.* The classification and every member of the execution record; the ledger and its
+  replay; R22's rounds; ENTRY-A; the accumulating failures' pause and its lifting; every budget.
+
+**The owner's ruling on this slice** (11-28, added to the work order after it was given): the
+situation gets a code of its own, the code states the result and the operation that follows. So
+(A) the three codes' catalogue entries say plainly the result (the pair's runs failed `count` times
+in a row; the latest failure's code and time) and the operation (not dispatched before
+`next_eligible_unix_ms`, then tried again, a success clearing the count; not dispatched before
+`window_end_unix_ms`; what a person can do), and the contract carries the table of what follows
+each failure in a row; (B) each failure that sets a wait writes one record of it under the
+instance at its settlement, by the way ENTRY-A's set-aside report is written: a `runtime.failed`
+record handed to the daemon's log. *Decided here:* the record is `instance_task_failure_waiting`
+itself, the code the deferral names (one cause, one code, as `policy_rerun_waiting` is both a
+reason and a record), its category info, which this record type carries (as AVAIL-1's
+`instance_unavailable_probe_passed`); the failure that sets the pair aside writes
+`instance_task_failure_set_aside_reported` in place of the wait's record (a pair set aside waits
+for its window's end, not for an interval); both name the instance by its alias, as the
+candidates' reasons do. The first failure writes none, no evaluation writes either, and no replay
+reads them.
+
+**Tests** (host gate map row "#503 PACE"; no clock read in the gate file).
+
+| Test | What it shows |
+|---|---|
+| `gate_503_pace::pace_p1_the_first_failure_is_rerun_as_on_main_with_a_retry_and_without_one` (1) | `retry_limit` 1: the record `retry_scheduled`, retry one backoff later, offered as `failure_retry_immediate` and dispatched then; `retry_limit` 0: `continue`, dispatched at the next evaluation; neither paced, no record of a wait |
+| `…::pace_p2_from_its_second_failure_in_a_row_the_pair_waits_one_two_four_minutes_to_the_longest_and_never_past_its_window` (2, B) | the 2nd to 8th failures: the wait's code and values, its end 1, 2, 4, 8, 16, 30 and 30 minutes after each settlement, still waiting a millisecond before; one wait record each, with the same values, none at an evaluation; a seeded wait past the window's end cut there; nothing at the end |
+| `…::pace_p3_a_every_way_to_be_a_candidate_waits_and_the_instances_other_task_runs` (3) | the trigger and `failure_retry_immediate` held while the other task is dispatched; a configured condition leaves the pair; an owed rerun (`policy_rerun_owed`) of a waiting pair held |
+| `…::pace_p3_b_the_gate_holds_its_pair_alone_and_names_itself_to_a_fact_refresh` (3) | the gate alone: a fact refresh names the code as its gate with the wait's end; another task and another instance not held; a cut at the window's end; set aside with its values; an unknown window only waits |
+| `…::pace_p4_a_waiting_pair_wakes_the_cycle_at_its_end_writes_no_record_and_names_its_code_in_the_explanation` (4, 12) | the decision's and the evaluation's wake the wait's end; the not-running row names the code; four evaluations write no record of the policy and no `runtime.failed`; dispatched at the end |
+| `…::pace_p5_a_success_of_the_pair_makes_its_next_failure_a_first` (5) | the pair gone after its success; its next failure a first, rerun at once |
+| `…::pace_p6_a_failures_with_another_success_between_them_set_the_pair_aside_and_tell_a_person_once` (6, B; rebuilt in fix round 2) | threshold 2, the other task succeeding before each failure from the second: nothing against it at the second to sixth, one at the seventh (the first whose wait is the longest), two and set aside at the eighth; the second to seventh's wait records; one report in place of the eighth's; `instance_task_failure_set_aside` waking at the window's end; the other task dispatched |
+| `…::pace_p6_b_failures_with_no_success_between_them_never_set_the_pair_aside` (6) | four failures in a row with nothing between: nothing against it, no report |
+| `…::pace_p6_c_an_unknown_window_never_sets_a_pair_aside_and_an_exempt_failure_never_counts_against_it` (6; rebuilt in fix round 2) | the memory alone, nine failures: an unknown window never, though the seventh to ninth count against it; exempt failures never count; each wait after the first said |
+| `…::pace_p7_the_windows_end_ends_the_set_aside_and_the_next_windows_first_failure_is_a_first` (7; its set-aside rebuilt in fix round 2) | set aside at the eighth failure, to a millisecond before the window's end; nothing at the end; the next window's first failure a first |
+| `…::pace_p8_a_an_activation_and_a_restart_clear_every_pair` (8) | an activation clears the pair and the task runs before the old wait's end; a restart has none |
+| `…::pace_p8_b_a_changed_package_frees_the_pairs_at_the_workbenchs_check` (8) | composer mode: an unchanged check leaves a seeded pair, a changed control file frees it |
+| `…::pace_p8_c_p10_a_store_update_tasks_runs_wait_for_nothing_and_its_success_clears_its_instances_pairs` (8, 10) | the memory alone: no pair for a store update task's failures; its success clears its instance's pairs only and is no evidence (fix round 2: the instance's succeeded runs a pair keeps stay none) |
+| `…::pace_p9_a_a_stop_and_a_condition_leave_the_pair_as_it_was_and_a_pausing_settlement_removes_it` (9) | a stop and a configured condition leave the pair; a severe failure (`paused_task`) removes it |
+| `…::pace_p9_b_a_failure_at_the_entry_leaves_the_pair_as_it_was_and_entry_a_counts_it_as_on_main` (9) | a failure at the entry: a condition of the instance, this slice's pair as it was, ENTRY-A's pair and block as on main |
+| `…::pace_p11_the_failures_records_are_mains_and_the_idle_plan_reads_the_wait_and_the_window_as_its_release` (11) | the waiting failures' records equal the first's but for their time and run; behind an instance pause the idle plan counts the task not due with the wait's end, then the window's end, as its release |
+| `…::pace_f1_a_the_second_to_sixth_failures_never_count_against_the_pair_whatever_its_threshold` (fix round 2, F1) | the memory alone, thresholds 2, 3 and 1000: the second to sixth failures, each after another task's success, nothing against the pair, never set aside, each a wait record |
+| `…::pace_f1_b_from_the_first_longest_wait_each_failure_counts_and_the_threshold_sets_it_aside` (fix round 2, F1) | the memory alone, thresholds 2 and 3: the seventh counts once, each later once more; set aside at the eighth or the ninth, said once in place of its wait record; the next writes none |
+| `…::pace_f1_c_a_configuration_whose_longest_interval_is_its_first_counts_from_the_second_failure` (fix round 2, F1) | the memory alone, a first interval at the cap and a `factor` of 1: the second counts and waits the first interval, the third sets the pair aside |
+| `…::pace_f2_a_failure_settled_at_or_after_its_windows_end_writes_no_record_and_sets_nothing_aside` (fix round 2, F2) | the memory alone: a failure settled at the window's end (it would reach the threshold) and one after it (it would set a wait) are the pair's latest, write no record, count nothing, set nothing aside; the next window's first failure a first |
+
+Adapted, the requirement (ruling 3) deliberately delaying the rerun after a second failure in a
+row: `gate_373_nav6::b43_2_a_scheduled_environment_limit_is_rerun_at_once_and_never_pauses_its_pair`
+and `gate_463_int1::int1_two_environment_resets_in_a_row_leave_the_pair_unpaused_and_rerun_at_once`
+evaluate the third run once the second's wait (the shipped one minute) has passed; what they
+assert (no pause, the immediate rerun) is unchanged. No golden re-recorded; no test leaves the gate
+maps. Fix round 2 rebuilt, on its ruling 1, the slice's own tests that reach a set-aside or count
+against a pair (`pace_p6_a` and `pace_p7` through their shared set-aside, now eight failures from
+07:00 to about 08:01:30 in the 06:00 to 23:30 window, and `pace_p6_c`), kept their names, and made
+`pace_p8_c_p10`'s "no evidence" visible in the instance count the pair keeps; it added the four
+`pace_f1_*` and `pace_f2_*` tests.
+
+**What is not changed.** The failure's classification and its execution record, byte for byte; the
+ledger, its event types and its replay (a ledger written while pairs waited is read by any build as
+before; the new records are `runtime.failed` with a new code); R22's rounds and their withdrawal;
+ENTRY-A's rules, state, codes and tests; the accumulating failures' pause and its lifting; every
+budget, window and cooldown; every configuration key; the order of tasks.
+
+**At deploy.** Nothing to configure and nothing to migrate: the pairs live in memory only, a start
+begins with none, and a rollback loses only the waits and set-asides in force. With the shipped
+`scheduling.unavailable_probe` a pair whose runs keep failing waits one minute after its second
+failure in a row, two after its third, then four, eight, sixteen and thirty minutes, never past its
+window's end; with another task succeeding between its failures and the recommended threshold 2 it
+is set aside at its eighth (fix round 2: the seventh is the first that counts, its wait the
+longest), about an hour after its first, and a failure settled after its window's end writes
+nothing. An operator sees three codes: `instance_task_failure_waiting` (a
+candidate's reason while the pair waits, and one `runtime.failed` record at each failure that sets
+a wait), `instance_task_failure_set_aside` (a candidate's reason until the window's end) and
+`instance_task_failure_set_aside_reported` (a warning record, once per pair and window). In the
+release notes' language: 新增：同一个任务在同一台实例上连续失败（不是靠条件结束、也没被暂停的失败）时，第一次失败照旧马上重跑；从第二次连续失败起，每次失败后都要等一段越来越长的时间才再派（出厂值一、二、四、八、十六分钟，之后每次三十分钟，不超过活动窗结束），每次等待在账本里留一条 `instance_task_failure_waiting`；等待已到最长（出厂值从第七次连续失败起）之后，同一窗口里别的任务在这台实例上成功过、它还接着失败，这样的失败次数到它规则的 `escalation_threshold` 就这个窗口里不再派（`instance_task_failure_set_aside`），并告诉人一次（`instance_task_failure_set_aside_reported`），门槛 2 时约在第一次失败后一小时；几分钟的故障不会让任务停一整天。任务本身不暂停，下一个窗口重新计；激活目录、排程工作台查到包变了（放置新包）、商店更新任务成功或重启立刻解除，在原处改一个工作台不比对的文件不解除。活动窗结束后才结算的失败什么也不记。只在内存里，重启就清零，不需要任何配置。
+
+### 1.547 Slice #455 SL2 (0.12.101): a stored goal on a pool that declares `spend_line` is that pool's line: it is accepted, kept and shown, it has no end of its own, and it never weighs what produces the pool (board #455; the owner's rulings of 11-27 and 11-28, the rulings 1 to 7 the coordinator's of 11-28; coordinator work order `rd-1123/brief-455-sl2.md`; on main `cdc3e0b4`, v0.12.99)
+
+This section takes 1.547 (§1.545 and §1.546 are two slices built beside it). It ships in 0.12.101.
+[resource-targets.md](resource-targets.md) (the new "A pool's line"; the v2 table's row of a line;
+"One value by name"; the targetable list of `ResourceTargetView`),
+[scheduling/README.md](scheduling/README.md) ("A pool whose spending a line governs", the new
+"With a line"; "A declared 0"), [scheduling/v2/README.md](scheduling/v2/README.md),
+[standard-pack-goals.md](standard-pack-goals.md) (the row of `goal_pool_unvalued`),
+[standard-pack-goal-tables.md](standard-pack-goal-tables.md) (the row of `table_pool_unvalued`),
+[standard-pack-schedule.md](standard-pack-schedule.md) ("A currency a line governs") and
+[runtime-interface.md](runtime-interface.md) ("Goal request kinds", the set's refusals) are the
+contract; the catalogue's texts of `goal_pool_unvalued`, `table_pool_unvalued` and `pool_unvalued`
+say it too. No interface revision moves, no code, word, setting or record is new, and no wire
+member; `runtime-client` does not move.
+
+**What could not be said before.** Since §1.540 (0.12.97) a pool that declares no valuation may
+declare `spend_line`: a currency whose spending a line governs, whose consumption costs nothing
+while no line is set. There was no way to give such a pool its line: the goal page's set and the
+pool's targetable row required a step and an importance the pool does not give (`pool_unvalued`),
+the stored document's check asked for them (`missing_field` at `/targets/<i>/scale`), the
+evaluation recorded such a target as `valuation_missing` and ignored it, and the Lab's check of
+`goals.json` refused a `resource` entry on the pool (`goal_pool_unvalued`). And there was a hole:
+a target that carried its own `scale` and `importance_milli` on such a pool was taken, and its
+terms then weighed the tasks that produce the pool.
+
+**The owner's rulings behind it, in neutral words** (11-27 and 11-28, board #455). The layer of
+goals never changes the weights of the business layer; a line on a currency saved for something
+needs no date of expiry: what one saves for does not change, and the line stands until a person
+changes it. So a line is not a goal to produce: it never raises the weight of the tasks that earn
+the currency, and it does not lapse.
+
+**The rulings, as built.**
+- *1, the line* (`crates/policy/src/resource_targets.rs`: `line_pool`, the one place it is read,
+  from the catalogue in force; `check_target_v2`; `resolve_target`). A stored target whose pool
+  writes `spend_line` carries `at_least` and nothing else of a target's terms: a `scale`, an
+  `importance_milli` or `tasks` on it is refused at that member, the first in that order, v2 and
+  v3 alike, with `unknown_field`, the nearest reason (a line has no such member); no word is new.
+  A v1 target always writes its own terms and tasks, so one on such a pool is `unknown_field` at
+  its `scale`, before its tasks (decided here: the v1 check had the same hole). `rule` and `apply`
+  are read as on every target. A line needs no producer: `unmapped_task` is not asked of it.
+- *2, where it is accepted.* The host's set: `check_target` reads the targetable row as before;
+  the row (`targetable_resources_with_readings`) names such a pool whatever its producers, its
+  `default_scale` and `default_importance_milli` the pool's `spend_line.scale` and `price_milli`
+  (`listed_terms`, read where `pool_target_terms` is read, never written in a row), so neither is
+  required and the set takes `{at_least}` on the pool's `resource` entry and by its pool id. The
+  view's own `validate` asks that a term without a default be required; giving the line's two
+  numbers keeps every answer valid for a client of today's revision, which a row with neither a
+  default nor a requirement would not be (decided here). The stored document's check: as ruling 1.
+  The pack's goal check: the references' one map (`GoalReferences::pools`, contract crate) holds
+  for each pool a `GoalPool`, `Valued`, `Line` (writes `spend_line`, not valued) or `Unvalued`, in
+  place of a truth value: `goal_pool_unvalued` refuses `Unvalued` and takes `Line`;
+  `table_pool_unvalued` refuses both for an item without a recipe, so no need lands on a line. For
+  a pool that does not write `spend_line` the map's value is the one the truth value was, so
+  neither word changes for it (the Tools' reader, `crates/resource-tooling/src/standard_pack_goals.rs`).
+- *3, it never weighs* (`weighed_target_policies`, the evaluator's one reading of the stored
+  records, in place of `instance_target_policies`, which the view keeps). Each instance-scoped
+  record is read without its lines, by the record's own reader (v1, v2 or v3, after its own
+  checks, a v3 line with its own lifetime), before the needs computed from the records are
+  stacked; a record of lines alone reads as one that holds no target. So `resolve_v2` and
+  `weigh_production` never see a line (no `Γ`, no `resource_targets` item, no override, no
+  inventory expiry), the gate's goal terms (B1) have none to read, the goal's gap behind
+  `gap_remaining`, `goal_runs` and `run_cap` is absent, no run is told turns for it, so the
+  unread-after-run rule of the produced side never names its pool, the two tiers cannot be written
+  on such a pool (§1.542), the stacking adds no need to a line, and a lapsed line names no candidate
+  expired. A task that produces the currency is judged exactly as with no target on the pool; a
+  task that consumes it as in 0.12.99 (`<pool>:-0`). Nothing of the pressing is built. *Where the
+  next slice reads the line*: the records `weighed_target_policies` reads, the targets its filter
+  leaves out; that slice turns the filter into a partition and hands each instance's lines to the
+  consumption loop of `judge` (`crates/policy/src/evaluator/benefit.rs`, where `spend_line_pool`
+  is asked).
+- *4, no end of its own.* Nothing gives a line a date; the set still refuses `by_unix_ms`
+  (`deadline_unsupported`); a document's own validity and a v3 target's own lifetime apply to it as
+  to every row.
+- *5, shown as a goal is shown.* The goal page's entry, by `resource_entry` as before: the
+  `{at_least}`, who set it, the pool's reading (the targetable row's observation, now present
+  without a producer) and the gap from the target's condition, how far the holding is below the
+  line. `ResourceTargetView`'s `active` lists the line as stored. The schedule's not-running rows
+  and candidates are unchanged.
+- *6, what stays byte for byte*: a catalogue without `spend_line` (its targetable rows, every
+  check, every evaluation); a pool with a valuation or `target_defaults` and every target on it; a
+  `spend_line` pool with no stored target; the stored rows' shape.
+
+**The question of a target with its own terms stored before** (the work order's third stop
+condition; it does not hold). No stored record is checked again: the start loads the records as
+they are, and only `ApplyResourceTargets` checks a document. A record that a build of 0.12.97 to
+0.12.100 took with a target with its own two terms on such a pool (no installed root declares
+`spend_line`, so none is known) loads, reads that target as the pool's line, which weighs nothing,
+and shows it; the same document applied again is refused at its `scale`. That is the gentlest
+handling: nothing is refused at the start and the hole is closed in the evaluation too.
+
+**Tests** (incident `#455 SL2`: `crates/policy/src/tests/gate_455_sl2.rs`, policy gate map;
+`crates/runtime-host/src/tests/gate_455_sl2.rs`, host gate map; one test appended to
+`crates/resource-tooling/src/gate_455_gr1.rs`, exec gate map; one to
+`crates/actingcommand-contract/src/standard_pack_goal_tables_tests.rs`, contract gate map; no clock
+read).
+
+| Test | What it shows |
+|---|---|
+| `sl2_host_a_line_is_set_by_at_least_alone_and_shown_as_a_goal_is` (1) | the targetable row of a `spend_line` pool no task produces, whole: no producers, defaults 6000 and 33 333, neither required, its reading; `{at_least: 40}` on its entry and by its pool id `SetTarget`, the row the valued entry's but for id and pool, without `scale`, `importance_milli` or `tasks`; `by_unix_ms` `deadline_unsupported`; 0 and 1001 over a capacity of 1000 `out_of_range` 1..1000 with the pool; the page's entry with its value, who set it, the reading 25 and the gap 15 |
+| `sl2_t2_a_stored_line_carries_at_least_alone_and_needs_no_producer` (2) | with no producer, the line alone taken in v3 and v2, its condition computed; `scale`, `importance_milli`, `tasks` each `unknown_field` at itself, v3 and v2; with a producer, own `scale` and `importance_milli` (taken since SL1) `unknown_field` at `/targets/0/scale`, changed on purpose, and taken on the same catalogue without the member, where the line alone is `missing_field` as on main; a v1 target `unknown_field` at its `scale` |
+| `sl2_t3_a_line_weighs_nothing_and_its_consumers_are_judged_as_before` (3) | a producer (`V` 800), a reserving consumer (`V` 50 000, `run_cap` 4), a lone consumer (`<pool>:-0`), a producer of a valued pool: the line in v3, the line past its own lifetime, the line in v2 and an earlier build's target with its own terms each evaluate equal, whole, to no record; with the records' needs too |
+| `sl2_a_line_s_pool_takes_a_resource_entry_and_no_need_lands_on_it` (4, 5) | the one map: an item without a recipe on a `Line` pool `table_pool_unvalued`, one with a recipe taken; a `resource` entry on it taken, on an `Unvalued` pool `goal_pool_unvalued` |
+| `sl2_a_resource_entry_on_a_pool_that_writes_spend_line_is_accepted` (5) | on G-R1's root, the map built from `schedule.json`: a `resource` entry on the `spend_line` pool no warning; on a pool with neither, or a valuation without a gap weight, `goal_pool_unvalued` as before |
+| `sl2_t6_a_catalogue_without_spend_line_and_its_stored_targets_read_as_on_main` (6) | without the member: the evaluation's reading of the records equals the view's whole, the targetable list is main's whole, and a target with its own terms weighs its producer as on main, `B = 800 + 150 000` |
+| `sl2_t7_a_reader_that_knows_no_line_ignores_it_and_keeps_the_other_goals` (7) | the older reader's condition, the line's pool read as one with neither a valuation nor `target_defaults`: the line weighs nothing, `unresolved why=valuation_missing gap_weight=0` on its producer, `no_producing_task` on every candidate without one, the other goal applied |
+| `sl2_host_an_older_page_refuses_to_set_a_line_and_clears_a_stored_one` (7) | fed an older build's row (none without a producer, both required with one): the set `pool_not_targetable` or `pool_unvalued`; the clear of a stored line `ClearTarget` |
+
+Test 8, the existing tests touched, each because ruling 2 moves what it pins:
+`gate_455_sl1::sl1_host_a_pool_whose_spending_a_line_governs_takes_no_goal_by_at_least` (host)
+is adapted and renamed `…_takes_its_line_by_at_least`, its former name retired in
+`ci/retired-gates.toml`; the contract crate's `standard_pack_goals` tests
+`goals_neutral_example_reads_to_typed_entries` and `goals_each_type_reads_its_members` and
+`standard_pack_goal_tables`' `references` helper take the map's new value type (`Valued` for
+`true`, `Unvalued` for `false`). No other test pins a targetable row or a goal check's verdict on a
+`spend_line` pool; no golden is re-recorded. Test 9, not verified by reading alone: that the four
+whole-evaluation equalities of test 3 hold (nothing else of the evaluation reads the record; the
+decision identity hashes the snapshot id, not the facts), and the arithmetic of test 6's
+`150 800`; CI is the first build.
+
+**What is not changed.** Every reader of a consumption, the pressing (none), the catalogue and its
+hash, the stored rows' shape, `EditGoal`'s and `ApplyResourceTargets`' wire, `ResourceTargetView`'s
+shape and validation, every interface revision, record, code, word and setting; the view's and the
+page's reading of a stored record (lines shown as stored). No game, package, pool or alias is
+named in code.
+
+**At deploy.** Nothing to configure. No installed package declares `spend_line` yet, so nothing
+changes until a resource root does and a person sets a line. In the release notes' language:
+写了 `spend_line` 的池子现在可以设一条线：在目标页上对它的条目填 `{at_least}`（或按池子 id 设），不用填步长和重要度、也不要求有任务产出它；目标页像别的资源目标一样显示这条线、当前读数和差多少。线没有自己的到期时间，也从不给产出这种货币的任务加权；消耗它的任务照旧按上一版判（这份消耗记 0），按线压低花费在后面一版。旧版接受过的、在这种池子上自带步长和重要度的目标，新版照常读入、当成这条线、不再加权；再次提交同一份文档会在 `scale` 处被拒。
+
+**Rollback.** A build before this one (0.12.97 to 0.12.100; below 0.12.97 the installer refuses
+the rollback while a root requires `pool_spend_line`, §1.540) with a stored record that holds a
+line: the start loads the record (no check of a stored record, nothing fatal); the first
+evaluation reads the line as a target on a pool with neither a valuation nor `target_defaults`: it
+weighs nothing, says `<id>@<pool>:unresolved why=valuation_missing gap_weight=0` in the
+`resource_targets` reason of each task that produces the pool, and, when no task of the instance
+produces it, `resource_target_tasks_unevaluable` `<id>@<pool>:no_producing_task` on every
+candidate of the instance, a record a person sees; the instance's other targets still apply. Its
+goal page lists the entry with its `{at_least}` and the gap, the reading only while a task produces
+the pool (else the pool is not targetable there); a set on it is refused `pool_unvalued` (with a
+producer) or `pool_not_targetable` (without), and a clear is taken. Before going back a person
+clears the lines (`EditGoal` `clear` of each line's entry or name), so nothing is shown that the
+older build cannot set again.
+
+### 1.548 Slice #455 RR3d (0.12.101): what leaves a pool unread after a run is judged over all the dispatches since its reading, not the latest one alone; and a run that failed at its entry leaves nothing unread (board #455; the rulings 1 to 6 are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr3d.md` after the read-only study `rd-1123/study-rr3c-gaps-1128.md`; on main `cdc3e0b4`, v0.12.99; §1.545 to §1.547 are #503 PACE's, #455 RR4a's and #455 SL2's, slices of the same days)
+
+This section takes 1.548. It ships in 0.12.101. [scheduling/README.md](scheduling/README.md) ("Pool
+lines", the bullet "At each evaluation": LF-1's paragraph gains the failure at the entry, its
+stated limits stay; RR3c's paragraph is rewritten as the sum, with its limits; "Needs computed from
+the records", "Known limits"), [resource-targets.md](resource-targets.md) ("Resource weights
+(v2)", "A pool a run was told enough to close the gap on", a new paragraph; "Needs computed from
+the records", "A holding a run left unread"), [remedies.md](remedies.md) (section 4, the row
+`gap_remaining`) and [standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("Taking apart,
+once") are the contract; the policy fragment's description of `goal_records_holding_unknown` says
+the sum (the index regenerated; it is unchanged). No `package`, `ledger`, `runtime-client` or
+`actingd-config` revision moves, no declared interface range, no configuration key, no code or
+word, no record, event, wire member or catalog member.
+
+**The problem** (the study's claims 1 and 2, confirmed by reading `cdc3e0b4`; neutral numbers).
+Two rules keep the evaluation from believing a reading a run made stale: LF-1's (§1.509) for the
+pools a run consumes, RR3c's (§1.543) for the pool it produced for a goal. Both are judged from the
+list of handed runs the host gives (`PolicyHost::handed_runs`, `HandedRuns`), and the list had
+three weaknesses.
+- *It did not look at how a run ended.* A run handed `run_cap` 3 and `gap_remaining` 2 whose entry
+  failed (its main package executed no step: the mark ENTRY-A writes into the failure identity,
+  §1.494) consumed and produced nothing, yet both its pools were unread: every judged consumer of
+  the consumed pool held `pool_line_held` `capped_cap_unknown` (`fact_stale`), the goal on the
+  produced pool pending with `Γ` 0, until some reading came; for a pool read from rows of a list
+  that is the list's own next run.
+- *Each dispatch was judged alone.* A stock gap of 150 at three turns of one unit a run: each
+  dispatch 3·1000 < 150·1000, so on one reading (a list reading may be valid for many hours) the
+  producer was sent again and again, each told 150 and 3, after the gap was in fact closed at the
+  fiftieth. With RR3b's two tiers (§1.542) that is a rule of a negative value of its own, lifted by a
+  need, that keeps spending after the need is met.
+- *Only a pair's latest dispatch was kept.* A dispatch told 2 of a gap of 2 at 2 turns closed it; a
+  later dispatch of the same pair that carried no gap for the pool (its goal pending, or told only
+  for another pool) took its place, and the pool was believed again on the reading the first run
+  made stale (the mirror of LF-1's stated limit for the consumed side).
+
+**The rulings, as built.**
+- *1, a run that failed at its entry leaves nothing unread* (`crates/runtime-host/src/policy_host.rs`,
+  `handed_runs_of` and `settled_at_entry`). A dispatch whose execution record, completed at or
+  before the inputs' ledger position, is a failure its settlement settled as one at its run's entry
+  is passed over, before a pair's latest is chosen and in the sum of ruling 2; the pair's previous
+  admitted dispatch then stands and is judged by the same rules. The record is read as ENTRY-A's
+  replay reads it, by `crate::policy_control::entry_blocked` (a condition whose failure identity's
+  frame is the entry mark `i…`); no other reader of the mark is written. Every other end leaves its
+  pools unread as before: a success, any other failure (one at the entry of another class, and one
+  a start's reconciliation settled, which carries no identity, included), a stop, an interrupted
+  settlement. A failure at the entry recorded after the inputs' position is a run that has not ended
+  there.
+- *2, the production told under a pool's gap adds up since the pool's reading*
+  (`crates/policy/src/evaluator.rs`, `HandedRuns::produced_unshown`, `ToldRun::gap_on`). For a pool
+  whose current reading was observed at `t`: of the noted dispatches whose run has not ended or
+  ended after `t` and that were told a gap of at least 1 for an entry of their task's `produces` on
+  the pool in the catalogue in force, in the order of their admission, the pool is unread when for
+  one of them the sum over it and those before it of `n·y` reaches `g·1000`, `g` the gap that
+  dispatch was itself told (the least where it was told several on the pool), `n` its turns (its
+  `run_cap`, 1 without one), `y` its task's production of the pool per run in thousandths
+  (`production_milli`; 0 is passed over). Checked arithmetic, an overflow counting as reached. With
+  one dispatch this is RR3c's `closes`, byte for byte: the least gap against one product is RR3c's
+  `any` over the records.
+- *3, a later dispatch erases nothing* (`HandedRuns`, `HandedRuns::note_dispatch`, signature
+  unchanged). The list keeps, beside each pair's latest noted dispatch that carried a `run_cap`
+  (`capped`, which LF-1's `consumed_unshown` reads as before), every noted dispatch that carried
+  `gaps_remaining` (`told`, in the order noted). The host notes every admitted dispatch it holds at
+  the position, in admission order (`admission_order`), so each noting is its pair's latest so far:
+  one with a `run_cap` becomes the pair's capped run and one without takes its place, LF-1's rule
+  and its stated limit unchanged.
+- *4, where it lives.* Memory only, filled from the resident journal at the same position as before:
+  the evaluated cycle reads it once, under the gates the inputs are projected under, and gives it to
+  the needs and the evaluation; an admission's recomputation of the needs reads it at the position
+  of its own inputs; no replay is given it (only these two paths and a test call
+  `PolicyHost::handed_runs`). It reads no clock and enters no snapshot and no decision identity but
+  through what `produced_unread` already enters (the needs' note). Bounded by what the journal keeps
+  of a pair: its latest `REMEDY_JOURNAL_MAX_RUNS` (64) admitted dispatches, beyond which an older
+  dispatch is not counted. Cost, by reading (nothing was measured): each evaluation walks the
+  journal's admitted dispatches once (at most 64 a pair, a few more where a late settlement or a
+  stop keeps one) with one sort and reads each one's recorded reasons once (before: only each
+  pair's latest); the list holds, for each dispatch that carried a gap, its task id, its end, its
+  turns and its gaps; for each pool read from a fact or from a list, one pass over the catalogue's
+  tasks for its producers and one over the list. The list is moved into the left-out facts, never
+  cloned in production.
+- *5, unchanged*: the span (a reading observed at or after a run's end ends its part), the three
+  readers of `produced_unread`, the turns a run is told (`goal_runs`, `run_cap`, `gap_remaining`:
+  RR3b's ruling 4), the matching of a task id across instances (§1.543 ruling 6), every record and
+  every code.
+- *6, not this slice*: a pool left unread asking for its reading (the study's R3), the told gap's
+  two parts (its R4).
+
+**Why only the failure at the entry is passed over.** It is the one end whose record proves that the
+run's main package executed no step (ENTRY-A's own definition, `policy-suspension.md`, "Which
+failures": its entry checked, no main package started), so it consumed and produced nothing and
+the readings are as true as before. A plain failure, a stop and an interrupted settlement may each
+have done some turns, and nothing the host holds counts them: the task terminal's step count and
+its designated-effect tallies are another ledger record the journal does not hold, and the tallies
+exist only on a success. So they keep the protections the two rules give: LF-1's hard line (a run
+that did 2 of its 3 turns and then failed spends as truly as one that succeeded) and RR3c's guard
+against a need-lifted rule overshooting.
+
+**A worked example** (the tests' numbers). One unit a run, a gap of 6 read once: a dispatch told 3
+turns leaves the pool read (3 < 6); a second told 3 since the same reading leaves it unread (6 ≥ 6);
+a reading observed at the first run's end counts only the second (read). A stock of 150 at three
+turns a dispatch is read through the 49th dispatch (147) and unread at the 50th. A pair's dispatch
+told 2 of 2 at 2 turns, then one of the same pair with no gap for the pool: unread until a reading
+after the first run's end. Three dispatches of 3 turns of a gap of 7, the second failed at its
+entry: 6 < 7, read. Through the host, a run producing 1000 handed `gap_remaining` 1600: read after
+it, unread after a second one ten minutes later on the same list reading, and the same after a
+start.
+
+**Where it is built.**
+
+| Part | Where |
+|---|---|
+| The list and its judgement | `crates/policy/src/evaluator.rs` (`HandedRuns` with `capped` and `told`, `ToldRun::gap_on`, `HandedRuns::note_dispatch`, `consumed_unshown`, `produced_unshown`; `HandedRun`, `HandedRun::closes` and `HandedRuns::misses` are gone) |
+| The host's noting | `crates/runtime-host/src/policy_host.rs` (`PolicyHost::handed_runs` calls `handed_runs_of`; `settled_at_entry`; the test seam `synthetic_handed_runs_for_test`) |
+| Doc comments and contracts saying the sum | `crates/policy/src/record_needs.rs`, `crates/policy/src/resource_targets.rs`, `crates/runtime-host/src/goal_needs.rs`, `crates/runtime-host/src/host/policy_dispatch.rs`; the policy fragment's description of `goal_records_holding_unknown` |
+
+**Decided here.** The failure at the entry is read by ENTRY-A's existing reader of the record, the
+condition and the mark together, rather than by the mark alone: every record this build writes with
+the mark carries its condition, so the two agree, and one function decides it. Where a dispatch was
+told two gaps on one pool (two entries of its `produces` there) its least counts, which for one
+dispatch is RR3c's rule. The study's overflow test is not built: no part can overflow alone (at
+most 2^64 turns times 2^53 units a run in thousandths stays inside 128 bits), and the sum can pass
+128 bits only after a part far above any gap a dispatch can be told (at most 2^63 times 1000), which
+already reaches it; the arithmetic stays checked.
+
+**Tests** (incident `#455 RR3d`: `crates/policy/src/tests/gate_455_rr3d.rs`, policy gate map, and
+`crates/runtime-host/src/tests/gate_455_rr3d.rs`, host gate map; no clock read).
+
+| Test | What it shows |
+|---|---|
+| `rr3d_t1_two_dispatches_short_of_the_gap_close_it_together` (2) | 6 told 3 and 3: read, unread; 7 told 3, 3, 1: read, read, unread; each against its own gap: 4 told 3 then 2 told 1 (unread), 4 told 3, 8 told 4 (read), 8 told 1 (unread) |
+| `rr3d_t2_a_reading_after_a_runs_end_counts_only_the_dispatches_after_it` (2) | 6 told 3 by an ended run and 3 by a running one: unread with a reading before both or during the first, read with one at the first run's end or after |
+| `rr3d_t3_a_later_dispatch_told_no_gap_there_does_not_take_the_place_of_one_that_closed_it` (3) | a closing dispatch, then one of the pair with its `run_cap` alone, with no member, or with a gap on another pool only: unread on the old reading, read on one at the first run's end; the other pool's gap counts there |
+| `rr3d_t4_two_tasks_told_three_each_of_a_gap_of_six_close_it_together` (2) | two tasks, either order: read after the first, unread after the second |
+| `rr3d_t5_a_stock_of_150_at_three_a_dispatch_is_unread_at_the_fiftieth` (2) | fifty dispatches told 150 and 3: read through the 49th, unread at the 50th |
+| `rr3d_h1_a_run_that_failed_at_its_entry_is_passed_over_and_every_other_end_is_noted` (1, host) | a pair's earlier dispatch and its later one ending as each case says: at the entry the list is the earlier one's alone; a success, a failure after the main package started, one at the entry its settlement did not mark, one a reconciliation settled, an interrupted settlement, a stop and a run still going are noted after it; a failure at the entry recorded after the position is noted running |
+| `rr3d_h2_a_dispatch_that_failed_at_its_entry_between_two_that_count_adds_nothing` (1, 2, host) | three dispatches told 3 of 7, the second failed at its entry: the list of the first and the third |
+| `rr3d_h3_the_list_holds_what_the_journal_keeps_of_a_pair` (4, host) | 65 dispatches told one turn of 65: the list of the latest 64 |
+| `rr3d_h4_a_capped_run_that_failed_at_its_entry_leaves_its_consumed_pool_read` (1, host) | through admission and settlement, a run handed `run_cap` 3: failed at its entry (its record a condition with the mark), the next evaluation reads the pool (no `fact_stale`, no `trigger_unknown`, no reserve hold for want of a reading); failed after its main package started, it reads it unknown |
+| `rr3d_h5_a_run_that_failed_at_its_entry_leaves_the_pool_it_was_told_to_close_read` (1, host) | a run handed `gap_remaining` 1600 producing 2000: failed at its entry, the pool read and the goal applied (gap 1600); failed after its main package started, unread |
+| `rr3d_h6_two_runs_short_of_the_gap_leave_the_pool_unread_across_a_start` (2, host) | two runs handed 1600 producing 1000, ten minutes apart on one list reading: read after the first, unread after the second (no intent), the same at two evaluations after a start that rebuilds the journal from the ledger; a list read after their end releases the pool |
+
+The byte-for-byte case: every existing gate passes as it is, none edited, renamed or retired, no
+golden re-recorded: RR3c's `rr3c_t1` to `rr3c_t8`, `rr3c_p1` and `rr3c_h1`, LF-1's `lf1_t1` to
+`lf1_t14` and `lf1_h1` note one dispatch of a pair (each table row of `rr3c_t1` and `rr3c_t2` on a
+list of its own), where the new rule is the old one; `p2_t2`, ENTRY-A's gates (`gate_490_entry_a`:
+their catalogues hand no `run_cap` and no `gap_remaining`, so the list is empty with or without
+ruling 1) and `rr3b_t5` give the list nothing new. What reading could not settle (no compiler, no
+test run here): that each fixture compiles and the catalogues of the policy gate are admitted as
+written (two pools without a valuation writing `target_defaults` and `goal_tiers`, as RR3c's);
+that in h4 a run failing after its main package started is rerun at once (R22, its `F` unique), so
+the next evaluation reads the pool unknown at its reserve gate rather than at its trigger (the test
+accepts either, both readings of the pool); in h5 the same, the goal pending rather than the trigger
+undecided; that the settlement hook's failure at the entry blocks the instance without a fatal
+error on catalog-a's fixture, as on ENTRY-A's budget fixture; and that in h6 the second dispatch is
+due ten minutes after the first, past catalog-a's activity interval, and told the same gap.
+
+**What is not changed.** Every decision of a catalogue in which no pair has two dispatches told a
+gap since a reading and no run failed at its entry: the list's judgement is the old one there;
+`goal_runs`, `run_cap` and `gap_remaining`; LF-1's rule and its limits; the span and the three
+readers; the goal page, `ResourceTargetView` and the receipts of `ApplyResourceTargets`; every
+stored record, request and ledger member, every declared interface range; the fact refresh, which
+still asks for an unread pool only where a trigger or a regenerating pool's cost term reads it.
+
+**At deploy.** Nothing to configure and nothing to migrate: the list is memory only, rebuilt at each
+evaluation from the journal the start rebuilds from the ledger. **Rollback.** An older build meets
+nothing kept on disk: it judges each pair's latest dispatch alone and notes a run that failed at its
+entry as any other. In the release notes' language:
+为目标缺口派出去的几趟，单趟补不上、加起来够了，也算把产出的那个池子的读数用旧了：从这次读数起，按准入先后把每趟被告知的趟数乘每趟产出累加，够到它被告知的缺口，那个池子就算没读过（`fact_stale`），直到这些趟结束之后再读到一次；同一个任务在同一台实例上后来派的、没带这个池子缺口的那一趟，不再把前面那趟抹掉。在入口就失败的一趟（主包一步没走）什么也不算：它消耗的池子和产出的池子都照旧信读数。没有要配置的东西。
+
+### 1.551 Slice #503 TRIAL (0.12.101): the standard-pack trial no longer asks for an acknowledgement before it runs a package the irreversible mark flags (board #503; the owner's ruling of 11-28, in neutral words below; the rulings 1 to 4 are the coordinator's on it; coordinator work order `rd-1123/brief-503-trial.md`; on main `cdc3e0b4`, v0.12.99)
+
+This section takes 1.551: §1.545 to §1.550 are slices built at the same time.
+[standard-pack-trial.md](standard-pack-trial.md) (the opening, "The operation", "The irreversible
+mark", "The plan", "The record", "The run", "The end", "Outcome codes"), the row `standard-pack
+trial` of [lab-operations.json](lab-operations.json) and the resource tooling's fragment of the
+outcome catalog are the contract; [standard-pack-goals.md](standard-pack-goals.md) follows it in
+one sentence (what stays of the mark).
+
+**What was left on 11-21, and why.** The owner's rulings of 11-21 removed the locks on a package
+marked as able to do something that cannot be undone. They were built as two slices: G-R2x
+(§1.499) removed the scheduler's line, G-SLx (§1.501) the goal and variable locks. §1.501 kept one
+refusal on purpose, as none of the two locks the question had named: `actinglab standard-pack
+trial` refused the run of a package the irreversible mark flags (`marked`, judged over `--root`)
+unless `--irreversible` was given (`trial_irreversible_unacknowledged`, §1.418). The mark counts a
+package its root does not register as `marked`, so every new package not yet in a bundle index was
+refused once before its first trial over its root.
+
+**The owner's ruling of 11-28**, in neutral words: that refusal goes too. A person who edits and
+tries packages should not meet a detour that protects nothing; a trial on a real application is
+already sent only under the owner's authorization (`--authorization`), which stays.
+
+**The rulings, as built.**
+- *1, the refusal and the flag* (`crates/resource-tooling/src/standard_pack_trial.rs`,
+  `check_trial_run`; `apps/actinglab/src/standard_pack_cli.rs`). The run refuses only a missing
+  authorization (`trial_authorization_missing`). `--irreversible` leaves every place it had:
+  `StandardPackTrialRequest::irreversible`, actinglab's `TRIAL_FLAGS` and `TRIAL_SWITCHES`, the
+  usage (`trial_options`), the request, the `next.collect` line, the operation table's row and so
+  the MCP tool's parameter, and the contract. The plan keeps `irreversible` and
+  `irreversible_basis`, information, and drops `irreversible_acknowledged`.
+  `trial_irreversible_unacknowledged` is retired as the catalog retires a code, as
+  `trial_variables_not_carried` (§1.444) and `resource_target_package_irreversible` (§1.499) were:
+  its fragment entry stays with `status` `retired` and `retired_in` `0.12.101`, its description
+  beginning "Retired" and keeping what it was, its `common_causes` and `handling` saying it is no
+  longer emitted; its variant leaves the resource tooling's registry for a comment naming the
+  release (G1 refuses a retired code in a registry); the index is regenerated and checked
+  (`ci/outcome_codes_index.py --check`: "is current"). It was `pending`, so no earlier release file
+  binds it; the release file of 0.12.101, which the release pull request writes with
+  `ci/outcome_release.py` (a release file is never overwritten, so a slice writes none), will hold
+  its retired signature, as `released/0.12.68.json` holds the first precedent's.
+- *2, the record* (`TrialRecordPlan`). It keeps its member `irreversible_acknowledged`, required;
+  the one conversion from a plan writes it `false`, and its doc says that no acknowledgement exists
+  since 0.12.101. So the record keeps the shape of `actingcommand.pack-trial.v1`: a record of an
+  earlier build, `true` where its `--irreversible` was given, decodes here as written, and a record
+  of this build decodes in an earlier build, whose reader denies unknown members and requires this
+  one, both of which the record meets.
+- *3, nothing else changes.* The study's list of what still behaves differently for an
+  irreversible package or operation was checked again by searching the workspace's code and
+  contracts: the mark is still judged over `--root` and shown, the last non-test reader of
+  `IrreversiblePackages::counts_irreversible` and `irreversible_capabilities`; the remedy rule that
+  an irreversible capability declares a parameter, the `package` revision 23 edge, the withdrawn
+  catalog member `irreversible_reach`, the Lab operations marked `irreversible` (which record who
+  started them and ask nothing), the displays of the mark and the words kept registered are
+  untouched. Nothing else in the tree refuses, or asks for an acknowledgement, because a package is
+  marked.
+- *4, a flag no longer taken is refused loudly.* A line or a script that still gives
+  `--irreversible` is `validation_failed` with `argument` `--irreversible` and `argument_problem`
+  `unknown`, as every flag the row does not take, before anything is read, sent or written; the
+  MCP tool `ac_standard_pack_trial`, whose schema is the row's, has no `irreversible` and takes no
+  other property (`additionalProperties` `false`).
+
+**Interfaces.** No revision moves: no `package`, `ledger`, `runtime-client`, `actingd-config`,
+`runtime-outcomes` or `install-cli` shape changes; the row is the authoring module's, which no
+interface revision covers. One code is retired and none is added; no key, word or setting.
+
+**Tests** (exec gate map row "#503 TRIAL"; no clock read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| resource tooling `gate_463_s311::trial_a_record_keeps_its_shape_and_an_earlier_acknowledged_record_still_reads` (2) | the record's plan of a marked package's run holds every member of the `v1` plan, `irreversible` `marked`, its basis and `irreversible_acknowledged` `false`; a record an earlier build wrote with it `true`, its bytes at its place, is read as written beside one this build's writer wrote; the content's summary is `passed`, passed on record, its latest record this build's |
+| actinglab `gate_463_s311::trial_a_marked_package_is_sent_and_recorded_under_its_authorization_alone` (1, 3) | over a root that does not register the package, a line with `--authorization` and no other flag sends status, the run once and the five event reads of any trial's run, exit 0; the plan `marked` with its basis and no `irreversible_acknowledged`, the record `marked` with its basis and `irreversible_acknowledged` `false`; the catalog holds the code retired in 0.12.101 |
+
+Adapted, the requirement changing what they pin: the resource tooling's
+`gate_463_s311::s311_the_runs_own_refusals_come_after_the_plan_in_their_order` (a marked package
+without an authorization is `trial_authorization_missing`; with one it passes, its record's plan
+`marked`, with its basis and `irreversible_acknowledged` `false`) and
+`gate_463_s310::s310_the_irreversible_mark_is_judged_only_over_a_root` (the plan shows the mark
+and holds no acknowledgement member); actinglab's
+`gate_463_s311::s311_each_run_only_refusal_sends_nothing_and_writes_nothing` (the marked line with
+an authorization is no refusal; `--irreversible` is `unknown`, 4). Touched because the plan and the
+request lost a member, nothing they assert changing otherwise:
+`gate_463_s310::s310_the_plan_of_a_package_with_two_endings_lists_three_keys` loses its one pin of
+the plan's `irreversible_acknowledged`; the request helpers of `gate_463_s310` and
+`gate_463_s311`, `gate_463_s312`'s `trial_request` and the two request literals of
+`gate_463_s314`'s fixture lose `irreversible: false`. No golden changes; no test leaves a gate
+map. The rows of S3-10 and S3-11 say what was adapted.
+
+**What is not changed.** The mark: judged over `--root` by the same functions, `not_judged`
+without one, shown in the plan and kept in the record with its basis; the record's shape, its
+schema version, its writer and its reader; `trial_authorization_missing`, the plan's refusals and
+their order; adoption's review and the status row, which read only `passed` and `trial_summary`;
+every other code. No Runtime component, ledger record or configuration key is involved: the trial
+is the Lab's, and its run is `run start`'s request. `distribution/windows/RELEASE-NOTES.md` still
+names the code in the notes of 0.12.65, as released, and §1.417, §1.418 and §1.501 stay as
+written.
+
+**At deploy.** Nothing to migrate or configure. The records on disk read as before; the first
+trial of a marked package over its root is sent under its authorization. In the release notes'
+language: 改动：`actinglab standard-pack trial` 试跑带「不可逆」标记的包时不再要求 `--irreversible`
+确认，有授权（`--authorization`）就直接发出；这个开关和 `ac_standard_pack_trial` 的 `irreversible`
+参数都去掉了，还写着它的命令会作为不认识的参数被拒（`validation_failed`）。码
+`trial_irreversible_unacknowledged` 停用。计划里照旧显示这个标记和它的依据，试跑记录的格式不变。
+
+**Rollback.** A build before this one refuses a marked package's run without `--irreversible`
+again, by its own rule, and its line takes the flag again; it reads this build's records (the same
+members, `irreversible_acknowledged` `false`), so its adoption review and its status row read them
+as their own.
+
 ### 1.550 Slice #503 FIXV (0.12.101): a task's fixed value may be 0 or negative and may stand beside productions into priced pools; with a fixed value the base value is that value alone, and the productions feed only the goal layer (board #503; the owner's direction of 11-28, the rulings the coordinator's of the same day; coordinator work order `rd-1123/brief-503-fixv.md` after its read-only study of the same day; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546, a slice of the same days, before this one)
 
 This section takes 1.550. It ships in 0.12.101. [scheduling/README.md](scheduling/README.md) ("Net

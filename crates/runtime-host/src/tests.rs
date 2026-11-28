@@ -305,6 +305,10 @@ mod gate_503_cyc3;
 // #503 GOAL-1 (0.12.88; register §1.531): on a game with two instances a goal names its pool as
 // the game root's files write it, and no value of a request stops the Runtime.
 mod gate_503_goal1;
+// #503 PACE (0.12.100; register §1.545): a pair whose scheduled runs keep failing waits a growing
+// interval between its dispatches from its second failure in a row on, and is set aside for its
+// window when it keeps failing while its instance lets other runs succeed.
+mod gate_503_pace;
 
 // #477 CK-2 (0.12.81; register §1.516): the task snapshot names the dispatch that served a clock
 // occurrence when the latest one never ran or its failure paused the pair.
@@ -322,6 +326,14 @@ mod gate_455_rr3c;
 // #455 RR4a (0.12.100; register §1.546): a tables file that writes the names a person reads gives
 // the needs of the same file without them, its sha256 aside.
 mod gate_455_rr4a;
+// #455 RR3d (0.12.101; register §1.548): the host notes every admitted dispatch in the order of
+// their admission, a run that failed at its entry passed over, so the production told under a
+// pool's gap adds up since its reading; a start rebuilds the same from the ledger.
+mod gate_455_rr3d;
+
+// #455 SL2 (0.12.101; register §1.547): the goal page sets a pool's line by `{at_least}` alone on
+// a pool that writes `spend_line` and shows it as any goal; an older page refuses it and clears it.
+mod gate_455_sl2;
 // SS-2d (0.12.35, register §1.235): a decision within its rounding error is neither due nor a
 // wake of the idle plan.
 mod gate_ss2d;

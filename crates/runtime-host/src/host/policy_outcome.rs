@@ -5,6 +5,7 @@ use super::*;
 use crate::codes::HostCode;
 use crate::codes::HostLocation;
 use crate::failure_identity::identifier_text;
+use crate::failure_pacing::PacingRule;
 use crate::policy_control::{ConditionDecision, ConditionRule, PolicyValueRecord};
 use actingcommand_contract::codes::SharedCode;
 use actingcommand_contract::outcome::{CauseRelation, Code, CodeStr, Location, Outcome};
@@ -15,6 +16,15 @@ pub(super) enum PolicyOutcomeCacheUpdate<'a> {
     Retain,
     Commit(Option<&'a AuthoritativeSchedulingOutcome>),
     Clear(&'a PolicyRunContext),
+}
+
+/// #503 PACE (register §1.545, ruling 1): which live settlement a scheduled run's record comes
+/// from: its run's own, which its pair's pacing reads, or the interrupted settlement of a run the
+/// Runtime's stop refused, which leaves the pair as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettledBy {
+    Run,
+    Interruption,
 }
 
 impl HostShared {
@@ -1307,6 +1317,7 @@ impl HostShared {
                     .map(SchedulingOutcomeProjection::scheduling_result),
             ),
             None,
+            SettledBy::Run,
         )?;
         // Workflow #336 L6: the run's resolution is no longer needed once it is recorded.
         self.forget_scheduled_resolution(context.decision_id())?;
@@ -1590,6 +1601,7 @@ impl HostShared {
             Some(context),
             PolicyOutcomeCacheUpdate::Clear(context),
             failed.entry,
+            SettledBy::Run,
         )?;
         self.forget_scheduled_resolution(context.decision_id())?;
         Ok(execution)
@@ -1621,6 +1633,7 @@ impl HostShared {
             Some(context),
             PolicyOutcomeCacheUpdate::Clear(context),
             None,
+            SettledBy::Interruption,
         )?;
         self.forget_scheduled_resolution(context.decision_id())?;
         Ok(execution)
@@ -2041,6 +2054,7 @@ impl HostShared {
             context,
             cache_update,
             None,
+            SettledBy::Run,
         )
     }
 
@@ -2048,7 +2062,8 @@ impl HostShared {
     /// ([`super::failure_settlement::ScheduledFailure`]): one that failed at its entry, whose failure
     /// the instance's recovery ladder takes, with what its start knew of its instance and the end
     /// of its admission's activity window, or one whose main package started; every other
-    /// settlement passes `None`.
+    /// settlement passes `None`. #503 PACE: `settled_by` says whether the record is the run's own
+    /// settlement, which its pair's pacing reads, or an interrupted one, which leaves it as it is.
     fn record_policy_dispatch_outcome_under_gate(
         &self,
         decision_id: &str,
@@ -2056,6 +2071,7 @@ impl HostShared {
         context: Option<&PolicyRunContext>,
         cache_update: PolicyOutcomeCacheUpdate<'_>,
         entry: Option<EntrySettlement>,
+        settled_by: SettledBy,
     ) -> RuntimeHostResult<PolicyExecutionEventData> {
         let result: RuntimeHostResult<PolicyExecutionEventData> = (|| {
             if let Some(context) = context
@@ -2211,6 +2227,15 @@ impl HostShared {
                 ConditionDecision::Condition(condition) => Some(condition),
                 ConditionDecision::Ordinary | ConditionDecision::Exhausted { .. } => None,
             };
+            // #503 PACE (register §1.545, ruling 2): the end of the activity window the run's
+            // admission was committed in, its pair's window, read before the record is committed
+            // (the dispatch then has its record, and none is read); only a failure needs it.
+            let pacing_window_end = match input {
+                PolicyExecutionInput::Failed { .. } => {
+                    policy.dispatch_window_end(decision_id)?.unwrap_or_default()
+                }
+                PolicyExecutionInput::Succeeded | PolicyExecutionInput::Stopped { .. } => 0,
+            };
             let (data, recorded_now) = match policy.prepare_execution(
                 decision_id,
                 observed_at_unix_ms,
@@ -2301,6 +2326,22 @@ impl HostShared {
                 },
                 store_task: policy.is_store_task(&data.task_id),
             };
+            // #503 PACE (register §1.545, rulings 1 and 4): what the policy knows of the run's
+            // dispatch and task, which its pair's pacing reads: the window above, its rule's
+            // `escalation_threshold` in the dispatch's catalog generation (only for a failure no
+            // condition settled) and whether it is a store update package's task.
+            let pacing_rule = PacingRule {
+                window_end: pacing_window_end,
+                threshold: match &data.outcome {
+                    PolicyExecutionOutcome::Failed { failure } if failure.condition.is_none() => {
+                        policy.dispatch_escalation_threshold(decision_id)?
+                    }
+                    PolicyExecutionOutcome::Failed { .. }
+                    | PolicyExecutionOutcome::Succeeded { .. }
+                    | PolicyExecutionOutcome::Stopped { .. } => u16::MAX,
+                },
+                store_task: entry_rule.store_task,
+            };
             drop(policy);
             // Workflow #490 ENTRY-A: a run recorded now counts in or starts again its pair's
             // count, and one that failed at its entry blocks its instance, under the policy outcome
@@ -2309,6 +2350,13 @@ impl HostShared {
             if recorded_now {
                 self.settle_entry(&data, entry, context, entry_rule)
                     .map_err(RuntimeHostError::into_fatal)?;
+                // #503 PACE (register §1.545): the run counts in or starts again its pair's pacing,
+                // under the same gate the evaluation reads the pairs under; an interrupted
+                // settlement leaves the pair as it is. Fatal for the same reason.
+                if settled_by == SettledBy::Run {
+                    self.settle_failure_pacing(&data, context, pacing_rule)
+                        .map_err(RuntimeHostError::into_fatal)?;
+                }
             }
             if let Some(settlement) = settlement {
                 self.record_policy_settlement_facts(&settlement)?;

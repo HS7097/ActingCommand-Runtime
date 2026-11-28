@@ -149,10 +149,14 @@ pub struct TargetableResource {
     pub fact_key: String,
     /// The tasks of the instance whose run produces the pool, in catalog order.
     pub producing_tasks: Vec<String>,
-    /// The pool valuation's `scale`; absent when a target must state its own.
+    /// The pool valuation's `scale`, else (#455 B3-P) its `target_defaults.scale`, else (#455 SL2)
+    /// its `spend_line.scale`, which a line on the pool is pressed by and no target writes; absent
+    /// when a target must state its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_scale: Option<u64>,
-    /// The pool valuation's `gap.weight_milli`; absent when a target must state its own.
+    /// The pool valuation's `gap.weight_milli`, else (#455 B3-P) its
+    /// `target_defaults.importance_milli`, else (#455 SL2) its `spend_line.price_milli`, which a line
+    /// on the pool is pressed by and no target writes; absent when a target must state its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_importance_milli: Option<u64>,
     pub scale_required: bool,

@@ -474,7 +474,10 @@ member; a number out of its range `limit_exceeded` at it; a missing member
 `missing_required_field`, any other member `unknown_field`, a member of another type
 `type_mismatch` (the reader). A `schedule.json` whose pool writes it names `pool_spend_line` in
 `requires`, which a Runtime names from 0.12.97 on. A pool without it serializes, hashes and decides
-exactly as before.
+exactly as before. #455 SL2 (since 0.12.101; register §1.547; `../../resource-targets.md`, "A
+pool's line"): the line can now be given: a stored target on such a pool is its line, set by
+`{at_least}` alone; it never weighs the pool's producers and has no date of its own. The pressing of
+the spenders below it is still to come.
 
 #455 RR3b (since 0.12.98; register §1.542; `../README.md`, "A goal's gap in two parts"), V2 only: a
 pool may write `goal_tiers`, `{"need_importance_milli": I_n, "stock_cap_milli": C}`, both required,

@@ -808,8 +808,9 @@ impl HostShared {
 
     /// The instance a settled execution record `data` ran on: its run's lease's when the
     /// settlement had the run (`context`), else the instance its alias names now; `None` for an
-    /// alias no instance has (nothing to count on it).
-    fn settled_instance(
+    /// alias no instance has (nothing to count on it). #503 PACE: its pair's pacing reads it too
+    /// (`failure_pairs.rs`).
+    pub(super) fn settled_instance(
         &self,
         data: &PolicyExecutionEventData,
         context: Option<&PolicyRunContext>,

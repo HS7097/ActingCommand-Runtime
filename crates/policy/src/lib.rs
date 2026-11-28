@@ -242,6 +242,14 @@ mod tests {
     // needs' holdings, until a reading observed at or after its end.
     mod gate_455_rr3c;
 
+    // #455 RR3d (0.12.101; register §1.548): the production told under a pool's gap adds up over
+    // the dispatches since the pool's reading, a later dispatch of the pair erasing nothing.
+    mod gate_455_rr3d;
+
+    // #455 SL2 (0.12.101; register §1.547): a stored target on a pool that writes `spend_line` is
+    // that pool's line: `at_least` alone, no producer asked, and it never weighs.
+    mod gate_455_sl2;
+
     // #503 FIXV (0.12.101; register §1.550): a task's fixed value may be 0 or negative and may
     // stand beside productions into priced pools; the base value is then the fixed value alone,
     // and the productions feed only the goal layer.

@@ -15,37 +15,37 @@ every code of its fragment, retired ones included, sorted by code, with its cate
 `since`, status (a retired code with the code that replaces it, where it names one), review, text
 (`written` when both texts are written, else `TBD`) and the first sentence of its description, cut
 at a space within 160 characters and then ending in `…`. The index holds codes only: the catalog's
-1774 locations are not in it, and 11 of the header's 41 owners have no fragment file and so no file
+1775 locations are not in it, and 11 of the header's 41 owners have no fragment file and so no file
 here.
 
 ## Codes by status
 
 | Status | Codes |
 |---|---:|
-| active | 3984 |
-| retired | 90 |
-| all | 4074 |
+| active | 3986 |
+| retired | 91 |
+| all | 4077 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 124 |
-| info | 235 |
-| warning | 194 |
-| error | 3416 |
+| info | 237 |
+| warning | 195 |
+| error | 3415 |
 | fatal | 15 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 831 |
+| `common_causes` and `handling` both written | 833 |
 | one of the two written, the other `TBD` or empty | 4 |
 | neither written (`TBD` or empty) | 3149 |
 | `settled` | 154 |
-| `pending` | 3830 |
-| all active codes | 3984 |
+| `pending` | 3832 |
+| all active codes | 3986 |
 
 ## By owner
 
@@ -72,13 +72,13 @@ here.
 | [policy](policy.md) | 131 | 128 | 67 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 115 | 114 | 38 | 0 |
+| [resource-tooling](resource-tooling.md) | 115 | 113 | 37 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1198 | 1151 | 230 | 6 |
+| [runtime-host](runtime-host.md) | 1201 | 1154 | 233 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4074 | 3984 | 831 | 154 |
+| all | 4077 | 3986 | 833 | 154 |
