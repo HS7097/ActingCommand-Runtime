@@ -656,7 +656,10 @@ expiry. An expired policy stays stored until replaced; applying the same documen
 refused because its lifetime has passed (`validity_out_of_range`).
 
 **The formal entries only.** `ApplyResourceTargets` and, since Workflow #463 V3 (0.12.61),
-`EditGoal` ("One value by name", below) are the two formal entries of this key.
+`EditGoal` ("One value by name", below) are the two formal entries of this key. (Since Workflow
+#455 RR2, 0.12.94, `EditGoal` writes a records entry's records into another key,
+`session.goal_records`, of which it is the one entry: [instance-fact-store.md](instance-fact-store.md),
+"Goal records facts".)
 `PublishFact` / `PublishFacts` refuse any record of this key as
 the non-fatal `resource_targets_formal_entry_required`, before the fact write gate. A
 configured policy input fact of this key fails every authoritative projection, so the daemon's
@@ -701,6 +704,15 @@ another request wrote with who set them:
   without one), the one `GoalView` answers; a stored record of entries alone has that version too,
   where `ResourceTargetView`'s `active.version` reads `0`. It is compared under the fact write
   gate first; only then are the name and the value checked against the record about to change.
+  Workflow #455 RR2 (since 0.12.94; [instance-fact-store.md](instance-fact-store.md), "Goal
+  records facts"): the goal page keeps one version over this record and the instance's
+  `session.goal_records` record, the records of its `records` entries, which `EditGoal` alone
+  writes: the greater of the two sequences (`0` without either), the one `GoalView` answers and
+  every `EditGoal`'s `expected_version` is compared with, so an edit of either record refuses a
+  stale edit of the other; the answer's `version` is that version after the edit, and a refused
+  stale edit names the page's version as `current_version` with the key of the record that holds
+  it. An application that holds no goal records record compares exactly as before.
+  `ApplyResourceTargets` compares its own `expected_version` with this record's alone, as before.
 
 The whole record is read back by the v3 reader before it is published, as one `fact.published`
 keeping the request's origin, under the fact write gate. #503 GOAL-1 (since 0.12.88): a composed

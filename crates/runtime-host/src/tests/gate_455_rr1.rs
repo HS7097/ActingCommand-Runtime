@@ -9,8 +9,9 @@
 // with the goal declaration, once per content, and keeps them for the generation in force; a
 // tables file the reader refuses applies no records entry and the root runs, recorded with the
 // file's own code (fix round 1, rd-1123/brief-455-rr1-fix1.md, ruling 5); the goal page lists
-// no records entry, and a set or a clear of its name answers `holds_no_value`. Every name, pool
-// and amount is made up; no clock is read and nothing sleeps.
+// no records entry, and (Workflow #455 RR2 adapted it) a clear of its name with nothing stored
+// answers `value_not_set`. Every name, pool and amount is made up; no clock is read and nothing
+// sleeps.
 
 use super::gate_442_rem1::write_package;
 use super::gate_rl1b::{
@@ -561,10 +562,13 @@ fn one_byte_longer_again(packs: &Path) {
 }
 
 // Rulings 6 and 7: the goal page of a root whose `goals.json` holds a records entry lists no such
-// entry, for today's client the page without it; a set and a clear of the records entry's name
-// are refused `goal_value_invalid` with the existing word `holds_no_value`, nothing stored (the
-// record's version unchanged). The same root's `goals.json` rewritten without the records entry:
-// after the next check its page is the page it was, member for member (the target view aside).
+// entry, for today's client the page without it. Adapted by Workflow #455 RR2 (0.12.94, register
+// §1.537), which stores a records entry's records: where this test pinned `holds_no_value` for a
+// set and a clear of the entry's name, a clear with nothing stored is now refused
+// `goal_value_invalid` with `value_not_set`, nothing stored (the record's version unchanged); a
+// set is RR2's (`gate_455_rr2`). The same root's `goals.json` rewritten without the records
+// entry: after the next check its page is the page it was, member for member (the target view
+// aside).
 #[test]
 fn rr1_h2_the_page_lists_no_records_entry_and_a_set_of_its_name_holds_no_value() {
     let scene = Scene::with(|packs| {
@@ -585,20 +589,12 @@ fn rr1_h2_the_page_lists_no_records_entry_and_a_set_of_its_name_holds_no_value()
         listed(&with_records),
         [("group_a".to_owned(), GoalEntryType::Heading)]
     );
-    let set = scene.edit(GoalEdit::Set {
-        name: RECORDS.to_owned(),
-        value_json: json!([{"key": "hero_a", "to": {"grade": [1]}}]).to_string(),
-    });
-    assert_eq!(
-        refused_word(&set).as_deref(),
-        Some(GoalProblem::HoldsNoValue.as_str())
-    );
     let clear = scene.edit(GoalEdit::Clear {
         name: RECORDS.to_owned(),
     });
     assert_eq!(
         refused_word(&clear).as_deref(),
-        Some(GoalProblem::HoldsNoValue.as_str())
+        Some(GoalProblem::ValueNotSet.as_str())
     );
     assert_eq!(scene.view().version, with_records.version, "nothing stored");
 

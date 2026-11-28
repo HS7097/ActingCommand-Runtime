@@ -34,6 +34,9 @@ mod fact_refresh;
 mod fact_refresh_transitions;
 mod fact_store;
 mod failure_identity;
+// Workflow #455 RR2: the instance fact `session.goal_records`, a records entry's stored records,
+// read and composed, pure.
+mod goal_records;
 // Workflow #463 V3: what the goal page's two requests decide, pure.
 mod goals;
 mod host;

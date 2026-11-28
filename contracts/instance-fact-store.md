@@ -557,6 +557,93 @@ before it). The evaluator scores it as `contracts/resource-targets.md`
 publication before RT-S1a could write, is never a policy: it is ignored with the reason
 `resource_target_policy_ignored` on the candidates of every instance it covers.
 
+## Goal records facts
+
+Workflow #455 RR2 (since 0.12.94; [v012-register.md](v012-register.md) §1.537;
+[standard-pack-goals.md](standard-pack-goals.md), "The records entry"). A `records` entry of a
+game root's `goals.json` takes records, each whom to raise (a key of the entry's table in the
+root's `goal-tables.json`) and to where (a position of each of the key's ladders it names). An
+instance's records of all its records entries are one instance fact. **Nothing is computed from
+them in this release**: no evaluation reads them ("Projection", below).
+
+| Key | Value | Scope |
+| --- | --- | --- |
+| `session.goal_records` | `record_list`: one `header` row, then one `record` row for each record | `instance` only |
+
+**Rows**, in this order:
+
+```text
+{row: "header", schema_version: "actingcommand.goal-records.v1", instance}       one header
+{row: "record", entry, key, to, set_unix_ms, channel [, initiator]}               one per record
+```
+
+- `instance` is the fact's instance; `entry` the records entry's name (an entry name's form); `key`
+  a key of its table (1 to 128 bytes without a control character); `to` the record's target in its
+  canonical text: compact JSON, the members of every object in ascending byte order of their
+  names, each position an array of whole numbers, at most 1024 bytes (the fact string bound), for
+  example `{"grade":[2],"mastery":{"1":[1]},"skill":[3]}`. `set_unix_ms` (an integer), `channel`
+  and `initiator` say who set the record and when, written by the Runtime from the request and
+  never from the value, as a v3 `entry` row's are ([resource-targets.md](resource-targets.md),
+  "Storage").
+- At most 128 `record` rows over all the instance's records entries (with the header 129 rows,
+  inside the 256 rows of a record list the scheduler's input takes), 6 or 7 fields a row. An
+  entry's records stand in the order the value gave them; a set of an entry replaces its records
+  where the first of them stood, else adds them after the others; every other record is kept as it
+  is stored, with who set it.
+- The reader is strict: exactly one leading header of this version naming the fact's instance,
+  then rows of exactly their fields and forms, no key twice under one entry; anything else is
+  unreadable, which only a fault of the Runtime writes (a set of a records entry is then refused
+  `goal_value_invalid` with `record_unreadable`; fix round 1: a clear of a records entry the page
+  declares rewrites the record as the header alone, the way out of it,
+  [runtime-interface.md](runtime-interface.md), "Goal request kinds"). It holds the rows to their form only, never to
+  the root in force: a record whose entry, key, column or position the root no longer declares is
+  read back as it is (judging it is a later slice's).
+
+The record: `scope` the instance and `key` `session.goal_records`; inline content; observed at
+the Runtime's clock at the request; no expiry and no TTL policy; `confidence_milli` 1000;
+`source_detector` `runtime.goal-records`; `source_snapshot_id`
+`snapshot:goal-records:<sha256 hex of JSON (scope, key, identity, observed_at)>`; `schema_version`
+`fact.v1`; `resource_bundle_hash` the record's identity, the lowercase hex SHA-256 of the JSON
+`[schema_version, instance, [[entry, key, to], …]]` of its records in their order (who set them is
+not part of it); `invalidate_on` empty.
+
+**Formal entry.** Only `EditGoal` writes it ([runtime-interface.md](runtime-interface.md), "Goal
+request kinds"), in one hold of the fact write gate, through `publish_facts` with the request's
+origin on the `fact.published` event, as it writes `session.resource_targets`. An ordinary
+`PublishFact` / `PublishFacts` record of this key is refused before the fact write gate as the
+non-fatal `goal_records_formal_entry_required`. A configured policy input fact or a forward
+projection caller's fact of this key is refused as `goal_records_key_reserved`: configured, it
+fails every authoritative projection. A record the edit composed that does not read back is the
+refusal of that request alone, `goal_records_record_invalid`, nothing appended and nothing
+latched; a record the Runtime cannot encode is that code, fatal.
+
+**Replay and version.** A record whose `resource_bundle_hash` equals the active one's appends
+nothing and answers the active revision, as a resource target policy's does. The record's own
+version is the sequence of the `fact.published` that holds it, `0` without one; the goal page's
+version is the greater of it and the `session.resource_targets` record's
+([resource-targets.md](resource-targets.md), "One value by name").
+
+**Projection.** As `session.resource_targets`, the key is not excluded from the overlay: the
+record is an ordinary overlaid instance fact, so it reaches `EvaluationFacts.facts`, the combined
+`fact_snapshot_id`, the instance's view in admission staleness (`policy_facts_stale`), the
+`FactsChanged` trigger and forward projections, and is loaded at the start as every tagged
+instance record. Nothing of the evaluation reads it: no policy code names the key, and it weighs
+no candidate and changes no decision. What it does is in the identities only: a change of an
+instance's records between an evaluation and an admission makes that instance's evaluated intents
+`policy_facts_stale` and wakes a cycle, as a change of its resource targets does. As for
+`session.resource_targets`, the catalog compile does not refuse a predicate that names the key.
+An instance without the record projects, hashes and decides exactly as before.
+
+**Where the two keys differ.** The goal records record has no expiry and no withdrawal: its
+version is always its own sequence (`EditGoal`'s, not `ResourceTargetView`'s judgement); it has
+one writer, not two; no evaluator reads it; and a server- or game-scoped record of the key
+cannot be written, so it has no counterpart of `resource_target_policy_ignored`. Its codes are its
+own because those of `session.resource_targets` name that key.
+
+**A fact reader** (`InstanceFactSnapshot`, `InstanceFactView`, the Lab's `facts`) shows the record
+as the instance's fact, its rows as stored: that is how a client reads the records back in this
+release, since the goal page lists no records entry.
+
 ## Resource reading facts
 
 Workflow #335 S5b. A package's resource readings (`contracts/resource-readings.md`) are
@@ -816,6 +903,7 @@ bound (`crates/runtime-host/src/fact_store.rs`), contract constants, not setting
 |---|---|---|---|
 | policy instance seeds | `session.instance.available`, `.capabilities`, `.preferred_tasks` | 3 | existing (#313) |
 | resource target policy | `session.resource_targets` | 1 | existing (#308 RT-S1a) |
+| goal records | `session.goal_records` | ≤ 1 ("Goal records facts" above) | #455 RR2 |
 | priority offsets | `session.task.<task_id>.priority_offset` | *O_i*: one per task with an offset set on the instance | existing (#308 4a-2) |
 | readings (D2 reality keys) | `resource.*`, `inventory.*` | *R_i*: the distinct reading keys of the packages bound to the instance | existing (#335 S5b); refreshed by D2 |
 | pack schedule | `session.pack.schedule` | ≤ 1 | SR-11 |
@@ -831,8 +919,9 @@ bound (`crates/runtime-host/src/fact_store.rs`), contract constants, not setting
 | list readings | `inventory.list.<name>` | *L_i*: the distinct list keys of the packages bound to the instance, a list reading's or a field list's, one each whatever its rows ("List reading facts" above) | #428 S168-4, #450 FL-1 |
 | a client's own keys | any key a client publishes under the instance | *C_i* | — |
 
-The fixed rows of an instance bound to a device come to 15 (3 + 1 + 1 + 1 + 2 + 1 + 1 + 1 + 4);
-*O_i* + *R_i* + *F_i* + *L_i* + *C_i* may take the other 209.
+The fixed rows of an instance bound to a device come to 16 (3 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1 +
+4; Workflow #455 RR2 added the goal records' 1); *O_i* + *R_i* + *F_i* + *L_i* + *C_i* may take the
+other 208.
 
 **A server's or a game's facts** (server *s* or game *g*, each against 16):
 

@@ -659,7 +659,7 @@ application's goals, read and set by name. Shapes: `crates/actingcommand-contrac
 
 | Kind | Block | Class | Shape | Answer |
 |---|---|---|---|---|
-| `GoalView` | general | read (memory only, records nothing) | `{instance_alias}` | `GoalViewed {view}`: `instance_alias`, `game_id`, `version` (the sequence of the `fact.published` that holds the application's `session.resource_targets` record, `0` without one: the next `expected_version`), `declaration` (`absent`, `accepted`, `refused` with its sha256 and first `standard_pack_problem` and pointer, `unreadable`, `not_read` without a composed standard pack, or, for a page that lists nothing, `not_checked_yet`, `root_failing` with the failed file's `path` and the reader's first problem and pointer or the operating system's `io_kind`, or `no_schedule`), `entries`, `orphans`, `remedy_parameters`, `other_targets`, `targets` (the resource target view) |
+| `GoalView` | general | read (memory only, records nothing) | `{instance_alias}` | `GoalViewed {view}`: `instance_alias`, `game_id`, `version` (the sequence of the `fact.published` that holds the application's `session.resource_targets` record, `0` without one; Workflow #455 RR2, since 0.12.94: the greater of that and the sequence that holds its `session.goal_records` record, "One version for the page" below: the next `expected_version`), `declaration` (`absent`, `accepted`, `refused` with its sha256 and first `standard_pack_problem` and pointer, `unreadable`, `not_read` without a composed standard pack, or, for a page that lists nothing, `not_checked_yet`, `root_failing` with the failed file's `path` and the reader's first problem and pointer or the operating system's `io_kind`, or `no_schedule`), `entries`, `orphans`, `remedy_parameters`, `other_targets`, `targets` (the resource target view) |
 | `EditGoal` | general | instruction | `{instance_alias, expected_version?, op}`, `op` `{kind: set, name, value_json}` or `{kind: clear, name}` | `GoalEdited {version, event_id, replayed, replaced_target_id?}` |
 
 **The view** reads memory only: what the scheduler workbench keeps of the game root from one
@@ -714,9 +714,9 @@ stored value, stored target or variable of the game root has, is `goal_value_inv
 `goal_problem` `name_unknown`; a `set` whose value is no JSON `value_not_json`; a page not in
 memory yet `not_checked_yet` (nothing is known of the name: send the request again after the next
 check; fix round 2: a root no check since the start could read `root_failing`, a game without
-`schedule.json` `no_schedule`, for every name); for a `set`, a heading or a note `holds_no_value`,
-and so does a `records` entry until the slice that stores records (Workflow #455 RR1, since
-0.12.92; [standard-pack-goals.md](standard-pack-goals.md), "The records entry"); a tier `tier_not_built`; a remedy
+`schedule.json` `no_schedule`, for every name); for a `set`, a heading or a note `holds_no_value`
+(from Workflow #455 RR1, 0.12.92, until RR2, 0.12.94, a `records` entry too; since RR2 it takes
+its records, below); a tier `tier_not_built`; a remedy
 parameter `remedy_parameter` (never written here); a variable that does not apply
 `variable_not_applying` with its `variable_problem`; a name the root declares that no bound
 package declares (a placement, or a variable of a package the catalog does not bind there)
@@ -735,15 +735,59 @@ the one the page's targetable list names it by: [resource-targets.md](resource-t
 target's pool"). A `clear` removes what is stored under the
 name whatever its entry is (a resource entry's target on its pool, else the entry row of the name,
 else the target of that id); with nothing stored under it the name's own word answers
-(`holds_no_value` for a heading, a note or, until the slice that stores records, a `records`
-entry, `tier_not_built`, `value_not_set` for a resource entry or a bound variable,
-`remedy_parameter`, `not_offered`, `name_unknown`). Then `record_unreadable` for a v1 policy or
-rows no reader reads, `record_out_of_limits` for a 17th target or a 97th entry, one row replaced,
-added or removed, the whole record read back by the v3 reader, and one `fact.published` keeping
-the request's origin; `fact_observation_not_newer` as for every observation. The row names the
-Runtime's clock at the request, the request's channel and, for the Lab, the initiator its
-connection declared. A resource entry's `set` replaces the target on its pool whatever its id
-(`replaced_target_id` names the one replaced). A refusal is Denied and appends nothing.
+(`holds_no_value` for a heading or a note (from RR1 until RR2 a `records` entry too),
+`tier_not_built`, `value_not_set` for a resource entry, a bound variable or, since RR2, an applied
+`records` entry, `remedy_parameter`, `not_offered`, `name_unknown`). Then `record_unreadable` for
+a v1 policy or rows no reader reads, `record_out_of_limits` for a 17th target or a 97th entry, one
+row replaced, added or removed, the whole record read back by the v3 reader, and one
+`fact.published` keeping the request's origin; `fact_observation_not_newer` as for every
+observation. The row names the Runtime's clock at the request, the request's channel and, for the
+Lab, the initiator its connection declared. A resource entry's `set` replaces the target on its
+pool whatever its id (`replaced_target_id` names the one replaced). A refusal is Denied and
+appends nothing.
+
+**A records entry** (Workflow #455 RR2, since 0.12.94; register §1.537;
+[standard-pack-goals.md](standard-pack-goals.md), "The records entry"). Its value is stored in the
+application's own record of the key `session.goal_records`, which only this edit writes
+([instance-fact-store.md](instance-fact-store.md), "Goal records facts"). A records entry applies
+when its table is a table of the root's accepted `goal-tables.json` as the workbench keeps it for
+the generation in force (the page reads it from memory, as it reads `goals.json`); one the root
+does not apply (no such entry; its tables file absent, refused or without the table) answers as
+an unknown name does. A `set` of an applied records entry takes a JSON array of 0 to
+`max_records` records `{key, to}` held to the table, the words at their causes: a part not of the
+form `wrong_type` at it (no array; a record no object, or with a member other than `key` and
+`to`; a `key` no text; a `to` no object or naming nothing; a sub column's value no object or
+naming no sub; a position no array of whole numbers), a key the table does not hold
+`not_an_option`, a key twice `key_repeated` (at the later), more than `max_records`
+`count_out_of_range` (0 to the bound), a column the key has no ladder for (a name no column of
+the table has among them) or a position its ladder does not hold `out_of_range` (at the column
+or the sub), a `to` whose canonical text passes 1024 bytes `value_too_large` (at the `to`, 0 to
+1024), then, against the stored record, more than 128 records over the application
+`record_out_of_limits` (0 to 128) and an unreadable record `record_unreadable`. The array replaces
+the entry's records as a whole, where they stood; an empty one removes them (where the
+application holds no record of the key at all, an empty array writes the header alone, the empty
+record: it holds nothing, and a `clear` after it answers `value_not_set`). A `clear` of a name
+under which records are stored removes them, whether or not the root declares an entry of that
+name (the rule of a value left under a name, above); else the name is judged as before. Fix round
+1 (the review): an unreadable stored record names nothing a `clear` could reach, so the `clear`
+of a records entry the page declares, applied or not, rewrites the record as the header alone,
+and a `set` then stores as on any application: the one state of this record that nothing else
+ends has an end a person can reach. What it held is lost; it was no record a reader read. A
+position against the account's progress and the prerequisites are not checked, on purpose: the
+computing slice's. The rows name who set them as the other record's rows do; the record is read back by its
+reader before it is published (a composed record that does not read back is Denied
+`goal_records_record_invalid`, nothing appended, nothing latched), and an equal record is a
+replay. `replaced_target_id` is absent.
+
+**One version for the page** (Workflow #455 RR2, since 0.12.94). The `version` `GoalView` answers
+is the greater of the sequences of the `fact.published` records that hold the application's
+`session.resource_targets` and `session.goal_records` records, `0` without either; every
+`EditGoal`'s `expected_version` is compared with it, so an edit of either record refuses a stale
+edit of the other, and the conflict's `current_version` is that version with `fact_key` the key
+of the record that holds it (`session.resource_targets` when neither is the later). `GoalEdited`'s
+`version` is the page's version after the edit: the new record's sequence, or, for a replay, the
+page's version as it was. No answer changes shape; an application without a goal records record
+answers every byte as before.
 
 **No value of a request stops the Runtime** (#503 GOAL-1, since 0.12.88; register §1.531). A value
 the record cannot hold is refused under the gate before anything is composed, with

@@ -330,8 +330,9 @@ The Runtime will compute, at every evaluation, each material pool's need from th
 or an agent sets on a `records` entry, this file's rules and the account's readings: the ladder
 from each record's current position to its target, its prerequisites, the taking apart of what is
 made by the recipes, and the stock the pool's own goal asks, stacked. Those are later slices'; this
-file's shape does not change for them. Until then no value is stored for a records entry and no
-evaluation reads the file.
+file's shape does not change for them. Since Workflow #455 RR2 (0.12.94) a records entry's records
+are stored ([instance-fact-store.md](instance-fact-store.md), "Goal records facts"); until the
+computing slice no evaluation reads them or the file.
 
 ## Interface
 

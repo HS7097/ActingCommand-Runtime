@@ -6,7 +6,8 @@ use crate::fact_store::{MAX_INSTANCE_FACTS, priority_offset_milli, valid_priorit
 use actingcommand_contract::codes::{ContractLocation, SharedCode};
 use actingcommand_contract::{
     CaptureExtent, CaptureGeometryObservation, CaptureRotation, CaptureRotationObservation,
-    DISPLAY_FRAME_EXTENT_FACT_KEY, RESOURCE_TARGETS_FACT_KEY, priority_offset_task_id,
+    DISPLAY_FRAME_EXTENT_FACT_KEY, GOAL_RECORDS_FACT_KEY, RESOURCE_TARGETS_FACT_KEY,
+    priority_offset_task_id,
 };
 
 /// `source_detector` of the three configuration-seeded policy instance facts.
@@ -217,6 +218,11 @@ pub(super) enum FactPublicationPurpose {
     /// Workflow #428 S168-4 (`contracts/resource-readings.md`, "List readings"): the Runtime's own
     /// write of one list reading's `record_list` under `inventory.list.`, the prefix's only entry.
     ListReading,
+    /// Workflow #455 RR2 (`contracts/instance-fact-store.md`, "Goal records facts"): the goal
+    /// edit's (`EditGoal`) write of one instance's `session.goal_records` record, the key's only
+    /// entry. A record equal to the active one is a replay, as a resource target policy's is; the
+    /// edit compares its version itself, before it composes the record.
+    GoalRecords,
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -435,12 +441,28 @@ impl HostShared {
                 )
                 .with_outcome_values(|outcome| outcome.fact_key(fact_key.as_str())));
             }
+            // Workflow #455 RR2: the goal records key has one formal entry, the goal edit; any
+            // other publication of it is refused before the gate, as one of the resource target
+            // policy key is (below).
+            if purpose != FactPublicationPurpose::GoalRecords
+                && observation
+                    .records
+                    .iter()
+                    .any(|record| record.key == GOAL_RECORDS_FACT_KEY)
+            {
+                return Err(RuntimeHostError::request(
+                    HostCode::GoalRecordsFormalEntryRequired,
+                    ContractLocation::PublishFacts,
+                    RuntimeErrorCode::InvalidRequest,
+                ));
+            }
             // Workflow #308 RT-S1a: the resource target policy key has one formal entry.
             match purpose {
                 FactPublicationPurpose::Ordinary
                 | FactPublicationPurpose::RunDuration
                 | FactPublicationPurpose::ApplicationUpdate
                 | FactPublicationPurpose::ListReading
+                | FactPublicationPurpose::GoalRecords
                 | FactPublicationPurpose::ResourceAdjustment { .. } => {
                     if observation
                         .records
@@ -501,17 +523,21 @@ impl HostShared {
                 }
             }
             // An observation of a family with the origin exception (priority offsets, remedy
-            // choices, Workflow #429 R-8: the pack schedule) and a resource target policy keep
-            // their request's origin on the `fact.published` event, so the ledger shows who
-            // set them; every other publication stays a Runtime fact-store event.
+            // choices, Workflow #429 R-8: the pack schedule), a resource target policy and
+            // (Workflow #455 RR2) a goal records record keep their request's origin on the
+            // `fact.published` event, so the ledger shows who set them; every other publication
+            // stays a Runtime fact-store event.
             let origin = match source_request {
                 Some(request)
-                    if matches!(purpose, FactPublicationPurpose::ResourceTargets { .. })
-                        || (!observation.records.is_empty()
-                            && observation.records.iter().all(|record| {
-                                actingcommand_contract::fact_key_family(&record.key)
-                                    .takes_origin_exception()
-                            })) =>
+                    if matches!(
+                        purpose,
+                        FactPublicationPurpose::ResourceTargets { .. }
+                            | FactPublicationPurpose::GoalRecords
+                    ) || (!observation.records.is_empty()
+                        && observation.records.iter().all(|record| {
+                            actingcommand_contract::fact_key_family(&record.key)
+                                .takes_origin_exception()
+                        })) =>
                 {
                     (request.source(), request.actor())
                 }
@@ -565,9 +591,20 @@ impl HostShared {
         }
         let now = self.clock.sample()?.unix_ms;
         // A resource target policy equal to the active, unexpired one is a replay: the
-        // active revision answers and nothing is appended.
+        // active revision answers and nothing is appended. Workflow #455 RR2: so is a goal
+        // records record equal to the active one (it has no expiry); its edit compared the
+        // page's version before it composed the record, so no version is compared here.
         let mut previous_version = None;
-        if let FactPublicationPurpose::ResourceTargets { expected_version } = purpose {
+        let replayable = match purpose {
+            FactPublicationPurpose::ResourceTargets { expected_version } => Some(expected_version),
+            FactPublicationPurpose::GoalRecords => Some(None),
+            FactPublicationPurpose::Ordinary
+            | FactPublicationPurpose::ResourceAdjustment { .. }
+            | FactPublicationPurpose::RunDuration
+            | FactPublicationPurpose::ApplicationUpdate
+            | FactPublicationPurpose::ListReading => None,
+        };
+        if let Some(expected_version) = replayable {
             let record = &observation.records[0];
             let facts = lock(&self.facts, ContractLocation::PublishFact)?;
             let active = facts.active_revision(&record.scope, &record.key);

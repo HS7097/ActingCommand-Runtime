@@ -26,7 +26,7 @@
 //!   record, compares its version with `expected_version` (absent compares nothing; the version is
 //!   the sequence of the `fact.published` that holds the record, `0` without one; another is
 //!   `fact_observation_version_conflict` with `current_version`), then checks the name and the
-//!   value against the record it is about to change (`crate::goals::check_edit`,
+//!   value against the record it is about to change (`crate::goals::check_goal_edit`,
 //!   `goal_value_invalid`), replaces or removes the one row (`edit_goal_record`), and publishes the
 //!   whole record as one `fact.published` keeping the request's origin. So a request of another
 //!   version is a version conflict whatever its value. The row it writes names the Runtime's clock
@@ -35,21 +35,31 @@
 //!   write it, the id the targetable list names it by; a composed record the v3 reader does not
 //!   read back is a refusal of the request (`resource_targets_record_invalid`), nothing appended
 //!   and nothing latched: no value of a request stops the Runtime.
+//! - Workflow #455 RR2 (register §1.537; `contracts/instance-fact-store.md`, "Goal records
+//!   facts"): a `records` entry the root in force applies (its table one of the root's accepted
+//!   `goal-tables.json`, which the page reads from the workbench's memory) takes its records, and
+//!   the edit writes the instance's `session.goal_records` record (`crate::goal_records`), its
+//!   only writer, through the same gate and with the request's origin; a `clear` removes the
+//!   records stored under its name, declared or not. The page keeps one version over both
+//!   records: the greater of their sequences, which `GoalView` answers and every edit's
+//!   `expected_version` is compared with, so an edit of either refuses a stale edit of the other;
+//!   the answer's `version` is that version after the edit. Nothing is computed from a record.
 
 use super::facts::{FactPublication, FactPublicationPurpose};
 use super::planning::planning_request_failure;
 use super::resource_targets::policy_record;
 use super::*;
 use crate::codes::{GoalValueCode, HostCode, HostLocation};
+use crate::goal_records::{ComposedGoalRecords, StoredGoalRecords, compose};
 use crate::goals::{
-    BoundPackage, BoundParameter, EditRequest, GoalPage, GoalRefusal, ViewEntries, check_edit,
-    page_variables, view_entries,
+    BoundPackage, BoundParameter, EditRequest, GoalChange, GoalPage, GoalRefusal, ViewEntries,
+    check_goal_edit, page_variables, view_entries,
 };
 use crate::remedy::{BuiltTable, covers};
 use actingcommand_contract::{
-    FactObservation, GoalDeclarationRead, GoalDeclarationState, GoalEdit, GoalEdited, GoalProblem,
-    GoalRemedyParameter, GoalView, RESOURCE_TARGETS_FACT_KEY, ResourceTargetView,
-    StandardPackGoals,
+    FactObservation, GOAL_RECORDS_FACT_KEY, GoalDeclarationRead, GoalDeclarationState, GoalEdit,
+    GoalEdited, GoalProblem, GoalRemedyParameter, GoalView, RESOURCE_TARGETS_FACT_KEY,
+    ResourceTargetView, StandardPackGoalTables, StandardPackGoals,
 };
 use actingcommand_policy::{
     TargetSetter, VariableSetBy, VariableTable, edit_goal_record, plan_variable_values,
@@ -59,9 +69,13 @@ use serde_json::Value;
 
 const VIEW_OPERATION: HostLocation = HostLocation::GoalView;
 const EDIT_OPERATION: HostLocation = HostLocation::EditGoal;
+/// Workflow #455 RR2: the `source_detector` and the `schema_version` of a goal records record.
+const GOAL_RECORDS_DETECTOR: &str = "runtime.goal-records";
+const GOAL_RECORDS_FACT_SCHEMA: &str = "fact.v1";
 
-/// The instance's stored `session.resource_targets` record: its rows (empty for content that is no
-/// record list), its expiry and its version (`0` without a record).
+/// The instance's stored `session.resource_targets` record or (Workflow #455 RR2) its
+/// `session.goal_records` record: its rows (empty for content that is no record list), its expiry
+/// and its version (`0` without a record).
 struct StoredRecord {
     rows: Option<Vec<BTreeMap<String, FactScalar>>>,
     expires_at_unix_ms: Option<u64>,
@@ -69,9 +83,9 @@ struct StoredRecord {
 }
 
 impl StoredRecord {
-    /// `scope`'s record as the fact store holds it now.
-    fn of(store: &InstanceFactStore, scope: &FactScope) -> Self {
-        match store.active_revision(scope, RESOURCE_TARGETS_FACT_KEY) {
+    /// `scope`'s record of `key` as the fact store holds it now.
+    fn of(store: &InstanceFactStore, scope: &FactScope, key: &str) -> Self {
+        match store.active_revision(scope, key) {
             Some((record, sequence, _)) => Self {
                 rows: Some(match &record.content {
                     FactContent::Inline {
@@ -91,6 +105,18 @@ impl StoredRecord {
     }
 }
 
+/// Workflow #455 RR2 (ruling 5): the page's one version over its two records, the greater of
+/// their sequences (`0` without either), with the key of the record that holds it
+/// (`session.resource_targets` when neither is the later): what `GoalView` answers and every
+/// `EditGoal`'s `expected_version` is compared with.
+fn page_version(record: &StoredRecord, records: &StoredRecord) -> (&'static str, u64) {
+    if records.version > record.version {
+        (GOAL_RECORDS_FACT_KEY, records.version)
+    } else {
+        (RESOURCE_TARGETS_FACT_KEY, record.version)
+    }
+}
+
 /// What the page is judged by, once it is in memory: the active catalog and the variable table a
 /// dispatch reads.
 struct PageSources {
@@ -101,7 +127,9 @@ struct PageSources {
 /// What a request read of the page: the page itself, what the workbench holds of the game's
 /// `goals.json`, the projection, what the page is judged by (`None` until it is in memory), the
 /// resource target view, the remedy parameters the last evaluation resolved by task, and the
-/// record.
+/// record. Workflow #455 RR2: and the instance's goal records record, and the root's accepted
+/// `goal-tables.json` as the workbench keeps it for the generation in force (`None` for a root
+/// without an accepted file, and for a page not in memory yet).
 struct PageRead {
     page: GoalPage,
     declaration: GoalDeclarationState,
@@ -110,6 +138,8 @@ struct PageRead {
     target_view: ResourceTargetView,
     resolved_parameters: BTreeMap<String, DecisionReason>,
     record: StoredRecord,
+    records: StoredRecord,
+    tables: Option<Arc<StandardPackGoalTables>>,
 }
 
 impl HostShared {
@@ -176,7 +206,8 @@ impl HostShared {
         Ok(GoalView {
             instance_alias: instance_alias.to_owned(),
             game_id: read.page.game_id.clone(),
-            version: read.record.version,
+            // Workflow #455 RR2 (ruling 5): the greater of the two records' sequences.
+            version: page_version(&read.record, &read.records).1,
             declaration: read.declaration.clone(),
             entries: listed.entries,
             orphans: listed.orphans,
@@ -255,18 +286,22 @@ impl HostShared {
         let scope = FactScope::Instance {
             instance_id: instance_alias.to_owned(),
         };
-        let written: RuntimeHostResult<(FactPublication, Option<String>)> = (|| {
+        let written: RuntimeHostResult<(FactPublication, Option<String>, u64)> = (|| {
             let _gate = lock(&self.fact_write_gate, EDIT_OPERATION)?;
             self.synchronize_fact_store_under_gate()?;
             // Fix round 2: the store's lock only for the read; the publication below takes it.
-            let record = {
+            let (record, records) = {
                 let store = lock(&self.facts, EDIT_OPERATION)?;
-                StoredRecord::of(&store, &scope)
+                (
+                    StoredRecord::of(&store, &scope, RESOURCE_TARGETS_FACT_KEY),
+                    StoredRecord::of(&store, &scope, GOAL_RECORDS_FACT_KEY),
+                )
             };
+            // Workflow #455 RR2 (ruling 5): the page's one version over both records.
+            let (version_key, current_version) = page_version(&record, &records);
             if let Some(expected) = expected_version
-                && expected != record.version
+                && expected != current_version
             {
-                let current_version = record.version;
                 return Err(RuntimeHostError::request(
                     HostCode::FactObservationVersionConflict,
                     EDIT_OPERATION,
@@ -274,44 +309,75 @@ impl HostShared {
                 )
                 .with_outcome_values(|outcome| {
                     outcome
-                        .fact_key(RESOURCE_TARGETS_FACT_KEY)
+                        .fact_key(version_key)
                         .current_version(current_version)
                 }));
             }
-            // The checks read the record they are about to change, so they run here, under the
+            // The checks read the records they are about to change, so they run here, under the
             // gate, after the version comparison.
             let stored = stored_goal_record(
                 record.rows.as_deref(),
                 record.expires_at_unix_ms,
                 instance_alias,
             );
-            let change = check_edit(&read.page, &stored, request, set_by)
-                .map_err(|refusal| goal_value_invalid(op.name(), &refusal))?;
-            #[cfg(test)]
-            let change = self.unreadable_edit_for_test(change, instance_alias);
-            let edited = edit_goal_record(
-                record.rows.as_deref(),
-                record.expires_at_unix_ms,
-                instance_alias,
-                &change,
-                setter,
+            let stored_records = StoredGoalRecords::read(records.rows.as_deref(), instance_alias);
+            let change = check_goal_edit(
+                &read.page,
+                read.tables.as_deref(),
+                &stored,
+                &stored_records,
+                request,
+                set_by,
             )
-            .map_err(|refusal| match GoalRefusal::of_record(refusal) {
-                Some(refusal) => goal_value_invalid(op.name(), &refusal),
-                None => self.record_not_read_back(),
-            })?;
-            let fact = policy_record(&scope, &edited.composed, sample.unix_ms)?;
+            .map_err(|refusal| goal_value_invalid(op.name(), &refusal))?;
+            let (fact, purpose, replaced_target_id) = match change {
+                GoalChange::Record(change) => {
+                    #[cfg(test)]
+                    let change = self.unreadable_edit_for_test(change, instance_alias);
+                    let edited = edit_goal_record(
+                        record.rows.as_deref(),
+                        record.expires_at_unix_ms,
+                        instance_alias,
+                        &change,
+                        setter,
+                    )
+                    .map_err(|refusal| {
+                        match GoalRefusal::of_record(refusal) {
+                            Some(refusal) => goal_value_invalid(op.name(), &refusal),
+                            None => self.record_not_read_back(),
+                        }
+                    })?;
+                    (
+                        policy_record(&scope, &edited.composed, sample.unix_ms)?,
+                        FactPublicationPurpose::ResourceTargets {
+                            expected_version: None,
+                        },
+                        edited.replaced_target_id,
+                    )
+                }
+                // Workflow #455 RR2: the goal records record, the key's one writer.
+                GoalChange::Records(change) => {
+                    let composed = compose(&stored_records, instance_alias, &change, setter)
+                        .map_err(|refusal| match GoalRefusal::of_records(refusal) {
+                            Some(refusal) => goal_value_invalid(op.name(), &refusal),
+                            None => self.records_not_read_back(),
+                        })?;
+                    (
+                        goal_records_fact(&scope, &composed, sample.unix_ms)?,
+                        FactPublicationPurpose::GoalRecords,
+                        None,
+                    )
+                }
+            };
             let publication = self.publish_facts_under_gate(
                 FactObservation {
                     records: vec![fact],
                 },
                 Some(validated),
-                FactPublicationPurpose::ResourceTargets {
-                    expected_version: None,
-                },
+                purpose,
                 (validated.source(), validated.actor()),
             )?;
-            Ok((publication, edited.replaced_target_id))
+            Ok((publication, replaced_target_id, current_version))
         })();
         if let Err(error) = &written
             && error.is_fatal()
@@ -326,13 +392,17 @@ impl HostShared {
                 ..
             },
             replaced_target_id,
+            current_version,
         ) = written?;
         Ok(OperationSuccess {
             state: RuntimeReceiptState::Completed,
             terminal: Some(TerminalEvent { sequence, event_id }),
             result: RuntimeResult::GoalEdited {
                 edited: GoalEdited {
-                    version: sequence,
+                    // Workflow #455 RR2 (ruling 5): the page's version after the edit: a new
+                    // record's sequence is the latest; a replay leaves the page's version as it
+                    // was.
+                    version: sequence.max(current_version),
                     event_id,
                     replayed,
                     replaced_target_id,
@@ -385,7 +455,7 @@ impl HostShared {
         let scope = FactScope::Instance {
             instance_id: instance_alias.to_owned(),
         };
-        let (facts, catalog, table, target_view, resolved_parameters, record) = {
+        let (facts, catalog, table, target_view, resolved_parameters, (record, records)) = {
             let _outcome_gate = lock(&self.policy_outcome_gate, operation)?;
             let mut policy = lock(self.policy()?, operation)?;
             let outcome_keys = policy.outcome_key_snapshot()?;
@@ -406,10 +476,13 @@ impl HostShared {
                 time,
                 operation.into(),
             )?;
-            // Fix round 2: the store's lock only for the read.
-            let record = {
+            // Fix round 2: the store's lock only for the read. Workflow #455 RR2: both records.
+            let stored = {
                 let store = lock(&self.facts, operation)?;
-                StoredRecord::of(&store, &scope)
+                (
+                    StoredRecord::of(&store, &scope, RESOURCE_TARGETS_FACT_KEY),
+                    StoredRecord::of(&store, &scope, GOAL_RECORDS_FACT_KEY),
+                )
             };
             (
                 facts,
@@ -417,7 +490,7 @@ impl HostShared {
                 policy.built_table(),
                 target_view,
                 policy.resolved_parameters(instance_alias),
-                record,
+                stored,
             )
         };
         let instance = facts
@@ -472,6 +545,8 @@ impl HostShared {
                 target_view,
                 resolved_parameters,
                 record,
+                records,
+                tables: None,
             });
         };
         let (declaration, accepted) = goal_declaration(root.map(|root| &root.goals));
@@ -523,6 +598,8 @@ impl HostShared {
             not_applying,
             root: verdicts,
         };
+        // Workflow #455 RR2: the root's accepted tables, which a records entry's table names.
+        let tables = root.and_then(|root| root.goal_tables.accepted().cloned());
         Ok(PageRead {
             page,
             declaration,
@@ -531,6 +608,8 @@ impl HostShared {
             target_view,
             resolved_parameters,
             record,
+            records,
+            tables,
         })
     }
 
@@ -542,6 +621,20 @@ impl HostShared {
     fn record_not_read_back(&self) -> RuntimeHostError {
         let refusal = RuntimeHostError::request(
             HostCode::ResourceTargetsRecordInvalid,
+            EDIT_OPERATION,
+            RuntimeErrorCode::InvalidRequest,
+        );
+        self.fatal.report_warning(&refusal.daemon_outcome());
+        refusal
+    }
+
+    /// Workflow #455 RR2: the answer to an edit whose composed goal records record the reader does
+    /// not read back, as [`Self::record_not_read_back`] answers one of the other record: a refusal
+    /// of this request alone, `goal_records_record_invalid` (an error, Denied, its daemon line
+    /// written), nothing appended and nothing latched.
+    fn records_not_read_back(&self) -> RuntimeHostError {
+        let refusal = RuntimeHostError::request(
+            HostCode::GoalRecordsRecordInvalid,
             EDIT_OPERATION,
             RuntimeErrorCode::InvalidRequest,
         );
@@ -586,6 +679,51 @@ impl RuntimeHost {
             .store(on, Ordering::Release);
         Ok(())
     }
+}
+
+/// Workflow #455 RR2 (`contracts/instance-fact-store.md`, "Goal records facts"): the instance fact
+/// that holds `composed`, observed at `observed_at_unix_ms`, the clock of the request, as the
+/// resource target policy's is built (`policy_record`): its rows, no expiry, its identity
+/// (`resource_bundle_hash` the records' own, by which an equal record is a replay) and a snapshot
+/// id of the scope, the key, that identity and the time. A record the Runtime cannot encode or
+/// that fails the fact's own check is the Runtime's fault: fatal `goal_records_record_invalid`.
+fn goal_records_fact(
+    scope: &FactScope,
+    composed: &ComposedGoalRecords,
+    observed_at_unix_ms: u64,
+) -> RuntimeHostResult<FactRecord> {
+    let invalid = || {
+        RuntimeHostError::fatal(
+            HostCode::GoalRecordsRecordInvalid,
+            EDIT_OPERATION,
+            RuntimeErrorCode::RuntimeHalted,
+        )
+    };
+    let identity = serde_json::to_vec(&(
+        scope,
+        GOAL_RECORDS_FACT_KEY,
+        &composed.identity,
+        observed_at_unix_ms,
+    ))
+    .map_err(|_| invalid())?;
+    let record = FactRecord {
+        scope: scope.clone(),
+        key: GOAL_RECORDS_FACT_KEY.to_owned(),
+        content: FactContent::Inline {
+            value: ContractFactValue::RecordList(composed.rows.clone()),
+        },
+        observed_at_unix_ms,
+        expires_at_unix_ms: None,
+        ttl_policy: None,
+        confidence_milli: 1_000,
+        source_detector: GOAL_RECORDS_DETECTOR.to_owned(),
+        source_snapshot_id: format!("snapshot:goal-records:{:x}", Sha256::digest(identity)),
+        schema_version: GOAL_RECORDS_FACT_SCHEMA.to_owned(),
+        resource_bundle_hash: composed.identity.clone(),
+        invalidate_on: Vec::new(),
+    };
+    record.validate().map_err(|_| invalid())?;
+    Ok(record)
 }
 
 /// A declaration state of `state` with nothing else.

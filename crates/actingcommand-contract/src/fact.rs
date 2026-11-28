@@ -33,6 +33,12 @@ pub const PRIORITY_OFFSET_KEY_SUFFIX: &str = ".priority_offset";
 /// record-list fact under this key, written only by `ApplyResourceTargets`; an ordinary fact
 /// publication or a configured or caller-supplied fact of this key is refused.
 pub const RESOURCE_TARGETS_FACT_KEY: &str = "session.resource_targets";
+/// Workflow #455 RR2 (`contracts/instance-fact-store.md`, "Goal records facts"): an instance's
+/// stored records of the `records` entries of its game root's `goals.json`, one instance-scoped
+/// inline record-list fact, written only by the goal edit (`EditGoal`); an ordinary fact
+/// publication or a configured or caller-supplied fact of this key is refused, as one of
+/// [`RESOURCE_TARGETS_FACT_KEY`] is.
+pub const GOAL_RECORDS_FACT_KEY: &str = "session.goal_records";
 /// Workflow #411 B15 R6: the instance's remedy choices (`contracts/instance-fact-store.md`,
 /// "Remedy choice facts"), one inline record-list fact per scope (instance or game; never
 /// server, whose id is not game-qualified), written by a person or an agent and checked by the

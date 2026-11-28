@@ -51130,6 +51130,191 @@ a placed one is refused at every admission), so the rollback stays open while no
 from such a bundle. In the release notes' language:
 列表读数（`read_list`）可以读"只有图、没有名字"的卡片格子：`repeated_anchor` 版式的图片身份特征声明 `region`（每张卡内打分的矩形），版式在 `identity_templates` 里为它声明一个对每张卡都一样的图池，最多 128 张，图池里既有想要的键的图（`{id, target_id}`），也有"已知但不是任何键"的卡的图（`{"other": true, target_id}`）。身份映射一次判定：认出是某个键、认出是"不是任何键"的已知卡（这才略过），其余都算没读成，整表不写；没有"分数都很低就略过"这条规则，所以图池里没有图的卡第一次出现时，整表停读，直到补上它的图。只差颜色的同一张图靠各自模板的颜色检查分开，颜色没对上的条目不参加比较。图池的分数不进投影、不进账本，只在投影旁边判定；离线的 `package list-check` 对每个图片位置给出最好的键和分数、最好的"其他"条目和分数、阈值和边距。代价：视图里出现的每一种卡都要有图；把某个键的图误标成"其他"，这个键每次都读 0，验收时要逐个对帧。图池上的选择步这一版先拒。包的修订升到 29：带这两个成员的包要本版以上的 Runtime。
 
+### 1.537 Slice #455 RR2 (0.12.94): a records entry's value is stored: the goal edit of a records entry writes the instance's records into the instance fact `session.goal_records`, a fact reader reads them back, the goal page keeps one version over both records, and nothing is computed yet (board #455; the rulings are the coordinator's of 11-28, on the read-only study of derived training targets and its dispositions; coordinator work order `rd-1123/brief-455-rr2.md`; on RR1's branch `df39227a`, merged with main `a2673bac`, v0.12.92, which holds RR1; §1.536, a slice merged before this one, is not in its tree, and the coordinator joins it at the merge)
+
+It ships in 0.12.94. [instance-fact-store.md](instance-fact-store.md) ("Goal records facts", the
+capacity ledger's row), [standard-pack-goals.md](standard-pack-goals.md) ("The records entry": its
+value, its edit, where it is stored, what a client sees), [runtime-interface.md](runtime-interface.md)
+("Goal request kinds": the `GoalView` row's `version`, "The edit", "A records entry", "One version
+for the page"), [resource-targets.md](resource-targets.md) ("One value by name", the version; "The
+formal entries only"), the rows `goals set` and `goals clear` of
+[lab-operations.json](lab-operations.json) (their `notes`), the host fragment's three codes and the
+vocabulary `goal_problem`'s texts are the contract.
+
+**What it is for.** A person says which character to raise and to which grade; nobody types how
+many of each material that takes. RR1 (§1.535) gave a root the two files that declare such an
+entry and carry the game's rules. This slice gives the person's words a place: an instance stores,
+for each records entry, whom and to where, written only through the goal edit and read back as a
+fact. After it an agent can set and read the records of an instance. Nothing is computed from them
+and no evaluation changes: that is the next slice's.
+
+**The rulings, as built.**
+- *1, the store* (`crates/runtime-host/src/goal_records.rs`, pure). The instance fact
+  `session.goal_records` (`GOAL_RECORDS_FACT_KEY` of the contract crate), a record list: the
+  header `{row: "header", schema_version: "actingcommand.goal-records.v1", instance}` and one row a
+  record, `{row: "record", entry, key, to, set_unix_ms, channel, initiator?}`, at most 128 record
+  rows over all the instance's entries (129 rows with the header, inside the 256 the scheduler's
+  input takes). `to` is the record's target in one canonical text: compact JSON, the members of
+  every object in ascending byte order of their names, each position an array of whole numbers,
+  at most 1024 bytes. A set replaces an entry's records where the first of them stood (else after
+  the others) and keeps every other record as stored, with who set it; the record's identity
+  (`resource_bundle_hash`) is the SHA-256 of its version, its instance and its records' entries,
+  keys and `to` texts in their order, so the same records again are a replay; the composed record
+  is read back by its reader before it is published. The reader is strict on the rows' form and
+  judges nothing against the root. Mirrored from `session.resource_targets` in every place that
+  names that key: the one writer and its refusals (`host/facts.rs`, before the gate; the
+  projection's reserved key, `fact_store.rs`), the request's origin on its `fact.published`, the
+  replay of an equal record (`publish_facts_under_gate`, the purpose `GoalRecords`), the overlay
+  into the evaluation's projection, a fact reader's view, the version from its sequence, a
+  composed record that does not read back being the refusal of the one request.
+- *2, who writes*. Only the goal edit. `resource_targets_formal_entry_required` and
+  `resource_targets_key_reserved` name the other key, and `resource_targets_record_invalid` says
+  a `session.resource_targets` record, so the key has three codes of its own, each the mirror of
+  one of those: `goal_records_formal_entry_required` (a `PublishFact` or `PublishFacts` of the
+  key, refused before the gate, not fatal), `goal_records_key_reserved` (a configured policy input
+  fact or a forward caller's fact of the key) and `goal_records_record_invalid` (a composed record
+  that does not read back, the refusal of that request alone; a fact record that cannot be
+  encoded, fatal).
+- *3, what a person gives* (`crate::goals::check_goal_edit`, `check_records`, `check_to`). A
+  records entry applies when its table is a table of the root's accepted `goal-tables.json` as the
+  workbench keeps it for the generation in force (`StandardPackGoalRoot::goal_tables`, read by the
+  page from memory). Its value is a JSON array of 0 to `max_records` records `{key, to}` exactly:
+  `key` a key of the table, once; `to` an object naming at least one column for which the key has
+  a ladder (its class's of a column of `per: "class"`, its own of one of `per: "key"`; `ladders_of`
+  of RR1), each with a position of that ladder; for a column of `per: "sub"`, an object of the
+  key's subs, at least one, each with a position of that sub's ladder. The array replaces the
+  entry's records; an empty one removes them, as the clear does. Not checked, on purpose (the
+  contract says why): a position against the account's progress and the prerequisites.
+- *4, the words* (all of `goal_value_invalid`'s `goal_problem`; no word added): `wrong_type` for
+  the form (at the record, its member, its `key`, its `to`, a column or a sub), `not_an_option` (a
+  key the table does not hold), `key_repeated` (at the later), `count_out_of_range` (0 to
+  `max_records`), `out_of_range` (a column the key has no ladder for, a name no column of the
+  table has among them, or a position its ladder does not hold, at the column or the sub: one
+  cause, a position the key's ladder there does not hold, a key without such a ladder holding
+  none), `record_out_of_limits` (a 129th record over the instance, 0 to 128). **The one place the
+  build departs from the ruling's list**: a `to` whose canonical text passes 1024 bytes is
+  `value_too_large` (at the `to`, 0 to 1024), not `record_out_of_limits`. The ruling's rule of one
+  word, one cause decides: `record_out_of_limits` would then cover two causes a reader acts on
+  differently (shorten one record's target, or hold fewer records), and the existing word whose
+  one cause is a text longer than the store keeps, 1024 bytes, is `value_too_large`. An entry the
+  root in force does not apply (no such entry; its tables file absent, refused, or without the
+  table) is passed to the checks as no entry, so it answers as an unknown name answers today
+  (`name_unknown` for an array).
+- *5, one version for the page* (`host/goals.rs`, `page_version`). `GoalView.version` is the
+  greater of the two records' sequences (`0` without either); every `EditGoal` compares its
+  `expected_version` with it under the fact write gate, before anything is checked, so an edit of
+  either record refuses a stale edit of the other; the conflict's `current_version` is that
+  version and its `fact_key` the key of the record that holds it (`session.resource_targets` when
+  neither is the later). `GoalEdited.version` is the page's version after the edit
+  (`max(the publication's sequence, the version compared)`: a new record's sequence is the latest,
+  a replay leaves the page's version). No answer changes shape. `ApplyResourceTargets` compares its
+  own version with its record's alone, as before.
+- *6, the root changes under stored records*. Nothing rewrites what is stored. The reader judges
+  no record against the root, so a record whose entry, key, column or position the root no longer
+  declares stays stored and is read back as it is. The page's existing rule for a value left
+  under a name (fix round 1 of §1.383: a value nobody can remove must not exist, so a clear
+  removes what is stored under its name whatever the name's entry is) is followed: a clear of a
+  name under which records are stored removes them, declared or not; else the name is judged as
+  before, and an applied records entry with nothing stored is `value_not_set`.
+- *7, what a client sees*. The goal page and `GoalView` list no records entry and gain no member and
+  no word; the records are read back as the instance's fact (`InstanceFactSnapshot`, the Lab's
+  `facts`). The Lab's rows `goals set` and `goals clear` say in their `notes` what a records entry
+  takes.
+- *8, nothing is computed*. What the mirroring brings of itself: the record is an ordinary overlaid
+  instance fact, so it reaches `EvaluationFacts.facts`, the combined `fact_snapshot_id`, the
+  instance's view in admission staleness and forward projections, and its publication wakes a
+  cycle (`FactsChanged`), as every publication does. What an evaluation does with it: nothing; no
+  policy code names the key, no candidate is weighed by it, no decision changes. Its one effect is
+  on identities: an edit of an instance's records between an evaluation and an admission makes that
+  instance's evaluated intents `policy_facts_stale`, as an edit of its targets does. As for
+  `session.resource_targets`, the catalog compile does not refuse a predicate that names the key;
+  none is written. An instance without the key, and a root without a records entry: every byte of
+  every answer, hash and identity as before.
+- *9, nothing else moves*. No `ledger` revision (an ordinary `fact.published` of an instance
+  record list within every bound the store and the ledger check: 129 rows, 7 fields, 1024-byte
+  texts; no event type, payload or persisted structure), no `runtime-client` revision (the
+  request's `value_json` is a text the request already carries; a value of 128 records of a
+  1024-byte target is about 150 KB, inside the 1 MiB frame), no `package` revision, no setting.
+
+**Where the two keys differ, and why.** The goal records record has no expiry and no withdrawal,
+so its version is always its own sequence (as `EditGoal` reads the other record's, not
+`ResourceTargetView`'s judgement of an active policy); it has one writer, not two; no evaluator
+reads it, so nothing of `resource_target_policy_ignored` (a server- or game-scoped record of the
+key cannot be written: an ordinary publication is refused); its codes are its own because the
+other key's name their key.
+
+| Code | The one cause | Refuses or warns |
+|---|---|---|
+| `goal_records_formal_entry_required` | a publication of `session.goal_records` other than the goal edit's | refuses (Denied `invalid_request`, before the gate; not fatal) |
+| `goal_records_key_reserved` | a configured policy input fact or a forward caller's fact of the key | refuses (configured: every authoritative projection fails; forward: the caller) |
+| `goal_records_record_invalid` | a goal records record the Runtime built that its reader does not take | refuses the one edit (Denied, nothing latched); a fact record it cannot encode is fatal |
+
+**Tests** (incident `#455 RR2`; no clock read, no sleep).
+
+| Test | What it shows |
+|---|---|
+| `rr2_p1_each_word_of_a_records_value_at_its_cause_and_the_instance_s_bound` (host, pure) | a well-formed value one change with its canonical `to`; twenty-odd cases, each word at its cause with its pointer and range; `value_too_large` of a long `to`; an entry the root does not apply and one without a tables file `name_unknown`; a clear `value_not_set` and `name_unknown`; 128 records composed, a 129th `record_out_of_limits`; a clear of a name with stored records removing them though no entry has it |
+| `rr2_h1_records_are_set_read_back_replaced_cleared_and_kept_across_starts` (host) | set, read back as the fact (header and rows, who set them), the page as before for today's client with the answer's version; a replay; replaced; an empty array and a clear; `value_not_set`; read back after a second and a third start, the page's version its record's |
+| `rr2_h2_the_page_keeps_one_version_over_both_records` (host) | a records set with the version before a target's refused naming the target record's key, the reverse naming the goal records key; the page's version the greater, the target view's its own; a replay answers the page's version |
+| `rr2_h3_a_fact_publication_of_the_key_is_refused` (host) | `PublishFact` and `PublishFacts` of the key, from the agent's and the Lab's envelopes, `goal_records_formal_entry_required`, nothing appended |
+| `rr2_h4_records_the_root_no_longer_declares_stay_stored_and_the_clear_removes_them` (host) | a key gone from the tables (a set of it then `not_an_option`): the record read back byte for byte, the clear removes it; the entry gone from `goals.json` (a set then `name_unknown`): the record kept, the clear of the name removes it |
+| `rr2_h5_two_instances_keep_their_own_records` (host) | each instance's record and page version its own; a clear on one leaves the other as it was |
+
+Adapted, because this slice deliberately changes what it pinned: `gate_455_rr1`'s
+`rr1_h2_the_page_lists_no_records_entry_and_a_set_of_its_name_holds_no_value` (a clear with
+nothing stored is `value_not_set`, the set is this slice's; name kept). The contract crate's
+`goal_problem` texts and `crate::goals::check_edit` (now a test-only wrapper of
+`check_goal_edit` over no tables and no stored records, so `gate_463_v3` and `gate_455_b3p` call it
+as they did) change no test.
+
+**Nothing moved.** An instance without the key compares, answers and versions as before (the
+version is `max(its resource target record's, 0)`); a root without a records entry takes no new
+path. The gates that hold it, unchanged: `gate_463_v3` (the page's checks and view, and the host's
+edits, versions and conflicts), `gate_455_b3p`, `gate_503_goal1` (the edits and views of two
+instances), `gate_455_gr2a` and `gate_455_t1r` (`ApplyResourceTargets`, its version, replay and
+origin), `gate_463_v2`, `gate_500_sv2` and `gate_455_tk1` (the variables a dispatch reads from the
+other record), `gate_455_rr1`'s `rr1_h1` (a root with the tables file), and the policy's gates,
+whose inputs no slice code changes.
+
+**Not proven by a test.** `goal_records_key_reserved` (a configured or forward fact of the key) is
+built by reading and mirrors the other key's check, which has its own gates; the fatal path of a
+record that cannot be encoded is not reached by any value. The cost of a value at its bound (128
+records) is not measured.
+
+**What is not changed, and what is left.** No record is computed from, judged against the
+account's progress or its prerequisites, or applied (the computing slice: a record the root no
+longer declares will apply nothing, and say why); the page lists no records entry (the view of
+`runtime-client` 15); the Lab's `goals get` reads no records (they are read with `facts`).
+
+**Fix round 1 (the independent review and the first build; the coordinator's).** The review found
+nothing that must change before the merge, and three things worth settling.
+(1) *A state nothing ended.* A stored record the reader does not read, which only a fault of the
+Runtime writes, could not be removed: it holds no name, so a clear answered `value_not_set`, a set
+`record_unreadable`, and a publication of the key is refused. Now, when the stored record is
+unreadable, the clear of a records entry the page declares, applied or not, is a change of the goal
+records record, and the composer writes the header alone for it; a set over an unreadable record
+is refused as before. What the record held is lost; it was no record a reader read.
+`check_goal_edit` and `compose` carry it, [runtime-interface.md](runtime-interface.md) ("Goal
+request kinds") and [instance-fact-store.md](instance-fact-store.md) say it, the word's text names
+the way out, and `rr2_p2_a_clear_rewrites_a_record_the_reader_does_not_read_as_the_header_alone`
+pins it (pure: the set refused; the clear of an applied and of an unapplied entry composed to the
+header alone, which reads back as a record that holds nothing; a clear of a name the page does not
+declare judged as before). The word `record_unreadable` keeps its one cause for both records (the
+stored record the edit would rewrite is not one its reader reads); the remedy differs by the
+record, and the request's own entry tells which.
+(2) *An empty set where nothing is stored* writes the header alone, and a clear after it answers
+`value_not_set`: harmless, and now said in the contract.
+(3) The read-back's check of a `to` (the text of a JSON object within the bound) is not the whole
+of the fact validation's check; no value reaches the difference, since a `to` is the composer's own
+canonical text, and it is left as it is.
+The first build's lint refused the pure test's list of cases (`clippy::type_complexity`, a tuple
+type inside a `Vec`); it has a named type now. Left without a test, as before:
+`goal_records_key_reserved`; and that decisions do not change while records are stored is shown
+only by evaluations that complete.
+
+**At deploy.** Nothing to configure, and nothing changes for an instance until a records entry is
+set on it. In the release notes' language: 新增：`goals.json` 里的 records 条目可以存值了。`goals set <实例> <条目名> '[{"key": …, "to": {…}}]'` 把“练谁、练到哪”存进实例事实 `session.goal_records`（只有目标编辑能写，用 `facts` 读回）；目标页的版本号取两份记录的较大者。这一版不据此计算任何需求，调度不变。
+
 ## 2 Removals and changes of option 丙 (M-PKG §4.3, §4.4)
 
 Deleted outright, no old-version reader (M-PKG §7). The slice named deletes the field and its
@@ -51218,6 +51403,7 @@ U-1 owns the shapes of `BindChannel`, `UpgradeState`, `UpgradeStateStatus`, `Loa
 | `session.remedy.choices` (one per scope: instance, server or game; §1.110 B15-6) | instance | yes | #411 B15 R6 |
 | `session.dispatch.parameter.<name>` (an overlay of a run's snapshots only, never stored; the prefix `session.dispatch.` is refused to publishers; §1.110 B15-7) | — (never stored) | — | #411 B15 R5 |
 | `inventory.list.<name>` (per instance, one `record_list` per list reading, at most 1024 rows since S168-LB1a, 0.12.55, §1.309, §1.311, 256 before it; the prefix is refused to client publishers and to marks; [instance-fact-store.md](instance-fact-store.md), "List reading facts"; §1.291 S168C-2) | instance | yes (every instance key) | #428 S168-4 |
+| `session.goal_records` (per instance, one `record_list` of a header and at most 128 records of the `records` entries, written only by `EditGoal`; [instance-fact-store.md](instance-fact-store.md), "Goal records facts"; §1.537) | instance | yes (every instance key) | #455 RR2 |
 
 The capacity of the instance store is booked in
 [Instance fact store](instance-fact-store.md#capacity-ledger-workflow-383-ao-0).

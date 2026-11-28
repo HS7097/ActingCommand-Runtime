@@ -103,7 +103,7 @@ Version 1, which release 0.12.60 read, had eight: these five without `variable`,
 | `resource` | `governs: {pool}`; `rate?: {floor_milli_per_day, ceiling_milli_per_day}` | `{at_least, by_unix_ms?}` |
 | `tier` | `governs: {rules}`; `options: [{value, title, scale_milli}]` (2 to 32), `default` | one option value |
 | `variable` | none; it writes neither `title` nor `help`, only `name`, `type` and an optional `block` | the placed variable's ([package-variables.md](package-variables.md)) |
-| `records` | `table`: a table of the root's `goal-tables.json`; `max_records`: 1 to 128 | records of keys of the table and their targets (a later slice's; none is stored in 0.12.92) |
+| `records` | `table`: a table of the root's `goal-tables.json`; `max_records`: 1 to 128 | `[{key, to}]`: 0 to `max_records` records of keys of the table and their targets, stored since 0.12.94 ("The records entry") |
 
 - **`rate`** (a `resource` entry): the pool's net income per day, times 1000, signed, at its low end
   (`floor_milli_per_day`) and at its high end (`ceiling_milli_per_day`), written by the resource
@@ -136,11 +136,41 @@ what that takes are the root's `goal-tables.json` ([standard-pack-goal-tables.md
   `malformed` when it is no whole number).
 - Its place on the page, its name, its texts and its block (`record_list`, its base block, or none
   written) are as every other type's.
-- **Until the slice that stores records**, the entry's name is declared and not settable: `goals
-  set` and `goals clear` of it are refused `goal_value_invalid` with the existing word
-  `holds_no_value`; the goal page and `GoalView` do not list it, so a client of today's
-  `runtime-client` revision reads the page as it reads it without the entry (no member, no type
-  word added). Nothing computes from it yet ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
+- **Its value** (Workflow #455 RR2, since 0.12.94; [v012-register.md](v012-register.md) §1.537).
+  A JSON array of 0 to `max_records` records `{key, to}`. `key` is a key of the entry's table, and
+  no key appears twice. `to` is an object that names at least one column of the table for which
+  the key has a ladder (its class's for a column of `per: "class"`, its own for one of
+  `per: "key"`), each with a position of that ladder; for a column of `per: "sub"`, an object of
+  subs the key has, at least one, each with a position of that sub's ladder. A position is an
+  array of whole numbers, one of the ladder's `positions`. A record holds nothing else. For
+  example, on the first table of [standard-pack-goal-tables.md](standard-pack-goal-tables.md):
+  `[{"key": "hero_a", "to": {"phase": [2], "level": [2, 2], "mastery": {"1": [2], "2": [2]}}}]`.
+- **Not checked, on purpose.** A position against the account's progress: it is not known when a
+  person speaks, and a goal behind the progress asks nothing. And the prerequisites (`requires`):
+  the computation raises a required column itself. Both are the computing slice's.
+- **The edit** (`goals set` and `goals clear`, `EditGoal`; [runtime-interface.md](runtime-interface.md),
+  "Goal request kinds"). The entry applies when the root in force holds an accepted
+  `goal-tables.json` with its table; a set of it replaces the entry's records as a whole, as the
+  set of any entry replaces its value, and an empty array and `goals clear` remove them. The
+  refusals are the existing words of `goal_value_invalid`, each at its cause: a value or a part of
+  it not of this form `wrong_type` (`json_pointer` names the part), a key the table does not hold
+  `not_an_option`, a key twice `key_repeated`, more records than `max_records`
+  `count_out_of_range`, a column the key has no ladder for or a position its ladder does not hold
+  `out_of_range` (at the column or the sub), a `to` whose canonical text passes 1024 bytes
+  `value_too_large`, more than 128 records over the application `record_out_of_limits`. An entry
+  the root in force does not apply (its tables file absent or refused, its table not in it)
+  answers as an unknown name does. `goals clear` of a name removes the records stored under it,
+  whether or not the root still declares an entry of that name (the page's rule for a value left
+  under a name); with none stored it answers `value_not_set` for an applied records entry.
+- **Where the value is stored**: the instance fact `session.goal_records`
+  ([instance-fact-store.md](instance-fact-store.md), "Goal records facts"), which only the edit
+  writes and a fact reader reads back. A change of the root never rewrites it: a record whose
+  entry, key, column or position the root in force no longer declares stays stored and is read
+  back as it is (the computing slice will apply no such record, and say why).
+- **What a client sees.** The goal page and `GoalView` do not list the entry and gain no member and
+  no word, so a client of today's `runtime-client` revision reads the page as it reads it without
+  the entry; the page's `version` is the greater of the sequences of the application's two records.
+  Nothing computes from the records yet ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
   "What arrives later").
 
 ### Neutral example
@@ -174,7 +204,7 @@ Version 2 has the seven blocks of version 1, one for each type or variable kind,
 | `choice` | `tier`, a `choice` variable | one of a few options: side by side up to four, a drop-down above |
 | `switch` | a `switch` variable | on or off |
 | `ordered_list` | an `ordered` variable | values in an order a person sets, with search when the list is long |
-| `record_list` | `records` (Workflow #455 RR1, version 3) | the records of whom to raise and to which grade (not shown before the slice that stores records) |
+| `record_list` | `records` (Workflow #455 RR1, version 3) | the records of whom to raise and to which grade (stored since Workflow #455 RR2; not shown on the page before the slice that views them) |
 
 `block` may be left out or name the type's base block; any other word is `goal_block_mismatch`. A
 `variable` entry may leave it out or name one of the four blocks a variable is shown with, which
@@ -271,7 +301,8 @@ for that game, and a reader of the declaration says why.
 Workflow #455 RR1: every reader below reads `goal-tables.json` where it reads this file, by the
 same goal check, and gives a records entry's table to it ([standard-pack-goal-tables.md](standard-pack-goal-tables.md),
 "Who reads it"); a bundle that carries a version 3 file declares `package` 28 ("Interface"); the
-goal page lists no records entry and an edit of its name is `holds_no_value` ("The records entry").
+goal page lists no records entry, and (Workflow #455 RR2, since 0.12.94) an edit of its name sets
+or clears its records, stored in the instance fact `session.goal_records` ("The records entry").
 Every version 2 word below reads version 3 since.
 
 - **`actinglab standard-pack check --root <game root>`** reads the file beside the other root files

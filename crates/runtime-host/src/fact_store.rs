@@ -11,8 +11,8 @@ use actingcommand_contract::{
     EventActor, EventId, EventPayload, EventQuery, EventType, FactContent,
     FactInvalidationEventData, FactPayload, FactPublishedPayload, FactRecord,
     FactScalar as ContractFactScalar, FactScope, FactValue as ContractFactValue,
-    InstanceFactContext, InstanceFactSnapshot, RESOURCE_TARGETS_FACT_KEY, RuntimeErrorCode,
-    priority_offset_task_id,
+    GOAL_RECORDS_FACT_KEY, InstanceFactContext, InstanceFactSnapshot, RESOURCE_TARGETS_FACT_KEY,
+    RuntimeErrorCode, priority_offset_task_id,
 };
 use actingcommand_ledger::{
     GlobalLedger, LedgerCode, LedgerTransactionWork, PersistedEvent, TransactionStateObservation,
@@ -1746,6 +1746,19 @@ impl InstanceFactStore {
         {
             return Err(RuntimeHostError::request(
                 HostCode::ResourceTargetsKeyReserved,
+                operation,
+                RuntimeErrorCode::InvalidRequest,
+            ));
+        }
+        // Workflow #455 RR2: so is an instance's goal records record, written only by the goal
+        // edit (`EditGoal`).
+        if facts
+            .facts
+            .iter()
+            .any(|fact| fact.fact_key == GOAL_RECORDS_FACT_KEY)
+        {
+            return Err(RuntimeHostError::request(
+                HostCode::GoalRecordsKeyReserved,
                 operation,
                 RuntimeErrorCode::InvalidRequest,
             ));
