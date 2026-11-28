@@ -38,10 +38,12 @@
 //!
 //! Workflow #463 S3-10 (contracts/standard-pack-trial.md; register §1.417): `actinglab
 //! standard-pack trial --instance <x> --package <dir> [--authorization <reference>] [--variable
-//! <name>=<json>]... [--expect <outcome_key>] [--irreversible] [--root <game root>] [--state-dir
-//! <dir>] --plan` answers the plan of one trial run on a real application and every refusal
-//! before it (the resource tooling's `plan_standard_pack_trial`). A plan asks for no authorization
-//! (fix round 2).
+//! <name>=<json>]... [--expect <outcome_key>] [--root <game root>] [--state-dir <dir>] --plan`
+//! answers the plan of one trial run on a real application and every refusal before it (the
+//! resource tooling's `plan_standard_pack_trial`). A plan asks for no authorization (fix round 2).
+//! Workflow #503 TRIAL (0.12.101): the line has no `--irreversible` (one given is refused as any
+//! flag the row does not take), and the run of a package the irreversible mark flags needs its
+//! authorization alone.
 //!
 //! Workflow #463 S3-11 (contracts/standard-pack-trial.md, "The run"; register §1.418): without
 //! `--plan` the line sends the trial's one run, after everything the plan does and the refusals only
@@ -197,13 +199,12 @@ const REDIRECTING_VARIABLES: [&str; 4] = [
 pub(crate) const READY_FLAGS: [&str; 1] = ["--root"];
 /// Workflow #463 S3-10: the flags `standard-pack trial` takes; its instance is actinglab's global
 /// `--instance`, as on every own command that acts on one. Workflow #463 S3-11: and the run's
-/// two, `--collect` and `--wait`.
-pub(crate) const TRIAL_FLAGS: [&str; 10] = [
+/// two, `--collect` and `--wait`. Workflow #503 TRIAL: no `--irreversible`.
+pub(crate) const TRIAL_FLAGS: [&str; 9] = [
     "--package",
     "--authorization",
     "--variable",
     "--expect",
-    "--irreversible",
     "--root",
     "--state-dir",
     "--plan",
@@ -215,8 +216,9 @@ pub(crate) const TRIAL_FLAGS: [&str; 10] = [
 const COLLECT_FLAG: &str = "--collect";
 const WAIT_FLAG: &str = "--wait";
 /// Workflow #463 S3-10: the flags of `standard-pack trial` that take no value, which take none
-/// from the next word but `true` or `false` (`FlagArgs::parse_switches`).
-pub(crate) const TRIAL_SWITCHES: [&str; 2] = ["--irreversible", "--plan"];
+/// from the next word but `true` or `false` (`FlagArgs::parse_switches`). Workflow #503 TRIAL:
+/// `--plan` alone.
+pub(crate) const TRIAL_SWITCHES: [&str; 1] = ["--plan"];
 /// Workflow #463 S3-10: the row's name, which its refusals name.
 const TRIAL: &str = "standard-pack trial";
 /// Workflow #463 S3-14: the flags `standard-pack status` takes, each once. Workflow #463 S3-15a:
@@ -312,14 +314,14 @@ pub(crate) fn catalog_options() -> [&'static str; 7] {
 }
 
 /// Workflow #463 S3-10: the flags of `standard-pack trial`. Workflow #463 S3-11: the run's.
-pub(crate) fn trial_options() -> [&'static str; 11] {
+/// Workflow #503 TRIAL: no `--irreversible`.
+pub(crate) fn trial_options() -> [&'static str; 10] {
     [
         "--instance <the instance the trial is for; the run is sent to it>",
         "--package <a pack directory: packs/<id> of a checkout or a placed pack; no container>",
         "--authorization <the owner's authorization reference, 1 to 1024 bytes; the run needs it>",
         "--variable <name>=<json> (repeatable; judged by the plan; the run carries it)",
         "--expect <an outcome key the package declares; the run answers whether it matched>",
-        "--irreversible (acknowledges a package the irreversible mark flags; its run needs it)",
         "--root <judges the mark; a pack it does not register is marked; without it not judged>",
         "--state-dir <the Lab's state directory, where trial records go; default actinglab's>",
         "--plan (the plan only; nothing is sent or written)",
@@ -925,7 +927,6 @@ fn run_trial(global: &GlobalOptions, args: &[String]) -> CliOutcome<Value> {
         authorization,
         variables,
         expect,
-        irreversible: flags.bool("--irreversible"),
         root,
         state_dir: crate::session_state_dir_from_flags(&flags)?,
     };
@@ -1426,9 +1427,6 @@ impl TrialRun<'_> {
         }
         if let Some(expected) = &plan.expect {
             words.extend(["--expect".to_owned(), expected.clone()]);
-        }
-        if plan.irreversible_acknowledged {
-            words.push("--irreversible".to_owned());
         }
         if let Some(root) = &self.request.root {
             words.extend(["--root".to_owned(), root.display().to_string()]);

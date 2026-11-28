@@ -537,7 +537,8 @@ for a version 2 file one of whose entries governs such a package:
 
   What stays: a capability's `irreversible` mark in a package's declaration, which the remedy layer
   reads ([remedies.md](remedies.md) §2.3), the Lab's `packs` and the console show, and the
-  standard-pack trial asks an acknowledgement for ([standard-pack-trial.md](standard-pack-trial.md));
+  standard-pack trial shows (it asked an acknowledgement for it until Workflow #503 TRIAL, 0.12.101,
+  and asks nothing since; [standard-pack-trial.md](standard-pack-trial.md));
   a Lab operation that is irreversible records who started it. Until 0.12.77 this section kept
   "premium currency, real money, retiring and scrapping" out at three places: the check refused
   an entry that governed, reached or followed such a package (`goal_governs_irreversible`, judged
