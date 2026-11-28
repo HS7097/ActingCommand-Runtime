@@ -24,6 +24,14 @@
 //   instance named asleep; asleep, the goal-lifted one waits for its hourly clock's next time.
 // - t8: an asleep instance woken for another task: at the next evaluation, awake, the consumer
 //   below the line is dispatched as on an awake instance.
+// - t9 (fix round 1, its regression): a chance whose end, a timeline interval's or an interval
+//   clock's, is also the pool's next projection step at the evaluation is released at that end less
+//   the run, and at the release the consumer passes; the first build took the end for the pool's
+//   step and waited for the line.
+// - t10 (fix round 1): a trigger that reads the regenerating pool names only its next step, which
+//   ends nothing: the consumer waits for the line.
+// - t11 (fix round 1): the same through `all` and `any`, one side naming the pool's step and the
+//   other the interval's end at the same time: the end is an end; steps alone are none.
 //
 // The fixture: one instance, a pool regenerating one unit in six minutes, capacity 240, read 100 a
 // minute before NOW, written lines 50 (hard), 120 (stop) and 150 (trigger) unless a test says
@@ -464,6 +472,144 @@ fn wake_t8_once_the_instance_is_awake_for_another_task_the_consumer_is_dispatche
     );
 }
 
+// ---- t9, t10, t11 (fix round 1: the end of a chance is known by where it comes from)
+
+/// 18:55 UTC, five minutes before the timeline interval ends at 19:00, 30 steps after the reading:
+/// the pool's next projection step is that end.
+const AT_EVENT_END: u64 = READ_AT + 175 * MINUTE_MS;
+const EVENT_END: u64 = READ_AT + 3 * HOUR_MS;
+
+#[test]
+fn wake_t9_a_chance_that_ends_on_a_pool_step_is_released_at_its_end_less_its_run() {
+    // Fix round 1's regression. (trigger, evaluation, end of the chance, case): each end is a step
+    // of the pool's projection and its next step at the evaluation.
+    let cases = [
+        (timeline(), AT_EVENT_END, EVENT_END, "a timeline interval"),
+        // 16:55: the hourly clock's next occurrence at 17:00, ten steps after the reading.
+        (
+            hourly(),
+            READ_AT + 55 * MINUTE_MS,
+            READ_AT + HOUR_MS,
+            "an interval clock",
+        ),
+    ];
+    for (trigger, at, end, case) in cases {
+        assert!((end - READ_AT).is_multiple_of(STEP_MS), "{case}: a step");
+        assert!(end - STEP_MS < at && at < end, "{case}: the next step");
+        let release = end - E;
+        assert!(at < release && release < REACHES, "{case}: before the line");
+        let catalog = catalog(
+            vec![consumer(CONSUMER, 10_000, trigger)],
+            regen_pools(Some(LINES)),
+            json!([daily_event()]),
+            0,
+        );
+        let mut world = World::new(catalog, &[(REGEN_KEY, READ)]);
+        let asleep = world.asleep(at);
+        assert!(asleep.dispatch_intents.is_empty(), "{case}: {asleep:#?}");
+        assert_below_line(
+            decision(&asleep, CONSUMER),
+            REGEN,
+            (projected_at(at), LINES.2),
+            "catalog",
+            release,
+        );
+        // At the release, the pool's next step still that end, it passes as today.
+        let at_release = world.asleep(release);
+        let woken_for = decision(&at_release, CONSUMER);
+        assert!(
+            last_is(woken_for, PolicyCode::InstanceAsleepWakeDue),
+            "{case}: {woken_for:#?}"
+        );
+    }
+}
+
+#[test]
+fn wake_t10_a_trigger_that_names_only_the_pools_step_waits_for_the_line() {
+    // At least 60 of the regenerating pool, true from the reading on: its wake is the pool's next
+    // step alone (the reading has no expiry), so the consumer waits for the line, also where that
+    // step falls on a whole hour.
+    for at in [NOW, READ_AT + 55 * MINUTE_MS] {
+        let catalog = catalog(
+            vec![consumer(CONSUMER, 10_000, regen_at_least(60))],
+            regen_pools(Some(LINES)),
+            no_events(),
+            0,
+        );
+        let mut world = World::new(catalog, &[(REGEN_KEY, READ)]);
+        let asleep = world.asleep(at);
+        assert!(asleep.dispatch_intents.is_empty(), "{at}: {asleep:#?}");
+        assert_below_line(
+            decision(&asleep, CONSUMER),
+            REGEN,
+            (projected_at(at), LINES.2),
+            "catalog",
+            REACHES,
+        );
+    }
+}
+
+#[test]
+fn wake_t11_through_all_and_any_a_pool_step_is_no_end_and_a_time_beside_it_is() {
+    // At 18:55 one side names the pool's next step and the other the interval's end, the same
+    // instant 19:00: (trigger, release, case).
+    let cases = [
+        (
+            json!({"kind": "all", "predicates": [regen_at_least(60), timeline()]}),
+            EVENT_END - E,
+            "all: a step and an end",
+        ),
+        // The pool's side false and read first, the interval's true.
+        (
+            json!({"kind": "any", "predicates": [regen_at_least(200), timeline()]}),
+            EVENT_END - E,
+            "any: a step and an end",
+        ),
+        (
+            json!({"kind": "all", "predicates": [regen_at_least(60), quiet()]}),
+            REACHES,
+            "all: a step alone",
+        ),
+        (
+            json!({"kind": "any", "predicates": [regen_at_least(200), regen_at_least(60)]}),
+            REACHES,
+            "any: steps alone",
+        ),
+    ];
+    for (trigger, release, case) in cases {
+        let catalog = catalog(
+            vec![consumer(CONSUMER, 10_000, trigger)],
+            regen_pools(Some(LINES)),
+            json!([daily_event()]),
+            0,
+        );
+        let mut world = World::new(catalog, &[(REGEN_KEY, READ)]);
+        let asleep = world.asleep(AT_EVENT_END);
+        assert!(asleep.dispatch_intents.is_empty(), "{case}: {asleep:#?}");
+        assert_below_line(
+            decision(&asleep, CONSUMER),
+            REGEN,
+            (projected_at(AT_EVENT_END), LINES.2),
+            "catalog",
+            release,
+        );
+        if release < REACHES {
+            let at_release = world.asleep(release);
+            let woken_for = decision(&at_release, CONSUMER);
+            assert!(
+                last_is(woken_for, PolicyCode::InstanceAsleepWakeDue),
+                "{case}: {woken_for:#?}"
+            );
+        }
+    }
+}
+
+/// The regenerating pool's projection at `at` with nothing unshown: its reading and one unit a
+/// whole step since.
+fn projected_at(at: u64) -> i64 {
+    READ + i64::try_from((at - READ_AT) / STEP_MS).expect("a count of steps")
+}
+
 // ---- The world a test drives
 
 /// The catalog, the Runtime's memory of the capped episodes, the pools' readings a minute before
@@ -813,6 +959,17 @@ fn quiet() -> Value {
         "pool_id": OUT,
         "comparison": "greater_than_or_equal",
         "value": 0
+    })
+}
+
+/// True while the regenerating pool's projection holds at least `value`, naming only the pool's
+/// next projection step (its reading has no expiry).
+fn regen_at_least(value: u64) -> Value {
+    json!({
+        "kind": "resource_projection",
+        "pool_id": REGEN,
+        "comparison": "greater_than_or_equal",
+        "value": value
     })
 }
 

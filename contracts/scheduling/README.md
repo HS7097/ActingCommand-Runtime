@@ -3716,9 +3716,16 @@ then held back; the idle check stopped it again, with no end.
     Over several such pools the candidate consumes, the earliest. A pool without written lines has
     its capacity as its trigger line, so it waits for its capacity.
   - *the chance*: the end of the task's chance less its expected duration `E`. Its chance ends at
-    the earlier of its decision's own wake as it stands (its trigger's and its feedback stop's next
-    time), unless that wake is a regenerating pool's next projection step, and the end of the
-    activity window open now.
+    the earliest time at which what lets it run now stops for a reason of time: its trigger's and
+    its feedback stop's own boundaries (a timeline interval's end, a clock's next occurrence or the
+    end of its grace, a fact's freshness end where the decision's wake counts it, a feedback
+    result's expiry), and the end of the activity window open now. A regenerating pool's next
+    projection step is never one, wherever it enters the decision's wake (a `resource_projection`
+    of the trigger or of the feedback stop, alone or under `all`, `any` or `not`): it is when the
+    evaluation reads the pool again. An end is known by where it comes from, never by its value, so
+    a time that is both a pool's step and such a boundary is an end. (Fix round 1 of 0.12.101: the
+    first build dropped the decision's whole wake whenever it equalled a pool's next step, so a
+    chance that ended on a step was missed and the consumer waited for the line past it.)
   With no time for the line, or a release not after the evaluation, the candidate passes exactly
   as before. The round goes on to the instance's next candidate through every gate: if that one is
   eligible it is the task the instance is woken for, as before, and two consumers below the line
@@ -3736,10 +3743,10 @@ then held back; the idle check stopped it again, with no end.
   explanation only: no decision record, no `task_held`, no clock-slot record). The hard line, the
   reserve gate and every later gate still judge whatever runs. Known limits: an interval clock's
   next occurrence, and an activity window that closes at a day's end to open again at once, end
-  the hold early (an extra wake, never a lost chance); a wake that is a pool's next step hides any
-  later time behind it, and a trigger that the filling pool turns false is not seen, as pool steps
-  are not counted as an end; a pack schedule's row or a blackout that closes the task before the
-  line is not seen by the evaluation. Not built: a wake planned while the instance was awake for
+  the hold early (an extra wake, never a lost chance), and so does an `any` whose first true side
+  names an end while a later side would stay true; a trigger that the filling pool turns false is
+  not seen, as pool steps are not counted as an end; a pack schedule's row or a blackout that closes
+  the task before the line is not seen by the evaluation. Not built: a wake planned while the instance was awake for
   such a consumer's own later time (its cooldown's end, its clock's next time) still wakes it then
   less the lead; and a consumed pool's reading that expires while the instance sleeps makes the
   consumer's benefit unknown, as before (with no reader bound its `fact_refresh_unbound` is held by

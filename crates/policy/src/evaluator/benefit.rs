@@ -91,7 +91,7 @@
 //!   such a pool the gate reads the sums with every term and says nothing of it.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use actingcommand_contract::outcome::Outcome;
 use actingcommand_selection_policy::UnknownReason;
@@ -1090,15 +1090,16 @@ pub(super) fn gate(
     Ok(kept)
 }
 
-/// #503 WAKE (register §1.549, the coordinator's ruling 1; `contracts/scheduling/README.md`,
-/// "Below a pool's trigger line"): when a consumer that would pass on an asleep instance below a
-/// regenerating pool's trigger line is let through: the earlier of the time the pool reaches the
-/// line (`trigger`, the earliest of such pools it consumes) and the end of its chance less its
-/// expected duration `expected`. Its chance ends at the earlier of its decision's own wake as it
-/// stands (its trigger's and its feedback stop's next time), unless that wake is a regenerating
-/// pool's next projection step (the evaluation's next reading of the pool, no end of anything), and
-/// the end of the activity window open now. `None` when that release is not after the evaluation:
-/// the consumer passes as on an awake instance.
+/// #503 WAKE (register §1.549, the coordinator's ruling 1 as fix round 1 states it;
+/// `contracts/scheduling/README.md`, "Below a pool's trigger line"): when a consumer that would
+/// pass on an asleep instance below a regenerating pool's trigger line is let through: the earlier
+/// of the time the pool reaches the line (`trigger`, the earliest of such pools it consumes) and
+/// the end of its chance less its expected duration `expected`. Its chance ends at the earliest
+/// time at which what lets it run now stops for a reason of time: its trigger's and its feedback
+/// stop's own boundaries (`TaskWork::chance_end_unix_ms`, which never holds a regenerating pool's
+/// projection step, whatever its value: that is the evaluation's next reading of the pool, no end
+/// of anything) and the end of the activity window open now. `None` when that release is not after
+/// the evaluation: the consumer passes as on an awake instance.
 fn asleep_release(
     context: &PlacementContext<'_>,
     candidate: &PlacementCandidate,
@@ -1107,10 +1108,6 @@ fn asleep_release(
     expected: u64,
 ) -> PolicyEvaluationResult<Option<u64>> {
     let now = context.time.unix_ms;
-    let own = match task_work.next_wake_unix_ms {
-        Some(wake) if pool_steps(context)?.contains(&wake) => None,
-        own => own,
-    };
     let window_end = context
         .profiles
         .iter()
@@ -1119,32 +1116,11 @@ fn asleep_release(
         .transpose()?
         .flatten()
         .map(|window| window.until_unix_ms);
-    let release = match min_wake(own, window_end) {
+    let release = match min_wake(task_work.chance_end_unix_ms, window_end) {
         Some(end) => trigger.unix_ms.min(end.saturating_sub(expected)),
         None => trigger.unix_ms,
     };
     Ok((release > now).then_some(release))
-}
-
-/// #503 WAKE: the next projection step of each regenerating pool the evaluation reads, as
-/// [`super::pool_projection_steps`] finds them for the idle plan, from the evaluation's own pool
-/// values.
-fn pool_steps(context: &PlacementContext<'_>) -> PolicyEvaluationResult<BTreeSet<u64>> {
-    let mut steps = BTreeSet::new();
-    for (pool_id, reading) in context.pool_values.iter() {
-        let Some(spec) = context.pool_specs.get(pool_id) else {
-            continue;
-        };
-        if let Some(step) = next_pool_projection_change(
-            spec,
-            reading.bound,
-            reading.snapshot,
-            context.time.unix_ms,
-        )? {
-            steps.insert(step);
-        }
-    }
-    Ok(steps)
 }
 
 /// `B` or `ε` in milli as a record value, saturated at the `i64` range.

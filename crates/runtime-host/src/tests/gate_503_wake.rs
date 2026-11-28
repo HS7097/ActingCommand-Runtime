@@ -217,7 +217,9 @@ fn read_sources() -> CatalogSources {
 }
 
 /// [`POOL`]'s reading `value` as a package publishes it, observed at `observed_at`, valid for
-/// `valid_ms`, no input invalidation (`gate_486_asleep`'s `pool_reading`).
+/// `valid_ms` (at least a second), no input invalidation (`gate_486_asleep`'s `pool_reading`). Its
+/// freshness policy admits that lifetime: `stored_fact`'s admits one second to two minutes, and a
+/// record whose lifetime lies outside its own policy is refused (`fact_observation_invalid`).
 fn pool_reading(value: i64, observed_at: u64, valid_ms: u64) -> FactRecord {
     let mut record = stored_fact(
         FactScope::Instance {
@@ -230,6 +232,11 @@ fn pool_reading(value: i64, observed_at: u64, valid_ms: u64) -> FactRecord {
     );
     record.observed_at_unix_ms = observed_at;
     record.expires_at_unix_ms = Some(observed_at + valid_ms);
+    record.ttl_policy = Some(FactTtlPolicy {
+        minimum_ms: 1_000,
+        maximum_ms: valid_ms,
+        source: FactTtlSource::DetectorContract,
+    });
     record.confidence_milli = 990;
     record.source_detector = format!(
         "{}task/k2",

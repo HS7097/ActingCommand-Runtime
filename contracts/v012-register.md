@@ -52463,16 +52463,30 @@ as it is (its decisions carry no reason). The new reason is in no closed set tha
   snapshot, `a` every `p` milliseconds its regeneration, `u` the consumption the reading does not
   show yet, `T` the trigger line as read now (the capacity without a written one); none when `a` is
   0, when `T + u` is above the capacity, when the snapshot is above a capacity read from its fact
-  (it does not regenerate), or when the time lies past the integer range. `E` is the earlier of the
-  decision's own wake as it stands (its trigger's and its feedback stop's next time) unless that
-  wake is one of the next projection steps of the regenerating pools the evaluation reads, and the
-  end of the activity window open now; `d` the candidate's expected duration. Its two known limits,
-  as the study states them: an interval clock's next occurrence also ends the hold early (an extra
-  wake, never a lost chance), and a trigger that the filling pool turns false is not seen, because
-  pool steps are left out of `E`. Read with it: a window that closes at a day's end and opens again
-  at once ends it early too; a wake that is a pool's step hides a later time behind it; a pack
-  schedule's row or a blackout that closes the task before the line is the host's, which the
-  evaluation does not read.
+  (it does not regenerate), or when the time lies past the integer range. `E`, the end of the
+  consumer's chance, is the earliest time at which what lets it run now stops for a reason of time:
+  its trigger's and its feedback stop's own boundaries (a timeline interval's end, a clock's next
+  occurrence or the end of its grace, a fact's freshness end where today's wake counts it, a
+  feedback result's expiry), and the end of the activity window open now; a regenerating pool's
+  next projection step is never one, wherever it entered the decision's wake, and a time that is
+  both is an end. `d` is the candidate's expected duration. *Fix round 1* (CI's first round, test
+  t4 at its interval's release): the first build took the decision's whole wake as the end unless
+  that time equalled a pool's next projection step, so an interval or a clock ending on a step was
+  dropped and the consumer waited for the line past its chance; now an end is known by where it
+  comes from. Built as the coordinator's shape A: `PredicateEvaluation::end_unix_ms`
+  (`crates/policy/src/evaluator.rs`) carries beside each predicate's wake the earliest of its times
+  that is no pool's step (a `resource_projection` names its step as its wake and only its reading's
+  freshness end as an end; `all` and `any` combine the ends as they combine the wakes), and
+  `TaskWork::chance_end_unix_ms`, the trigger's and the feedback stop's, is what `asleep_release`
+  reads; nothing else reads it, and every wake, reason and record is as the first build left it.
+  The score stage's wakes (a selection fact, a goal's inventory or validity lapsing) are no end of
+  the chance, as the first build's wording said and its code did not. Its known limits, as the
+  study states them: an interval clock's next occurrence also ends the hold early (an extra wake,
+  never a lost chance), and a trigger that the filling pool turns false is not seen, because pool
+  steps are left out of `E`. Read with it: a window that closes at a day's end and opens again at
+  once ends it early too, and so does an `any` whose first true side names an end while a later
+  side would stay true; a pack schedule's row or a blackout that closes the task before the line is
+  the host's, which the evaluation does not read.
 - *2, the idle plan keeps that release* (`crates/runtime-host/src/schedule_explanation.rs`,
   `IdleDraft::add`). A decision whose last reason is the new code is not due, and its wake is its
   release on every instance, kept on an instance whose idle action can put it to sleep even when it
@@ -52507,6 +52521,9 @@ as it is (its decisions carry no reason). The new reason is in no closed set tha
 | `…::wake_t6_two_consumers_below_the_line_both_wait_and_neither_waits_for_the_other` (study 6) | both deferred with the new code, neither `instance_already_selected`, nothing woken for |
 | `…::wake_t7_the_awake_a1_cases_are_dispatched_as_before_and_asleep_the_goal_lifted_one_waits` (work order 1) | §1.542 A1 (a)'s numbers, `B` 2, and a consumer of `B` 9000: awake, dispatched with those values, byte for byte; asleep the goal-lifted one waits until its hourly clock's next time less `E` |
 | `…::wake_t8_once_the_instance_is_awake_for_another_task_the_consumer_is_dispatched` (work order 2) | asleep, the consumer waits and another task is the one woken for; after that task's run, awake, the consumer is dispatched as on an awake instance |
+| `…::wake_t9_a_chance_that_ends_on_a_pool_step_is_released_at_its_end_less_its_run` (fix round 1, its regression) | at 18:55 a timeline interval ending at 19:00, and at 16:55 an hourly clock's 17:00, each a step of the projection and its next step then: the release is that end less `E`, and at the release the consumer is the task woken for |
+| `…::wake_t10_a_trigger_that_names_only_the_pools_step_waits_for_the_line` (fix round 1) | a trigger reading the regenerating pool (at least 60), its reading without expiry, names only the pool's next step: the consumer waits for the line, at now and at 16:55 |
+| `…::wake_t11_through_all_and_any_a_pool_step_is_no_end_and_a_time_beside_it_is` (fix round 1) | at 18:55, `all` of the pool's reading and the interval, and `any` of a false reading and the interval, release at 18:59 and pass then; `all` of a reading and a trigger naming no time, and `any` of two readings, wait for the line |
 | `actingcommand-runtime-host` `gate_503_wake::wake_h1_an_asleep_instance_sleeps_below_the_trigger_line_and_is_woken_once_at_it` (study host 1) | two real replays, `close_app` and `stop_emulator`, catalog-a's pool of capacity 1000 with the lines 426, 440 and 450: the hard line holds the consumer, the action with no wake; four evaluations from 436 to 445 wait until 08:00, the plan's wake 08:00, no wake recorded; at 07:55 one wake `planned_time_reached` (and the emulator's start); awake, dispatched; the action taken again |
 | `…::wake_h2_the_release_stays_the_plans_wake_also_when_it_is_a_pool_step` (study host 2) | ruling 2 on the plan: the release that is a pool's step kept on an instance that can sleep and on another; another code's step names none there; never due |
 | `…::wake_h3_three_answers_only_a_change_lets_through_are_held_and_the_others_stay_due` (study host 3) | ruling 3: the three not due, an awake instance closes, a closed one is not woken; the reserve without `amount_after` and `heavy_scene_budget_deferred` due, kept open, a closed one woken |
@@ -52520,7 +52537,10 @@ No existing test is adapted: the gates the study lists as pinning today's behavi
 `asleep4_r11` to `asleep4_r14`, `asleep5_h1`, `asleep5_h2`, `idle1p_l2p`, `idle1p_l5`, `idle1p_l6`,
 `gate_ss2d` and `gate_484_idle_w2`) have no asleep instance with a regenerating consumed pool, or no
 decision that ends with one of ruling 3's codes, and pass unchanged as read. No golden re-recorded;
-no test leaves the gate maps.
+no test leaves the gate maps. Fix round 1 also gave h4's reading a freshness policy that admits its
+twenty minutes: the shared fixture's admits one second to two minutes, and a record whose lifetime
+lies outside its own policy is refused, so the first build's publication of it failed
+(`fact_observation_invalid`) before the test reached what it pins.
 
 **What is not changed.** Every instance not asleep, and an evaluation with no asleep instance, byte
 for byte; on an asleep instance every other candidate (one that does not pass, one a line holds, a
