@@ -982,7 +982,12 @@ fn factr_g_a_full_game_reclaims_an_expired_offset_a_request_published() {
     let mut store = Store::new();
     let g = game("game-one");
     let offset_key = priority_offset_fact_key("example.task");
-    let offset = store.observation(&g, &[offset_key.clone()], Some(BASE_MS + DAY_MS), &[]);
+    let offset = store.observation(
+        &g,
+        std::slice::from_ref(&offset_key),
+        Some(BASE_MS + DAY_MS),
+        &[],
+    );
     let old = offset.clone();
     store.append(
         offset,
