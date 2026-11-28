@@ -252,6 +252,15 @@ pub(super) fn build(inputs: &ManifestInputs<'_>) -> Result<RuntimeConfigManifest
             true,
             Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
         ),
+        // #503 FIXV (register §1.550): this build reads a task's fixed value of either sign, 0
+        // included, and beside a production of a priced or pending pool, the fixed value then the
+        // task's base value alone; a `schedule.json` whose rule writes such a value requires it, so
+        // an older Runtime refuses the file instead of refusing it at the rule's value.
+        subsystem(
+            actingcommand_policy::FIXED_VALUE_ANY_SUBSYSTEM,
+            true,
+            Outcome::new(ActingdCode::ConfigSubsystemAlwaysOn),
+        ),
         // Workflow #477 CV-2 (register §1.508): this build's composer takes a game root's business
         // part from its version 2 `pack-catalog.json`; a `schedule.json` that names it writes none
         // of its rules' business members, so an older Runtime refuses the file instead of

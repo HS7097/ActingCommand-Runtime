@@ -190,6 +190,12 @@ mod gate_477_cv2;
 #[cfg(test)]
 mod gate_477_cv2b;
 
+// #503 FIXV (register §1.550): the value of a version 2 `pack-catalog.json` takes the signed
+// range a rule's fixed value takes, written back by `--refresh` and `--values` and composed from a
+// switched root as the file that writes it.
+#[cfg(test)]
+mod gate_503_fixv;
+
 // Workflow #477 LR-1 (register §1.513): the root check holds a variable a press count reads to a
 // cap's range.
 #[cfg(test)]

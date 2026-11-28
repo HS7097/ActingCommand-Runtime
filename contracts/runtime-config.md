@@ -1020,6 +1020,8 @@ a file that does not name it keeps its revision.
 | `emulator_control.watch_interval_ms` | milliseconds `5000..=3600000`, the time between two polls, on the Runtime clock | `60000` | yes |
 | `emulator_control.restart_attempts` | integer `1..=100`, the most starts of one configured instance's stopped emulator by the watch within `restart_window_ms` (emu-watch R3) | `3` | yes |
 | `emulator_control.restart_window_ms` | milliseconds `60000..=86400000`, the window `restart_attempts` counts in | `1800000` | yes |
+| `emulator_control.start_commit_reserve_bytes` (#503 MEM, since 0.12.102) | integer `0..=1099511627776`, the host's available commit, in bytes, an automatic emulator start requires; `0` checks nothing | `17179869184` | yes |
+| `emulator_control.start_spacing_ms` (#503 MEM, since 0.12.102) | milliseconds `0..=600000`, how long after the latest emulator Start of any kind returned an automatic start may go on, on the Runtime clock; `0` spaces nothing | `30000` | yes |
 
 A value outside its range is `config_value_invalid` (`out_of_range`, with `range_min` and
 `range_max`) at start, in `check-config` and in `ConfigureSettings`; a value that is no integer is
@@ -1037,6 +1039,20 @@ or bound to another port, or bound to the reported port but unprepared (EMU-BIND
 restarts (no new key).
 `actingd-config` revision 11 ([component-interfaces.md](component-interfaces.md)) adds the four
 keys; a file that names none of them keeps its revision.
+
+**The start gate of the automatic emulator starts (#503 MEM, since 0.12.102; `actingd-config`
+revision 36; [emulator-control.md](emulator-control.md), "Commit headroom and spacing";
+[v012-register.md](v012-register.md) §1.556).** `start_commit_reserve_bytes` and
+`start_spacing_ms` hold an automatic emulator start (the daemon start's configured start, the
+emulator watch's restart, an idle wake after `stop_emulator`) whose turn has come until the host's
+available commit is at or above the reserve and the spacing has passed since the latest emulator
+Start of any kind returned. A person's, an agent's or the Lab's emulator control, any stop and the
+recovery ladder's restart rung are never held. Both keys are settable and read by the waiting claim
+at every tick of its wait (every 500 ms), so an instruction applies at the next tick without a
+restart; no per-instance form; no cross-key rule refuses a value. The keys are `hidden` in the
+console's tiers (the `advanced` tier holds its eight keys): a person sets them with `actingctl
+config set`, MCP `ac_config_set` or the configuration file. A file that names neither keeps its
+revision, and the defaults file's values apply.
 
 ## The `watchdog` section (#411 A66)
 
@@ -1503,6 +1519,38 @@ evaluator names no time at which a projection crosses a threshold). A wake a tim
 clock or timeline time of the trigger, a cooldown's end, a budget's release, an activity window's
 opening, a deadline, a reading's expiry. An instance whose idle action is `none`, and the plan the
 evaluation's own rows show, are as before.
+
+A consumer below its pool's trigger line wakes an asleep instance only when the pool reaches the
+line (#503 WAKE, since 0.12.101, [v012-register.md](v012-register.md) §1.549; the owner's direction
+of 11-28: an asleep instance waits until the pool has reached its trigger line and is then woken to
+spend it; an awake one counts goals and spends as before). Before 0.12.101 a judged consumer of a
+regenerating pool below its trigger line, with no capped episode under way, became the task an
+asleep instance is woken for as soon as one run fit above the hard line: the instance was started
+for one run and stopped again each time one run's cost had regenerated. Now the evaluation defers
+such a consumer on an asleep instance with `instance_asleep_below_trigger_line` until its release,
+the earlier of the time the pool's projection reaches the trigger line and the end of the task's
+chance less its expected duration ([scheduling/README.md](scheduling/README.md), "An asleep
+instance", "Below a pool's trigger line"). The idle plan does not count that decision due, and its
+release is its wake on every instance, also on one whose idle action can put it to sleep when the
+release is a regenerating pool's next projection step: the instance is woken at the release less
+the wake lead (`planned_time_reached`), and awake, the consumer is judged and dispatched as on any
+awake instance. A blackout covering the instance or its closed activity window holds that wake
+until it lets the instance through, and one that names no such time leaves none (fix round 2). Another task of the instance that is due still wakes it at once, as before.
+
+Three more answers wake nothing (#503 WAKE, ruling 3). A decision whose last reason is
+`fact_refresh_unbound` (a realistic key no reader can read), `selection_input_unknown` (a selection
+input no reading supplies) or `resource_reserve_insufficient` carrying `amount_after` (a known
+amount below the reserve) counts as held by a gate without a time, as the benefit gate's holds do:
+it is never due, and on an instance whose idle action can put it to sleep it names no wake. Only a
+change of the facts, the catalog or the configuration lets such a candidate through, and each such
+change wakes the policy driver. Before 0.12.101 each counted due: an awake instance whose only
+candidates were of these kinds never took its idle action, and an asleep one was woken for nothing,
+again at growing intervals (#486 ASLEEP-3's hold). The list is closed; due as before: a reserve hold
+without `amount_after` (its amount unknown: a reading may be what is missing), the shared run limits'
+waits (`heavy_scene_budget_deferred`, `policy_concurrent_runs_deferred`), `instance_already_selected`,
+`device_group_waiting` and `policy_chain_handover_waiting` (each ends with another run within
+minutes), and the fact refresh's waits for a reading (IDLE-1: a task waiting for a reading wakes the
+instance for it).
 
 A Runtime start keeps an asleep instance asleep (#486 ASLEEP-1 fix round 1, ruling 5). The start
 restores the instance stopped with its wake (IDLE-1P above), withdraws its availability as for every

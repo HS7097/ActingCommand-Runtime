@@ -2111,9 +2111,10 @@ impl HostShared {
             )?;
             let projection_micros = crate::policy_host::micros_since(projection_started);
             // #477 LF-1 (register §1.509): the pairs whose latest dispatch at the inputs' position
-            // carried a `run_cap`, with when that run ended; #455 RR3c (register §1.543): or
-            // `gaps_remaining`. Read once, here: the needs below and the evaluation read the one
-            // list, so a pool a run left unread is unread to both.
+            // carried a `run_cap`, with when that run ended; #455 RR3c (register §1.543) and RR3d
+            // (register §1.548): and every dispatch that carried `gaps_remaining`, a run that failed
+            // at its entry passed over. Read once, here: the needs below and the evaluation read the
+            // one list, so a pool a run left unread is unread to both.
             let handed_runs = policy.handed_runs(facts.ledger_position);
             // Workflow #455 RR3 (register §1.538, rulings 1 and 6): the needs computed from each
             // instance's stored records, under the gate these inputs were projected under, with
@@ -2316,8 +2317,9 @@ impl HostShared {
             // #477 LF-1 (register §1.509): the pairs whose latest dispatch at the inputs' position
             // carried a `run_cap`, with when that run ended; a pool such a run's task consumes is
             // unknown in the evaluation until it is read after that end. #455 RR3c (register
-            // §1.543): the list read with the needs, under the gates; so is a pool a run told
-            // enough turns to close a goal's gap on produced into.
+            // §1.543): the list read with the needs, under the gates; so is a pool on which the
+            // production told under a goal's gap since its reading reaches that gap (#455 RR3d,
+            // register §1.548: summed over the dispatches since the reading).
             left_out.give_handed_runs(handed_runs);
             setup.lap(SetupCall::HandedRuns, policy.catalog_costs());
             let evaluating = crate::policy_host::lap_instant();

@@ -144,7 +144,7 @@ fn goals_neutral_example_reads_to_typed_entries() {
     let mut references = GoalReferences::new(packages(&["neutral.collect"]));
     references
         .pools
-        .insert("pool.neutral.points".to_owned(), true);
+        .insert("pool.neutral.points".to_owned(), GoalPool::Valued);
     references.variables.insert(
         "route".to_owned(),
         variable(GoalBlock::Choice, &["neutral.collect"]),
@@ -280,7 +280,7 @@ fn goals_each_type_reads_its_members() {
     references.tables = Some(BTreeSet::from(["heroes".to_owned()]));
     references
         .pools
-        .insert("pool.neutral.points".to_owned(), true);
+        .insert("pool.neutral.points".to_owned(), GoalPool::Valued);
     references.rules.insert(
         "neutral.spend".to_owned(),
         GoalRule {

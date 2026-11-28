@@ -207,9 +207,10 @@ pub enum RecordNeedsNote {
         reason: Option<ResourceTargetPendingReason>,
     },
     /// #455 RR3c (register §1.543): `goal_records_holding_unknown` with `unknown_reason`
-    /// `fact_stale`: the holding of an item with a recipe is unread, a run told enough turns to
-    /// close a goal's gap on its pool having produced into it after its reading
-    /// ([`NeedHolding::Unread`]), so nothing below the item is taken apart.
+    /// `fact_stale`: the holding of an item with a recipe is unread, the production told under a
+    /// goal's gap on its pool since its reading having reached that gap (#455 RR3d, register
+    /// §1.548: summed over the dispatches since the reading; [`NeedHolding::Unread`]), so nothing
+    /// below the item is taken apart.
     HoldingUnread { item: String, pool_id: String },
     /// `goal_records_item_unweighed`: an item without a recipe and without a pool: shown with
     /// what the characters need of it, weighing nothing.
@@ -642,8 +643,8 @@ pub(crate) fn not_stacked_reason() -> DecisionReason {
 /// What the host reads of one evaluation's inputs to compute the needs (module doc): the facts and
 /// the readings given to the pools read from rows of a list as the evaluator projects them at the
 /// evaluation's time, and the timeline's resets at that time. #455 RR3c (register §1.543): and the
-/// pools a run told enough turns to close a goal's gap on left unread, judged from the evaluation's
-/// handed runs as the evaluator judges them ([`produced_unread`]).
+/// pools the production told under a goal's gap since their reading left unread, judged from the
+/// evaluation's handed runs as the evaluator judges them ([`produced_unread`]).
 pub struct NeedsProjection<'a> {
     catalog: &'a CompiledCatalog,
     projected: EvaluationFacts,
@@ -664,9 +665,10 @@ pub enum NeedHolding {
     /// Not known: the observation's reason, none when the id names no pool of the instance (or
     /// one that is not observable or out of its scope).
     Unknown(Option<ResourceTargetPendingReason>),
-    /// #455 RR3c (register §1.543): not known because a run told enough turns to close a goal's
-    /// gap on the pool produced into it after its reading, which would be known otherwise: the
-    /// evaluation reads the pool as unknown, `fact_stale`, until it is read after that run's end.
+    /// #455 RR3c (register §1.543): not known because the runs told under a goal's gap on the pool
+    /// since its reading were told enough to close it (#455 RR3d, register §1.548: together),
+    /// which would be known otherwise: the evaluation reads the pool as unknown, `fact_stale`,
+    /// until it is read after their end.
     Unread,
 }
 

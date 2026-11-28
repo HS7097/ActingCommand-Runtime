@@ -643,6 +643,11 @@ pub struct RuntimeHostConfig {
     /// the operating system's.
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #503 MEM, test only: the commit an automatic start's gate reads instead of the operating
+    /// system's; without it a test build consults no gate (see
+    /// [`RuntimeHostConfig::with_commit_sample_for_test`]).
+    #[cfg(test)]
+    commit_sample_for_test: Option<CommitSampleForTest>,
     /// EMU-BIND fix 1 (0.12.28), test only: a Start's ADB baseline wait in place of its 30 s.
     #[cfg(test)]
     adb_baseline_wait_for_test: Option<Duration>,
@@ -718,6 +723,15 @@ pub struct RuntimeHostConfig {
 pub(crate) type NetworkConnectivityForTest =
     Arc<dyn Fn() -> actingcommand_host_metrics::NetworkConnectivity + Send + Sync>;
 
+/// #503 MEM, test only: one read of the host's commit, as `sample_commit` answers it.
+#[cfg(test)]
+pub(crate) type CommitReadForTest =
+    Result<actingcommand_host_metrics::CommitSample, actingcommand_contract::outcome::Code>;
+
+/// #503 MEM, test only: a scripted commit read.
+#[cfg(test)]
+pub(crate) type CommitSampleForTest = Arc<dyn Fn() -> CommitReadForTest + Send + Sync>;
+
 impl RuntimeHostConfig {
     pub fn new(state_root: impl Into<PathBuf>, secret_fingerprint_salt: impl AsRef<[u8]>) -> Self {
         Self {
@@ -766,6 +780,8 @@ impl RuntimeHostConfig {
             settlement_refusal_for_test: None,
             #[cfg(test)]
             network_connectivity_for_test: None,
+            #[cfg(test)]
+            commit_sample_for_test: None,
             #[cfg(test)]
             adb_baseline_wait_for_test: None,
             #[cfg(test)]
@@ -950,6 +966,16 @@ impl RuntimeHostConfig {
         read: NetworkConnectivityForTest,
     ) -> Self {
         self.network_connectivity_for_test = Some(read);
+        self
+    }
+
+    /// #503 MEM, test only: an automatic start's gate reads `read` instead of the host's commit,
+    /// and the gate (the commit reserve and the spacing) is consulted at all. A test build without
+    /// it consults no gate and stamps no Start, so every test written before the gate starts its
+    /// emulators as it did and reads nothing of the host's memory (register §1.556).
+    #[cfg(test)]
+    pub(crate) fn with_commit_sample_for_test(mut self, read: CommitSampleForTest) -> Self {
+        self.commit_sample_for_test = Some(read);
         self
     }
 
@@ -2334,6 +2360,8 @@ impl RuntimeHost {
             #[cfg(test)]
             network_connectivity_for_test: config.network_connectivity_for_test.clone(),
             #[cfg(test)]
+            commit_sample_for_test: config.commit_sample_for_test.clone(),
+            #[cfg(test)]
             adb_baseline_wait_for_test: config.adb_baseline_wait_for_test,
             #[cfg(test)]
             scheduling_pause_deadlines_for_test: config.scheduling_pause_deadlines_for_test,
@@ -2451,6 +2479,7 @@ impl RuntimeHost {
             stability_counter: Mutex::new(recovery_ladder::StabilityCounter::default()),
             unclassified_codes: Mutex::new(BTreeSet::new()),
             blackout_silence: Mutex::new(blackout_silence::BlackoutSilence::default()),
+            catalog_read_facts: Mutex::new(Arc::default()),
             #[cfg(test)]
             performance_hold_for_test: AtomicBool::new(false),
             #[cfg(test)]
@@ -2642,6 +2671,16 @@ impl RuntimeHost {
             let discovered_at_unix_ms = shared.clock.sample()?.unix_ms;
             let registered_instances =
                 initial_registered_instances(provider.as_ref(), discovered_at_unix_ms)?;
+            // #503 NOISE-A (register §1.552): from here on the process sampler counts the
+            // processes the registered instances run as owned. No rebinding changes an
+            // instance's installation, so a start hands them over once.
+            let resolved = provider
+                .instance_aliases()
+                .iter()
+                .filter_map(|alias| provider.resolve(alias))
+                .collect::<Vec<_>>();
+            lock(&shared.performance, HostLocation::StartRuntimeHost)?
+                .hand_over_owned_images(crate::performance::owned_process_images(&resolved));
             drop(provider);
             stages.end(StartStage::Provider);
             let startup_packages = startup_package::resolve_startup_packages(
@@ -2709,6 +2748,15 @@ impl RuntimeHost {
                 // policy runs; Workflow #429 R-2: the configuration's value in effect when it
                 // carries the key, this one otherwise.
                 policy.set_max_concurrent_runs(config.performance_control.max_concurrent_runs());
+                // Workflow #503 FACT-R fix round 1 (review F1): the facts the active catalog's
+                // conditions read, before any publication of this start can plan a reclamation;
+                // every catalog transition replaces them.
+                *lock(&shared.catalog_read_facts, HostLocation::LoadActiveCatalog)? = Arc::new(
+                    policy
+                        .active_loaded()
+                        .map(|active| crate::fact_store::CatalogReadFacts::of(active.compiled()))
+                        .unwrap_or_default(),
+                );
                 // ROUT-L RL-1b (model §3.4): in composer mode the procedures of the active
                 // composed generation are scheduled runs too, so a run a stop cut is told apart
                 // as the configured ones are.
@@ -4893,6 +4941,15 @@ impl RuntimeHost {
             HostLocation::RunEmulatorAutostart,
         )? = Some(hook);
         Ok(())
+    }
+
+    /// #503 MEM, test builds: when the latest emulator Start of any kind returned, on the Runtime's
+    /// monotonic clock, as the automatic starts' spacing counts from it; `None` before the first
+    /// (and always on a host started without the commit seam, which stamps nothing).
+    #[cfg(test)]
+    pub(crate) fn emulator_start_returned_for_test(&self) -> RuntimeHostResult<Option<u64>> {
+        self.shared_ref(HostLocation::RunEmulatorAutostart)?
+            .emulator_start_returned_ms()
     }
 
     /// #480 PG-1 fix round 2, test builds: runs `hook` once, on the claim's worker, when the next
@@ -7430,6 +7487,9 @@ struct HostShared {
     idle_action_finished_hook_for_test: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     network_connectivity_for_test: Option<NetworkConnectivityForTest>,
+    /// #503 MEM, test only: see [`RuntimeHostConfig::with_commit_sample_for_test`].
+    #[cfg(test)]
+    commit_sample_for_test: Option<CommitSampleForTest>,
     /// EMU-BIND fix 1 (0.12.28), test only: see
     /// [`RuntimeHostConfig::with_adb_baseline_wait_for_test`].
     #[cfg(test)]
@@ -7680,6 +7740,11 @@ struct HostShared {
     // Workflow #386 SR-4a3: the active catalog's `maintenance` events the host's own entries read
     // their blackouts from (a leaf lock).
     blackout_silence: Mutex<blackout_silence::BlackoutSilence>,
+    // Workflow #503 FACT-R fix round 1 (`contracts/instance-fact-store.md`, "Expiry reclamations"):
+    // the facts the conditions of the active catalog read, which no reclamation takes; set at the
+    // start and by every catalog transition under `policy`, read by a publication that plans a
+    // reclamation under `fact_write_gate` (a leaf lock; empty without an active catalog).
+    catalog_read_facts: Mutex<Arc<crate::fact_store::CatalogReadFacts>>,
     // Workflow #387 D1c, test only: holds every instance back from performance release (§3.7),
     // the stand-in for performance control's suspension.
     #[cfg(test)]

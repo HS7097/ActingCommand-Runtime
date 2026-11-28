@@ -223,6 +223,32 @@ pub(super) enum FactPublicationPurpose {
     /// entry. A record equal to the active one is a replay, as a resource target policy's is; the
     /// edit compares its version itself, before it composes the record.
     GoalRecords,
+    /// #503 ISO-A (the coordinator's ruling 3; `contracts/instance-fact-store.md`, "Backend
+    /// self-check availability"): the Runtime's own record of one instance's
+    /// `session.instance.available` (`publish_policy_instance_availability`). Under
+    /// `fact_write_gate` its observation is raised to one millisecond after what the store holds
+    /// for the key when it is not later (two writes in one millisecond, a wall clock stepped
+    /// back), and it is judged at that observation (`observed_after_stored`).
+    RuntimeAvailability,
+}
+
+/// #503 ISO-A (the coordinator's ruling 3): `record`, the Runtime's own availability record, is
+/// raised to one millisecond after the latest observation `facts` holds for its scope and key
+/// (its active record's, else the key's latest, which an invalidation keeps) when its own is not
+/// later, so the store's rule that a record of another source snapshot must be newer takes it.
+/// A record of the active record's own source snapshot is left as it is: the store replays or
+/// refuses it by its rule as before. Returns the record's observation, which it is judged at.
+fn observed_after_stored(facts: &InstanceFactStore, record: &mut FactRecord) -> u64 {
+    let active = facts.active_record(&record.scope, &record.key);
+    let same_snapshot =
+        active.is_some_and(|active| active.source_snapshot_id == record.source_snapshot_id);
+    let stored = active
+        .map(|active| active.observed_at_unix_ms)
+        .max(facts.latest_observed_unix_ms(&record.scope, &record.key));
+    if let Some(stored) = stored.filter(|_| !same_snapshot) {
+        record.observed_at_unix_ms = record.observed_at_unix_ms.max(stored.saturating_add(1));
+    }
+    record.observed_at_unix_ms
 }
 
 /// Where one publication landed: the event that holds its records, the sequence of the
@@ -463,6 +489,7 @@ impl HostShared {
                 | FactPublicationPurpose::ApplicationUpdate
                 | FactPublicationPurpose::ListReading
                 | FactPublicationPurpose::GoalRecords
+                | FactPublicationPurpose::RuntimeAvailability
                 | FactPublicationPurpose::ResourceAdjustment { .. } => {
                     if observation
                         .records
@@ -561,7 +588,7 @@ impl HostShared {
     /// edited one in one hold of the gate through it. A fatal failure is the caller's to mark.
     pub(super) fn publish_facts_under_gate(
         &self,
-        observation: actingcommand_contract::FactObservation,
+        mut observation: actingcommand_contract::FactObservation,
         source_request: Option<&ValidatedRuntimeRequest<'_>>,
         purpose: FactPublicationPurpose,
         origin: (EventSource, EventActor),
@@ -590,6 +617,21 @@ impl HostShared {
             }
         }
         let now = self.clock.sample()?.unix_ms;
+        // #503 ISO-A (the coordinator's ruling 3): the Runtime's own availability record follows
+        // what the store holds for its key, read in this hold of the gate, which every writer of
+        // a fact takes, and is judged at its own observation: one a clock that has not moved past
+        // the stored one (or has stepped back) leaves ahead of `now`. Every other publication is
+        // judged at `now`, as before.
+        let now = if purpose == FactPublicationPurpose::RuntimeAvailability {
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            observation
+                .records
+                .iter_mut()
+                .map(|record| observed_after_stored(&facts, record))
+                .fold(now, u64::max)
+        } else {
+            now
+        };
         // A resource target policy equal to the active, unexpired one is a replay: the
         // active revision answers and nothing is appended. Workflow #455 RR2: so is a goal
         // records record equal to the active one (it has no expiry); its edit compared the
@@ -602,7 +644,8 @@ impl HostShared {
             | FactPublicationPurpose::ResourceAdjustment { .. }
             | FactPublicationPurpose::RunDuration
             | FactPublicationPurpose::ApplicationUpdate
-            | FactPublicationPurpose::ListReading => None,
+            | FactPublicationPurpose::ListReading
+            | FactPublicationPurpose::RuntimeAvailability => None,
         };
         if let Some(expected_version) = replayable {
             let record = &observation.records[0];
@@ -646,11 +689,23 @@ impl HostShared {
                 previous_version = Some(sequence);
             }
         }
-        let preview = lock(&self.facts, ContractLocation::PublishFact)?.preview_observation(
-            &observation,
-            now,
-            &self.ledger,
-        )?;
+        // Workflow #503 FACT-R: a scope the publication's new keys would take past its bound takes
+        // them in the room of its records that expired more than seven days ago, when those cover
+        // it; the check counts that room, and the records are written below, after every other
+        // check of the publication has passed. Fix round 1 (review F1): the keys the active
+        // catalog's conditions read are not taken; a plan that needs room reads their set as the
+        // last activation left it (a leaf lock, never `policy`).
+        let (preview, reclamation) = {
+            let facts = lock(&self.facts, ContractLocation::PublishFact)?;
+            let reclamation =
+                facts.plan_expiry_reclamation(&observation, now, || self.catalog_read_facts())?;
+            let freed = reclamation
+                .as_ref()
+                .map_or(0, crate::fact_store::ExpiryReclamation::freed);
+            let preview =
+                facts.preview_observation_freeing(&observation, now, &self.ledger, freed)?;
+            (preview, reclamation)
+        };
         if let Some(event_id) = preview {
             let record = &observation.records[0];
             let facts = lock(&self.facts, ContractLocation::PublishFact)?;
@@ -701,6 +756,7 @@ impl HostShared {
                 ContractLocation::PublishFacts,
             ));
         }
+        let reclaiming = reclamation.map(|reclamation| (reclamation, observation.clone()));
         let payload =
             FactPayloadDraft::observation(observation, scope_instances, AuditInput::new())
                 .map_err(|_| {
@@ -709,6 +765,16 @@ impl HostShared {
                         ContractLocation::PublishFacts,
                     )
                 })?;
+        // Workflow #503 FACT-R: the room is reclaimed now, in this hold; the check then runs again
+        // on the store that followed the records, without the room, and must pass.
+        if let Some((reclamation, observation)) = &reclaiming {
+            self.reclaim_expired_under_gate(reclamation, observation)?;
+            lock(&self.facts, ContractLocation::PublishFact)?.preview_observation(
+                observation,
+                now,
+                &self.ledger,
+            )?;
+        }
         let links = match source_request {
             Some(request) => self.events.request_links(request, None, None, None),
             None => self.events.system_links()?,
@@ -783,6 +849,107 @@ impl HostShared {
             self.fatal.report_warning(&outcome);
         }
         self.synchronize_fact_store_under_gate()
+    }
+
+    /// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): the
+    /// records of `reclamation`, planned for `observation`, written in the caller's hold of
+    /// `fact_write_gate` before the publication that needs their room. Fix round 1 (review F3):
+    /// first one Warning `runtime.failed` `fact_store_expired_facts_reclaimed` is drafted under the
+    /// system links (`instance_id` the alias, or `server` or `game`, the scope's id; `count` the
+    /// records the plan reclaims; `limit_count` the scope's bound), nothing written; the plan is
+    /// made again at the warning's own time and must be the same
+    /// (`InstanceFactStore::confirm_expiry_reclamation`), or nothing is written and the publication
+    /// is refused as one with too few candidates. Then the warning is appended, the store follows
+    /// it and the invalidations it derives by the ordinary rule are written; then, per record in
+    /// the plan's order, one `fact.invalidated` whose trigger is the warning and whose time is the
+    /// record's own expiry, with its State tombstone in one transaction, the store following each.
+    /// Each record stands on its own: a failure stops the reclamation there and the publication is
+    /// not appended; a start loads what was written. Fix round 1 (review F2): the daemon's log line
+    /// follows the invalidations, with how many were written.
+    fn reclaim_expired_under_gate(
+        &self,
+        reclamation: &crate::fact_store::ExpiryReclamation,
+        observation: &actingcommand_contract::FactObservation,
+    ) -> RuntimeHostResult<()> {
+        let outcome = |count: usize| {
+            let outcome = Outcome::new(FactCapacityCode::ExpiredFactsReclaimed)
+                .operation(ContractLocation::PublishFacts);
+            let outcome = match reclamation.scope() {
+                FactScope::Instance { instance_id } => outcome.instance_id(instance_id.as_str()),
+                FactScope::Server { server_id } => outcome.server(server_id.as_str()),
+                FactScope::Game { game_id } => outcome.game(game_id.as_str()),
+            };
+            outcome
+                .count(u32::try_from(count).unwrap_or(u32::MAX))
+                .limit_count(u32::try_from(reclamation.bound()).unwrap_or(u32::MAX))
+        };
+        let draft = self.events.draft(
+            EventSeverity::Warning,
+            EventSource::Runtime,
+            OriginModule::Runtime,
+            EventActor::Runtime,
+            self.events.system_links()?,
+            RuntimePayloadDraft::failed(
+                DiagnosticCode::RuntimeDiagnostic,
+                EffectDisposition::NotPerformed,
+                outcome(reclamation.records().len()),
+                DiagnosticDetailDraft::new(
+                    "instance_fact_store",
+                    HostLocation::CommitFact,
+                    "runtime_host",
+                    ContractLocation::PublishFacts.as_str(),
+                ),
+                AuditInput::new(),
+            ),
+        )?;
+        let draft = self.events.sanitize(draft)?;
+        lock(&self.facts, ContractLocation::PublishFacts)?.confirm_expiry_reclamation(
+            observation,
+            reclamation,
+            draft.timestamp_unix_ms(),
+        )?;
+        let warning = self
+            .ledger
+            .append(draft)
+            .map_err(|error| ledger_error_caused_by(HostLocation::AppendRuntimeEvent, &error))?;
+        // Workflow #383 AO-7: the committed warning's wake reaches the driver from here. It has
+        // no instance link and no device detail, so no other step of a Runtime record's append
+        // applies to it.
+        self.policy_wakes.raise(warning.event_type());
+        self.synchronize_fact_store_under_gate()?;
+        let mut written = 0_usize;
+        let reclaimed = (|| -> RuntimeHostResult<()> {
+            for (key, published_sequence) in reclamation.records() {
+                let (data, work) = lock(&self.facts, ContractLocation::PublishFacts)?
+                    .prepare_expiry_reclamation(
+                        &self.ledger,
+                        reclamation.scope(),
+                        key,
+                        *published_sequence,
+                        &warning,
+                    )?;
+                let draft = self.events.draft(
+                    EventSeverity::Info,
+                    EventSource::Runtime,
+                    OriginModule::FactStore,
+                    EventActor::Runtime,
+                    self.events.system_links()?,
+                    FactPayloadDraft::invalidated(data, AuditInput::new()),
+                )?;
+                let draft = self.events.sanitize(draft)?;
+                let persisted = self
+                    .ledger
+                    .append_transaction(draft, Box::new(work))
+                    .map_err(crate::fact_store::fact_transaction_error)?;
+                written += 1;
+                // Workflow #383 AO-7: a committed invalidation changes the instance fact store.
+                self.policy_wakes.raise(persisted.event_type());
+                self.synchronize_fact_store_under_gate()?;
+            }
+            Ok(())
+        })();
+        self.fatal.report_warning(&outcome(written));
+        reclaimed
     }
 
     /// Workflow #411 B15 R6 (model-b15 §5.1): the write rule of one `session.remedy.choices`
@@ -1146,6 +1313,15 @@ impl HostShared {
         )
     }
 
+    /// The one publisher of the Runtime's own `session.instance.available` records (the self-check
+    /// gate's withdrawals and restores, and the device link's, device state's and device system's
+    /// withdrawals), through [`Self::publish_facts`] as `publish_fact` publishes. #503 ISO-A (the
+    /// coordinator's ruling 3): its observation is the host clock, or one millisecond after what
+    /// the store holds for the key when the clock is not later, read and written in one hold of
+    /// `fact_write_gate` (`FactPublicationPurpose::RuntimeAvailability`), so two writes in one
+    /// millisecond, or a write after a wall-clock step back, are not refused
+    /// `fact_observation_not_newer`. The store's rule and every fact a client publishes are as
+    /// before.
     fn publish_policy_instance_availability(
         &self,
         instance_alias: &str,
@@ -1156,22 +1332,28 @@ impl HostShared {
         let value = ContractFactValue::Boolean(available);
         let digest =
             policy_instance_seed_digest(instance_alias, POLICY_INSTANCE_AVAILABLE_KEY, &value)?;
-        self.publish_fact(FactRecord {
-            scope: FactScope::Instance {
-                instance_id: instance_alias.to_owned(),
+        self.publish_facts(
+            actingcommand_contract::FactObservation {
+                records: vec![FactRecord {
+                    scope: FactScope::Instance {
+                        instance_id: instance_alias.to_owned(),
+                    },
+                    key: POLICY_INSTANCE_AVAILABLE_KEY.to_owned(),
+                    content: FactContent::Inline { value },
+                    observed_at_unix_ms: self.clock.sample()?.unix_ms,
+                    expires_at_unix_ms: None,
+                    ttl_policy: None,
+                    confidence_milli: 1_000,
+                    source_detector: source_detector.to_owned(),
+                    source_snapshot_id: source_snapshot_id(&digest),
+                    schema_version: POLICY_INSTANCE_SEED_SCHEMA.to_owned(),
+                    resource_bundle_hash: digest,
+                    invalidate_on: Vec::new(),
+                }],
             },
-            key: POLICY_INSTANCE_AVAILABLE_KEY.to_owned(),
-            content: FactContent::Inline { value },
-            observed_at_unix_ms: self.clock.sample()?.unix_ms,
-            expires_at_unix_ms: None,
-            ttl_policy: None,
-            confidence_milli: 1_000,
-            source_detector: source_detector.to_owned(),
-            source_snapshot_id: source_snapshot_id(&digest),
-            schema_version: POLICY_INSTANCE_SEED_SCHEMA.to_owned(),
-            resource_bundle_hash: digest,
-            invalidate_on: Vec::new(),
-        })
+            None,
+            FactPublicationPurpose::RuntimeAvailability,
+        )
         .map(|_| ())
     }
 

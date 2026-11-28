@@ -19,9 +19,10 @@ use actingcommand_ledger::{
     TransactionWorkError, instance_fact_state_key,
 };
 use actingcommand_policy::{
-    EvaluationFacts, EvaluationResources, FactScalar as PolicyFactScalar,
-    FactValue as PolicyFactValue, InstanceSnapshot, MAX_ID_BYTES, MAX_PRIORITY_OFFSET_MILLI,
-    ObservedFact, PriorityOffsetOrigin, ScopeSelector,
+    CompiledCatalog, EvaluationFacts, EvaluationResources, FactComparand,
+    FactScalar as PolicyFactScalar, FactValue as PolicyFactValue, InstanceSnapshot, MAX_ID_BYTES,
+    MAX_PRIORITY_OFFSET_MILLI, ObservedFact, PoolSpec, PredicateSpec, PriorityOffsetOrigin,
+    ProjectionComparand, ScopeSelector,
 };
 use actingcommand_runtime_state::{
     FACT_TOMBSTONE_NAMESPACE, FactStateObservation, PreparedFactProjection, RuntimeStateStore,
@@ -168,6 +169,149 @@ fn scope_fact_count<V>(active: &BTreeMap<FactIdentity, V>, scope: &FactScope) ->
         .range((scope.clone(), String::new())..)
         .take_while(|((stored, _), _)| stored == scope)
         .count()
+}
+
+/// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): the keys whose
+/// writers read an expired record back (a pack schedule's edit version, the lift of remedy
+/// choices, the page versions of the resource targets and of the goal records); no reclamation
+/// takes one.
+const RECLAIM_EXCLUDED_KEYS: [&str; 4] = [
+    actingcommand_contract::PACK_SCHEDULE_FACT_KEY,
+    actingcommand_contract::REMEDY_CHOICES_FACT_KEY,
+    RESOURCE_TARGETS_FACT_KEY,
+    GOAL_RECORDS_FACT_KEY,
+];
+
+/// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): what one
+/// publication reclaims of its scope to take its new keys
+/// ([`InstanceFactStore::plan_expiry_reclamation`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExpiryReclamation {
+    scope: FactScope,
+    /// The scope's bound.
+    bound: usize,
+    /// The records reclaimed, in the order they are reclaimed: each its key and the sequence of
+    /// the `fact.published` that carried it.
+    records: Vec<(String, u64)>,
+    /// The scope's records the reclamation's warning drops by the ordinary rule (they list
+    /// `runtime.failed`).
+    dropped: usize,
+    /// Fix round 1 (review F1): the keys the conditions of the active catalog read, as the plan
+    /// read them; the plan made again at the warning's time reads the same.
+    read_facts: Arc<CatalogReadFacts>,
+}
+
+/// Workflow #503 FACT-R fix round 1 (`contracts/instance-fact-store.md`, "Expiry reclamations";
+/// review F1): the facts, by scope and key, that a condition of one compiled catalog reads: the
+/// fact of every `fact`, `record_deadline` and `fact_time_reached` predicate of a task's trigger
+/// and feedback stop, the fact a `fact` predicate compares with, and the fact a
+/// `resource_projection` compares with, in its pool's scope. No reclamation takes one of them. The
+/// host keeps the set of the active catalog, made when a catalog becomes active and replaced then;
+/// without an active catalog it is empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CatalogReadFacts {
+    by_scope: BTreeMap<FactScope, BTreeSet<String>>,
+}
+
+impl CatalogReadFacts {
+    pub(crate) fn of(catalog: &CompiledCatalog) -> Self {
+        let bundle = catalog.catalog();
+        let mut read = Self::default();
+        for task in &bundle.tasks.tasks {
+            read.add_condition(&task.trigger, &bundle.pools.pools);
+            read.add_condition(&task.feedback_stop, &bundle.pools.pools);
+        }
+        read
+    }
+
+    /// The keys a condition reads in exactly `scope`.
+    fn keys(&self, scope: &FactScope) -> Option<&BTreeSet<String>> {
+        self.by_scope.get(scope)
+    }
+
+    fn insert(&mut self, scope: &ScopeSelector, key: &str) {
+        self.by_scope
+            .entry(store_scope(scope))
+            .or_default()
+            .insert(key.to_owned());
+    }
+
+    /// Every fact `predicate` reads, its nested predicates' included.
+    fn add_condition(&mut self, predicate: &PredicateSpec, pools: &[PoolSpec]) {
+        match predicate {
+            PredicateSpec::All { predicates } | PredicateSpec::Any { predicates } => {
+                for predicate in predicates {
+                    self.add_condition(predicate, pools);
+                }
+            }
+            PredicateSpec::Not { predicate } => self.add_condition(predicate, pools),
+            PredicateSpec::Fact {
+                scope,
+                fact_key,
+                value,
+                ..
+            } => {
+                self.insert(scope, fact_key);
+                if let FactComparand::Fact(reference) = value {
+                    self.insert(scope, &reference.fact_key);
+                }
+            }
+            PredicateSpec::RecordDeadline {
+                scope, fact_key, ..
+            }
+            | PredicateSpec::FactTimeReached {
+                scope, fact_key, ..
+            } => self.insert(scope, fact_key),
+            PredicateSpec::ResourceProjection {
+                pool_id,
+                value: ProjectionComparand::Fact(reference),
+                ..
+            } => {
+                if let Some(pool) = pools.iter().find(|pool| pool.id == *pool_id) {
+                    self.insert(&pool.scope, &reference.fact_key);
+                }
+            }
+            PredicateSpec::ResourceProjection { .. }
+            | PredicateSpec::Clock { .. }
+            | PredicateSpec::TimelineActive { .. }
+            | PredicateSpec::DependencyCompleted { .. }
+            | PredicateSpec::Outcome { .. } => {}
+        }
+    }
+}
+
+/// The store's scope a policy scope names (the reverse of [`policy_scope`]).
+fn store_scope(scope: &ScopeSelector) -> FactScope {
+    match scope {
+        ScopeSelector::Instance { instance_id } => FactScope::Instance {
+            instance_id: instance_id.clone(),
+        },
+        ScopeSelector::Server { server_id } => FactScope::Server {
+            server_id: server_id.clone(),
+        },
+        ScopeSelector::Game { game_id } => FactScope::Game {
+            game_id: game_id.clone(),
+        },
+    }
+}
+
+impl ExpiryReclamation {
+    pub(crate) fn scope(&self) -> &FactScope {
+        &self.scope
+    }
+
+    pub(crate) fn bound(&self) -> usize {
+        self.bound
+    }
+
+    pub(crate) fn records(&self) -> &[(String, u64)] {
+        &self.records
+    }
+
+    /// The room the reclamation frees in its scope: its records and those its warning drops.
+    pub(crate) fn freed(&self) -> usize {
+        self.records.len() + self.dropped
+    }
 }
 
 /// The policy instance facts (Workflow #313 item 4): the evaluation's `instances` read these
@@ -419,9 +563,13 @@ impl HistoricalFactProjection {
                     data.source_snapshot_id.clone(),
                 );
                 // Workflow #384 D2-S3: an adjustment's invalidation is derived from no trigger
-                // event; it applies where it stands.
+                // event; it applies where it stands. Workflow #503 FACT-R: so does an expiry
+                // reclamation of the active record.
                 if !self.invalidated.contains_key(&identity)
-                    && actingcommand_contract::is_adjustment_invalidation(data)
+                    && (actingcommand_contract::is_adjustment_invalidation(data)
+                        || self.active.get(&identity.0).is_some_and(|(record, _, _)| {
+                            actingcommand_contract::is_expiry_reclamation(data, record)
+                        }))
                 {
                     return self.invalidate(data.clone());
                 }
@@ -534,7 +682,8 @@ impl HistoricalFactProjection {
             || !(active
                 .invalidate_on
                 .contains(&data.invalidated_by_event_type)
-                || actingcommand_contract::is_adjustment_invalidation(&data))
+                || actingcommand_contract::is_adjustment_invalidation(&data)
+                || actingcommand_contract::is_expiry_reclamation(&data, active))
         {
             return Err(fact_fatal(
                 SharedCode::FactInvalidationTargetMismatch,
@@ -1097,10 +1246,23 @@ impl InstanceFactStore {
         Ok(())
     }
 
+    /// One record's check as a publication without a reclamation makes it (the store's own tests).
+    #[cfg(test)]
     pub(crate) fn preview_publish(
         &self,
         record: &FactRecord,
         ledger: &GlobalLedger,
+    ) -> RuntimeHostResult<Option<EventId>> {
+        self.preview_publish_freeing(record, ledger, 0)
+    }
+
+    /// One record's check; `freed` is the room of the record's scope a reclamation planned for the
+    /// publication frees (Workflow #503 FACT-R), 0 without one.
+    fn preview_publish_freeing(
+        &self,
+        record: &FactRecord,
+        ledger: &GlobalLedger,
+        freed: usize,
     ) -> RuntimeHostResult<Option<EventId>> {
         record.validate().map_err(|_| {
             fact_request(HostCode::FactRecordInvalid, ContractLocation::PublishFact)
@@ -1134,8 +1296,11 @@ impl InstanceFactStore {
                     ContractLocation::PublishFact,
                 ));
             }
-            // Workflow #498: a new key counts against its own scope's bound only.
-            if scope_fact_count(&self.active, &record.scope) >= scope_fact_bound(&record.scope) {
+            // Workflow #498: a new key counts against its own scope's bound only. Workflow #503
+            // FACT-R: less the room a reclamation planned for the publication frees.
+            if scope_fact_count(&self.active, &record.scope).saturating_sub(freed)
+                >= scope_fact_bound(&record.scope)
+            {
                 return Err(fact_request(
                     HostCode::FactStoreCapacityExceeded,
                     ContractLocation::PublishFact,
@@ -1233,6 +1398,20 @@ impl InstanceFactStore {
         now: u64,
         ledger: &GlobalLedger,
     ) -> RuntimeHostResult<Option<EventId>> {
+        self.preview_observation_freeing(observation, now, ledger, 0)
+    }
+
+    /// Workflow #503 FACT-R: [`Self::preview_observation`] with the room of the observation's
+    /// scope that a reclamation planned for its publication frees (`freed`,
+    /// [`ExpiryReclamation::freed`]) counted in its two bound checks alone; every other check is
+    /// made on the store as it is. With `freed` 0 it is that check.
+    pub(crate) fn preview_observation_freeing(
+        &self,
+        observation: &actingcommand_contract::FactObservation,
+        now: u64,
+        ledger: &GlobalLedger,
+        freed: usize,
+    ) -> RuntimeHostResult<Option<EventId>> {
         observation.validate().map_err(|_| {
             fact_request(
                 HostCode::FactObservationInvalid,
@@ -1250,7 +1429,7 @@ impl InstanceFactStore {
         let mut new_count = 0;
         let mut new_identities = 0;
         for record in &observation.records {
-            match self.preview_publish(record, ledger)? {
+            match self.preview_publish_freeing(record, ledger, freed)? {
                 Some(event) => {
                     reused.insert(event);
                 }
@@ -1307,7 +1486,7 @@ impl InstanceFactStore {
         // compared: a key the scope holds is replaced in place even in a scope a build before
         // 0.12.76 filled past its bound.
         if new_identities > 0
-            && scope_fact_count(&self.active, &first.scope) + new_identities
+            && scope_fact_count(&self.active, &first.scope).saturating_sub(freed) + new_identities
                 > scope_fact_bound(&first.scope)
         {
             return Err(fact_request(
@@ -1316,6 +1495,228 @@ impl InstanceFactStore {
             ));
         }
         Ok(reused.into_iter().next())
+    }
+
+    /// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): what a
+    /// publication of `observation` at `at_unix_ms` reclaims, when it brings keys its scope does
+    /// not hold and they would take the scope past its bound. The candidates are the scope's
+    /// records whose expiry lies more than [`actingcommand_contract::FACT_RECLAIM_AFTER_EXPIRY_MS`]
+    /// before `at_unix_ms`, but the observation's own keys, a record that lists `runtime.failed`
+    /// (the reclamation's warning drops it by the ordinary rule, so it counts as freed),
+    /// [`RECLAIM_EXCLUDED_KEYS`] and (fix round 1, review F1) the keys of the scope a condition of
+    /// the active catalog reads, which `read_facts` gives ([`CatalogReadFacts`]; called only once
+    /// the publication needs room); the longest expired first, then the earlier publication, then
+    /// the key; exactly as many as the publication needs. `None` when it needs none, when the
+    /// candidates do not cover what it needs (the publication is then refused as before), and when
+    /// the warning would drop the record of one of the observation's own keys. Only `read_facts`
+    /// fails.
+    pub(crate) fn plan_expiry_reclamation(
+        &self,
+        observation: &actingcommand_contract::FactObservation,
+        at_unix_ms: u64,
+        read_facts: impl FnOnce() -> RuntimeHostResult<Arc<CatalogReadFacts>>,
+    ) -> RuntimeHostResult<Option<ExpiryReclamation>> {
+        let Some(first) = observation.records.first() else {
+            return Ok(None);
+        };
+        let scope = &first.scope;
+        let keys = observation
+            .records
+            .iter()
+            .map(|record| record.key.as_str())
+            .collect::<BTreeSet<_>>();
+        let new_identities = observation
+            .records
+            .iter()
+            .filter(|record| {
+                !self
+                    .active
+                    .contains_key(&(record.scope.clone(), record.key.clone()))
+            })
+            .count();
+        if new_identities == 0 {
+            return Ok(None);
+        }
+        let scoped = self
+            .active
+            .range((scope.clone(), String::new())..)
+            .take_while(|((stored, _), _)| stored == scope)
+            .map(|(_, fact)| fact)
+            .collect::<Vec<_>>();
+        let bound = scope_fact_bound(scope);
+        let Some(needed) = (scoped.len() + new_identities)
+            .checked_sub(bound)
+            .filter(|needed| *needed > 0)
+        else {
+            return Ok(None);
+        };
+        let listed = scoped
+            .iter()
+            .filter(|fact| {
+                fact.record
+                    .invalidate_on
+                    .contains(&EventType::RuntimeFailed)
+            })
+            .collect::<Vec<_>>();
+        if listed
+            .iter()
+            .any(|fact| keys.contains(fact.record.key.as_str()))
+        {
+            return Ok(None);
+        }
+        let dropped = listed.len();
+        let Some(reclaimed) = needed
+            .checked_sub(dropped)
+            .filter(|reclaimed| *reclaimed > 0)
+        else {
+            return Ok(None);
+        };
+        let read_facts = read_facts()?;
+        let read_here = read_facts.keys(scope);
+        let mut candidates = scoped
+            .into_iter()
+            .filter(|fact| {
+                fact.record.expires_at_unix_ms.is_some_and(|expires| {
+                    expires.saturating_add(actingcommand_contract::FACT_RECLAIM_AFTER_EXPIRY_MS)
+                        < at_unix_ms
+                }) && !keys.contains(fact.record.key.as_str())
+                    && !fact
+                        .record
+                        .invalidate_on
+                        .contains(&EventType::RuntimeFailed)
+                    && !RECLAIM_EXCLUDED_KEYS.contains(&fact.record.key.as_str())
+                    && !read_here.is_some_and(|read| read.contains(fact.record.key.as_str()))
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() < reclaimed {
+            return Ok(None);
+        }
+        candidates.sort_by(|left, right| {
+            left.record
+                .expires_at_unix_ms
+                .cmp(&right.record.expires_at_unix_ms)
+                .then(left.sequence.cmp(&right.sequence))
+                .then_with(|| left.record.key.cmp(&right.record.key))
+        });
+        Ok(Some(ExpiryReclamation {
+            scope: scope.clone(),
+            bound,
+            records: candidates
+                .into_iter()
+                .take(reclaimed)
+                .map(|fact| (fact.record.key.clone(), fact.sequence))
+                .collect(),
+            dropped,
+            read_facts,
+        }))
+    }
+
+    /// Workflow #503 FACT-R fix round 1 (review F3): `reclamation`, which the publication of
+    /// `observation` planned at its own time, planned again at `at_unix_ms`, the time of the warning
+    /// drafted for it before anything is written, on this store and with the keys the plan read.
+    /// The same plan: every record of it lies more than the margin before the warning, and the
+    /// records may be written. Another (the clock stepped back between the two): nothing is
+    /// written, and the publication is refused `fact_store_capacity_exceeded`, as one whose
+    /// candidates are too few.
+    pub(crate) fn confirm_expiry_reclamation(
+        &self,
+        observation: &actingcommand_contract::FactObservation,
+        reclamation: &ExpiryReclamation,
+        at_unix_ms: u64,
+    ) -> RuntimeHostResult<()> {
+        let again = self.plan_expiry_reclamation(observation, at_unix_ms, || {
+            Ok(Arc::clone(&reclamation.read_facts))
+        })?;
+        if again.as_ref() == Some(reclamation) {
+            return Ok(());
+        }
+        Err(fact_request(
+            HostCode::FactStoreCapacityExceeded,
+            ContractLocation::PublishFacts,
+        ))
+    }
+
+    /// Workflow #503 FACT-R (`contracts/instance-fact-store.md`, "Expiry reclamations"): the
+    /// `fact.invalidated` that reclaims `key`'s record in `scope`, published at ledger sequence
+    /// `published_sequence`, with its State tombstone: its trigger is the reclamation's warning
+    /// `trigger`, its time the record's own expiry. A record whose expiry does not lie more than
+    /// the margin before the warning is refused `fact_store_capacity_exceeded`, as the publication
+    /// would have been; after [`Self::confirm_expiry_reclamation`] passed at the warning's own
+    /// time none is (fix round 1), and the check stays the record's own.
+    pub(crate) fn prepare_expiry_reclamation(
+        &self,
+        ledger: &GlobalLedger,
+        scope: &FactScope,
+        key: &str,
+        published_sequence: u64,
+        trigger: &PersistedEvent,
+    ) -> RuntimeHostResult<(FactInvalidationEventData, FactTransaction)> {
+        let stored = self
+            .active
+            .get(&(scope.clone(), key.to_owned()))
+            .filter(|stored| stored.sequence == published_sequence)
+            .ok_or_else(|| {
+                fact_fatal(
+                    HostCode::FactInvalidationTargetMissing,
+                    HostLocation::CommitFactInvalidation,
+                )
+            })?;
+        let expires = stored.record.expires_at_unix_ms.ok_or_else(|| {
+            fact_fatal(
+                SharedCode::FactInvalidationTargetMismatch,
+                HostLocation::CommitFactInvalidation,
+            )
+        })?;
+        if expires.saturating_add(actingcommand_contract::FACT_RECLAIM_AFTER_EXPIRY_MS)
+            >= trigger.timestamp_unix_ms()
+        {
+            return Err(fact_request(
+                HostCode::FactStoreCapacityExceeded,
+                ContractLocation::PublishFacts,
+            ));
+        }
+        let data = FactInvalidationEventData {
+            scope: scope.clone(),
+            key: key.to_owned(),
+            source_snapshot_id: stored.record.source_snapshot_id.clone(),
+            invalidated_at_unix_ms: expires,
+            invalidated_by_event_id: *trigger.event_id(),
+            invalidated_by_event_type: trigger.event_type(),
+        };
+        if stored.sequence >= trigger.sequence()
+            || !actingcommand_contract::is_expiry_reclamation(&data, &stored.record)
+        {
+            return Err(fact_fatal(
+                SharedCode::FactInvalidationTargetMismatch,
+                HostLocation::CommitFactInvalidation,
+            ));
+        }
+        let published = original_at(ledger, stored.sequence)?;
+        let state = self
+            .state
+            .prepare_fact_projection(&data, published, trigger.clone())
+            .map_err(fact_state_error)?;
+        Ok((data, FactTransaction { state }))
+    }
+
+    /// Workflow #503 FACT-R, tests: the State tombstone of any invalidation a test makes up, of the
+    /// record the event at `published_sequence` published, triggered by the event at
+    /// `trigger_sequence`; the State projection judges it when it is appended.
+    #[cfg(test)]
+    pub(crate) fn prepare_made_up_invalidation_for_test(
+        &self,
+        ledger: &GlobalLedger,
+        data: &FactInvalidationEventData,
+        published_sequence: u64,
+        trigger_sequence: u64,
+    ) -> RuntimeHostResult<FactTransaction> {
+        let published = original_at(ledger, published_sequence)?;
+        let trigger = original_at(ledger, trigger_sequence)?;
+        let state = self
+            .state
+            .prepare_fact_projection(data, published, trigger)
+            .map_err(fact_state_error)?;
+        Ok(FactTransaction { state })
     }
 
     pub(crate) fn plan_invalidations(
@@ -1454,7 +1855,8 @@ impl InstanceFactStore {
                 .record
                 .invalidate_on
                 .contains(&data.invalidated_by_event_type)
-                || actingcommand_contract::is_adjustment_invalidation(&data))
+                || actingcommand_contract::is_adjustment_invalidation(&data)
+                || actingcommand_contract::is_expiry_reclamation(&data, &active.record))
         {
             return Err(fact_fatal(
                 SharedCode::FactInvalidationTargetMismatch,
@@ -1587,6 +1989,16 @@ impl InstanceFactStore {
         self.active
             .get(&(scope.clone(), key.to_owned()))
             .map(|stored| &stored.record)
+    }
+
+    /// #503 ISO-A: the latest observation the store keeps for exactly this scope and key, its
+    /// record active or not (an invalidated key keeps its invalidation's), which a new record of
+    /// the key must be newer than while none is active (`preview_publish`); `None` for a key never
+    /// observed.
+    pub(crate) fn latest_observed_unix_ms(&self, scope: &FactScope, key: &str) -> Option<u64> {
+        self.latest_observed
+            .get(&(scope.clone(), key.to_owned()))
+            .copied()
     }
 
     /// The active record under exactly this scope and key with the sequence and id of the

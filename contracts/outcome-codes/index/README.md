@@ -22,30 +22,30 @@ here.
 
 | Status | Codes |
 |---|---:|
-| active | 3993 |
-| retired | 90 |
-| all | 4083 |
+| active | 3997 |
+| retired | 91 |
+| all | 4088 |
 
 ## Active codes by category
 
 | Category | Codes |
 |---|---:|
 | success | 125 |
-| info | 237 |
-| warning | 195 |
-| error | 3421 |
+| info | 239 |
+| warning | 198 |
+| error | 3420 |
 | fatal | 15 |
 
 ## Text and review of the active codes
 
 | Active codes | Codes |
 |---|---:|
-| `common_causes` and `handling` both written | 840 |
+| `common_causes` and `handling` both written | 845 |
 | one of the two written, the other `TBD` or empty | 4 |
-| neither written (`TBD` or empty) | 3149 |
+| neither written (`TBD` or empty) | 3148 |
 | `settled` | 154 |
-| `pending` | 3839 |
-| all active codes | 3993 |
+| `pending` | 3843 |
+| all active codes | 3997 |
 
 ## By owner
 
@@ -69,16 +69,16 @@ here.
 | [mcp-entry-g2](mcp-entry-g2.md) | 3 | 3 | 3 | 0 |
 | [pack-containment](pack-containment.md) | 40 | 40 | 0 | 0 |
 | [page-detector](page-detector.md) | 2 | 2 | 2 | 0 |
-| [policy](policy.md) | 131 | 128 | 67 | 0 |
+| [policy](policy.md) | 132 | 129 | 68 | 0 |
 | [recognition](recognition.md) | 6 | 6 | 0 | 0 |
 | [recognition-pack](recognition-pack.md) | 22 | 22 | 0 | 0 |
-| [resource-tooling](resource-tooling.md) | 115 | 114 | 38 | 0 |
+| [resource-tooling](resource-tooling.md) | 115 | 113 | 37 | 0 |
 | [runtime-client](runtime-client.md) | 211 | 209 | 5 | 0 |
 | [runtime-config](runtime-config.md) | 11 | 11 | 11 | 0 |
 | [runtime-database](runtime-database.md) | 51 | 51 | 2 | 0 |
-| [runtime-host](runtime-host.md) | 1205 | 1158 | 237 | 6 |
+| [runtime-host](runtime-host.md) | 1209 | 1162 | 242 | 6 |
 | [runtime-state](runtime-state.md) | 176 | 176 | 0 | 0 |
 | [scheduler](scheduler.md) | 14 | 14 | 0 | 0 |
 | [selection-policy](selection-policy.md) | 27 | 27 | 0 | 0 |
 | [vision-ffi](vision-ffi.md) | 4 | 4 | 1 | 0 |
-| all | 4083 | 3993 | 840 | 154 |
+| all | 4088 | 3997 | 845 | 154 |

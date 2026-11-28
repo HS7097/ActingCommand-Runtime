@@ -290,7 +290,7 @@ against the root.
 | `goal_default_invalid` | a `tier`'s `default` is not one of its option values, judged once its options hold | `/entries/<i>/default` |
 | `goal_rate_invalid` | a `rate` whose `ceiling_milli_per_day` is below its `floor_milli_per_day` | `/entries/<i>/rate/ceiling_milli_per_day` |
 | `goal_pool_unknown` | a `resource` entry's pool is not a pool of the composed schedule (no pool without `schedule.json`) | `/entries/<i>/governs/pool` |
-| `goal_pool_unvalued` | that pool gives a goal no step and importance: its `valuation` lacks `scale` or `gap` (a pending or absent valuation too), and (#455 B3-P, since 0.12.82) it writes no `target_defaults` with both `scale` and `importance_milli` in their place, which only a pool without a valuation (the member absent or `null`, as the compiler reads it) may ([resource-targets.md](resource-targets.md), "Who gives a goal its step and importance") | `/entries/<i>/governs/pool` |
+| `goal_pool_unvalued` | that pool gives a goal no step and importance: its `valuation` lacks `scale` or `gap` (a pending or absent valuation too), and (#455 B3-P, since 0.12.82) it writes no `target_defaults` with both `scale` and `importance_milli` in their place, which only a pool without a valuation (the member absent or `null`, as the compiler reads it) may ([resource-targets.md](resource-targets.md), "Who gives a goal its step and importance"); #455 SL2 (since 0.12.101): nor `spend_line`, on which the entry's goal is the pool's line, `{at_least}` alone, which never weighs its producers ([resource-targets.md](resource-targets.md), "A pool's line"). One map of the references says what each pool offers (a valuation's or the defaults' step and importance, a line, or neither), which `table_pool_unvalued` reads too ([standard-pack-goal-tables.md](standard-pack-goal-tables.md)) | `/entries/<i>/governs/pool` |
 | `goal_package_unknown` | (G-R1 fix round 1) the package a `tier` entry's rule runs is not a package of `bundle.json`, which the composition has refused before (`rule_package_unregistered`), so that the check never passes a rule whose package it was not told of; Workflow #463 V1: or a package that declares a placed variable is not | `.../governs/rules/<j>`, or `/entries/<i>/name` |
 | `goal_rule_unknown` | a `tier` entry's rule is not a rule of `schedule.json` | `/entries/<i>/governs/rules/<j>` |
 | `goal_tier_without_fixed_value` | that rule, its package passed, writes no `fixed_value_milli` | `/entries/<i>/governs/rules/<j>` |
@@ -549,7 +549,8 @@ for a version 2 file one of whose entries governs such a package:
 
   What stays: a capability's `irreversible` mark in a package's declaration, which the remedy layer
   reads ([remedies.md](remedies.md) §2.3), the Lab's `packs` and the console show, and the
-  standard-pack trial asks an acknowledgement for ([standard-pack-trial.md](standard-pack-trial.md));
+  standard-pack trial shows (it asked an acknowledgement for it until Workflow #503 TRIAL, 0.12.101,
+  and asks nothing since; [standard-pack-trial.md](standard-pack-trial.md));
   a Lab operation that is irreversible records who started it. Until 0.12.77 this section kept
   "premium currency, real money, retiring and scrapping" out at three places: the check refused
   an entry that governed, reached or followed such a package (`goal_governs_irreversible`, judged

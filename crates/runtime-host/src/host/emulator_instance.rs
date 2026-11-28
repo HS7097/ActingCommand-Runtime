@@ -1420,10 +1420,15 @@ impl HostShared {
         // Outside the fact write gate and outside any device session, on the control's key; the
         // per-instance admission guard stays held so no keyless observe meets the changing
         // emulator.
-        let outcome = match self
+        let controlled = self
             .execution()?
-            .control_instance(&resolved.instance_alias, action)
-        {
+            .control_instance(&resolved.instance_alias, action);
+        // #503 MEM (register §1.556): every Start of any kind returns here, whatever its result;
+        // the automatic starts' spacing counts from it. Nothing waits here.
+        if action == EmulatorInstanceAction::Start {
+            self.note_emulator_start_returned()?;
+        }
+        let outcome = match controlled {
             Ok(outcome) => outcome,
             Err(failure) => {
                 // Workflow #381 B F4 (review M3): one bounded read of the instance's current

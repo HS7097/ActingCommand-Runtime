@@ -100,7 +100,9 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   34: an instance entry's `device.system` (`android` or `ios`, a handset's only); revisions 5
 ///   to 33 are still read, so [5, 34]. Workflow #489 AVAIL-1 (0.12.76, register §1.493) raises it
 ///   to 35: the member `unavailable_probe` of the `scheduling` section; revisions 5 to 34 are
-///   still read, so [5, 35].
+///   still read, so [5, 35]. #503 MEM (0.12.102, register §1.556) raises it to 36: the members
+///   `start_commit_reserve_bytes` and `start_spacing_ms` of the `emulator_control` section;
+///   revisions 5 to 35 are still read, so [5, 36].
 /// - `install-control` was [0, 1] (model-378 §16 A-7). Workflow #434 LAB-6S4a (0.12.63, register
 ///   §1.287, "Slice LAB-6S4a") lowers it to [0, 0]: the request kind `InstallTransition` and
 ///   actingd's `--install-held` start, which revision 1 named, are gone; an installer that speaks
@@ -125,7 +127,11 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   [3, 9], one way. #503 CYC-3 (0.12.86, register §1.529) raises `max` to 10: the optional
 ///   member `window_until_unix_ms` of the policy admission record's activity sample
 ///   (`PolicyActivitySample`, in `policy.dispatch_admitted` and `policy.dispatch_completed`);
-///   revision-3 to revision-9 ledgers are still read, so [3, 10], one way.
+///   revision-3 to revision-9 ledgers are still read, so [3, 10], one way. #503 FACT-R (0.12.103,
+///   register §1.555) raises `max` to 11: a `fact.invalidated` of the existing shape that reclaims
+///   a record expired for more than seven days, its trigger a `runtime.failed` the record does not
+///   list, a changed rule of an existing record that an older history read refuses; revision-3 to
+///   revision-10 ledgers are still read, so [3, 11], one way.
 /// - `package` 3: the one `package` bump of v0.12.0 (register §6); only bundle index v4 is read.
 ///   Workflow #411 B15 R1 (register §1.111) raises `max` to 4 in v0.12.3: a pack's `remedy` and
 ///   `provides`; a revision-3 pack is still read. Workflow #406 T3 (register §1.137) raises it to
@@ -261,10 +267,10 @@ const SCHEMA_VERSION: &str = "actingcommand.component-interfaces.v1";
 ///   byte for byte, so [12, 15].
 /// - `runtime-outcomes` [1, 1]: the new interface of model-378 §10.
 const V0120: &[(&str, [u64; 2])] = &[
-    ("actingd-config", [5, 35]),
+    ("actingd-config", [5, 36]),
     ("install-control", [0, 0]),
     ("install-selection", [1, 1]),
-    ("ledger", [3, 10]),
+    ("ledger", [3, 11]),
     ("package", [3, 32]),
     ("runtime-client", [12, 15]),
     ("runtime-outcomes", [1, 1]),

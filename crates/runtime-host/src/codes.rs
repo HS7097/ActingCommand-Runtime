@@ -171,6 +171,24 @@ actingcommand_contract::outcome_codes! {
         /// with the failure pair under the claim and the claim releases its key (Workflow #369
         /// S6c, P3; keys `alias`, `elapsed_ms`). Also its report line.
         EmulatorAutostartNetworkUnready => "emulator_autostart_network_unready": error / environment_fault,
+        // #503 MEM begin: the start gate of the automatic emulator starts (register §1.556).
+        /// Warning (#503 MEM). Automatic emulator starts are held: the host's available commit is
+        /// below `emulator_control.start_commit_reserve_bytes`. Once per short episode, host-wide,
+        /// for the instance first in line (keys `alias`, `commit_available_bytes`,
+        /// `commit_limit_bytes`, `commit_reserve_bytes`, `idle_action` for an idle wake). A
+        /// `runtime.failed` record under the instance's links and its report line.
+        EmulatorAutostartCommitShort => "emulator_autostart_commit_short": warning / none,
+        /// Info (#503 MEM). The host's available commit is back at or above the reserve and the
+        /// held automatic start goes on (keys `alias`, `elapsed_ms` since the episode began,
+        /// `commit_available_bytes`, `commit_limit_bytes`, `commit_reserve_bytes`). A
+        /// `runtime.failed` record under the instance's links and its report line.
+        EmulatorAutostartCommitReady => "emulator_autostart_commit_ready": info / none,
+        /// Warning (#503 MEM). The host's commit could not be read; the automatic start goes on
+        /// without the headroom check. Once per failing streak (keys `alias`, `failure_code` the
+        /// read's code, `commit_reserve_bytes`). A `runtime.failed` record under the instance's
+        /// links and its report line.
+        EmulatorAutostartCommitUnknown => "emulator_autostart_commit_unknown": warning / none,
+        // #503 MEM end
         /// Info. A configured start was performed and the connection preparation after it passed
         /// (Workflow #369 S6c; keys `alias`). A report line.
         EmulatorAutostartStarted => "emulator_autostart_started": info / none,
@@ -305,11 +323,12 @@ actingcommand_contract::outcome_codes! {
         InstanceEntryBlockedAwaitingPerson => "instance_entry_blocked_awaiting_person": warning / none,
         /// Warning (Workflow #490 ENTRY-A). One of an entry-blocked instance's own recoveries ended
         /// without recovering (`entry_recovery_end`: its ladder exhausted, the game's update
-        /// dialog ended a rung's run, its worker panicked; `trigger_rule` the trigger item it was
-        /// admitted under): the instance stays blocked, once per block; after an exhausted climb
-        /// the block climbs again by itself (`next_occurrence_unix_ms` its earliest time), after
-        /// the update dialog no climb again in the stretch, after a panicked worker none in the
-        /// block (keys as above).
+        /// dialog ended a rung's run, its worker panicked, its worker's payload ended with an
+        /// error the worker contained; `trigger_rule` the trigger item it was admitted under): the
+        /// instance stays blocked, once per block; after an exhausted climb the block climbs again
+        /// by itself (`next_occurrence_unix_ms` its earliest time), after the update dialog no
+        /// climb again in the stretch, after a panicked or failed worker none in the block (keys
+        /// as above).
         InstanceEntryBlockedRecoveryFailed => "instance_entry_blocked_recovery_failed": warning / none,
         /// Info (Workflow #490 ENTRY-A fix round 4, ruling 2). The candidate's task failed at its
         /// entry on its instance `count` times in a row in its activity window, the latest
@@ -3966,6 +3985,10 @@ actingcommand_contract::outcome_vocabulary! {
         UpdateDialog => "update_dialog",
         /// The worker that climbed the ladder panicked; the ladder ended there.
         WorkerPanicked => "worker_panicked",
+        /// #503 ISO-A fix round 1 (since 0.12.102): the payload that climbed the ladder ended with
+        /// an error its worker contained (the error's own record says which); the ladder ended
+        /// there. Its effect on the block is `WorkerPanicked`'s.
+        WorkerFailed => "worker_failed",
     }
 }
 // ---- Workflow #490 ENTRY-A fix round 1: end ----
@@ -3982,6 +4005,13 @@ actingcommand_contract::outcome_codes! {
         /// the share, and once more after a start that finds it at or past it. Nothing is
         /// refused; the instance takes new keys up to its bound.
         ShareReached => "fact_store_capacity_share_reached": warning / none,
+        /// Warning (Workflow #503 FACT-R, since 0.12.103). A scope at its bound took a
+        /// publication's new keys in the room of its records that had been expired for more than
+        /// seven days: one Warning `runtime.failed` under the system links (`instance_id` the
+        /// alias, or `server` or `game`; `count` the records removed; `limit_count` the scope's
+        /// bound), each removed record's `fact.invalidated` naming it as its trigger. The
+        /// publication goes on.
+        ExpiredFactsReclaimed => "fact_store_expired_facts_reclaimed": warning / none,
     }
 }
 // ---- #498 FACT-CAP: end ----
