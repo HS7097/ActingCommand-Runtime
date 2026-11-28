@@ -1111,10 +1111,11 @@ fn sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below(
     // list reading of the wanted keys only, Workflow #455 RR1 (register §1.535) to [3, 28], a
     // `goals.json` of version 3 and a root's `goal-tables.json`, Workflow #503 LIST-B (register
     // §1.536) to [3, 29], a `repeated_anchor` layout's picture pool, Workflow #503 LIST-C
-    // (register §1.541) to [3, 30], a scan's end that requires the list to be stationary, and
+    // (register §1.541) to [3, 30], a scan's end that requires the list to be stationary,
     // Workflow #503 LIST-D (register §1.544) to [3, 31], a layout's own budget of OCR and NN
-    // evaluations; [20, 20] stays within it.
-    assert_eq!(own, [3, 31]);
+    // evaluations, and Workflow #455 RR4a (register §1.546) to [3, 32], a root's
+    // `goal-tables.json` that writes the names a person reads; [20, 20] stays within it.
+    assert_eq!(own, [3, 32]);
     assert!(package_edge_holds(own, [20, 20]));
     assert!(!package_edge_holds([3, 19], [20, 20]));
 }

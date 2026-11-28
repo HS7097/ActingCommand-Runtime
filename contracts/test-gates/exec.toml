@@ -4637,3 +4637,12 @@ tests = [
     "actingcommand-actinglab::bin:actinglab::tests::gate_503_list_d::list_d_a_layouts_own_evaluation_budget_needs_revision_31_and_nothing_else_does",
 ]
 incident = ["#503 LIST-D"]
+
+# Workflow #455 RR4a (0.12.100; register §1.546; brief rd-1123/brief-455-rr4a.md, ruling 7 and test 5; contracts/standard-pack-goal-tables.md, "Interface"; contracts/resource-verify.md, row 32; contracts/component-interfaces.md, the package row 32), the Lab: the revision table counts a goal-tables.json whose document writes names as 32, whatever the member holds, the same file without it 28 and the name inside a table nothing; this build declares [3, 32] and places both zips, an installer of [3, 31] refuses the zip of 32 at its package edge and places the zip of 28 (1); resource verify of a neutral repository whose goal-tables.json writes names passes, carries the file byte for byte, counts 32 and declares [32, 32], which this build's range holds, and the installed root's check names no problem (2). Adapted, the requirement moving the shipped package range to [3, 32]: gate_463_kp1::kp1_a_package_with_a_key_step_needs_revision_17_and_one_without_keeps_its_revision (KEY_REVISION + 15), gate_463_sel2l::sel2l_a_layout_without_the_member_projects_as_before_and_package_20_is_in_range (SHARED_READ_REVISION + 12), the Lab's gate_463_sel2l_rows::sel2l_rows_the_generated_package_is_admitted_at_package_20_and_refused_below, actinglab-architecture's component_interfaces::the_runtime_declares_each_v0120_interface_revision_once, the rescue module's gate_463_v1::v1_the_build_declares_package_through_revision_14, gate_477_cv1::cv1_a_zip_with_a_version_2_catalog_needs_package_24_and_one_with_version_1_keeps_16, gate_455_tk1::tk1_a_variable_a_rule_gives_needs_package_26_and_an_earlier_installer_refuses_it and gate_455_rr1::rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused ([3, 32] each)
+[[gate]]
+coverage = "Y"
+tests = [
+    "actingcommand-actinglab::bin:actinglab::tests::gate_455_rr1::rr4a_lab_a_tables_file_that_writes_names_needs_package_32_and_one_without_keeps_28",
+    "actingcommand-actinglab::bin:actinglab::tests::gate_455_rr1::rr4a_lab_resource_verify_declares_32_for_a_tables_file_that_writes_names",
+]
+incident = ["#455 RR4a"]

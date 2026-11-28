@@ -319,6 +319,9 @@ mod gate_455_sl1;
 // pool it produced unread, the needs' holding of it included, until a reading after its end; a
 // start rebuilds the same from the ledger.
 mod gate_455_rr3c;
+// #455 RR4a (0.12.100; register §1.546): a tables file that writes the names a person reads gives
+// the needs of the same file without them, its sha256 aside.
+mod gate_455_rr4a;
 // #503 WAKE (0.12.101; register §1.549): an asleep instance is not woken for a consumer below its
 // pool's trigger line before the line; the idle plan keeps that release, and three answers only a
 // change lets through are held.

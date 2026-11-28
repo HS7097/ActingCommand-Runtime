@@ -52263,7 +52263,143 @@ the `package` edge, a placed one is refused at every admission), so the rollback
 no root is placed from such a bundle. In the release notes' language: 新增：候选布局可以写
 `"provider_evaluations": n`（17 到 64），给自己的一次投影放宽 OCR 和 NN 识别次数的上限；不写的布局照旧是 16。一屏十六张卡、每张要在卡上读名字和数字两项（32 次）的列表，写 32 就能整屏读完；这个布局的准入时间上界也按 32 次算，读它的那一步要给够时间。别的布局、别的包一切照旧。包的修订升到 31：写了这个成员的包要本版以上的 Runtime。
 
-### 1.549 Slice #503 WAKE (0.12.101): an instance that is asleep is not woken for a task that spends a regenerating pool below its trigger line; it wakes when the pool reaches the line. An instance that is awake is judged exactly as today (board #503; the owner's direction of 11-28, the rulings 1 to 6 the coordinator's of the same day; coordinator work order `rd-1123/brief-503-wake.md` after the read-only study `rd-1123/study-wake-1128.md`; on main `cdc3e0b4`, v0.12.99)
+### 1.546 Slice #455 RR4a (0.12.100): `goal-tables.json` may carry the names a person reads (`names`): of its items, keys, columns, subs, classes and conditions, and how a position is said, so that a client can show a table without inventing a word (board #455; the rulings 1 to 8 and the addendum's A and B are the coordinator's of 11-28, no words of the owner's behind them; coordinator work order `rd-1123/brief-455-rr4a.md` with its addendum 1; on main `cdc3e0b4`, v0.12.99; §1.545 is #503 PACE's, a slice of the same days)
+
+It ships in 0.12.100 and takes `package` 32, written over row 31 of §1.544.
+[standard-pack-goal-tables.md](standard-pack-goal-tables.md) ("The file": the member and its
+grammar; the new "Names for people"; "Limits"; "The checks": the order and the rows `malformed` and
+`table_out_of_limits`; "Who reads it"; "Interface"), [standard-pack-goals.md](standard-pack-goals.md)
+("Texts and limits", one sentence), [component-interfaces.md](component-interfaces.md) (the
+`package` row 32) and [resource-verify.md](resource-verify.md) (row 32, the bundle step's counts and
+`resource verify`'s rule) are the contract. The tree holds no JSON schema of the file.
+
+**What a client could not show.** Every name of the file is an opaque id (an item, a key, a column,
+a sub, a class, a condition), and a position is a tuple of whole numbers. That is right for the
+computation, which compares them for equality, and useless to a person: a client that lists the
+records of whom to raise and how far could show only ids and tuples, and the clients' rule is that
+they invent no name. A goal entry can be shown because `goals.json` declares its `title`; nothing
+declared a table's names.
+
+**Why the pack declares them, in this file.** A name is the game's, the same for every account: a
+declaration, written by the resource side beside what it names. It goes into the file that already
+declares what it names, so that a name and its thing are written, checked, bundled and placed
+together and a misspelt one is refused where the file is checked; a file of its own would hold a
+second list of the same ids to keep in step. The next slice (RR4b, a view of the records for
+clients) hands the names on; this one gives them their place, its checks and limits, and keeps
+them.
+
+**What it rests on** (read at `cdc3e0b4`; none of the stop conditions holds).
+- *The text form is reused as it is.* `goals.json`'s localized text is the type `GoalText`, read by
+  `Check::text` (`crates/actingcommand-contract/src/standard_pack_goals.rs`), which takes a value, a
+  pointer and a byte bound and reports a broken bound with the word of the `Check` it runs on; it
+  is tied to nothing an entry has. The tables' reader already runs on a `Check` whose word for a
+  bound is `table_out_of_limits`. A title's bound is `MAX_PACK_CATALOG_TITLE_BYTES`, 128 bytes, not
+  under 128; the locales are 1 to 16 of 1 to 35 bytes.
+- *Nothing hashed changes for a file without the member.* The reader's result
+  (`StandardPackGoalTables`) is serialized nowhere: the workbench keeps it in memory with the sha256
+  of the file's bytes (`RootGoalTables::Accepted`), the needs read its items and tables, and the
+  needs set hashes the file's sha256, never the tables. A file without `names` reads to the value it
+  read to, its names empty; what the workbench keeps already differs by the sha256 when the bytes
+  do.
+- *The revision table can count it.* `pack-catalog.json`'s version is already read from that root
+  file's bytes by the contract crate's `catalog_package_revision`, in `standard-pack build`'s
+  revision table (`entry_revision`) and in `resource verify`'s bundle step; `goal-tables.json` is
+  read the same way at the same two places, at the cost of parsing that one file once more.
+
+**The rulings, as built.**
+- *1, the member* (`crates/actingcommand-contract/src/standard_pack_goal_tables.rs`,
+  `StandardPackGoalTables::names`, `GoalTableNames`, `GoalTableNaming`, `GoalPositionSegment`). The
+  document may have `names`; absent, the names are `GoalTableNames::default()` and everything else
+  reads as before.
+- *2, the text* is `GoalText`, read by `Check::text` with a title's bound; a bound broken is
+  `table_out_of_limits`, as every bound of this file is.
+- *3, what a name names.* Every key names what the file declares: an item; a table; in a table's
+  names a key, a column, under `subs` a column of `per: "sub"` and its sub, a class, a condition a
+  prerequisite of the table names; under `positions` a column; under `sub_positions` a column of
+  `per: "sub"` and its sub. Another key is `malformed` at its pointer, an unknown member. Nothing
+  must be named.
+- *4, how a position is said.* `positions` by column: 1 to 64 segments `{prefix, text}`, the prefix
+  0 to the width's whole numbers (a column of `per: "sub"`: its narrowest sub's), the strings'
+  placeholders `{0}` to `{3}` below the width; a brace of no placeholder `malformed` at the string,
+  a repeated prefix `malformed` at the later's `prefix`. Addendum A: `sub_positions` by column of
+  `per: "sub"` and by sub, by the same rules held to the sub's own width, a column not of
+  `per: "sub"` and a sub the column does not have `malformed` at the key; a sub's position is said by
+  its own list when it has one, else by the column's. The one pure function,
+  `say_goal_position(naming: &GoalTableNaming, column: &str, sub: Option<&str>, position: &[i64])
+  -> Option<GoalText>`: of the list that says it, the segment of the longest prefix that is the
+  position's first elements, each placeholder filled with the decimal number; nothing when no list
+  or no segment says it or a placeholder names an element the position lacks. Addendum B: it takes
+  no language and gives every language the segment writes; the client chooses among them.
+- *5, limits and problems.* The 4 MiB stays; `malformed` and `table_out_of_limits`, each at the
+  pointer of what is wrong; the names are read last of the forms, after the tables and before what
+  the file says of itself; a file whose names are refused is refused whole. No word and no code.
+- *6, who keeps it.* The workbench keeps the reader's result as before, so the names stay with the
+  tables of the generation in force, parsed once per content by the same sha256 rule; nothing else
+  reads them. The needs computed from a records entry are byte for byte those of the same file
+  without `names`, but for the file's sha256 the set carries.
+- *7, `package` 32* (`goal_tables_package_revision`, `GOAL_TABLE_NAMES_PACKAGE_REVISION`;
+  `apps/actinglab/src/resource_verify/revision.rs`, `entry_revision`;
+  `apps/actinglab/src/resource_verify/bundle.rs`, the bundle step's revision). The precedent
+  followed is row 24, a `pack-catalog.json` of version 2: a contract-crate function of the root
+  file's bytes that both rows call. The member counts by its presence at the document's top,
+  whatever it holds; a file without it keeps 28.
+- *8, neutral; nothing new on the wire.* No record, event or wire member; `ledger`,
+  `runtime-client`, `actingd-config` and `runtime-outcomes` do not move; no code, word or setting,
+  and the outcome index does not change. Every example is made up.
+
+**Decided here.** `names: {}` and an empty map read as no names. A prefix of more elements than its
+width is `malformed` at the prefix (a width is at most 4, so the 4 takes no word of its own); a
+prefix element that is no safe integer is `malformed` at it. A placeholder is `{`, one decimal digit
+and `}`; `{4}` to `{9}` and `{10}` are none. The names are read in the forms, so a file whose names
+are refused is judged for what it says of itself once they are mended, as for any other form. The
+installer's `place` reads no member of the file: its rule stays the file's presence (28,
+`goal_tables_undeclared`), and a bundle that writes `names` and declares less is placed as
+declared, as for rows 20 to 31. The function takes the sub (addendum A needs it) as an option.
+
+**Tests** (contract gate map row "#455 RR4a", exec and host gate map rows "#455 RR4a"; no clock
+read in a gate file).
+
+| Test | What it shows |
+|---|---|
+| `standard_pack_goal_tables::tests::rr4a_the_first_example_with_names_reads_and_its_tables_are_those_of_the_file_without` (1, 4) | the contract's first example with its `names` reads, every name and list as written (items in file order, a key, a column, a sub, a class, a condition, `level`'s three prefixes, `mastery`'s sub `2` list and none for sub `1`); its game, items and tables equal those of the file without, whose names are none |
+| `…::rr4a_each_name_of_nothing_declared_and_each_bad_segment_is_refused_at_its_pointer` (2, A) | one problem each at its pointer: an item, a table, a key, a column, a sub, a class, a condition not declared, a sub under a column not of `per: "sub"`, an unknown member of a table's names and of `names`, a prefix over the width (a `per: "sub"` column's too), a repeated prefix, `{1}` on a width of 1, `{0` and `0}` and `{x}`, `malformed`; 65 segments and none, a string of 129 bytes, `table_out_of_limits`; of `sub_positions` a column not of `per: "sub"`, a sub not of the column and a prefix over the sub's width, `malformed`; 64 segments and 128 bytes read |
+| `…::rr4a_a_position_is_said_by_its_longest_prefix_in_every_language_of_its_segment` (3, A, B) | `[0, 2]` by `[0]` in English and French, `[1, 1]` by the empty prefix in English only, `[2, 2]` and `[2, 1]`, `-3` written as decimal; nothing for a placeholder past the position and for a column without a list; sub `1` by the column's list, sub `2` by its own alone, `[1]` of it nothing |
+| runtime-host `gate_455_rr4a::rr4a_p1_a_file_with_names_and_the_same_file_without_give_the_same_needs_but_their_sha256` (4) | the same tables; the same pools (4 covered, 24 and 1800 landing), notes, time and freshness; each set its own sha256 and identity; the named tables with the plain sha256 the plain set, identity and all |
+| runtime-host `gate_455_rr1::rr1_h1_the_workbench_reads_the_tables_once_per_content_and_a_refused_file_applies_no_records`, extended (4, 6) | the workbench keeps the first file's names with its tables (an item, a key, the column's position said) and the same shared value on a read of the same content; the file without `names` is parsed again, another sha256, the same tables, no names, nothing recorded |
+| actinglab `gate_455_rr1::rr4a_lab_a_tables_file_that_writes_names_needs_package_32_and_one_without_keeps_28` (5) | 32 for `names`, whatever it holds; 28 without, and for the name inside a table; this build's [3, 32] places both, [3, 31] refuses the zip of 32 at its edge and places the zip of 28 |
+| actinglab `gate_455_rr1::rr4a_lab_resource_verify_declares_32_for_a_tables_file_that_writes_names` (5) | `resource verify` of a repository whose file writes `names`: passes, the file carried byte for byte, the count 32, the zip [32, 32], the installed root's check without a problem |
+
+Adapted, the requirement moving the shipped `package` range to [3, 32]: `gate_463_kp1`
+(`KEY_REVISION + 15`), `gate_463_sel2l` (`SHARED_READ_REVISION + 12`), the Lab's
+`gate_463_sel2l_rows`, actinglab-architecture's `component_interfaces`, the rescue module's
+`gate_463_v1`, `gate_477_cv1`, `gate_455_tk1` and `gate_455_rr1` (`rr1_lab_both_files_need_package_28_and_a_bundle_below_it_is_refused`).
+Extended, as the work order's test 6 asks: the host's `gate_455_rr1::rr1_h1`, whose first file now
+writes `names` and which reads the same file without them before its other content; its every
+earlier assertion stands. No other existing test is changed, no golden is re-recorded and no test
+leaves the gate maps. What reading could not settle (no compiler, no test run here): that each
+fixture compiles and reads as written (the brace pattern of `template_pieces` on a byte slice, the
+closures that change a fixture's `names`), that the workbench reads the root again when only the
+tables file's bytes shrink (it marks the file by its length and time), and that `resource verify`'s
+other steps take a tables file with `names` as they take one without.
+
+**What is not changed.** A file without `names`: read, kept, hashed and computed from as before,
+byte for byte (RR1 to RR3c's gates pass unchanged); `goals.json` and its reader; the goal page and
+`GoalView` (a view of the records is RR4b's); the installer's rules and the readiness item I2; the
+records, every code, word, setting, record and wire member; the outcome index.
+
+**At deploy.** Nothing to configure, and nothing changes until a root's `goal-tables.json` writes
+`names`: none does. The resource side ships a file with `names` only once this build is installed;
+its bundle declares `package` 32, which an earlier installer refuses at its `package` edge. A
+Runtime before this build that reads a root whose file writes `names` refuses the file
+(`malformed` at `/names`): it applies no `records` entry of that root and says
+`standard_pack_goal_tables_not_applied` (`refused`); every other entry applies and the root runs.
+
+**Rollback.** Below 0.12.100, first replace the root's `goal-tables.json` by one without `names`
+(a bundle that declares 28): otherwise the earlier Runtime applies no `records` entry of that root
+until it is replaced, and nothing else is kept on disk for this slice. In the release notes'
+language: 新增：`goal-tables.json` 可以写 `names`，给物品、表里的键、列、子列、类别和条件起给人看的名字，并写明一个位置怎么念（按前缀匹配的片段，文字里可以有 `{0}` 到 `{3}` 的占位，子列也可以有自己的一套）；Runtime 不拿名字算任何东西，只随表一起保存。包的修订升到 32：写了 `names` 的表文件要本版以上；回滚到本版以前，先换回不写 `names` 的表文件，否则旧版拒收整个表文件、记录条目不生效（其余照常）。
+
+### 1.549 Slice #503 WAKE (0.12.101): an instance that is asleep is not woken for a task that spends a regenerating pool below its trigger line; it wakes when the pool reaches the line. An instance that is awake is judged exactly as today (board #503; the owner's direction of 11-28, the rulings 1 to 6 the coordinator's of the same day; coordinator work order `rd-1123/brief-503-wake.md` after the read-only study `rd-1123/study-wake-1128.md`; on main `cdc3e0b4`, v0.12.99, merged with main `924f4034`, which holds §1.546, a slice of the same days, before this one; §1.545, §1.547 and §1.548 are other slices of the same days)
 
 It ships in 0.12.101. No interface revision moves (`package`, `ledger`, `runtime-client`,
 `actingd-config`), no record member and no setting; one outcome code is new,
