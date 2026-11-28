@@ -436,7 +436,9 @@ it computes 25 for a zip whose `linear_steps` pack has an operation that declare
 row 26, a variable only a rule gives, Workflow #455 TK-1, register §1.532, so it computes 26 for a
 zip whose pack's `control.json` has a variable that writes `given_by`; row 27, a list reading of
 the wanted keys only, Workflow #503 LIST-A, register §1.533, so it computes 27 for a zip whose pack
-has a `read_list` that declares `others`);
+has a `read_list` that declares `others`; row 29, a `repeated_anchor` layout's picture pool,
+Workflow #503 LIST-B, register §1.536, so it computes 29 for a zip whose pack has a candidate layout
+that declares `identity_templates` or a layout feature that declares `region`);
 and, P2's
 fix round 1, what the
 register sections it cites and the B train's sections put into a revision (their members joined revision 6, "which BT-PK6
@@ -500,6 +502,7 @@ as an element of its array.
 | 26 | control | `given_by` of an entry of `variables`, whatever it holds: every Runtime before 26 refuses the member at the declaration (`variables_invalid` at `/variables/<i>/given_by`), in every pack | TK-1, §1.532; [package-variables.md](package-variables.md), "A variable a rule gives" |
 | 27 | task | `others` under `read_list`, whatever it holds, in a pack of any execution mode (a Runtime before 27 refuses the member's name at its declaration gate, `UnknownField` at `/operations/<i>/read_list/others`, in every pack); a list reading without it keeps row 8's or row 22's revision (`LIST_OTHERS_REVISION`) | LIST-A, §1.533; [resource-readings.md](resource-readings.md), "A list of the wanted keys only" |
 | 28 | root | `goals.json` (row 14's, moved: version 3 since, whatever version it holds, `goal_undeclared` below 28) and `goal-tables.json`, each by its presence at the zip's root, as `place` reads it (`goal_tables_undeclared` below 28), whatever it holds | RR1, §1.535; [standard-pack-goal-tables.md](standard-pack-goal-tables.md), "Interface" |
+| 29 | task | `identity_templates` under `candidate_layouts` (a layout's pool; a slot's stands under `slots` and keeps its revision) and `region` under `features`, whatever they hold, in a pack of any execution mode (a Runtime before 29 refuses either member's name at its declaration gate, `UnknownField` at the member, in every pack) (`LAYOUT_POOL_REVISION`) | LIST-B, §1.536; [business-identity-consensus.md](business-identity-consensus.md), "A layout's pool" |
 
 Revisions 13 and 14 (after the train 0.12.61a; register §1.376): no content needs 12 any more.
 Revision 12 brought version 1 of `goals.json`, which this build reads no more; revision 14 brought

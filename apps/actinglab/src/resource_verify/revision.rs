@@ -70,6 +70,9 @@
 //!   of an entry of a pack's `control.json` `variables`, whatever it holds, a row of [`ROWS`].
 //! - **A list reading of the wanted keys only**, 27 (Workflow #503 LIST-A, register §1.533): the
 //!   member `others` of an operation's `read_list`, in a pack of either mode, a row of [`ROWS`].
+//! - **A `repeated_anchor` layout's picture pool**, 29 (Workflow #503 LIST-B, register §1.536):
+//!   the member `identity_templates` of a candidate layout and the member `region` of a layout's
+//!   feature, whatever they hold, in a pack of either mode, two rows of [`ROWS`].
 //!
 //! Any other file needs nothing here, and so does a JSON file that does not read (the format step
 //! refuses it). A feature that adds a `package` revision adds its row here, in its own slice.
@@ -159,6 +162,10 @@ const PRESSES_REVISION: u64 = 25;
 /// Revision 27: a list reading that wants only its declared keys (Workflow #503 LIST-A), the
 /// member `others` of an operation's `read_list` (a row of [`ROWS`]).
 const LIST_OTHERS_REVISION: u64 = 27;
+/// Revision 29: a `repeated_anchor` layout's picture pool (Workflow #503 LIST-B), the members
+/// `identity_templates` of a candidate layout and `region` of a layout's feature (two rows of
+/// [`ROWS`]).
+const LAYOUT_POOL_REVISION: u64 = 29;
 const VARIABLES: &str = "variables";
 const PROVIDES: &str = "provides";
 const IRREVERSIBLE: &str = "irreversible";
@@ -288,11 +295,11 @@ const fn when(
 
 /// The members of the bundle's files that the `package` rows 4 to 11, 13, 14, 17, (Workflow #463
 /// INT-1) 19, (Workflow #463 SEL-GRID G2) 21, (Workflow #428 S168-LK) 22, (Workflow #477 LR-1) 25,
-/// (Workflow #455 TK-1) 26 and (Workflow #503 LIST-A) 27 and the register sections they cite, and
-/// the B train's sections, put into a revision: each with its file, its place, what it holds, its
-/// condition and its revision (`contracts/resource-verify.md`, "The `package` revision", lists
-/// them with their sources).
-const ROWS: [Row; 53] = [
+/// (Workflow #455 TK-1) 26, (Workflow #503 LIST-A) 27 and (Workflow #503 LIST-B) 29 and the
+/// register sections they cite, and the B train's sections, put into a revision: each with its
+/// file, its place, what it holds, its condition and its revision
+/// (`contracts/resource-verify.md`, "The `package` revision", lists them with their sources).
+const ROWS: [Row; 55] = [
     // 4, Workflow #411 B15 (register §1.110 B15-10, §1.111): a `scheduling_outcome` mapping's
     // `remedy`, `control.json`'s `provides`.
     row(TASK, "remedy", Place::Under("mappings"), 4),
@@ -560,6 +567,24 @@ const ROWS: [Row; 53] = [
         "others",
         Place::Under("read_list"),
         LIST_OTHERS_REVISION,
+    ),
+    // 29, Workflow #503 LIST-B (§1.536; contracts/selection-graph.md, "Rules";
+    // contracts/business-identity-consensus.md, "A layout's pool"): a candidate layout's
+    // `identity_templates` (a slot's stands under `slots` and keeps its revision) and a layout
+    // feature's `region`, whatever they hold and in a pack of either mode: every Runtime before it
+    // refuses either member's name at its declaration gate (`UnknownField` at
+    // `/candidate_layouts/<i>/identity_templates` and `/candidate_layouts/<i>/features/<j>/region`).
+    row(
+        TASK,
+        "identity_templates",
+        Place::Under(CANDIDATE_LAYOUTS),
+        LAYOUT_POOL_REVISION,
+    ),
+    row(
+        TASK,
+        "region",
+        Place::Under("features"),
+        LAYOUT_POOL_REVISION,
     ),
 ];
 

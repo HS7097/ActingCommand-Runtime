@@ -2911,6 +2911,8 @@ impl Declaration<'_> {
                     "unknown_identity",
                     "sample_interval_ms",
                     "shared_ocr",
+                    // Workflow #503 LIST-B.
+                    "identity_templates",
                 ],
             )?;
             let id_pointer = child(&pointer, "id");
@@ -2934,6 +2936,7 @@ impl Declaration<'_> {
                 }
             };
             // Workflow #463 SEL-2L: a `repeated_anchor` layout declares `shared_ocr` too.
+            // Workflow #503 LIST-B: a `repeated_anchor` layout declares `identity_templates`.
             let other_kind: &[&str] = if anchored {
                 &["slots"]
             } else {
@@ -2945,6 +2948,7 @@ impl Declaration<'_> {
                     "instance_rect",
                     "click",
                     "readable_band",
+                    "identity_templates",
                 ]
             };
             if let Some(field) = other_kind.iter().find(|field| object.contains_key(**field)) {
@@ -2979,6 +2983,8 @@ impl Declaration<'_> {
                         "integer",
                         "target",
                         "offset",
+                        // Workflow #503 LIST-B.
+                        "region",
                     ],
                 )?;
                 let name_pointer = child(&feature_pointer, "name");
@@ -3006,6 +3012,25 @@ impl Declaration<'_> {
                             self.error(&value_pointer, ResourceDeclarationReason::InvalidValue)
                         );
                     }
+                    if let Some(field) = ["target", "offset", "region"]
+                        .into_iter()
+                        .find(|field| feature.contains_key(*field))
+                    {
+                        return Err(self.error(
+                            &child(&feature_pointer, field),
+                            ResourceDeclarationReason::UnknownField,
+                        ));
+                    }
+                } else if let Some(region) = feature.get("region") {
+                    // Workflow #503 LIST-B: a picture identity of a `repeated_anchor` layout is
+                    // scored in a region relative to its instance, from the layout's pool, and
+                    // reads no target at an offset; a `fixed_slots` feature declares none.
+                    if !anchored {
+                        return Err(self.error(
+                            &child(&feature_pointer, "region"),
+                            ResourceDeclarationReason::UnknownField,
+                        ));
+                    }
                     if let Some(field) = ["target", "offset"]
                         .into_iter()
                         .find(|field| feature.contains_key(*field))
@@ -3015,6 +3040,7 @@ impl Declaration<'_> {
                             ResourceDeclarationReason::UnknownField,
                         ));
                     }
+                    self.relative_rect(region, &child(&feature_pointer, "region"))?;
                 } else if anchored
                     || feature.contains_key("target")
                     || feature.contains_key("offset")
@@ -3076,6 +3102,10 @@ impl Declaration<'_> {
                         frame,
                     )?;
                 }
+                // Workflow #503 LIST-B: the pools of its picture identity features.
+                if let Some(pools) = object.get("identity_templates") {
+                    self.layout_pools(pools, &child(&pointer, "identity_templates"))?;
+                }
             }
             let slots_pointer = child(&pointer, "slots");
             let slots: &[Value] = if anchored {
@@ -3115,6 +3145,24 @@ impl Declaration<'_> {
                         );
                     }
                     self.string(target, &target_pointer)?;
+                }
+                // Workflow #503 LIST-B: a slot's pool holds the pictures of keys only; an `other`
+                // entry is a `repeated_anchor` layout's. Nothing else of it is checked here.
+                let pools = slot.get("identity_templates").and_then(Value::as_object);
+                for (name, pool) in pools.into_iter().flatten() {
+                    let entries = pool.as_array().map_or(&[][..], Vec::as_slice);
+                    for (index, entry) in entries.iter().enumerate() {
+                        if entry.get("other").is_some() {
+                            let entry_pointer = child(
+                                &child(&child(&slot_pointer, "identity_templates"), name),
+                                &index.to_string(),
+                            );
+                            return Err(self.error(
+                                &child(&entry_pointer, "other"),
+                                ResourceDeclarationReason::UnknownField,
+                            ));
+                        }
+                    }
                 }
             }
             // Workflow #396 REC-8: `shared_ocr` holds a source region, checked above; the
@@ -3166,6 +3214,68 @@ impl Declaration<'_> {
                     consensus.validate(feature.value).map_err(|error| {
                         self.refuse(&pointer, ResourceDeclarationReason::InvalidValue, &error)
                     })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Workflow #503 LIST-B (`contracts/selection-graph.md`, "Rules"): a `repeated_anchor`
+    /// layout's `identity_templates`, an object whose every member is an array of entries, each
+    /// an object of `id`, `variant`, `other` and `target_id` at most: `target_id` a string; an
+    /// entry that writes `other` writes it `true` and names no `id` and no `variant`; any other
+    /// names its `id`, a string, and may name a `variant`, a string. Its bounds, its keys and its
+    /// targets are the recognition pack's rules, checked while the pack is derived.
+    fn layout_pools(&self, value: &Value, pointer: &str) -> CliOutcome<()> {
+        let pools = value
+            .as_object()
+            .ok_or_else(|| self.error(pointer, ResourceDeclarationReason::InvalidType))?;
+        for (name, pool) in pools {
+            let pool_pointer = child(pointer, name);
+            for (index, entry) in self.array(pool, &pool_pointer)?.iter().enumerate() {
+                let entry_pointer = child(&pool_pointer, &index.to_string());
+                let entry = self.object(
+                    entry,
+                    &entry_pointer,
+                    &["id", "variant", "other", "target_id"],
+                )?;
+                self.string(
+                    self.required(entry, &entry_pointer, "target_id")?,
+                    &child(&entry_pointer, "target_id"),
+                )?;
+                match entry.get("other") {
+                    Some(Value::Bool(true)) => {
+                        if let Some(field) = ["id", "variant"]
+                            .into_iter()
+                            .find(|field| entry.contains_key(*field))
+                        {
+                            return Err(self.error(
+                                &child(&entry_pointer, field),
+                                ResourceDeclarationReason::UnknownField,
+                            ));
+                        }
+                    }
+                    Some(Value::Bool(false)) => {
+                        return Err(self.error(
+                            &child(&entry_pointer, "other"),
+                            ResourceDeclarationReason::InvalidValue,
+                        ));
+                    }
+                    Some(_) => {
+                        return Err(self.error(
+                            &child(&entry_pointer, "other"),
+                            ResourceDeclarationReason::InvalidType,
+                        ));
+                    }
+                    None => {
+                        self.string(
+                            self.required(entry, &entry_pointer, "id")?,
+                            &child(&entry_pointer, "id"),
+                        )?;
+                        if let Some(variant) = entry.get("variant") {
+                            self.string(variant, &child(&entry_pointer, "variant"))?;
+                        }
+                    }
                 }
             }
         }
