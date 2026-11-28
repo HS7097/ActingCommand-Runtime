@@ -235,8 +235,10 @@ serializes, hashes and decides exactly as before.
 words that such a currency has a line: above it the spending goes on as today, below it the rules
 that spend are pressed, the harder the farther below, the pressing depends on time, and close to
 the date nothing more may be spent). Some pools are what a player saves for a dated event: they
-carry no valuation and cannot carry one (every rule that produces them keeps a fixed value, and a
-fixed value beside a production of a valued pool is refused). In a V2 catalog a pool that writes
+carry no valuation and could not carry one (every rule that produces them keeps a fixed value, and
+before #503 FIXV, 0.12.101, a fixed value beside a production of a valued pool was refused; since,
+such a pool's valuation would not be read beside the value: "Fixed values written in the pack",
+"Beside priced productions"). In a V2 catalog a pool that writes
 **neither a `valuation`** (a block or the pending marker) **nor `target_defaults`** may write
 `spend_line`, which declares that a line a person may set governs its spending:
 
@@ -246,7 +248,7 @@ fixed value beside a production of a valued pool is refused). In a V2 catalog a 
 
 | Field | Bound | What it will be read for | Diagnostic |
 | --- | --- | --- | --- |
-| `price_milli` | required, 1..=9,007,199,254,740,991, the bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line | `limit_exceeded` at it; missing: `missing_required_field` |
+| `price_milli` | required, 1..=9,007,199,254,740,991, the upper bound of a task's fixed value | the milli of value of `scale` units of the pool, in the unit the instance's valuations weigh in (as a weight is the milli of value of `Q` steps): the full price of the pressing below a line | `limit_exceeded` at it; missing: `missing_required_field` |
 | `scale` | required, 1..=9,007,199,254,740,991, the bound of a valuation's `scale` | the amount the price is of, and the shortfall below the line at which the pressing reaches the full price | as `price_milli` |
 | `income_floor_milli_per_day` | required, 0..=9,007,199,254,740,991 | the thousandths of a unit the pool gains each day at the least, with nothing spent; 0 says nothing is sure; read for a line with a date | as `price_milli` |
 
@@ -1246,7 +1248,9 @@ key and no per-instance mode: a deployed Runtime judges every marked task.
   ("Capped spending order"), which also gives the head of its order its own `B` (below). Nothing
   here writes a pool weight (the one-way rule, SS-1). #455 B1 (since 0.12.82; register §1.518):
   a task with a fixed value reads of what it produces only its goal terms, each at its goal's
-  `scale` ("Fixed values written in the pack" below, "A goal on what it produces").
+  `scale` ("Fixed values written in the pack" below, "A goal on what it produces"); #503 FIXV
+  (since 0.12.101; register §1.550): each the pool's gap weight `Γ` alone, at the step its term
+  divides by, whatever valuation the pool carries.
 - **Unknown is never 0.** A judged candidate whose task declares no `produces` and no `consumes`
   entry (SCHED-C1a, since 0.12.52: and no fixed value, "Fixed values written in the pack" below,
   which reads of its `produces` only its goal terms, so a pool it produces never makes its `B`
@@ -1403,7 +1407,8 @@ urgency_total_milli / cost_ms`, added to a candidate's `total` whether or not it
 task that writes it enters the score stage); the benefit gate never reads it.
 
 - **The member.** A V2 task may write `benefit_fixed_value_milli`, an integer in
-  `1..=9007199254740991`: `V`, the value of one run of the task without the cost of the pools it
+  `-9007199254740991..=9007199254740991` (#503 FIXV, since 0.12.101, register §1.550; before,
+  `1..=9007199254740991`): `V`, the value of one run of the task without the cost of the pools it
   consumes, in milli of the value unit its instance's valuations weigh in (the unit of `W`: a
   weight is the milli of value of `Q` steps of a pool). It requires `benefit_judged: true`.
   `value_milli` is not reused: its reader, the score stage, multiplies it by urgency and divides it
@@ -1414,8 +1419,9 @@ task that writes it enters the score stage); the benefit gate never reads it.
   catalog writes the task member itself.
 - **Without a consumption** `B = V`, known: such a rule is never `benefit_unknown` for lack of
   effects or of a priced pool. A fixed value is exact, so it adds nothing to `ε` ("Within
-  tolerance"); since `V ≥ 1`, the candidate is positive and ranks by `B ÷ E`. #455 B1 (since
-  0.12.82): plus its goal terms, "A goal on what it produces" below; without one, `B = V`.
+  tolerance"); with `V ≥ 1` the candidate is positive and ranks by `B ÷ E` (with `V ≤ 0`, "What 0
+  and below mean" below). #455 B1 (since 0.12.82): plus its goal terms, "A goal on what it
+  produces" below; without one, `B = V`.
 - **With a consumption** `B = V − Σ_p C_p·W_p/(1000·Q_p)`, the cost term of "Net benefit within a
   tier" unchanged (#455 B1: plus its goal terms). So below the cap (below the trigger line, "Pool lines") its net benefit is
   `V − W·c` as today, and in a capped round its value without the pool's cost is `V` less the cost
@@ -1428,17 +1434,19 @@ task that writes it enters the score stage); the benefit gate never reads it.
   above), so `B = V` less the other pools' cost. `ε` holds the consumption's terms only. A pool the pack values takes part in the lines and the capped order as
   any valued pool.
 - **Its `produces`** entries are not read by `B` but for its goal terms (#455 B1, the next item);
-  they keep their other readers (forward projection, resource targets). A produced pool that is
-  priced is refused (below).
+  they keep their other readers (forward projection, resource targets, the turns a run is told
+  under a goal, the pools a run leaves unread). #503 FIXV (since 0.12.101): a produced pool may be
+  priced or pending ("Beside priced productions" below).
 - **A goal on what it produces** (#455 B1, since 0.12.82; register §1.518; the coordinator's
-  rulings of 11-23, not the owner's words). Each pool the task produces that declares no valuation
-  (a priced or pending one is refused beside `V`, below) and that a goal in force covers with an
-  open gap adds its *goal term* to `B`: its per-run yield `r(k,p)` times the weight the resource
-  layer gives the pool for the goal over the goal's own `scale`, exactly as a production term of
-  "Net benefit within a tier" ([../resource-targets.md](../resource-targets.md), "Resource weights
-  (v2)": `W = B_p + Γ` with `B_p` 0 for a pool without a valuation, `Γ = min(⌊I·g/S⌋,
-  1 000 000)`, `S` the goal's `scale` and `I` its `importance_milli`, which the goal must carry for
-  such a pool). So `B = V + Σ_g r(k,g)·Γ_g/(1000·S_g) − Σ_p C_p·W_p/(1000·Q_p)`. An expected yield
+  rulings of 11-23, not the owner's words). Each pool the task produces that a goal in force
+  covers with an open gap adds its *goal term* to `B`: its per-run yield `r(k,p)` times the gap
+  weight `Γ` the resource layer gives the pool for the goal over the step its term divides by
+  ([../resource-targets.md](../resource-targets.md), "Resource weights (v2)": `Γ =
+  min(⌊I·g/S⌋, 1 000 000)`, `S` the goal's step and `I` its importance; the step `Q` the term
+  divides by is the pool's `valuation.scale` for a priced pool, else the goal's `scale`). For a
+  pool without a valuation `Γ` is its whole weight `W = B_p + Γ`, `B_p` 0, as since 0.12.82; #503
+  FIXV: for a priced pool only `Γ` is read, never `B_p`. So `B = V + Σ_g r(k,g)·Γ_g/(1000·Q_g) −
+  Σ_p C_p·W_p/(1000·Q_p)`. An expected yield
   brings its rounding bound to `ε` as a production term does ("Within tolerance"), and the
   judgement's items (`policy_benefit_nonpositive`, `benefit_within_tolerance`) name each term as
   `<pool>:+<term>`, before the consumption's (but not where they are not counted, the next
@@ -1461,7 +1469,11 @@ task that writes it enters the score stage); the benefit gate never reads it.
   ⌈gap·1000 ÷ the yield in thousandths⌉ runs, at least 1, where before it removed it ("Expected
   quantities (v2)", SS-6); #455 RR3b (since 0.12.98): on a pool that writes `goal_tiers` the gap a
   run is bounded by and handed is the need's part while it is open, else the stock's, and the goal
-  term is that pool's `Γ` of two parts ("A goal's gap in two parts"). Without such a goal every value, record, decision and identity is as before; what a
+  term is that pool's `Γ` of two parts ("A goal's gap in two parts"); #503 FIXV (since 0.12.101;
+  the coordinator's ruling 2): for a task with a fixed value the goal's runs bound `run_cap`
+  whatever valuations its produced pools carry (the goal term of `run_cap` makes no base-weight
+  test for it, where a priced product beside the goal's pool would otherwise remove the bound).
+  Without such a goal every value, record, decision and identity is as before; what a
   catalog accepts or refuses, its hash and the `requires` names are unchanged, and an older
   Runtime ignores these productions as before.
 - **A goal chooses which task spends a pool, the pool's lines choose when** (#455 B1 ruling 9,
@@ -1522,15 +1534,46 @@ task that writes it enters the score stage); the benefit gate never reads it.
   the unit of its valuations, in which the pack writes its fixed values and its constant valuations
   (`B` of two games is never compared: "Turns across instances").
 - **Refused at compile time** (point 4), each at its pointer: in a V1 document the member is
-  `unknown_field`; a value that is no integer `type_mismatch`, one outside `1..=9007199254740991`
-  `limit_exceeded`; without `benefit_judged: true`, `missing_required_field` at `benefit_judged`.
-  With the new diagnostic `fixed_value_conflict` (error) at `benefit_fixed_value_milli`: (a) a
-  `produces` entry on a pool whose `valuation` is a declared block or the pending marker, since the
-  rule would then have two values, the fixed one and its priced effects. Refusal, not precedence:
-  neither may silently win, and a model export that prices a rule's effects removes its fixed value
-  in the same change. (b) `benefit_realization: true`, since the zero tier reads a modelled value's
-  rounding and a product weighed above 0, which a fixed value does not have. A value of 0 is no
-  value: a rule that must not run is held or not written.
+  `unknown_field`; a value that is no integer `type_mismatch`, one outside
+  `-9007199254740991..=9007199254740991` `limit_exceeded` (#503 FIXV, since 0.12.101: 0 and
+  negative values are taken; before, `1..=9007199254740991`); without `benefit_judged: true`,
+  `missing_required_field` at `benefit_judged`. The diagnostic `fixed_value_conflict` (error) at
+  `benefit_fixed_value_milli` beside `benefit_realization: true`, since the zero tier reads a
+  modelled value's rounding and a product weighed above 0, which a fixed value does not have.
+  Before 0.12.101 it was given beside a `produces` entry on a pool whose `valuation` is a declared
+  block or the pending marker too, as a refusal rather than a precedence, so that neither of the
+  rule's two values (the fixed one and its priced effects) silently won; #503 FIXV replaces that
+  refusal by the precedence of the next item.
+- **Beside priced productions** (#503 FIXV, since 0.12.101; register §1.550; the coordinator's
+  rulings on the owner's direction of 11-28, which has people edit these files and asks that they
+  can write what is true). A task with a fixed value may write a `produces` entry on a pool whose
+  `valuation` is a declared block or the pending marker. The precedence is written, and nothing is
+  counted twice: **with a fixed value the task's base value is `V` alone.** Its productions stay as
+  written and feed everything that is not the base value: the goal terms of "A goal on what it
+  produces" (each pool's gap weight `Γ` alone, never its base valuation `B_p`), the turns a run is
+  told under a goal (`gap_remaining` and the goal term of `run_cap`) and the pools a run told
+  enough turns leaves unread (#455 RR3c, "Pool lines"). A produced pool's pending amount or pending
+  valuation never makes `B` unknown beside `V`, and its reading is read only for a goal on it. So a
+  rule writes its real drops beside its value, and a goal on what it really produces reaches it.
+  Provenance still lists every rule that runs on a fixed value, the list a model export that prices
+  a rule's effects replaces; whether that export then removes the value is the model's choice.
+  Without a goal on such a pool every `B`, `ε`, item and reason is `V`'s and the consumption's
+  alone, as for a rule that wrote no such production.
+- **What 0 and below mean** (#503 FIXV, since 0.12.101). `V` is the value of one run without the
+  cost of what it consumes, in the game's unit, of either sign: 0 says "worth nothing by itself",
+  a negative value "costs more than its priced consumption". With 0 and no consumption and no goal
+  term `S = ε = 0`, exact, so `policy_benefit_nonpositive` with `benefit_milli` 0 (after
+  `benefit_fixed_value` with `fixed_value_milli` 0); with a consumption `B = V − W·c < 0`, the same
+  reason. Such a task runs only where its goal terms make it positive outside the band (and only
+  where they are counted: below the trigger line of a regenerating pool it consumes, only those of
+  pools that write `goal_tiers`), or at an evaluation where it is not judged (a manual request, or
+  a ride in its chain head's run window); within the band it is `benefit_within_tolerance`
+  `unmarked`. In a capped round a consumer is listed only when its value without the pool's cost
+  is above that value's bound, so a `V ≤ 0` without goal terms is never listed. A rule that must
+  not run is still held or not written, and an unknown value is still the pending marker: neither
+  is 0. A step that costs something and yields nothing by itself is **not** helped by a value of 0
+  or below ([../standard-pack-schedule.md](../standard-pack-schedule.md), "What a resource
+  repository writes").
 - **What a person sees** (point 5). The decision of a judged candidate whose `B` was computed from
   a fixed value carries `benefit_fixed_value` (info; `benefit_milli` `B`, `fixed_value_milli` `V`,
   `expected_duration_ms`) before its other reasons, whether it was dispatched, deferred
@@ -1548,8 +1591,19 @@ task that writes it enters the score stage); the benefit gate never reads it.
   writes `valuation_origin`, lists it in `requires`; the composer refuses the file without it, so a
   Runtime that does not name the subsystem refuses the file (`schedule_requires_missing`) instead of
   reading the rule without its value. An older Runtime given a catalog with the member refuses it
-  at its reader (`unknown_field`).
-- **Identity.** A task without the member serializes, hashes and decides byte for byte as before.
+  at its reader (`unknown_field`). #503 FIXV (since 0.12.101): a Runtime that reads a value of any
+  sign and beside priced productions also reports the always-on `fixed_value_any`; a
+  `schedule.json` whose rule's `fixed_value_milli` is 0 or below, or whose rule with a fixed value
+  writes a production of a pool whose `valuation` is a block or the pending marker, lists it beside
+  `benefit_fixed_value` ([../standard-pack-schedule.md](../standard-pack-schedule.md),
+  "`requires`"), so a Runtime before 0.12.101 refuses the file at `requires` and the installer's
+  plan refuses a rollback below it while such a file is in use. A raw V2 catalog carries no
+  `requires`: an older Runtime refuses its value of 0 or below (`limit_exceeded`) or beside a priced
+  product (`fixed_value_conflict`) at its compiler.
+- **Identity.** A task without the member serializes, hashes and decides byte for byte as before;
+  so does one whose value is 1 or more beside no priced or pending product (#503 FIXV: for it the
+  gap weight read equals the weight read before, and the goal term of `run_cap` meets no
+  base-weighted product).
 
 ## Task Reserves (Workflow #411 B16 part 2)
 
@@ -4049,7 +4103,7 @@ The compiler enforces both schema limits and UTF-8 byte limits:
 | Pool valuation name / unit | 128 / 32 UTF-8 bytes |
 | Pool valuation scale | 1..=9,007,199,254,740,991 |
 | Pool valuation base weight / gap weight | 0..=1,000,000 / 1..=1,000,000 milli |
-| A task's fixed value (SCHED-C1a, since 0.12.52) | 1..=9,007,199,254,740,991 milli |
+| A task's fixed value (SCHED-C1a, since 0.12.52; of either sign since #503 FIXV, 0.12.101) | -9,007,199,254,740,991..=9,007,199,254,740,991 milli |
 | A consumption's fallback, and a usable amount read from a fact (SCHED-C1f1, since 0.12.54) | 1..=9,007,199,254,740,991, at most a constant capacity |
 | Rows of a record list in the evaluation's input, and of a predicate's `record_list` value | 256 (since S168-LB1a, 0.12.55, the projection leaves a longer record out, "Record lists and the projection") |
 

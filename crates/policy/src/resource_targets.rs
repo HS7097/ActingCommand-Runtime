@@ -2514,6 +2514,11 @@ pub(crate) struct ResourceTerm {
 pub(crate) struct PoolWeight {
     /// `W = B + Γ`, the pool's effective weight for the candidate.
     pub(crate) weight_milli: u64,
+    /// #503 FIXV (register §1.550): `Γ`, the part of `W` a goal in force that covers the candidate
+    /// adds (0 without one): all a task with a fixed value reads of a pool it produces, so a priced
+    /// product's base valuation `B` is never added to the fixed value. Equal to `W` for a pool
+    /// without a valuation.
+    pub(crate) gap_weight_milli: u64,
     /// `Q`, the step its term divides by: the pool's `valuation.scale`, else the `scale` of the
     /// goal that covers the candidate (#455 B1, register §1.518: the step of a fixed-value task's
     /// goal term), its own, else (#455 B3-P, register §1.522) the pool's `target_defaults.scale`.
@@ -2540,7 +2545,7 @@ impl ResourceTerm {
 
     /// SS-2b: the effective weight `W = B + Γ` of each pool this term weighs, with the step `Q` its
     /// term divides by, by pool id; the net benefit reads the resource layer's own weights and
-    /// writes none.
+    /// writes none. #503 FIXV (register §1.550): with its gap weight `Γ` beside it.
     pub(crate) fn pool_weights(&self) -> BTreeMap<String, PoolWeight> {
         self.items
             .iter()
@@ -2549,6 +2554,7 @@ impl ResourceTerm {
                     item.pool.clone(),
                     PoolWeight {
                         weight_milli: item.effective_milli,
+                        gap_weight_milli: item.gap_weight_milli,
                         step: item.step,
                     },
                 )
@@ -4813,19 +4819,22 @@ fn run_cap(
 /// gap that declares no integer per-run `amount` on every entry (an `expected_amount_milli`
 /// production) needs ⌈gap·1000 / its expected yield per run in thousandths⌉ runs, at least 1; one
 /// that yields nothing per run (its amount pending) adds nothing. Before, such a pool removed
-/// `run_cap` whole.
+/// `run_cap` whole. #503 FIXV (register §1.550): a task with a fixed value makes no base-weight
+/// test: its base value is the fixed value alone, so its goals' runs bound `run_cap` whatever
+/// valuations its produced pools carry.
 fn goal_runs(
     task: &TaskSpec,
     pools: &[PoolSpec],
     gap: &impl Fn(&str) -> Option<u64>,
 ) -> Option<u64> {
-    let base_weighted = task.produces.iter().any(|effect| {
-        pools
-            .iter()
-            .find(|pool| pool.id == effect.pool_id)
-            .and_then(|pool| pool.declared_valuation())
-            .is_some_and(|valuation| valuation.base_weight_milli > 0)
-    });
+    let base_weighted = task.benefit_fixed_value_milli.is_none()
+        && task.produces.iter().any(|effect| {
+            pools
+                .iter()
+                .find(|pool| pool.id == effect.pool_id)
+                .and_then(|pool| pool.declared_valuation())
+                .is_some_and(|valuation| valuation.base_weight_milli > 0)
+        });
     if base_weighted {
         return None;
     }

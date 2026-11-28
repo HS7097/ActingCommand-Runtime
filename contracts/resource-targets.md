@@ -1018,9 +1018,9 @@ something irreversible" above).
 
 **A goal on what a task with a fixed value produces** (#455 B1, since 0.12.82; register §1.518;
 the coordinator's rulings of 11-23, not the owner's words). A task whose benefit is a fixed value
-`V` produces only pools without a valuation (a priced or pending one beside `V` is refused,
-[scheduling/README.md](scheduling/README.md), "Fixed values written in the pack"), so this section
-weighs such a pool for it only through a target that covers it: `B_p` 0, `W(k,p) = Γ` and
+`V` produced only pools without a valuation before 0.12.101 (a priced or pending one beside `V` was
+refused; since #503 FIXV it is taken, below), so this section weighs such a pool for it only
+through a target that covers it: `B_p` 0, `W(k,p) = Γ` and
 `Q_p = t.scale`, the target's own `scale` and `importance_milli`, which the entry requires for a
 pool without a valuation, or (#455 B3-P, since 0.12.82) the pool's `target_defaults` where the
 target carries none, from the same resolution ("Who gives a goal its step and importance").
@@ -1037,6 +1037,20 @@ line, in the capped spending order, and for a pool that does not regenerate, the
 A1 (since 0.12.98): a goal term of a pool that writes `goal_tiers`, whose `Γ` is bounded, counts
 below that line too; only the goal terms of pools without the member are left out there. `R` and
 every reason above are unchanged, and so is `gap_remaining`.
+
+#503 FIXV (since 0.12.101; register §1.550; the coordinator's rulings on the owner's direction of
+11-28). A task with a fixed value may also produce a priced or pending pool. For it the net benefit
+reads of each produced pool **only its gap weight `Γ`** (the resource layer's term gives it beside
+the effective weight, `PoolWeight::gap_weight_milli`), at the step `Q_p` its term divides by (a
+priced pool's `valuation.scale`, else the target's or the pool's `target_defaults` step as above):
+`r(k,p)·Γ/(1000·Q_p)`. The pool's base valuation `B_p` is never added to `V`, so without a target
+on it a priced product adds nothing, and with one its gap term is added once. For a pool without a
+valuation `Γ` is `W(k,p)`, so nothing above changes for it. The goal term of `run_cap` makes no
+base-weight test for such a task: the goal's runs bound the turns a run is told whatever
+valuations its produced pools carry (the coordinator's ruling 2). `R`, the score stage's term, is
+left as the resource layer computes it for every task, `B_p + Γ` included: it orders no judged
+candidate within its tier (the business tier orders by `B ÷ E`), and the `resource_weights` reason
+shows it as before.
 
 **A goal never takes `run_cap` away** (#455 B1 ruling 10, since 0.12.82; register §1.518). The
 goal term of `run_cap` ([remedies.md](remedies.md), section 4, "Spend values") of a produced pool

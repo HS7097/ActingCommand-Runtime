@@ -514,15 +514,16 @@ pub fn parse_standard_pack_catalog(
 /// `schedule.json` gives `facts` ([`CatalogScheduleFacts`]: `Some` of none for a root without the
 /// file; `None` when that file could not be read, which is its own refusal: then no reference to
 /// it is judged), the reader every tool of this build calls: version 1 is read exactly as there,
-/// against the pools `facts` declares, and version 2 against them and the rules and valuations it
-/// holds too. Version 2's errors beside version 1's, each at its pointer: an effect not of its form
+/// against the pools `facts` declares, and version 2 against them and the rules it holds too.
+/// Version 2's errors beside version 1's, each at its pointer: an effect not of its form
 /// or outside its bounds ([`crate::resource_effect::ResourceEffectSpec::form_fault`]: `malformed`
 /// or `catalog_out_of_limits` at the member; a member an effect does not know, `malformed` at the
 /// effect), more than [`crate::resource_effect::MAX_EFFECTS_PER_TASK`] effects on one side or
 /// more than [`MAX_PACK_CATALOG_RULE_PARTS`] per-rule parts (`catalog_out_of_limits`), a value
-/// whose `milli` is outside 1 to 2^53 - 1 (`catalog_out_of_limits`) or whose `origin` is not
-/// `"model"`, a mark other than `true` (`malformed`), a value beside the realization mark or beside
-/// a production of a pool with a valuation (`catalog_value_conflict`), a per-rule part's `rule_id`
+/// whose `milli` is outside −(2^53 − 1) to 2^53 − 1 (#503 FIXV, register §1.550: of either sign,
+/// 0 included; `catalog_out_of_limits`) or whose `origin` is not `"model"`, a mark other than
+/// `true` (`malformed`), a value beside the realization mark (`catalog_value_conflict`; #503 FIXV:
+/// beside a production of a pool with a valuation it is taken), a per-rule part's `rule_id`
 /// off the rule-id grammar, twice in an entry (`catalog_duplicate`) or of no rule that runs the
 /// entry's package (`catalog_rule_unknown`).
 pub fn parse_standard_pack_catalog_with(

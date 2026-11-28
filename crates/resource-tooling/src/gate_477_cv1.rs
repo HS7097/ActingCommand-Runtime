@@ -56,6 +56,8 @@ const VERSION_2: &str = "actingcommand.pack-catalog.v2";
 const VALUES: &str = "actingcommand.pack-catalog-values.v1";
 /// The largest whole quantity of an effect, 2^53 - 1.
 const MAX: u64 = 9_007_199_254_740_991;
+/// #503 FIXV: the largest fixed value, 2^53 - 1, as a value of either sign is held.
+const MAX_VALUE: i64 = 9_007_199_254_740_991;
 
 fn write_json(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
@@ -408,7 +410,11 @@ fn cv1_each_quantity_form_round_trips_and_the_bounds_are_a_rule_s() {
     );
 }
 
-/// (2) The value and the marks: taken; each refusal of the work order's ruling 2 one case.
+/// (2) The value and the marks: taken; each refusal of the work order's ruling 2 one case. Adapted
+/// in place by #503 FIXV (register §1.550), which changes on purpose what this test pinned: a value
+/// of 0 or below is taken down to -(2^53 - 1), -2^53 is out of limits, and a value beside a
+/// production of a pool whose valuation is pending is taken (before, out of limits and
+/// `catalog_value_conflict`).
 #[test]
 fn cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word() {
     let facts = facts(Vec::new(), &[]);
@@ -436,18 +442,28 @@ fn cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word() {
     assert_eq!(
         own.value,
         Some(CatalogValue {
-            milli: MAX,
+            milli: MAX_VALUE,
             origin: ScheduleValueOrigin::Model
         })
     );
     assert!(own.limited && !own.realization);
-    assert!(
-        read(
-            &with(json!({"value": {"milli": 1}}), produce(STOCK)),
-            &facts
-        )
-        .is_ok()
-    );
+    // #503 FIXV: a value of either sign, 0 included, and a value beside a pending product.
+    for (milli, produced) in [
+        (1, STOCK),
+        (0, STOCK),
+        (-1, STOCK),
+        (-MAX_VALUE, STOCK),
+        (1, VALUED),
+    ] {
+        assert!(
+            read(
+                &with(json!({"value": {"milli": milli}}), produce(produced)),
+                &facts
+            )
+            .is_ok(),
+            "{milli} beside {produced}"
+        );
+    }
     assert!(
         read(
             &with(
@@ -461,7 +477,7 @@ fn cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word() {
 
     let cases = [
         (
-            json!({"value": {"milli": 0}}),
+            json!({"value": {"milli": -MAX_VALUE - 1}}),
             produce(STOCK),
             StandardPackProblem::CatalogOutOfLimits,
             "/packs/0/value/milli",
@@ -493,12 +509,6 @@ fn cv1_the_value_and_the_marks_are_taken_and_each_refusal_has_its_word() {
         (
             json!({"value": {"milli": 1}, "realization": true}),
             produce(STOCK),
-            StandardPackProblem::CatalogValueConflict,
-            "/packs/0/value",
-        ),
-        (
-            json!({"value": {"milli": 1}}),
-            produce(VALUED),
             StandardPackProblem::CatalogValueConflict,
             "/packs/0/value",
         ),

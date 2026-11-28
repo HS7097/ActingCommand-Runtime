@@ -12,8 +12,8 @@
 // - a consumed pool still needs its valuation, and a regenerating one its reading;
 // - every decision whose `B` came from a fixed value carries `benefit_fixed_value` first, and a
 //   judged winner's `rank_breakdown` names `V`;
-// - the compiler refuses the member at its pointer, `fixed_value_conflict` beside a priced product
-//   or the realization mark;
+// - the compiler refuses the member at its pointer, `fixed_value_conflict` beside the realization
+//   mark (and, before #503 FIXV, beside a priced product);
 // - the composer writes it from the rule member `fixed_value_milli`, keeps the origins out of the
 //   catalog, and refuses it without `requires`, on a maintenance rule and as the task member;
 // - a catalog without the member keeps its golden hashes.
@@ -377,10 +377,12 @@ fn sched_c1a_t5_a_consumed_pool_without_a_valuation_stays_unknown() {
 }
 
 // Test 6, the compiler's refusals, each at its pointer: in V1 `unknown_field`; a string, `null` or
-// a fraction `type_mismatch`; 0, −1 and 2^53 `limit_exceeded`; without `benefit_judged: true`
-// `missing_required_field` at `benefit_judged`; `fixed_value_conflict` beside a production of a
-// valued pool or of a pool whose valuation is pending (case a) and beside `benefit_realization:
-// true` (case b). A production of a pool without a valuation and the largest value compile.
+// a fraction `type_mismatch`; 2^53 and −2^53 `limit_exceeded`; without `benefit_judged: true`
+// `missing_required_field` at `benefit_judged`; `fixed_value_conflict` beside `benefit_realization:
+// true`. A production of a pool without a valuation and the largest value compile. Adapted in place
+// by #503 FIXV (register §1.550), which changes on purpose what this test pinned: 0, −1 and the
+// least value −(2^53 − 1) compile, and so does a value beside a production of a valued pool or of
+// a pool whose valuation is pending (before, `limit_exceeded` and `fixed_value_conflict`).
 #[test]
 fn sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer() {
     const MEMBER: &str = "/tasks/0/benefit_fixed_value_milli";
@@ -418,7 +420,7 @@ fn sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer() {
             MEMBER,
         );
     }
-    for value in [0, -1, 9_007_199_254_740_992] {
+    for value in [9_007_199_254_740_992, -9_007_199_254_740_992] {
         refused(
             &format!("{value}"),
             fixed(base(), value),
@@ -436,18 +438,6 @@ fn sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer() {
     );
     let mut later = valued(LATER, 1000, 1000);
     later["valuation"] = json!("pending");
-    for (case, produced) in [("a valued product", OUT), ("a pending product", LATER)] {
-        refused(
-            case,
-            fixed(
-                with(base(), "produces", json!([produce(produced, 1)])),
-                12_000,
-            ),
-            json!([out_pool(), later.clone()]),
-            CatalogDiagnosticCode::FixedValueConflict,
-            MEMBER,
-        );
-    }
     refused(
         "the realization mark",
         with(
@@ -460,12 +450,24 @@ fn sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer() {
         MEMBER,
     );
 
+    // #503 FIXV: 0 and below compile, and so does a value beside a valued or a pending product.
+    let beside = |id: &str, produced: &str| {
+        fixed(
+            with(judged(id, 0, 0), "produces", json!([produce(produced, 1)])),
+            12_000,
+        )
+    };
     let compiled = catalog(
         vec![
             fixed(with(base(), "produces", json!([produce(BARE, 1)])), 12_000),
             fixed(judged("task_w", 0, 0), 9_007_199_254_740_991),
+            fixed(judged("task_zero", 0, 0), 0),
+            fixed(judged("task_minus", 0, 0), -1),
+            fixed(judged("task_least", 0, 0), -9_007_199_254_740_991),
+            beside("task_priced", OUT),
+            beside("task_pending", LATER),
         ],
-        json!([out_pool(), bare_pool(BARE)]),
+        json!([out_pool(), bare_pool(BARE), later]),
     );
     let values = compiled
         .catalog()
@@ -474,7 +476,18 @@ fn sched_c1a_t6_the_compiler_refuses_the_member_at_its_pointer() {
         .iter()
         .map(|task| task.benefit_fixed_value_milli)
         .collect::<Vec<_>>();
-    assert_eq!(values, [Some(12_000), Some(9_007_199_254_740_991)]);
+    assert_eq!(
+        values,
+        [
+            Some(12_000),
+            Some(9_007_199_254_740_991),
+            Some(0),
+            Some(-1),
+            Some(-9_007_199_254_740_991),
+            Some(12_000),
+            Some(12_000)
+        ]
+    );
 
     assert_eq!(
         CatalogDiagnosticCode::FixedValueConflict.code(),

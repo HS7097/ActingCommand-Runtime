@@ -187,6 +187,21 @@ plan refuses a rollback to such a build while an installed or kept schedule list
 above). The resource tools check no `requires`: `standard-pack check`, `compose` and `adopt` accept
 and carry the member.
 
+#503 FIXV (register §1.550, since 0.12.101). A rule whose `fixed_value_milli` is an integer of 0 or
+below, or a rule with a fixed value that writes a `produces` entry on a pool whose `valuation` is
+written (a block or the pending marker), requires `fixed_value_any` beside `benefit_fixed_value`
+("The fixed value" below), alike: the composer refuses a file that writes one while `requires` does
+not name it, `schedule_invalid` at the first such rule's `fixed_value_milli` in file order (for
+example `/rules/1/fixed_value_milli`). It judges the rules as composed, so on a root whose rules
+take their business part from `pack-catalog.json` ("`catalog_business`" below) the value and the
+productions are the catalog's, and the refusal names the catalog's `value`. A file whose values are
+all 1 or more and stand beside no priced or pending product names nothing new. A Runtime names
+`fixed_value_any` in `config.subsystems`, always on, from 0.12.101. **No Runtime before 0.12.101
+names it**: such a Runtime, and its check-config, refuse a file that lists it with
+`schedule_requires_missing` at that entry, and the installer's plan refuses a rollback to such a
+build while an installed or kept schedule lists it (#429 RB-1 above). The resource tools check no
+`requires`: `standard-pack check`, `compose` and `adopt` accept and carry the member.
+
 Workflow #477 CV-2 (register §1.508, since 0.12.80; the coordinator's rulings, the owner's words
 being only "one cut-over, no coexistence"). **`catalog_business` switches a root's business part to
 its `pack-catalog.json`** ([pack-catalog.md](pack-catalog.md), "Version 2"). A file whose
@@ -586,8 +601,19 @@ its pools' valuations weigh in):
   pointer, `/rules/<i>/fixed_value_milli`. A rule that writes `benefit_fixed_value_milli` itself is
   refused at `/rules/<i>/benefit_fixed_value_milli`: the task member is the composer's. The
   compiler's refusals of the task member (its range, `missing_required_field`, and
-  `fixed_value_conflict` beside a priced product or the realization mark) name the rule's
-  `fixed_value_milli`, as every compiler diagnostic is mapped back.
+  `fixed_value_conflict` beside the realization mark) name the rule's `fixed_value_milli`, as
+  every compiler diagnostic is mapped back.
+- #503 FIXV (since 0.12.101; register §1.550). The value is a whole number of either sign, 0
+  included, from −(2^53 − 1) to 2^53 − 1: 0 says the run is worth nothing by itself, a negative
+  value that it costs more than its priced consumption ([scheduling/README.md](scheduling/README.md),
+  "What 0 and below mean": such a rule runs only where a goal term makes it positive). A rule that
+  must not run is still held or not written, and a value not yet known is still left out (or the
+  rule's effects `"pending"`), never written as 0. And the rule may write its true `produces`
+  beside its value, pools whose `valuation` is a block or the pending marker included: **with a
+  fixed value the rule's base value is the value alone**, and its productions feed only what is not
+  the base value, its goal terms (a goal's gap weight on each such pool), the turns a run is told
+  under a goal and the pools a run leaves unread ("Beside priced productions" there). A rule that
+  uses either freedom requires `fixed_value_any` ("`requires`" above).
 - A consumer writes its `consumes` beside its value, and the pool it consumes needs a valuation
   for its cost: the model's, or a constant block the pack writes on the pool
   ([scheduling/README.md](scheduling/README.md), "Pool Valuation", "A valuation written in the
@@ -604,17 +630,18 @@ its pools' valuations weigh in):
   values are the pack's and which the model's.
 - The rule requires `benefit_fixed_value` ("`requires`" above).
 - A goal on what it produces (#455 B1, since 0.12.82; register §1.518): a pool the rule produces
-  that declares no valuation counts in its benefit once a goal in force covers it with an open gap,
-  `V` plus the goal term less the cost of what it consumes
-  ([scheduling/README.md](scheduling/README.md), "Fixed values written in the pack", "A goal on
-  what it produces"); without such a goal the rule is judged as before. The coverage ("Judged
-  rules" above) still reads no `produces` of such a rule.
+  counts in its benefit once a goal in force covers it with an open gap, `V` plus the goal term
+  less the cost of what it consumes ([scheduling/README.md](scheduling/README.md), "Fixed values
+  written in the pack", "A goal on what it produces"); without such a goal the rule is judged as
+  before. #503 FIXV (since 0.12.101): a priced pool too, by its goal's gap weight alone, never by
+  its base valuation. The coverage ("Judged rules" above) still reads no `produces` of such a rule.
 
 **Pools a goal asks for** (#455 B1, since 0.12.82). So that a person can say what an account lacks
 and the scheduler picks the stages that yield it, a resource repository declares each material or
 currency a business rule yields as a pool of `schedule.json` **without a `valuation`** (neither a
-block nor the pending marker: either beside a fixed value is refused, `fixed_value_conflict`, and
-in `pack-catalog.json` `catalog_value_conflict`), with an `observation` of the kind `fact` whose key
+block nor the pending marker; #503 FIXV, since 0.12.101: a priced pool may also be produced beside
+a fixed value, its base valuation not read there, but a goal on a pool without a valuation takes
+its step and importance from `target_defaults`, below), with an `observation` of the kind `fact` whose key
 is under `inventory.` or `resource.` (a goal attaches to no other pool; a pool read from rows of a
 list also takes one), a `capacity` no less than the largest amount one effect writes, and
 `projection` `{"kind": "none"}` where it does not regenerate. #455 B3-P (since 0.12.82; register
@@ -640,7 +667,8 @@ regenerate (a ticket, a shop currency) runs as soon as the goal makes it worth i
 cooldown. While its gap is open such a rule is handed the gap as `gap_remaining`, and its `run_cap`
 is at most the runs the gap still needs: ⌈gap ÷ the integer `amount`⌉, or for a production by
 `expected_amount_milli` ⌈gap·1000 ÷ that expectation⌉, at least 1 (ruling 10: a goal never takes
-`run_cap` away; [remedies.md](remedies.md), section 4, "Spend values").
+`run_cap` away; [remedies.md](remedies.md), section 4, "Spend values"); #503 FIXV (since 0.12.101):
+for a rule with a fixed value, whatever valuations its other productions carry.
 
 **A currency a line governs** (#455 SL1, since 0.12.97; register §1.540). A currency a player saves
 for a dated event, which no valuation can price (its producers keep their fixed values), is
@@ -710,6 +738,27 @@ game's business rules:
 | Consumer of a regenerating pool | its `consumes` (one run's amount), `fixed_value_milli` (`V`, its value without the pool's cost), `"limited": true` where a limit counts its runs; no "reading ≥ capacity − margin" threshold once the pool is valued ("Tools", the redundant trigger) | a constant `valuation` (`scale` Q, `base_weight_milli` W) beside its `stop_line` and `hard_line` (and `trigger_line`), `H = S − (the costliest run)` | below the trigger line `V − W·c`; from the trigger line the capped order by `V ÷ c`. A pack that wants a consumer to run only in capped rounds writes its pool's `W` so that `W·c ≥ V` for that consumer; a consumer meant to spend the reserve below the stop line (a time-limited, high-value run) has `V > W·c` and is still held by the hard line: the reserve Alice's planned red line keeps (11-07, #428 6706630435: 「不让资源达到上限，但是保留一些资源用于某些限时的，收益高的任务」) |
 | Reading and navigation step inside a chain | a readings, return-home or recovery step: `"maintenance": true`; a step after the chain's first business rule: nothing (it rides with that rule, SS-2e); the chain's value once, on its first business rule | — | the maintenance tier, or its chain |
 | Still needs the model (its value depends on live data or on a choice made at run time) | nothing, or `"amount": "pending"` | `"valuation": "pending"` | `benefit_unknown` until the model's export |
+
+**A chain is judged once, at its head** (#503 FIXV, since 0.12.101; register §1.550). A step that
+costs something and yields nothing by itself (a preparation that spends a valued pool before the
+run that pays for it) is **not** helped by a fixed value of 0 or below: it is the head of its
+chain, judged by its own `B`, so `B ≤ −W·c` keeps it below zero, it is never dispatched, and the
+steps that require its success are never due. Write the chain on its head instead:
+
+- the head, the chain's first business rule, writes **the chain's value** (what the whole chain is
+  worth, as a positive `fixed_value_milli`), **its true consumption** (`consumes`, so the cost is
+  judged) **and its true productions** (`produces`, the pools the chain yields, priced ones
+  included), so that a goal on what the chain produces reaches the decision ("The fixed value"
+  above: beside the value the productions feed only the goal terms, the turns and the unread
+  rule; the file then names `fixed_value_any` when a product is priced);
+- the steps after it write nothing of value: they ride with the head (SS-2e), and the coverage
+  counts them as followers when their edge writes `since_own_run: true`;
+- a step that only reads or navigates and spends nothing (a reading, a return home, a recovery)
+  writes `"maintenance": true`; a step that spends a valued pool is never marked maintenance, or
+  its spending would be judged by nothing.
+
+A value of 0 or below is for a run whose own worth is truly nothing or less, so that only a goal
+moves it ([scheduling/README.md](scheduling/README.md), "What 0 and below mean").
 
 **Who writes the fixed value and the marks, since Workflow #477 CV-1** (0.12.79; register §1.507;
 [pack-catalog.md](pack-catalog.md), "Version 2"). A rule's `consumes` and `produces`, its
@@ -792,6 +841,8 @@ pure: its caller reads the packages.
    kind `list_rows`, #455 B3-P (0.12.82): `pool_target_defaults` when a pool writes
    `target_defaults`, #455 SL1 (0.12.97): `pool_spend_line` when a pool writes `spend_line`,
    #455 RR3b (0.12.98): `pool_goal_tiers` when a pool writes `goal_tiers`,
+   #503 FIXV (0.12.101): `fixed_value_any` when a rule's `fixed_value_milli` is 0 or below or a
+   rule with a fixed value writes a production of a pool whose `valuation` is written,
    SCHED-C1f1 (0.12.54): `consumption_fact` when a rule's `consumes`
    entry writes its `amount` as a fact, Workflow #437 ORD-1a (0.12.60): `queue_wait` when a rule
    writes `max_queue_wait_ms`, Workflow #500 SV-2 (0.12.81): `rule_variables` when a rule carries
